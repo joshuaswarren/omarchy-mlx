@@ -1,0 +1,101 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// SDPA VJP logsumexp (upstream #4563 keeps lse from the fused forward
+// forward; the Omarchy forward computes it from the same float32 score
+// buffer the backward rebuilds, so P = exp(scale * S - lse) here and in
+// the backward see identical score bits). One workgroup per row:
+//   lse[row] = max + log(sum_j exp(s[row, j] - max))
+// with the causal limit at j == row + diag_off (two's-complement uint;
+// a fully masked row - lim < 0 - stores -inf, which the backward's dead
+// guard turns into zero gradients). No subgroup ops; shared tree reduce.
+
+#version 460
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer SBuf { float v[]; } s_buf;
+layout(set = 0, binding = 1, std430) writeonly buffer LseBuf { float v[]; } lse_buf;
+
+layout(push_constant) uniform Params {
+  uint count;        // rows = B*H*qL
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;   // scores (float32, row-contiguous)
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;     // kL
+  uint matrix_k;
+  uint flags;        // bit0: causal
+  float alpha;
+  float beta_f;
+  uint dims;         // diag_off, two's complement
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+shared float red[256];
+
+float load_score(uint index) {
+  return s_buf.v[params.lhs_offset + index];
+}
+
+void main() {
+  uint row = gl_WorkGroupID.x;
+  uint lane = gl_LocalInvocationID.x;
+  if (row >= params.count) {
+    return;
+  }
+  bool causal = (params.flags & 1u) != 0u;
+  int lim = causal ? int(row) + int(params.dims) : int(params.matrix_n) - 1;
+  uint base = row * params.matrix_n;
+
+  float peak = uintBitsToFloat(0xff800000u);
+  if (lim >= 0) {
+    for (uint j = lane; j <= uint(lim); j += 256u) {
+      peak = max(peak, load_score(base + j));
+    }
+  }
+  red[lane] = peak;
+  barrier();
+  for (uint stride = 128u; stride >= 1u; stride >>= 1u) {
+    if (lane < stride) {
+      red[lane] = max(red[lane], red[lane + stride]);
+    }
+    barrier();
+  }
+  peak = red[0];
+  barrier();
+
+  float minus_inf = uintBitsToFloat(0xff800000u);
+  if (peak == minus_inf) {
+    // Fully masked row: lse = -inf; the backward's dead guard zeroes it.
+    if (lane == 0u) {
+      lse_buf.v[params.output_offset + row] = minus_inf;
+    }
+    return;
+  }
+
+  float acc = 0.0f;
+  for (uint j = lane; j <= uint(lim); j += 256u) {
+    acc += exp(load_score(base + j) - peak);
+  }
+  red[lane] = acc;
+  barrier();
+  for (uint stride = 128u; stride >= 1u; stride >>= 1u) {
+    if (lane < stride) {
+      red[lane] += red[lane + stride];
+    }
+    barrier();
+  }
+  if (lane == 0u) {
+    lse_buf.v[params.output_offset + row] = peak + log(red[0]);
+  }
+}

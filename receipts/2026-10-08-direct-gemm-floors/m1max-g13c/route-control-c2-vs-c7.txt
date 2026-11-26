@@ -1,0 +1,4 @@
+cells: C2 36 C7 36; empty traces C2 0 C7 0
+expected-different cells that match: none
+unexpected differences: none
+VERDICT PASS

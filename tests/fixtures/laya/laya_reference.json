@@ -1,0 +1,630 @@
+{
+  "schema": "laya-reference-fixture/1",
+  "source_repo": "convaiinnovations/laya",
+  "source_revision": "1c5edc17a7acd8701df6fc341c0d179f1c62c982",
+  "pack_repo": "aac6fef/laya-mlx",
+  "pack_revision": "20aed815fc6acde75733882e7ec0e3f28aeb9717",
+  "reference_env": {
+    "mlx_engine": "laya",
+    "max_len": 512,
+    "head_max_len": 192
+  },
+  "cases": [
+    {
+      "name": "email_json_state",
+      "state": {
+        "from": "user@acme.com",
+        "subject": "Duplicate charge on invoice #4411",
+        "body": "Hi, we were billed twice for March. Please refund the duplicate today or we will cancel our plan."
+      },
+      "questions": {
+        "department": {
+          "type": "choice",
+          "instructions": "Which department should handle this request?",
+          "criteria": {
+            "billing": "invoices, payments, refunds",
+            "technical": "bugs, outages, system errors",
+            "sales": "pricing, new contracts",
+            "other": "everything else"
+          }
+        },
+        "urgency": {
+          "type": "score",
+          "instructions": "How urgent is this request?",
+          "criteria": [
+            "not urgent",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "is_refund_request": {
+          "type": "noul",
+          "instructions": "Is this a refund request?",
+          "criteria": null
+        }
+      },
+      "expected_upstream_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "department": {
+            "type": "choice",
+            "choice": "billing",
+            "probabilities": {
+              "billing": 0.9653,
+              "technical": 0.014,
+              "sales": 0.0101,
+              "other": 0.0107
+            },
+            "confidence": 0.864,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "urgency": {
+            "type": "score",
+            "score": 1.5036,
+            "legend": {
+              "0": "not urgent",
+              "1": "low",
+              "2": "medium",
+              "3": "high",
+              "4": "critical"
+            },
+            "probabilities": {
+              "0": 0.2104,
+              "1": 0.348,
+              "2": 0.271,
+              "3": 0.069,
+              "4": 0.1016
+            },
+            "confidence": 0.0891,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "is_refund_request": {
+            "type": "noul",
+            "noul": 0.8936,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 267,
+          "output_tokens": 0
+        }
+      },
+      "expected_mlx_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "department": {
+            "type": "choice",
+            "choice": "billing",
+            "probabilities": {
+              "billing": 0.9653,
+              "technical": 0.014,
+              "sales": 0.0101,
+              "other": 0.0107
+            },
+            "confidence": 0.864,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "urgency": {
+            "type": "score",
+            "score": 1.5036,
+            "legend": {
+              "0": "not urgent",
+              "1": "low",
+              "2": "medium",
+              "3": "high",
+              "4": "critical"
+            },
+            "probabilities": {
+              "0": 0.2104,
+              "1": 0.348,
+              "2": 0.271,
+              "3": 0.069,
+              "4": 0.1016
+            },
+            "confidence": 0.0891,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "is_refund_request": {
+            "type": "noul",
+            "noul": 0.8936,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 267,
+          "output_tokens": 0
+        }
+      }
+    },
+    {
+      "name": "plain_string_state",
+      "state": "The server has been returning 503s for the EU checkout fleet since 09:12 UTC; revenue impact is roughly 4k EUR per hour and growing.",
+      "questions": {
+        "severity": {
+          "type": "score",
+          "instructions": "Rate the severity.",
+          "criteria": [
+            "trivial",
+            "minor",
+            "moderate",
+            "major",
+            "catastrophic"
+          ]
+        },
+        "is_outage": {
+          "type": "noul",
+          "instructions": "Is production currently degraded?",
+          "criteria": {
+            "false": "no degradation",
+            "true": "active degradation"
+          }
+        }
+      },
+      "expected_upstream_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "severity": {
+            "type": "score",
+            "score": 2.7535,
+            "legend": {
+              "0": "trivial",
+              "1": "minor",
+              "2": "moderate",
+              "3": "major",
+              "4": "catastrophic"
+            },
+            "probabilities": {
+              "0": 0.0035,
+              "1": 0.0602,
+              "2": 0.2083,
+              "3": 0.6354,
+              "4": 0.0926
+            },
+            "confidence": 0.3637,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "is_outage": {
+            "type": "noul",
+            "noul": 0.8903,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 119,
+          "output_tokens": 0
+        }
+      },
+      "expected_mlx_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "severity": {
+            "type": "score",
+            "score": 2.7535,
+            "legend": {
+              "0": "trivial",
+              "1": "minor",
+              "2": "moderate",
+              "3": "major",
+              "4": "catastrophic"
+            },
+            "probabilities": {
+              "0": 0.0035,
+              "1": 0.0602,
+              "2": 0.2083,
+              "3": 0.6354,
+              "4": 0.0926
+            },
+            "confidence": 0.3637,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "is_outage": {
+            "type": "noul",
+            "noul": 0.8903,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 119,
+          "output_tokens": 0
+        }
+      }
+    },
+    {
+      "name": "empty_state_two_choice",
+      "state": "",
+      "questions": {
+        "coin": {
+          "type": "choice",
+          "instructions": "Pick one.",
+          "criteria": [
+            "heads",
+            "tails"
+          ]
+        },
+        "color": {
+          "type": "choice",
+          "instructions": "Pick a color.",
+          "criteria": {
+            "red": null,
+            "green": null,
+            "blue": null
+          }
+        }
+      },
+      "expected_upstream_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "coin": {
+            "type": "choice",
+            "choice": "heads",
+            "probabilities": {
+              "heads": 0.8375,
+              "tails": 0.1625
+            },
+            "confidence": 0.3597,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "color": {
+            "type": "choice",
+            "choice": "blue",
+            "probabilities": {
+              "red": 0.2216,
+              "green": 0.3518,
+              "blue": 0.4265
+            },
+            "confidence": 0.0307,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 31,
+          "output_tokens": 0
+        }
+      },
+      "expected_mlx_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "coin": {
+            "type": "choice",
+            "choice": "heads",
+            "probabilities": {
+              "heads": 0.8375,
+              "tails": 0.1625
+            },
+            "confidence": 0.3597,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "color": {
+            "type": "choice",
+            "choice": "blue",
+            "probabilities": {
+              "red": 0.2216,
+              "green": 0.3518,
+              "blue": 0.4265
+            },
+            "confidence": 0.0307,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 31,
+          "output_tokens": 0
+        }
+      }
+    },
+    {
+      "name": "mask_token_and_unicode",
+      "state": "ユーザーは [MASK] トークンを含むテキストを送りました — attention: réclamation nº 7",
+      "questions": {
+        "lang": {
+          "type": "choice",
+          "instructions": "Which language is this?",
+          "criteria": {
+            "japanese": null,
+            "french": null,
+            "mixed": null,
+            "other": null
+          }
+        },
+        "complaint": {
+          "type": "noul",
+          "instructions": "Is this a complaint?",
+          "criteria": null
+        }
+      },
+      "expected_upstream_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "lang": {
+            "type": "choice",
+            "choice": "japanese",
+            "probabilities": {
+              "japanese": 0.421,
+              "french": 0.1619,
+              "mixed": 0.1329,
+              "other": 0.2842
+            },
+            "confidence": 0.0732,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "complaint": {
+            "type": "noul",
+            "noul": 0.6435,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 120,
+          "output_tokens": 0
+        }
+      },
+      "expected_mlx_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "lang": {
+            "type": "choice",
+            "choice": "japanese",
+            "probabilities": {
+              "japanese": 0.421,
+              "french": 0.1619,
+              "mixed": 0.1329,
+              "other": 0.2842
+            },
+            "confidence": 0.0732,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "complaint": {
+            "type": "noul",
+            "noul": 0.6435,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 120,
+          "output_tokens": 0
+        }
+      }
+    },
+    {
+      "name": "long_state_truncation",
+      "state": "filler token 0 filler token 1 filler token 2 filler token 3 filler token 4 filler token 5 filler token 6 filler token 7 filler token 8 filler token 9 filler token 10 filler token 11 filler token 12 filler token 13 filler token 14 filler token 15 filler token 16 filler token 17 filler token 18 filler token 19 filler token 20 filler token 21 filler token 22 filler token 23 filler token 24 filler token 25 filler token 26 filler token 27 filler token 28 filler token 29 filler token 30 filler token 31 filler token 32 filler token 33 filler token 34 filler token 35 filler token 36 filler token 37 filler token 38 filler token 39 filler token 40 filler token 41 filler token 42 filler token 43 filler token 44 filler token 45 filler token 46 filler token 47 filler token 48 filler token 49 filler token 50 filler token 51 filler token 52 filler token 53 filler token 54 filler token 55 filler token 56 filler token 57 filler token 58 filler token 59 filler token 60 filler token 61 filler token 62 filler token 63 filler token 64 filler token 65 filler token 66 filler token 67 filler token 68 filler token 69 filler token 70 filler token 71 filler token 72 filler token 73 filler token 74 filler token 75 filler token 76 filler token 77 filler token 78 filler token 79 filler token 80 filler token 81 filler token 82 filler token 83 filler token 84 filler token 85 filler token 86 filler token 87 filler token 88 filler token 89 filler token 90 filler token 91 filler token 92 filler token 93 filler token 94 filler token 95 filler token 96 filler token 97 filler token 98 filler token 99 filler token 100 filler token 101 filler token 102 filler token 103 filler token 104 filler token 105 filler token 106 filler token 107 filler token 108 filler token 109 filler token 110 filler token 111 filler token 112 filler token 113 filler token 114 filler token 115 filler token 116 filler token 117 filler token 118 filler token 119 filler token 120 filler token 121 filler token 122 filler token 123 filler token 124 filler token 125 filler token 126 filler token 127 filler token 128 filler token 129 filler token 130 filler token 131 filler token 132 filler token 133 filler token 134 filler token 135 filler token 136 filler token 137 filler token 138 filler token 139 filler token 140 filler token 141 filler token 142 filler token 143 filler token 144 filler token 145 filler token 146 filler token 147 filler token 148 filler token 149 filler token 150 filler token 151 filler token 152 filler token 153 filler token 154 filler token 155 filler token 156 filler token 157 filler token 158 filler token 159 filler token 160 filler token 161 filler token 162 filler token 163 filler token 164 filler token 165 filler token 166 filler token 167 filler token 168 filler token 169 filler token 170 filler token 171 filler token 172 filler token 173 filler token 174 filler token 175 filler token 176 filler token 177 filler token 178 filler token 179 filler token 180 filler token 181 filler token 182 filler token 183 filler token 184 filler token 185 filler token 186 filler token 187 filler token 188 filler token 189 filler token 190 filler token 191 filler token 192 filler token 193 filler token 194 filler token 195 filler token 196 filler token 197 filler token 198 filler token 199 filler token 200 filler token 201 filler token 202 filler token 203 filler token 204 filler token 205 filler token 206 filler token 207 filler token 208 filler token 209 filler token 210 filler token 211 filler token 212 filler token 213 filler token 214 filler token 215 filler token 216 filler token 217 filler token 218 filler token 219 filler token 220 filler token 221 filler token 222 filler token 223 filler token 224 filler token 225 filler token 226 filler token 227 filler token 228 filler token 229 filler token 230 filler token 231 filler token 232 filler token 233 filler token 234 filler token 235 filler token 236 filler token 237 filler token 238 filler token 239 filler token 240 filler token 241 filler token 242 filler token 243 filler token 244 filler token 245 filler token 246 filler token 247 filler token 248 filler token 249 filler token 250 filler token 251 filler token 252 filler token 253 filler token 254 filler token 255 filler token 256 filler token 257 filler token 258 filler token 259 filler token 260 filler token 261 filler token 262 filler token 263 filler token 264 filler token 265 filler token 266 filler token 267 filler token 268 filler token 269 filler token 270 filler token 271 filler token 272 filler token 273 filler token 274 filler token 275 filler token 276 filler token 277 filler token 278 filler token 279 filler token 280 filler token 281 filler token 282 filler token 283 filler token 284 filler token 285 filler token 286 filler token 287 filler token 288 filler token 289 filler token 290 filler token 291 filler token 292 filler token 293 filler token 294 filler token 295 filler token 296 filler token 297 filler token 298 filler token 299 filler token 300 filler token 301 filler token 302 filler token 303 filler token 304 filler token 305 filler token 306 filler token 307 filler token 308 filler token 309 filler token 310 filler token 311 filler token 312 filler token 313 filler token 314 filler token 315 filler token 316 filler token 317 filler token 318 filler token 319 filler token 320 filler token 321 filler token 322 filler token 323 filler token 324 filler token 325 filler token 326 filler token 327 filler token 328 filler token 329 filler token 330 filler token 331 filler token 332 filler token 333 filler token 334 filler token 335 filler token 336 filler token 337 filler token 338 filler token 339 filler token 340 filler token 341 filler token 342 filler token 343 filler token 344 filler token 345 filler token 346 filler token 347 filler token 348 filler token 349 filler token 350 filler token 351 filler token 352 filler token 353 filler token 354 filler token 355 filler token 356 filler token 357 filler token 358 filler token 359 filler token 360 filler token 361 filler token 362 filler token 363 filler token 364 filler token 365 filler token 366 filler token 367 filler token 368 filler token 369 filler token 370 filler token 371 filler token 372 filler token 373 filler token 374 filler token 375 filler token 376 filler token 377 filler token 378 filler token 379 filler token 380 filler token 381 filler token 382 filler token 383 filler token 384 filler token 385 filler token 386 filler token 387 filler token 388 filler token 389 filler token 390 filler token 391 filler token 392 filler token 393 filler token 394 filler token 395 filler token 396 filler token 397 filler token 398 filler token 399 filler token 400 filler token 401 filler token 402 filler token 403 filler token 404 filler token 405 filler token 406 filler token 407 filler token 408 filler token 409 filler token 410 filler token 411 filler token 412 filler token 413 filler token 414 filler token 415 filler token 416 filler token 417 filler token 418 filler token 419 filler token 420 filler token 421 filler token 422 filler token 423 filler token 424 filler token 425 filler token 426 filler token 427 filler token 428 filler token 429 filler token 430 filler token 431 filler token 432 filler token 433 filler token 434 filler token 435 filler token 436 filler token 437 filler token 438 filler token 439 filler token 440 filler token 441 filler token 442 filler token 443 filler token 444 filler token 445 filler token 446 filler token 447 filler token 448 filler token 449 filler token 450 filler token 451 filler token 452 filler token 453 filler token 454 filler token 455 filler token 456 filler token 457 filler token 458 filler token 459 filler token 460 filler token 461 filler token 462 filler token 463 filler token 464 filler token 465 filler token 466 filler token 467 filler token 468 filler token 469 filler token 470 filler token 471 filler token 472 filler token 473 filler token 474 filler token 475 filler token 476 filler token 477 filler token 478 filler token 479 filler token 480 filler token 481 filler token 482 filler token 483 filler token 484 filler token 485 filler token 486 filler token 487 filler token 488 filler token 489 filler token 490 filler token 491 filler token 492 filler token 493 filler token 494 filler token 495 filler token 496 filler token 497 filler token 498 filler token 499 filler token 500 filler token 501 filler token 502 filler token 503 filler token 504 filler token 505 filler token 506 filler token 507 filler token 508 filler token 509 filler token 510 filler token 511 filler token 512 filler token 513 filler token 514 filler token 515 filler token 516 filler token 517 filler token 518 filler token 519 filler token 520 filler token 521 filler token 522 filler token 523 filler token 524 filler token 525 filler token 526 filler token 527 filler token 528 filler token 529 filler token 530 filler token 531 filler token 532 filler token 533 filler token 534 filler token 535 filler token 536 filler token 537 filler token 538 filler token 539 filler token 540 filler token 541 filler token 542 filler token 543 filler token 544 filler token 545 filler token 546 filler token 547 filler token 548 filler token 549 filler token 550 filler token 551 filler token 552 filler token 553 filler token 554 filler token 555 filler token 556 filler token 557 filler token 558 filler token 559 filler token 560 filler token 561 filler token 562 filler token 563 filler token 564 filler token 565 filler token 566 filler token 567 filler token 568 filler token 569 filler token 570 filler token 571 filler token 572 filler token 573 filler token 574 filler token 575 filler token 576 filler token 577 filler token 578 filler token 579 filler token 580 filler token 581 filler token 582 filler token 583 filler token 584 filler token 585 filler token 586 filler token 587 filler token 588 filler token 589 filler token 590 filler token 591 filler token 592 filler token 593 filler token 594 filler token 595 filler token 596 filler token 597 filler token 598 filler token 599 filler token 600 filler token 601 filler token 602 filler token 603 filler token 604 filler token 605 filler token 606 filler token 607 filler token 608 filler token 609 filler token 610 filler token 611 filler token 612 filler token 613 filler token 614 filler token 615 filler token 616 filler token 617 filler token 618 filler token 619 filler token 620 filler token 621 filler token 622 filler token 623 filler token 624 filler token 625 filler token 626 filler token 627 filler token 628 filler token 629 filler token 630 filler token 631 filler token 632 filler token 633 filler token 634 filler token 635 filler token 636 filler token 637 filler token 638 filler token 639 filler token 640 filler token 641 filler token 642 filler token 643 filler token 644 filler token 645 filler token 646 filler token 647 filler token 648 filler token 649 filler token 650 filler token 651 filler token 652 filler token 653 filler token 654 filler token 655 filler token 656 filler token 657 filler token 658 filler token 659 filler token 660 filler token 661 filler token 662 filler token 663 filler token 664 filler token 665 filler token 666 filler token 667 filler token 668 filler token 669 filler token 670 filler token 671 filler token 672 filler token 673 filler token 674 filler token 675 filler token 676 filler token 677 filler token 678 filler token 679 filler token 680 filler token 681 filler token 682 filler token 683 filler token 684 filler token 685 filler token 686 filler token 687 filler token 688 filler token 689 filler token 690 filler token 691 filler token 692 filler token 693 filler token 694 filler token 695 filler token 696 filler token 697 filler token 698 filler token 699 filler token 700 filler token 701 filler token 702 filler token 703 filler token 704 filler token 705 filler token 706 filler token 707 filler token 708 filler token 709 filler token 710 filler token 711 filler token 712 filler token 713 filler token 714 filler token 715 filler token 716 filler token 717 filler token 718 filler token 719 filler token 720 filler token 721 filler token 722 filler token 723 filler token 724 filler token 725 filler token 726 filler token 727 filler token 728 filler token 729 filler token 730 filler token 731 filler token 732 filler token 733 filler token 734 filler token 735 filler token 736 filler token 737 filler token 738 filler token 739 filler token 740 filler token 741 filler token 742 filler token 743 filler token 744 filler token 745 filler token 746 filler token 747 filler token 748 filler token 749 filler token 750 filler token 751 filler token 752 filler token 753 filler token 754 filler token 755 filler token 756 filler token 757 filler token 758 filler token 759 filler token 760 filler token 761 filler token 762 filler token 763 filler token 764 filler token 765 filler token 766 filler token 767 filler token 768 filler token 769 filler token 770 filler token 771 filler token 772 filler token 773 filler token 774 filler token 775 filler token 776 filler token 777 filler token 778 filler token 779 filler token 780 filler token 781 filler token 782 filler token 783 filler token 784 filler token 785 filler token 786 filler token 787 filler token 788 filler token 789 filler token 790 filler token 791 filler token 792 filler token 793 filler token 794 filler token 795 filler token 796 filler token 797 filler token 798 filler token 799 filler token 800 filler token 801 filler token 802 filler token 803 filler token 804 filler token 805 filler token 806 filler token 807 filler token 808 filler token 809 filler token 810 filler token 811 filler token 812 filler token 813 filler token 814 filler token 815 filler token 816 filler token 817 filler token 818 filler token 819 filler token 820 filler token 821 filler token 822 filler token 823 filler token 824 filler token 825 filler token 826 filler token 827 filler token 828 filler token 829 filler token 830 filler token 831 filler token 832 filler token 833 filler token 834 filler token 835 filler token 836 filler token 837 filler token 838 filler token 839 filler token 840 filler token 841 filler token 842 filler token 843 filler token 844 filler token 845 filler token 846 filler token 847 filler token 848 filler token 849 filler token 850 filler token 851 filler token 852 filler token 853 filler token 854 filler token 855 filler token 856 filler token 857 filler token 858 filler token 859 filler token 860 filler token 861 filler token 862 filler token 863 filler token 864 filler token 865 filler token 866 filler token 867 filler token 868 filler token 869 filler token 870 filler token 871 filler token 872 filler token 873 filler token 874 filler token 875 filler token 876 filler token 877 filler token 878 filler token 879 filler token 880 filler token 881 filler token 882 filler token 883 filler token 884 filler token 885 filler token 886 filler token 887 filler token 888 filler token 889 filler token 890 filler token 891 filler token 892 filler token 893 filler token 894 filler token 895 filler token 896 filler token 897 filler token 898 filler token 899 filler token 900 filler token 901 filler token 902 filler token 903 filler token 904 filler token 905 filler token 906 filler token 907 filler token 908 filler token 909 filler token 910 filler token 911 filler token 912 filler token 913 filler token 914 filler token 915 filler token 916 filler token 917 filler token 918 filler token 919 filler token 920 filler token 921 filler token 922 filler token 923 filler token 924 filler token 925 filler token 926 filler token 927 filler token 928 filler token 929 filler token 930 filler token 931 filler token 932 filler token 933 filler token 934 filler token 935 filler token 936 filler token 937 filler token 938 filler token 939 filler token 940 filler token 941 filler token 942 filler token 943 filler token 944 filler token 945 filler token 946 filler token 947 filler token 948 filler token 949 filler token 950 filler token 951 filler token 952 filler token 953 filler token 954 filler token 955 filler token 956 filler token 957 filler token 958 filler token 959 filler token 960 filler token 961 filler token 962 filler token 963 filler token 964 filler token 965 filler token 966 filler token 967 filler token 968 filler token 969 filler token 970 filler token 971 filler token 972 filler token 973 filler token 974 filler token 975 filler token 976 filler token 977 filler token 978 filler token 979 filler token 980 filler token 981 filler token 982 filler token 983 filler token 984 filler token 985 filler token 986 filler token 987 filler token 988 filler token 989 filler token 990 filler token 991 filler token 992 filler token 993 filler token 994 filler token 995 filler token 996 filler token 997 filler token 998 filler token 999 filler token 1000 filler token 1001 filler token 1002 filler token 1003 filler token 1004 filler token 1005 filler token 1006 filler token 1007 filler token 1008 filler token 1009 filler token 1010 filler token 1011 filler token 1012 filler token 1013 filler token 1014 filler token 1015 filler token 1016 filler token 1017 filler token 1018 filler token 1019 filler token 1020 filler token 1021 filler token 1022 filler token 1023 filler token 1024 filler token 1025 filler token 1026 filler token 1027 filler token 1028 filler token 1029 filler token 1030 filler token 1031 filler token 1032 filler token 1033 filler token 1034 filler token 1035 filler token 1036 filler token 1037 filler token 1038 filler token 1039 filler token 1040 filler token 1041 filler token 1042 filler token 1043 filler token 1044 filler token 1045 filler token 1046 filler token 1047 filler token 1048 filler token 1049 filler token 1050 filler token 1051 filler token 1052 filler token 1053 filler token 1054 filler token 1055 filler token 1056 filler token 1057 filler token 1058 filler token 1059 filler token 1060 filler token 1061 filler token 1062 filler token 1063 filler token 1064 filler token 1065 filler token 1066 filler token 1067 filler token 1068 filler token 1069 filler token 1070 filler token 1071 filler token 1072 filler token 1073 filler token 1074 filler token 1075 filler token 1076 filler token 1077 filler token 1078 filler token 1079 filler token 1080 filler token 1081 filler token 1082 filler token 1083 filler token 1084 filler token 1085 filler token 1086 filler token 1087 filler token 1088 filler token 1089 filler token 1090 filler token 1091 filler token 1092 filler token 1093 filler token 1094 filler token 1095 filler token 1096 filler token 1097 filler token 1098 filler token 1099 filler token 1100 filler token 1101 filler token 1102 filler token 1103 filler token 1104 filler token 1105 filler token 1106 filler token 1107 filler token 1108 filler token 1109 filler token 1110 filler token 1111 filler token 1112 filler token 1113 filler token 1114 filler token 1115 filler token 1116 filler token 1117 filler token 1118 filler token 1119 filler token 1120 filler token 1121 filler token 1122 filler token 1123 filler token 1124 filler token 1125 filler token 1126 filler token 1127 filler token 1128 filler token 1129 filler token 1130 filler token 1131 filler token 1132 filler token 1133 filler token 1134 filler token 1135 filler token 1136 filler token 1137 filler token 1138 filler token 1139 filler token 1140 filler token 1141 filler token 1142 filler token 1143 filler token 1144 filler token 1145 filler token 1146 filler token 1147 filler token 1148 filler token 1149 filler token 1150 filler token 1151 filler token 1152 filler token 1153 filler token 1154 filler token 1155 filler token 1156 filler token 1157 filler token 1158 filler token 1159 filler token 1160 filler token 1161 filler token 1162 filler token 1163 filler token 1164 filler token 1165 filler token 1166 filler token 1167 filler token 1168 filler token 1169 filler token 1170 filler token 1171 filler token 1172 filler token 1173 filler token 1174 filler token 1175 filler token 1176 filler token 1177 filler token 1178 filler token 1179 filler token 1180 filler token 1181 filler token 1182 filler token 1183 filler token 1184 filler token 1185 filler token 1186 filler token 1187 filler token 1188 filler token 1189 filler token 1190 filler token 1191 filler token 1192 filler token 1193 filler token 1194 filler token 1195 filler token 1196 filler token 1197 filler token 1198 filler token 1199 filler token 1200 filler token 1201 filler token 1202 filler token 1203 filler token 1204 filler token 1205 filler token 1206 filler token 1207 filler token 1208 filler token 1209 filler token 1210 filler token 1211 filler token 1212 filler token 1213 filler token 1214 filler token 1215 filler token 1216 filler token 1217 filler token 1218 filler token 1219 filler token 1220 filler token 1221 filler token 1222 filler token 1223 filler token 1224 filler token 1225 filler token 1226 filler token 1227 filler token 1228 filler token 1229 filler token 1230 filler token 1231 filler token 1232 filler token 1233 filler token 1234 filler token 1235 filler token 1236 filler token 1237 filler token 1238 filler token 1239 filler token 1240 filler token 1241 filler token 1242 filler token 1243 filler token 1244 filler token 1245 filler token 1246 filler token 1247 filler token 1248 filler token 1249 filler token 1250 filler token 1251 filler token 1252 filler token 1253 filler token 1254 filler token 1255 filler token 1256 filler token 1257 filler token 1258 filler token 1259 filler token 1260 filler token 1261 filler token 1262 filler token 1263 filler token 1264 filler token 1265 filler token 1266 filler token 1267 filler token 1268 filler token 1269 filler token 1270 filler token 1271 filler token 1272 filler token 1273 filler token 1274 filler token 1275 filler token 1276 filler token 1277 filler token 1278 filler token 1279 filler token 1280 filler token 1281 filler token 1282 filler token 1283 filler token 1284 filler token 1285 filler token 1286 filler token 1287 filler token 1288 filler token 1289 filler token 1290 filler token 1291 filler token 1292 filler token 1293 filler token 1294 filler token 1295 filler token 1296 filler token 1297 filler token 1298 filler token 1299 filler token 1300 filler token 1301 filler token 1302 filler token 1303 filler token 1304 filler token 1305 filler token 1306 filler token 1307 filler token 1308 filler token 1309 filler token 1310 filler token 1311 filler token 1312 filler token 1313 filler token 1314 filler token 1315 filler token 1316 filler token 1317 filler token 1318 filler token 1319 filler token 1320 filler token 1321 filler token 1322 filler token 1323 filler token 1324 filler token 1325 filler token 1326 filler token 1327 filler token 1328 filler token 1329 filler token 1330 filler token 1331 filler token 1332 filler token 1333 filler token 1334 filler token 1335 filler token 1336 filler token 1337 filler token 1338 filler token 1339 filler token 1340 filler token 1341 filler token 1342 filler token 1343 filler token 1344 filler token 1345 filler token 1346 filler token 1347 filler token 1348 filler token 1349 filler token 1350 filler token 1351 filler token 1352 filler token 1353 filler token 1354 filler token 1355 filler token 1356 filler token 1357 filler token 1358 filler token 1359 filler token 1360 filler token 1361 filler token 1362 filler token 1363 filler token 1364 filler token 1365 filler token 1366 filler token 1367 filler token 1368 filler token 1369 filler token 1370 filler token 1371 filler token 1372 filler token 1373 filler token 1374 filler token 1375 filler token 1376 filler token 1377 filler token 1378 filler token 1379 filler token 1380 filler token 1381 filler token 1382 filler token 1383 filler token 1384 filler token 1385 filler token 1386 filler token 1387 filler token 1388 filler token 1389 filler token 1390 filler token 1391 filler token 1392 filler token 1393 filler token 1394 filler token 1395 filler token 1396 filler token 1397 filler token 1398 filler token 1399 filler token 1400 filler token 1401 filler token 1402 filler token 1403 filler token 1404 filler token 1405 filler token 1406 filler token 1407 filler token 1408 filler token 1409 filler token 1410 filler token 1411 filler token 1412 filler token 1413 filler token 1414 filler token 1415 filler token 1416 filler token 1417 filler token 1418 filler token 1419 filler token 1420 filler token 1421 filler token 1422 filler token 1423 filler token 1424 filler token 1425 filler token 1426 filler token 1427 filler token 1428 filler token 1429 filler token 1430 filler token 1431 filler token 1432 filler token 1433 filler token 1434 filler token 1435 filler token 1436 filler token 1437 filler token 1438 filler token 1439 filler token 1440 filler token 1441 filler token 1442 filler token 1443 filler token 1444 filler token 1445 filler token 1446 filler token 1447 filler token 1448 filler token 1449 filler token 1450 filler token 1451 filler token 1452 filler token 1453 filler token 1454 filler token 1455 filler token 1456 filler token 1457 filler token 1458 filler token 1459 filler token 1460 filler token 1461 filler token 1462 filler token 1463 filler token 1464 filler token 1465 filler token 1466 filler token 1467 filler token 1468 filler token 1469 filler token 1470 filler token 1471 filler token 1472 filler token 1473 filler token 1474 filler token 1475 filler token 1476 filler token 1477 filler token 1478 filler token 1479 filler token 1480 filler token 1481 filler token 1482 filler token 1483 filler token 1484 filler token 1485 filler token 1486 filler token 1487 filler token 1488 filler token 1489 filler token 1490 filler token 1491 filler token 1492 filler token 1493 filler token 1494 filler token 1495 filler token 1496 filler token 1497 filler token 1498 filler token 1499 filler token 1500 filler token 1501 filler token 1502 filler token 1503 filler token 1504 filler token 1505 filler token 1506 filler token 1507 filler token 1508 filler token 1509 filler token 1510 filler token 1511 filler token 1512 filler token 1513 filler token 1514 filler token 1515 filler token 1516 filler token 1517 filler token 1518 filler token 1519 filler token 1520 filler token 1521 filler token 1522 filler token 1523 filler token 1524 filler token 1525 filler token 1526 filler token 1527 filler token 1528 filler token 1529 filler token 1530 filler token 1531 filler token 1532 filler token 1533 filler token 1534 filler token 1535 filler token 1536 filler token 1537 filler token 1538 filler token 1539 filler token 1540 filler token 1541 filler token 1542 filler token 1543 filler token 1544 filler token 1545 filler token 1546 filler token 1547 filler token 1548 filler token 1549 filler token 1550 filler token 1551 filler token 1552 filler token 1553 filler token 1554 filler token 1555 filler token 1556 filler token 1557 filler token 1558 filler token 1559 filler token 1560 filler token 1561 filler token 1562 filler token 1563 filler token 1564 filler token 1565 filler token 1566 filler token 1567 filler token 1568 filler token 1569 filler token 1570 filler token 1571 filler token 1572 filler token 1573 filler token 1574 filler token 1575 filler token 1576 filler token 1577 filler token 1578 filler token 1579 filler token 1580 filler token 1581 filler token 1582 filler token 1583 filler token 1584 filler token 1585 filler token 1586 filler token 1587 filler token 1588 filler token 1589 filler token 1590 filler token 1591 filler token 1592 filler token 1593 filler token 1594 filler token 1595 filler token 1596 filler token 1597 filler token 1598 filler token 1599 filler token 1600 filler token 1601 filler token 1602 filler token 1603 filler token 1604 filler token 1605 filler token 1606 filler token 1607 filler token 1608 filler token 1609 filler token 1610 filler token 1611 filler token 1612 filler token 1613 filler token 1614 filler token 1615 filler token 1616 filler token 1617 filler token 1618 filler token 1619 filler token 1620 filler token 1621 filler token 1622 filler token 1623 filler token 1624 filler token 1625 filler token 1626 filler token 1627 filler token 1628 filler token 1629 filler token 1630 filler token 1631 filler token 1632 filler token 1633 filler token 1634 filler token 1635 filler token 1636 filler token 1637 filler token 1638 filler token 1639 filler token 1640 filler token 1641 filler token 1642 filler token 1643 filler token 1644 filler token 1645 filler token 1646 filler token 1647 filler token 1648 filler token 1649 filler token 1650 filler token 1651 filler token 1652 filler token 1653 filler token 1654 filler token 1655 filler token 1656 filler token 1657 filler token 1658 filler token 1659 filler token 1660 filler token 1661 filler token 1662 filler token 1663 filler token 1664 filler token 1665 filler token 1666 filler token 1667 filler token 1668 filler token 1669 filler token 1670 filler token 1671 filler token 1672 filler token 1673 filler token 1674 filler token 1675 filler token 1676 filler token 1677 filler token 1678 filler token 1679 filler token 1680 filler token 1681 filler token 1682 filler token 1683 filler token 1684 filler token 1685 filler token 1686 filler token 1687 filler token 1688 filler token 1689 filler token 1690 filler token 1691 filler token 1692 filler token 1693 filler token 1694 filler token 1695 filler token 1696 filler token 1697 filler token 1698 filler token 1699 filler token 1700 filler token 1701 filler token 1702 filler token 1703 filler token 1704 filler token 1705 filler token 1706 filler token 1707 filler token 1708 filler token 1709 filler token 1710 filler token 1711 filler token 1712 filler token 1713 filler token 1714 filler token 1715 filler token 1716 filler token 1717 filler token 1718 filler token 1719 filler token 1720 filler token 1721 filler token 1722 filler token 1723 filler token 1724 filler token 1725 filler token 1726 filler token 1727 filler token 1728 filler token 1729 filler token 1730 filler token 1731 filler token 1732 filler token 1733 filler token 1734 filler token 1735 filler token 1736 filler token 1737 filler token 1738 filler token 1739 filler token 1740 filler token 1741 filler token 1742 filler token 1743 filler token 1744 filler token 1745 filler token 1746 filler token 1747 filler token 1748 filler token 1749 filler token 1750 filler token 1751 filler token 1752 filler token 1753 filler token 1754 filler token 1755 filler token 1756 filler token 1757 filler token 1758 filler token 1759 filler token 1760 filler token 1761 filler token 1762 filler token 1763 filler token 1764 filler token 1765 filler token 1766 filler token 1767 filler token 1768 filler token 1769 filler token 1770 filler token 1771 filler token 1772 filler token 1773 filler token 1774 filler token 1775 filler token 1776 filler token 1777 filler token 1778 filler token 1779 filler token 1780 filler token 1781 filler token 1782 filler token 1783 filler token 1784 filler token 1785 filler token 1786 filler token 1787 filler token 1788 filler token 1789 filler token 1790 filler token 1791 filler token 1792 filler token 1793 filler token 1794 filler token 1795 filler token 1796 filler token 1797 filler token 1798 filler token 1799 filler token 1800 filler token 1801 filler token 1802 filler token 1803 filler token 1804 filler token 1805 filler token 1806 filler token 1807 filler token 1808 filler token 1809 filler token 1810 filler token 1811 filler token 1812 filler token 1813 filler token 1814 filler token 1815 filler token 1816 filler token 1817 filler token 1818 filler token 1819 filler token 1820 filler token 1821 filler token 1822 filler token 1823 filler token 1824 filler token 1825 filler token 1826 filler token 1827 filler token 1828 filler token 1829 filler token 1830 filler token 1831 filler token 1832 filler token 1833 filler token 1834 filler token 1835 filler token 1836 filler token 1837 filler token 1838 filler token 1839 filler token 1840 filler token 1841 filler token 1842 filler token 1843 filler token 1844 filler token 1845 filler token 1846 filler token 1847 filler token 1848 filler token 1849 filler token 1850 filler token 1851 filler token 1852 filler token 1853 filler token 1854 filler token 1855 filler token 1856 filler token 1857 filler token 1858 filler token 1859 filler token 1860 filler token 1861 filler token 1862 filler token 1863 filler token 1864 filler token 1865 filler token 1866 filler token 1867 filler token 1868 filler token 1869 filler token 1870 filler token 1871 filler token 1872 filler token 1873 filler token 1874 filler token 1875 filler token 1876 filler token 1877 filler token 1878 filler token 1879 filler token 1880 filler token 1881 filler token 1882 filler token 1883 filler token 1884 filler token 1885 filler token 1886 filler token 1887 filler token 1888 filler token 1889 filler token 1890 filler token 1891 filler token 1892 filler token 1893 filler token 1894 filler token 1895 filler token 1896 filler token 1897 filler token 1898 filler token 1899 filler token 1900 filler token 1901 filler token 1902 filler token 1903 filler token 1904 filler token 1905 filler token 1906 filler token 1907 filler token 1908 filler token 1909 filler token 1910 filler token 1911 filler token 1912 filler token 1913 filler token 1914 filler token 1915 filler token 1916 filler token 1917 filler token 1918 filler token 1919 filler token 1920 filler token 1921 filler token 1922 filler token 1923 filler token 1924 filler token 1925 filler token 1926 filler token 1927 filler token 1928 filler token 1929 filler token 1930 filler token 1931 filler token 1932 filler token 1933 filler token 1934 filler token 1935 filler token 1936 filler token 1937 filler token 1938 filler token 1939 filler token 1940 filler token 1941 filler token 1942 filler token 1943 filler token 1944 filler token 1945 filler token 1946 filler token 1947 filler token 1948 filler token 1949 filler token 1950 filler token 1951 filler token 1952 filler token 1953 filler token 1954 filler token 1955 filler token 1956 filler token 1957 filler token 1958 filler token 1959 filler token 1960 filler token 1961 filler token 1962 filler token 1963 filler token 1964 filler token 1965 filler token 1966 filler token 1967 filler token 1968 filler token 1969 filler token 1970 filler token 1971 filler token 1972 filler token 1973 filler token 1974 filler token 1975 filler token 1976 filler token 1977 filler token 1978 filler token 1979 filler token 1980 filler token 1981 filler token 1982 filler token 1983 filler token 1984 filler token 1985 filler token 1986 filler token 1987 filler token 1988 filler token 1989 filler token 1990 filler token 1991 filler token 1992 filler token 1993 filler token 1994 filler token 1995 filler token 1996 filler token 1997 filler token 1998 filler token 1999",
+      "questions": {
+        "topic": {
+          "type": "choice",
+          "instructions": "What is the dominant topic?",
+          "criteria": {
+            "technology": null,
+            "business": null,
+            "sports": null,
+            "noise": null
+          }
+        }
+      },
+      "expected_upstream_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "topic": {
+            "type": "choice",
+            "choice": "noise",
+            "probabilities": {
+              "technology": 0.3376,
+              "business": 0.2227,
+              "sports": 0.1019,
+              "noise": 0.3379
+            },
+            "confidence": 0.062,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 512,
+          "output_tokens": 0
+        }
+      },
+      "expected_mlx_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "topic": {
+            "type": "choice",
+            "choice": "noise",
+            "probabilities": {
+              "technology": 0.3376,
+              "business": 0.2227,
+              "sports": 0.1019,
+              "noise": 0.3379
+            },
+            "confidence": 0.062,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 512,
+          "output_tokens": 0
+        }
+      }
+    },
+    {
+      "name": "dict_instructions_and_many_options",
+      "state": {
+        "note": "triage"
+      },
+      "questions": {
+        "routing": {
+          "type": "choice",
+          "instructions": {
+            "goal": "route",
+            "allow_multiple": false
+          },
+          "criteria": {
+            "opt0": "description 0",
+            "opt1": "description 1",
+            "opt2": "description 2",
+            "opt3": "description 3",
+            "opt4": "description 4",
+            "opt5": "description 5",
+            "opt6": "description 6",
+            "opt7": "description 7",
+            "opt8": "description 8",
+            "opt9": "description 9",
+            "opt10": "description 10",
+            "opt11": "description 11"
+          }
+        },
+        "quality": {
+          "type": "score",
+          "instructions": "Score the writing quality.",
+          "criteria": [
+            "poor",
+            "fair",
+            "good",
+            "excellent"
+          ]
+        }
+      },
+      "expected_upstream_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "routing": {
+            "type": "choice",
+            "choice": "opt0",
+            "probabilities": {
+              "opt0": 0.9987,
+              "opt1": 0.0013,
+              "opt2": 0.0,
+              "opt3": 0.0,
+              "opt4": 0.0,
+              "opt5": 0.0,
+              "opt6": 0.0,
+              "opt7": 0.0,
+              "opt8": 0.0,
+              "opt9": 0.0,
+              "opt10": 0.0,
+              "opt11": 0.0
+            },
+            "confidence": 0.9959,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "quality": {
+            "type": "score",
+            "score": 1.3157,
+            "legend": {
+              "0": "poor",
+              "1": "fair",
+              "2": "good",
+              "3": "excellent"
+            },
+            "probabilities": {
+              "0": 0.1686,
+              "1": 0.4569,
+              "2": 0.2648,
+              "3": 0.1097
+            },
+            "confidence": 0.0966,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 138,
+          "output_tokens": 0
+        }
+      },
+      "expected_mlx_fp32_cpu": {
+        "model": "rl-agent",
+        "answers": {
+          "routing": {
+            "type": "choice",
+            "choice": "opt0",
+            "probabilities": {
+              "opt0": 0.9987,
+              "opt1": 0.0013,
+              "opt2": 0.0,
+              "opt3": 0.0,
+              "opt4": 0.0,
+              "opt5": 0.0,
+              "opt6": 0.0,
+              "opt7": 0.0,
+              "opt8": 0.0,
+              "opt9": 0.0,
+              "opt10": 0.0,
+              "opt11": 0.0
+            },
+            "confidence": 0.9959,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          },
+          "quality": {
+            "type": "score",
+            "score": 1.3157,
+            "legend": {
+              "0": "poor",
+              "1": "fair",
+              "2": "good",
+              "3": "excellent"
+            },
+            "probabilities": {
+              "0": 0.1686,
+              "1": 0.4569,
+              "2": 0.2648,
+              "3": 0.1097
+            },
+            "confidence": 0.0966,
+            "rl_agent": {
+              "act_probability": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 138,
+          "output_tokens": 0
+        }
+      }
+    }
+  ]
+}

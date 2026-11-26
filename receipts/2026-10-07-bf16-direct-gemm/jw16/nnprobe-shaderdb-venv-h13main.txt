@@ -1,0 +1,6 @@
+CS shader: 165 instrs, 150 alu, 150 fscib, 120 ic, 1338 code size, 25 gprs, 58 uniforms, 0 scratch, 1024 threads, 2 loops, 0:0 spills:fills, 129 preamble inst
+CS shader: 17 instrs, 8 alu, 8 fscib, 0 ic, 116 code size, 7 gprs, 28 uniforms, 0 scratch, 1024 threads, 1 loops, 0:0 spills:fills, 24 preamble inst
+CS shader: 17 instrs, 9 alu, 9 fscib, 0 ic, 116 code size, 7 gprs, 28 uniforms, 0 scratch, 1024 threads, 1 loops, 0:0 spills:fills, 24 preamble inst
+CS shader: 214 instrs, 162 alu, 162 fscib, 120 ic, 1674 code size, 27 gprs, 116 uniforms, 0 scratch, 1024 threads, 2 loops, 0:0 spills:fills, 136 preamble inst
+CS shader: 2999 instrs, 2787 alu, 2787 fscib, 1404 ic, 22600 code size, 71 gprs, 432 uniforms, 0 scratch, 1024 threads, 3 loops, 0:0 spills:fills, 261 preamble inst
+CS shader: 337 instrs, 259 alu, 259 fscib, 110 ic, 2526 code size, 111 gprs, 78 uniforms, 0 scratch, 896 threads, 2 loops, 0:0 spills:fills, 60 preamble inst

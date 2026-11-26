@@ -1,0 +1,44 @@
+{
+  "talker_quantized_linear_count": 196,
+  "talker_linear_count": 0,
+  "predictor_quantized_linear_count": 35,
+  "predictor_linear_count": 0,
+  "sample_weights": [
+    {
+      "name": "layers.27.mlp.down_proj",
+      "type": "QuantizedLinear",
+      "shape": [
+        1024,
+        384
+      ],
+      "dtype": "mlx.core.uint32"
+    },
+    {
+      "name": "layers.27.mlp.up_proj",
+      "type": "QuantizedLinear",
+      "shape": [
+        3072,
+        128
+      ],
+      "dtype": "mlx.core.uint32"
+    },
+    {
+      "name": "layers.27.mlp.gate_proj",
+      "type": "QuantizedLinear",
+      "shape": [
+        3072,
+        128
+      ],
+      "dtype": "mlx.core.uint32"
+    },
+    {
+      "name": "layers.27.self_attn.o_proj",
+      "type": "QuantizedLinear",
+      "shape": [
+        1024,
+        256
+      ],
+      "dtype": "mlx.core.uint32"
+    }
+  ]
+}

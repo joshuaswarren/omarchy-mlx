@@ -1,0 +1,69 @@
+qmvov (16-inch M1 Max) 20261029T1257Z load 1.56 boot 2cf8e649-e17b-4b16-8d76-a0bcfc921a20
+== micro
+-- micro round 1 arm A
+MICRO A mlx_omarchy 0.32.4.dev202610281952+5e40ecf9 {'libmlx.so': '7ca9b27ebb32c378'}
+MICRO A up/gate K2048 N6144: median 66.0 us/call (min 60.5) fp 9050f8e4c4f351aa
+MICRO A down K6144 N2048: median 88.8 us/call (min 78.0) fp 9a6c45972a268415
+MICRO A proj K2048 N2048: median 69.6 us/call (min 68.2) fp 45ed1907c81cb9bd
+MICRO A kv K2048 N512: median 100.4 us/call (min 99.4) fp e008527fbb6fabde
+MICRO A head K2048 N248320: median 1295.8 us/call (min 1288.7) fp 7cdcc47b750e5d33
+-- micro round 1 arm B
+MICRO B mlx_omarchy 0.32.4.dev202610291252+9562bc74 {'libmlx.so': '640f45e9842153dd'}
+MICRO B up/gate K2048 N6144: median 80.9 us/call (min 78.5) fp 9050f8e4c4f351aa
+MICRO B down K6144 N2048: median 106.2 us/call (min 94.4) fp 9a6c45972a268415
+MICRO B proj K2048 N2048: median 86.8 us/call (min 85.3) fp 45ed1907c81cb9bd
+MICRO B kv K2048 N512: median 105.8 us/call (min 105.0) fp e008527fbb6fabde
+MICRO B head K2048 N248320: median 1750.7 us/call (min 1745.3) fp 7cdcc47b750e5d33
+-- micro round 2 arm A
+MICRO A mlx_omarchy 0.32.4.dev202610281952+5e40ecf9 {'libmlx.so': '7ca9b27ebb32c378'}
+MICRO A up/gate K2048 N6144: median 70.9 us/call (min 63.8) fp 9050f8e4c4f351aa
+MICRO A down K6144 N2048: median 88.2 us/call (min 76.1) fp 9a6c45972a268415
+MICRO A proj K2048 N2048: median 46.3 us/call (min 41.5) fp 45ed1907c81cb9bd
+MICRO A kv K2048 N512: median 76.4 us/call (min 71.9) fp e008527fbb6fabde
+MICRO A head K2048 N248320: median 1273.6 us/call (min 1265.1) fp 7cdcc47b750e5d33
+-- micro round 2 arm B
+MICRO B mlx_omarchy 0.32.4.dev202610291252+9562bc74 {'libmlx.so': '640f45e9842153dd'}
+MICRO B up/gate K2048 N6144: median 78.4 us/call (min 77.5) fp 9050f8e4c4f351aa
+MICRO B down K6144 N2048: median 110.6 us/call (min 95.2) fp 9a6c45972a268415
+MICRO B proj K2048 N2048: median 54.3 us/call (min 49.9) fp 45ed1907c81cb9bd
+MICRO B kv K2048 N512: median 79.9 us/call (min 74.2) fp e008527fbb6fabde
+MICRO B head K2048 N248320: median 1746.6 us/call (min 1742.5) fp 7cdcc47b750e5d33
+-- micro round 3 arm A
+MICRO A mlx_omarchy 0.32.4.dev202610281952+5e40ecf9 {'libmlx.so': '7ca9b27ebb32c378'}
+MICRO A up/gate K2048 N6144: median 60.0 us/call (min 59.0) fp 9050f8e4c4f351aa
+MICRO A down K6144 N2048: median 78.1 us/call (min 76.4) fp 9a6c45972a268415
+MICRO A proj K2048 N2048: median 42.6 us/call (min 40.7) fp 45ed1907c81cb9bd
+MICRO A kv K2048 N512: median 70.9 us/call (min 68.4) fp e008527fbb6fabde
+MICRO A head K2048 N248320: median 1271.3 us/call (min 1266.6) fp 7cdcc47b750e5d33
+-- micro round 3 arm B
+MICRO B mlx_omarchy 0.32.4.dev202610291252+9562bc74 {'libmlx.so': '640f45e9842153dd'}
+MICRO B up/gate K2048 N6144: median 91.6 us/call (min 78.9) fp 9050f8e4c4f351aa
+MICRO B down K6144 N2048: median 100.6 us/call (min 94.5) fp 9a6c45972a268415
+MICRO B proj K2048 N2048: median 49.7 us/call (min 49.1) fp 45ed1907c81cb9bd
+MICRO B kv K2048 N512: median 74.3 us/call (min 72.8) fp e008527fbb6fabde
+MICRO B head K2048 N248320: median 1752.1 us/call (min 1747.6) fp 7cdcc47b750e5d33
+== end to end (256 tokens, greedy)
+-- pair 1 arm A load 1.26
+Traceback (most recent call last):
+ModuleNotFoundError: No module named 'caps_sim_guard'
+-- pair 1 arm B load 1.26
+Traceback (most recent call last):
+ModuleNotFoundError: No module named 'caps_sim_guard'
+-- pair 2 arm B load 1.26
+Traceback (most recent call last):
+ModuleNotFoundError: No module named 'caps_sim_guard'
+-- pair 2 arm A load 1.26
+Traceback (most recent call last):
+ModuleNotFoundError: No module named 'caps_sim_guard'
+-- pair 3 arm A load 1.26
+Traceback (most recent call last):
+ModuleNotFoundError: No module named 'caps_sim_guard'
+-- pair 3 arm B load 1.26
+Traceback (most recent call last):
+ModuleNotFoundError: No module named 'caps_sim_guard'
+== identity (full logits, 256 steps)
+IDENT A mlx_omarchy 0.32.4.dev202610281952+5e40ecf9 {'libmlx.so': '7ca9b27ebb32c378'}
+IDENT A steps 256 ids_sha e70cb52a914936c0 logits_sha c0a8b9edbfa9eafe first [271, 248068, 271, 248069, 271, 57590]
+IDENT B mlx_omarchy 0.32.4.dev202610291252+9562bc74 {'libmlx.so': '640f45e9842153dd'}
+IDENT B steps 256 ids_sha e70cb52a914936c0 logits_sha c0a8b9edbfa9eafe first [271, 248068, 271, 248069, 271, 57590]
+done 12:57:58

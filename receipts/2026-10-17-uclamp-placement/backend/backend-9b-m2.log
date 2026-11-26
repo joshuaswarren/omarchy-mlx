@@ -1,0 +1,15 @@
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:02 start key 9b-m2 model mlx-community/Qwen3.5-9B-4bit kernel 7.1.12-2-20261013.18-sep-ARCH governors performance, load1 0.43
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:02 packages: asahi-alarm-keyring 20241216-1;asahi-audio 4.1-1;asahi-bless 0.4.2-1;asahi-fwextract 0.8.4-1;asahi-scripts 20260127.1-1;linux-api-headers 7.2-1;linux-aurora 7.1.12.aurora2-20261013.18;linux-aurora-headers 7.1.12.aurora2-12.6;mesa 1:26.2.4-1;omarchy-mlx 0.7.28-2;omarchy-mlx-vulkan-omarchy 1:26.2.4.git69bde15340-2;vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2;vulkan-headers 1:1.4.363.0-1;vulkan-icd-loader 1.4.363.0-1;vulkan-mesa-implicit-layers 1:26.2.4-1;vulkan-tools 1.4.363.0-1;
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:02 vulkaninfo: 	apiVersion         = 1.4.362
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:02 vulkaninfo: 	driverVersion      = 26.2.99
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:02 vulkaninfo: 	deviceName         = Apple M2 Max (G14C B1)
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:02 vulkaninfo: 	driverName         = Honeykrisp
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:02 vulkaninfo: 	driverInfo         = Mesa 26.3.0-devel (git-69bde15340)
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:02 serving processes: litellm=0 mlx_lm_server=0
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:02 provenance script sha256 21337ddd29e79291 bench_decode sha256 f5062d88f34b0845
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:02 provenance: mlx-omarchy 0.32.4.dev202610161042+75cc013b mx=0.32.4.dev202610161042+75cc013b verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:3f6d0a63405aa6f7
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:06 traced run rc=0: decode 39.76 tok/s over 15 tokens (16 requested, EOS suppressed) generated_ids sha256:e3185a84eb9dccac n=16 first=8160,579,264 last=271,16,13
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:06 traced run provenance: mlx-omarchy 0.32.4.dev202610161042+75cc013b mx=0.32.4.dev202610161042+75cc013b verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:3f6d0a63405aa6f7
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:06 TRACE dispatch_lines 11006 distinct_kernels 33 max_count 524288 top10(id x lines) 425x2640 58x1752 233x1556 419x766 463x576 9x534 464x528 514x528 507x382 450x300
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:06 device reopen rc=0 reopen Device(gpu, 0) [2.0, 2.0, 2.0, 2.0]
+CLAMPMETA meta-9b-m2-20261017T064402Z 06:44:06 DONE out=$WORK/out-meta-9b-m2-20261017T064402Z

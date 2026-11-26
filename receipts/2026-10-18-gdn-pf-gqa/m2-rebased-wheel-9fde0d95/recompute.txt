@@ -1,0 +1,17 @@
+t-P1-A-1.out json 1 True 40.4073 0a1a64828ea650e8 64 Apple M2 Max (G14C B1)
+t-P1-B-1.out json 1 True 43.1745 0a1a64828ea650e8 64 Apple M2 Max (G14C B1)
+t-P1-C-1.out json 1 True 43.8276 0a1a64828ea650e8 64 Apple M2 Max (G14C B1)
+P1 A B ids_equal True full_steps 32 max|d| full 0.0 differ 0 top1 128/128 top5 128/128 KL 0.0
+P1 B C ids_equal True full_steps 32 max|d| full 0.0 differ 0 top1 128/128 top5 128/128 KL 0.0
+P1 C C2 ids_equal True full_steps 32 max|d| full 0.0 differ 0 top1 128/128 top5 128/128 KL 0.0
+P1 A C ids_equal True full_steps 32 max|d| full 0.0 differ 0 top1 128/128 top5 128/128 KL 0.0
+P1 A C2 ids_equal True full_steps 32 max|d| full 0.0 differ 0 top1 128/128 top5 128/128 KL 0.0
+A 6 True ids ['139a0af7ed4e5481']
+A 10 True ids ['df4f0808b6b5fd64']
+B 6 True ids ['139a0af7ed4e5481']
+B 10 True ids ['df4f0808b6b5fd64']
+C 6 True ids ['139a0af7ed4e5481']
+C 10 True ids ['df4f0808b6b5fd64']
+A dispatches per token 306.0 {514: 24.0, 516: None, 636: None, 637: None, 58: 8.0}
+B dispatches per token 354.0 {514: None, 516: 24.0, 636: None, 637: None, 58: 56.0}
+C dispatches per token 306.0 {514: None, 516: None, 636: None, 637: 24.0, 58: 8.0}

@@ -1,0 +1,21 @@
+A = main, B = p4; host wall time per decode q+k pair (us), 200 pairs in one eval
+## bfloat16 base
+  per process, run order: main 131.3, p4 102.9, p4 103.7, main 141.0
+  main: n=2 mean 136.2 (min 131.3, max 141.0)
+  p4: n=2 mean 103.3 (min 102.9, max 103.7)
+  B/A 0.759
+## bfloat16 freqs
+  per process, run order: main 1396.0, p4 1342.6, p4 1325.7, main 1399.2
+  main: n=2 mean 1397.6 (min 1396.0, max 1399.2)
+  p4: n=2 mean 1334.2 (min 1325.7, max 1342.6)
+  B/A 0.955
+## float16 base
+  per process, run order: main 32.2, p4 32.5, p4 35.2, main 32.1
+  main: n=2 mean 32.2 (min 32.1, max 32.2)
+  p4: n=2 mean 33.9 (min 32.5, max 35.2)
+  B/A 1.053
+## float16 freqs
+  per process, run order: main 1341.4, p4 1198.6, p4 1196.3, main 1343.4
+  main: n=2 mean 1342.4 (min 1341.4, max 1343.4)
+  p4: n=2 mean 1197.4 (min 1196.3, max 1198.6)
+  B/A 0.892

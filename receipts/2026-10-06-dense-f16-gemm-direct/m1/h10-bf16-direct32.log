@@ -1,0 +1,18 @@
+# 2026-10-06T21:44:19Z tag=h10-bf16-direct32 boot=abc36fa1-7db1-4088-96ed-4523f5ad087e load=4.73 3.99 1.92 icd=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json
+# cmd: ./gemm-bench --dtype bf16 --reps 6 --rounds 5 --side cb=sh/matmul_coopmat_bf16.comp:32:32:8 --side d32=sh/direct32.comp:64:64:0:-DOPERAND_F32=1
+probing Apple M1 (G13G B1) api=1.4
+sh/matmul_coopmat_bf16.comp
+sh/direct32.comp
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[1,1,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[0,0,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[0,0,0,0],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[1,1,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[0,0,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[0,0,0,0],"scope":3}
+{"k":"dev","name":"Apple M1 (G13G B1)","subgroupSize":32,"coopmat":true}
+{"k":"problem","dtype":"bf16","m":4096,"n":4096,"kdim":4096,"a_t":0,"b_t":0,"samples":4096}
+{"k":"accuracy","side":"cb","exact_rounded":1.00000,"mean_ulp":0.2457,"max_ulp":0.500,"nonfinite":0,"bits_vs_cb":0}
+{"k":"accuracy","side":"d32","exact_rounded":1.00000,"mean_ulp":0.2457,"max_ulp":0.500,"nonfinite":0,"bits_vs_cb":0}
+{"k":"time","side":"cb","median_us":229337.9,"min_us":229301.9,"max_us":229381.6,"tflops":0.599,"tflops_best":0.599}
+{"k":"time","side":"d32","median_us":123590.1,"min_us":121667.3,"max_us":125642.2,"tflops":1.112,"tflops_best":1.130}
+# end 2026-10-06T21:49:02Z rc=0

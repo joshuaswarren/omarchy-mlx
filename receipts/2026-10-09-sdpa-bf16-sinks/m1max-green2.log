@@ -1,0 +1,9 @@
+start 2026-10-09T17:41:22Z label green2 load 0.10 bin 381e82808f1520f7
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:      2 |      2 passed | 0 failed | 44 skipped
+[doctest] assertions: 188680 | 188680 passed | 0 failed |
+[doctest] Status: SUCCESS!
+rc=0
+end 2026-10-09T17:41:22Z

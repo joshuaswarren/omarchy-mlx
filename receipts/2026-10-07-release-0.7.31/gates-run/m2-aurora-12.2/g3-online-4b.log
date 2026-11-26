@@ -1,0 +1,21 @@
+BEGIN 2026-10-07T20:58:25Z tag=v0.7.31 boot_id=f0eafd96-0532-4db9-ab2f-5f42f3eba49c uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202610071347+9b5c938 (sha=a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
+df_before 103G
+OUTBOUND_DENIED False
+SETUP_COMPLETE 15.4s pair=compact
+CHAT status=complete 2.01s text='ready'
+CARD status=complete wall_s=38.12 text_len=0 components=1 component_types=['chart'] sse_component_types=['chart'] first_visible_text_s=None first_visible_component_s=38.102 notices=['working', 'generating', 'working', 'generating', 'working', 'generating']
+CARD_CHECK PASS
+GATE PASS
+SSE_EVENT_COUNT 8
+SSE {"type": "status", "data": {"state": "working"}, "at_s": 0.003}
+SSE {"type": "status", "data": {"state": "generating", "context_tokens": 1667, "context_limit": 4096, "output_tokens": 700}, "at_s": 0.005}
+SSE {"type": "status", "data": {"state": "working"}, "at_s": 15.009}
+SSE {"type": "status", "data": {"state": "generating", "context_tokens": 1667, "context_limit": 4096, "output_tokens": 700}, "at_s": 15.009}
+SSE {"type": "status", "data": {"state": "working"}, "at_s": 30.014}
+SSE {"type": "status", "data": {"state": "generating", "context_tokens": 1667, "context_limit": 4096, "output_tokens": 700}, "at_s": 30.014}
+SSE {"type": "component", "data": {"type": "chart", "kind": "bar", "series": [{"id": "paris", "label": "Paris", "unit": "M", "source": "user input", "estimate": false, "values": [{"label": "2020", "value": 2.1}, {"label": "2030", "value": 2.4}]}, {"id": "tokyo", "label": "Tokyo", "unit": "M", "source": "user input", "estimate": false, "values": [{"label": "2020", "value": 13.9}, {"label": "2030", "value": 14.5}]}, {"id": "lagos", "label": "Lagos", "unit": "M", "source": "user input", "estimate": false, "values": [{"label": "2020", "value": 21.0}, {"label": "2030", "value": 24.5}]}], "id": "a7f073de095d4651a819af25c5d2d81a", "turn_id": "25e545da966f403494c0c3f9f581e4dd", "revision": 1}, "at_s": 38.102}
+SSE {"type": "done", "data": {"stopped": false}, "at_s": 38.102}
+fuser_port=34459 exit=1 output=
+GATE3_ONLINE_EXIT 0
+hf_bytes_after 9103542631

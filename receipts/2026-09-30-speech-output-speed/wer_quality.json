@@ -1,0 +1,92 @@
+{
+  "base": {
+    "overall_wer": 0.0,
+    "rows": [
+      {
+        "i": 1,
+        "wer": 0.0,
+        "audio_s": 2.8,
+        "rms_dbfs": -20.6,
+        "peak": 0.462,
+        "spectral_flatness_median": 0.138
+      },
+      {
+        "i": 2,
+        "wer": 0.0,
+        "audio_s": 4.4,
+        "rms_dbfs": -18.9,
+        "peak": 0.616,
+        "spectral_flatness_median": 0.088
+      },
+      {
+        "i": 3,
+        "wer": 0.0,
+        "audio_s": 4.4,
+        "rms_dbfs": -20.2,
+        "peak": 0.598,
+        "spectral_flatness_median": 0.218
+      },
+      {
+        "i": 4,
+        "wer": 0.0,
+        "audio_s": 4.08,
+        "rms_dbfs": -18.5,
+        "peak": 0.762,
+        "spectral_flatness_median": 0.195
+      },
+      {
+        "i": 5,
+        "wer": 0.0,
+        "audio_s": 4.56,
+        "rms_dbfs": -20.8,
+        "peak": 0.48,
+        "spectral_flatness_median": 0.156
+      }
+    ]
+  },
+  "A": {
+    "overall_wer": 0.0,
+    "rows": [
+      {
+        "i": 1,
+        "wer": 0.0,
+        "audio_s": 2.72,
+        "rms_dbfs": -25.2,
+        "peak": 0.368,
+        "spectral_flatness_median": 0.205
+      },
+      {
+        "i": 2,
+        "wer": 0.0,
+        "audio_s": 5.04,
+        "rms_dbfs": -18.5,
+        "peak": 0.69,
+        "spectral_flatness_median": 0.135
+      },
+      {
+        "i": 3,
+        "wer": 0.0,
+        "audio_s": 3.6,
+        "rms_dbfs": -18.4,
+        "peak": 0.647,
+        "spectral_flatness_median": 0.217
+      },
+      {
+        "i": 4,
+        "wer": 0.0,
+        "audio_s": 6.0,
+        "rms_dbfs": -18.5,
+        "peak": 0.758,
+        "spectral_flatness_median": 0.178
+      },
+      {
+        "i": 5,
+        "wer": 0.0,
+        "audio_s": 4.32,
+        "rms_dbfs": -17.0,
+        "peak": 0.875,
+        "spectral_flatness_median": 0.149
+      }
+    ]
+  }
+}

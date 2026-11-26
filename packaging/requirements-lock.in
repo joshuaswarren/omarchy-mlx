@@ -1,0 +1,21 @@
+# Top-level inputs for the system-package venv. Release tooling
+# (packaging/vendor-wheels.sh) resolves this on a networked host into the
+# vendored, hash-locked manifest (requirements-lock.txt); the offline venv
+# build (packaging/build-venv.sh) installs only from that manifest.
+#
+# Same pins as install.sh: mlx-lm goes in without its upstream mlx
+# dependency (the wheel satisfies it), transformers carries the
+# sentencepiece extra, and the resolver pins the transitive closure
+# (huggingface-hub stays below 2.0 through transformers' own pin).
+# The mlx-omarchy wheel itself is added from the release asset via
+# --wheel. Voice extras (mlx-audio and friends) stay install.sh-only
+# for the system package's first scope.
+
+mlx-lm==0.31.3
+transformers[sentencepiece]==5.16.1
+numpy
+protobuf
+pyyaml
+jinja2
+huggingface_hub
+soundfile

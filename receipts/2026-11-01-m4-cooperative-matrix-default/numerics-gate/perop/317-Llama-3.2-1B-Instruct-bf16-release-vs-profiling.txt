@@ -1,0 +1,3 @@
+317-Llama-3.2-1B-Instruct-bf16-main.npz vs 317-Llama-3.2-1B-Instruct-bf16-dmain.npz: 84/84 outputs bit-identical
+317-Llama-3.2-1B-Instruct-bf16-p2.npz vs 317-Llama-3.2-1B-Instruct-bf16-dp2.npz: 84/84 outputs bit-identical
+release and profiling outputs identical

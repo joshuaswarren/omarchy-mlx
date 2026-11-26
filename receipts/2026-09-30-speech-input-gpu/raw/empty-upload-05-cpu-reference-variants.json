@@ -1,0 +1,100 @@
+{
+ "meta": {
+  "mlx": "0.32.3",
+  "device": "Device(cpu, 0)",
+  "mlx_audio": "?",
+  "model_path": "/tmp/sig/hf/models--mlx-community--parakeet-tdt-0.6b-v3/snapshots/ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15"
+ },
+ "rows": [
+  {
+   "case": "cpu",
+   "n": 68437,
+   "ms": 31398.9,
+   "text": ""
+  },
+  {
+   "case": "cpu_pad_end_160",
+   "n": 68597,
+   "ms": 29327.7,
+   "text": "She promised to do this."
+  },
+  {
+   "case": "cpu_pad_end_800",
+   "n": 69237,
+   "ms": 31126.9,
+   "text": ""
+  },
+  {
+   "case": "cpu_pad_end_1600",
+   "n": 70037,
+   "ms": 39930.3,
+   "text": ""
+  },
+  {
+   "case": "cpu_pad_end_4000",
+   "n": 72437,
+   "ms": 39250.3,
+   "text": "She promised to do this."
+  },
+  {
+   "case": "cpu_pad_end_8000",
+   "n": 76437,
+   "ms": 35181.2,
+   "text": ""
+  },
+  {
+   "case": "cpu_trim_start_160",
+   "n": 68277,
+   "ms": 29007.9,
+   "text": "She promised to do this."
+  },
+  {
+   "case": "cpu_trim_end_160",
+   "n": 68277,
+   "ms": 30224.4,
+   "text": "She promised to do this."
+  },
+  {
+   "case": "cpu_trim_start_800",
+   "n": 67637,
+   "ms": 29480.9,
+   "text": ""
+  },
+  {
+   "case": "cpu_trim_end_800",
+   "n": 67637,
+   "ms": 31338.1,
+   "text": ""
+  },
+  {
+   "case": "cpu_trim_start_1600",
+   "n": 66837,
+   "ms": 29652.0,
+   "text": ""
+  },
+  {
+   "case": "cpu_trim_end_1600",
+   "n": 66837,
+   "ms": 30427.9,
+   "text": ""
+  },
+  {
+   "case": "cpu_trim_start_4000",
+   "n": 64437,
+   "ms": 27490.7,
+   "text": "She promised to do this. And she mentioned to me that when M."
+  },
+  {
+   "case": "cpu_trim_end_4000",
+   "n": 64437,
+   "ms": 27568.1,
+   "text": "She promised to do this."
+  },
+  {
+   "case": "cpu_gain_0.5",
+   "n": 68437,
+   "ms": 29357.5,
+   "text": ""
+  }
+ ]
+}

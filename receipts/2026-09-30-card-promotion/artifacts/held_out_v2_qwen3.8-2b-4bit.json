@@ -1,0 +1,157 @@
+{
+  "suite_sha256": "93f606a995e97f9c41398f315d6a91d725330db5c6f1e2361947dcd1b97f9f5c",
+  "chat_model": "qwen3.8-2b-4bit",
+  "prompts": [
+    {
+      "id": "v2-25",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [
+        "comparison"
+      ],
+      "elapsed_s": 37.4,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "v2-26",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 37.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-27",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [
+        "comparison"
+      ],
+      "elapsed_s": 25.1,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "v2-28",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 4.0,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-29",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 5.0,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-30",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 5.0,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-31",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 13.3,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-32",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 5.0,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-33",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 3.0,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-34",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 3.0,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-35",
+      "category": "near-miss",
+      "kind": "explanation-with-bullets",
+      "expect": "none",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 41.1,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "v2-36",
+      "category": "near-miss",
+      "kind": "explanation-with-bullets",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 13.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-01",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 36.3,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-02",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 40.1,
+      "status": "complete",
+      "pass": true
+    }
+  ],
+  "_path": "<home>/agents/MarkdownCards/results/held_out_v2_qwen3.8-2b-4bit.json"
+}

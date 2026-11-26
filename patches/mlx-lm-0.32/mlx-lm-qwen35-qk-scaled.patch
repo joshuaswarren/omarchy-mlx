@@ -1,0 +1,13 @@
+--- a/mlx_lm/models/gated_delta.py
++++ b/mlx_lm/models/gated_delta.py
+@@ -39,6 +39,10 @@
+     ``mx.fast.rms_norm`` adds it to mean(x^2), so scale it by ``inv_scale**2``.
+     """
+     rms_eps = eps * inv_scale**2
++    if q.dtype == mx.bfloat16 and hasattr(mx.fast, "rms_norm_scaled"):
++        q = mx.fast.rms_norm_scaled(q, None, inv_scale * inv_scale, rms_eps)
++        k = mx.fast.rms_norm_scaled(k, None, inv_scale, rms_eps)
++        return q, k
+     q = (inv_scale**2) * mx.fast.rms_norm(q, None, rms_eps)
+     k = inv_scale * mx.fast.rms_norm(k, None, rms_eps)
+     return q, k

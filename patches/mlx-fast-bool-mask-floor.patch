@@ -1,0 +1,27 @@
+--- a/mlx/fast.cpp	2026-09-06 10:55:04.712401172 -0500
++++ b/mlx/fast.cpp	2026-09-06 10:55:04.717401124 -0500
+@@ -939,13 +939,21 @@
+           force_fused,
+           stream)) {
+     if (has_bool_mask && !ScaledDotProductAttention::supports_bool_mask()) {
+-      // Convert bool mask to additive mask.
+-      float inf = std::numeric_limits<float>::infinity();
++      // Convert bool mask to additive mask. The floor is the dtype's
++      // finite minimum, not -infinity: a fully masked row (every
++      // position false, e.g. a scalar false mask broadcast to the
++      // output shape) then softmaxes to the uniform distribution the
++      // composed reference produces, where an all -infinity row would
++      // produce inf - inf NaN.
+       array& mask = inputs[3];
+       mask = where(
+           mask,
+           full_like(mask, 0, final_type, s),
+-          full_like(mask, -inf, final_type, s));
++          full_like(
++              mask,
++              static_cast<float>(finfo(final_type).min),
++              final_type,
++              s));
+     }
+     Shape out_shape{q.shape(0), q.shape(1), q.shape(2), v.shape(-1)};
+     auto primitive = std::make_shared<ScaledDotProductAttention>(

@@ -1,0 +1,35 @@
+{
+  "comparator": "llama.cpp",
+  "pin": {
+    "commit": "c1d0e7a004015f23bc0233470b747b596f29b264",
+    "release": "v0.3.0",
+    "build_id": "c1d0e7a build 1",
+    "build_flags": "CMAKE_BUILD_TYPE=Release;GGML_NATIVE=ON;GGML_VULKAN=ON",
+    "vulkan_device": "Apple M1 (G13G B1) (Honeykrisp)",
+    "model": "Qwen3.8-2B-Q4_K_M.gguf",
+    "model_path": "$HOME/ane-models/Qwen3.8-2B-Q4_K_M.gguf",
+    "model_sha256": "4aa0fb13c431514262f259d420ecc95a8714df58ac2a2384514e20b93983f0ff",
+    "model_bytes": 1301202176,
+    "params_billions": 1.942653248,
+    "context_tokens": 512,
+    "machine": "m1-test-host-linux",
+    "kernel": "7.1.6-1-1-ARCH",
+    "mesa": "26.1.7-1",
+    "threads": 1
+  },
+  "prefill": {
+    "test": "pp512",
+    "prompt_tokens": 512,
+    "tps": 209.251152
+  },
+  "decode": {
+    "test": "tg128",
+    "generated_tokens": 128,
+    "tps": 25.148727
+  },
+  "thermal": {
+    "idle_baseline_c": 36.4,
+    "procedure": "Read the highest available SMC temperature after llama-bench completed at 5.29 W system power and 0 RPM fan speed."
+  },
+  "source_receipt": "$HOME/llama.cpp/build-vulkan/llama-bench-output.json"
+}

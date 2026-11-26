@@ -1,0 +1,184 @@
+# Maintainer: Joshua Warren <joshua@joshuawarren.com>
+#
+# DEPRECATED. Do not build or install this package. It replaces the system
+# Mesa package. The supported Honeykrisp driver is omarchy-mlx-vulkan, which
+# installs a private ICD under /usr/lib/omarchy-mlx/vulkan/ and leaves the
+# system Mesa driver installed for the desktop. See docs/install-omarchy.md.
+#
+# Drop-in replacement for the asahi-alarm `mesa` package that builds the
+# Honeykrisp fork branch (github.com/joshuaswarren/mesa-1, honeykrisp-omarchy).
+# The recipe is AsahiLinux/PKGBUILDs mesa/PKGBUILD at 28229b8 (the exact
+# PKGBUILD that produced the installed mesa 26.1.7-1, .BUILDINFO
+# pkgbuild_sha256sum 296cee6f...) with the source switched to the fork commit,
+# the fex overlay and dummy split packages dropped, and the dri driver list
+# globbed so upstream additions do not break package(). Build options are
+# unchanged, so GL, llvmpipe, zink, rusticl, teflon and VA are all still built.
+#
+# Rollback: sudo pacman -U /var/cache/pacman/pkg/mesa-26.1.7-1-aarch64.pkg.tar.xz
+
+pkgname=mesa-honeykrisp-omarchy
+_commit=6f6afc896844730f6d6c47f12a91145351cb4c28
+pkgver=26.3.0.devel.hk${_commit:0:7}
+pkgrel=1
+pkgdesc="Mesa with the Honeykrisp fork fixes (coopmat, byte extract, precise math) for Apple Silicon"
+arch=('aarch64')
+url="https://github.com/joshuaswarren/mesa-1/tree/honeykrisp-omarchy"
+license=('MIT AND BSD-3-Clause AND SGI-B-2.0')
+makedepends=('git' 'python-mako' 'libxml2' 'libx11' 'xorgproto' 'libdrm' 'libxshmfence' 'libxxf86vm'
+  'libxdamage' 'libva' 'wayland' 'wayland-protocols' 'zstd' 'elfutils' 'llvm' 'spirv-llvm-translator'
+  'libomxil-bellagio' 'libclc' 'clang' 'libglvnd' 'libunwind' 'lm_sensors' 'libxrandr'
+  'systemd' 'valgrind' 'glslang' 'vulkan-icd-loader' 'directx-headers' 'cmake' 'meson' 'python-pycparser' 'python-packaging' 'python-pyaml'
+  'rust' 'rust-bindgen')
+depends=('egl-wayland' 'libdrm' 'wayland' 'libxxf86vm' 'libxdamage' 'libxshmfence' 'libelf' 'libomxil-bellagio'
+  'libunwind' 'llvm-libs' 'lm_sensors' 'libglvnd' 'zstd' 'vulkan-icd-loader' 'spirv-tools')
+optdepends=('vulkan-mesa-layers: additional vulkan layers')
+provides=('mesa=26.3.0' 'mesa-libgl' 'opengl-driver' 'libva-mesa-driver' 'vulkan-asahi' 'vulkan-driver'
+  'opencl-driver' 'opencl-rusticl-mesa' 'libva-driver')
+conflicts=('mesa' 'mesa-asahi' 'mesa-asahi-edge' 'mesa-libgl' 'vulkan-swrast')
+options=('!debug' '!lto')
+source=(
+  "mesa::git+https://github.com/joshuaswarren/mesa-1.git#commit=$_commit"
+  Mesa-MLAA-License-Clarification-Email.txt
+)
+sha512sums=('SKIP'
+            'ecdabad21a86f04d51ba709a90fbeccb3004c6e8af3546edc530dcb4727787ed5d6a63043b6ab50b4c0a46de0894b6f3c594101b4d25f7831dee9f33fd2a7e31')
+
+prepare() {
+  # rust-bindgen 0.73.x generates `let val: u32 = val as _;` for bitfield-enum
+  # newtypes stored in C bitfields (pipe_resource.usage, pipe_transfer.usage)
+  # and rusticl fails to compile. asahi-alarm built 26.1.7-1 with 0.72.1;
+  # build that bindgen-cli locally when the distro one is 0.73.
+  if bindgen --version | grep -q ' 0\.73\.'; then
+    cargo install --locked --root "$srcdir/bindgen" bindgen-cli --version 0.72.1
+  fi
+
+  cd mesa
+  chmod -Rf a+rX,u+w,g-w,o-w .
+}
+
+build() {
+  export PATH="$srcdir/bindgen/bin:$PATH"
+
+  # Same flags as asahi-alarm mesa 26.1.7-1 (minimal debug info, no LTO).
+  CFLAGS+=' -g1'
+  CXXFLAGS+=' -g1'
+
+  meson mesa build \
+    --prefix=/usr \
+    --libdir=lib \
+    --libexecdir=lib \
+    --sbindir=bin \
+    --buildtype=release \
+    -Db_ndebug=true \
+    -Db_lto=false \
+    -Dplatforms=x11,wayland \
+    -Dgallium-drivers=llvmpipe,virgl,asahi,zink \
+    -Dgallium-va=enabled \
+    -Dgallium-mediafoundation=disabled \
+    -Dteflon=true \
+    -Dgallium-rusticl=true \
+    -Dvulkan-drivers=swrast,virtio,asahi \
+    -Dvulkan-layers=device-select \
+    -Dgles1=enabled \
+    -Dgles2=enabled \
+    -Dopengl=true \
+    -Dgbm=enabled \
+    -Dglx=dri \
+    -Degl=enabled \
+    -Dglvnd=enabled \
+    -Dintel-rt=disabled \
+    -Dmicrosoft-clc=disabled \
+    -Dllvm=enabled \
+    -Dshared-llvm=enabled \
+    -Dvalgrind=disabled \
+    -Dbuild-tests=false \
+    -Dandroid-libbacktrace=disabled \
+    -Dspirv-tools=enabled \
+    -Dglx-read-only-text=false
+
+  meson configure --no-pager build
+  ninja -C build
+
+  DESTDIR="${srcdir}/fakeinstall" meson install -C build
+}
+
+_install() {
+  local src f dir
+  for src; do
+    f="${src#fakeinstall/}"
+    dir="${pkgdir}/$([[ "$f" == */* ]] && printf "%s" "${f%/*}" || printf "")"
+    install -m755 -d "${dir}"
+    mv -v "${src}" "${dir}/"
+  done
+}
+
+package() {
+  # glvnd owns the unversioned GLX/EGL names; GLES comes from glvnd too.
+  rm -vf fakeinstall/usr/lib/libGLX_mesa.so
+  rm -vf fakeinstall/usr/lib/libEGL_mesa.so
+  rm -vf fakeinstall/usr/lib/libGLES*
+
+  # glvnd needs a default provider for indirect rendering where it cannot
+  # determine the vendor
+  ln -s libGLX_mesa.so.0 fakeinstall/usr/lib/libGLX_system.so.0
+
+  pushd fakeinstall/usr/lib
+  for i in libGL.so; do
+    eu-findtextrel $i && exit 1
+  done
+  popd
+
+  # the two drivers this package exists for must be present
+  test -f fakeinstall/usr/lib/libvulkan_asahi.so
+  test -f fakeinstall/usr/lib/dri/asahi_dri.so
+  test -f fakeinstall/usr/lib/dri/apple_dri.so
+
+  install -Dpm0755 -t ${pkgdir}/usr/share/doc/mesa/ Mesa-MLAA-License-Clarification-Email.txt
+  install -m755 -d ${pkgdir}/usr/lib/dri
+  install -m755 -d ${pkgdir}/usr/share/drirc.d
+
+  # libGL
+  _install fakeinstall/usr/lib/libGLX_mesa.so.0*
+  _install fakeinstall/usr/lib/libGLX_system.so.0*
+
+  # libEGL
+  _install fakeinstall/usr/share/glvnd/egl_vendor.d/50_mesa.json
+  _install fakeinstall/usr/lib/libEGL_mesa.so.0*
+
+  # libgbm
+  _install fakeinstall/usr/lib/libgbm.so
+  _install fakeinstall/usr/lib/libgbm.so.1
+  _install fakeinstall/usr/lib/libgbm.so.1.*
+
+  # libTeflon
+  _install fakeinstall/usr/lib/libteflon.so
+
+  # libOpenCL
+  _install fakeinstall/usr/lib/libRusticlOpenCL.so.*
+  _install fakeinstall/etc/OpenCL/vendors/rusticl.icd
+
+  # dri-drivers (every *_dri.so the fork built, asahi/apple/zink included)
+  _install fakeinstall/usr/lib/gbm/dri_gbm.so
+  _install fakeinstall/usr/share/drirc.d/00-mesa-defaults.conf
+  _install fakeinstall/usr/lib/libgallium-*.so
+  _install fakeinstall/usr/lib/dri/*_dri.so
+
+  # va-drivers
+  _install fakeinstall/usr/lib/dri/*_drv_video.so
+
+  # vulkan-drivers
+  _install fakeinstall/usr/lib/libvulkan_lvp.so
+  _install fakeinstall/usr/share/vulkan/icd.d/lvp_icd.*.json
+  _install fakeinstall/usr/lib/libVkLayer_MESA_device_select.so
+  _install fakeinstall/usr/share/vulkan/implicit_layer.d/VkLayer_MESA_device_select.json
+  _install fakeinstall/usr/lib/libvulkan_virtio.so
+  _install fakeinstall/usr/share/vulkan/icd.d/virtio_icd.*.json
+  _install fakeinstall/usr/lib/libvulkan_asahi.so
+  _install fakeinstall/usr/share/vulkan/icd.d/asahi_icd.*.json
+
+  # headers
+  _install fakeinstall/usr/include
+
+  # pkg-config files
+  _install fakeinstall/usr/lib/pkgconfig
+}

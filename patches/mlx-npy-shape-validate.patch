@@ -1,0 +1,61 @@
+# Upstream: ml-explore/mlx 99f109b567b969ef06974f1e0450ce0e2eeb4de2 (Validate .npy shape in mlx/io/load.cpp, #4657)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/mlx/io/load.cpp b/mlx/io/load.cpp
+index 25fe48029d..f5472b55c4 100644
+--- a/mlx/io/load.cpp
++++ b/mlx/io/load.cpp
+@@ -292,10 +292,23 @@ array load(std::shared_ptr<io::Reader> in_stream, StreamOrDevice s) {
+   size_t ed = header.find_last_of(')');
+   std::string shape_str = header.substr(st, ed - st);
+ 
++  size_t max_size = std::numeric_limits<size_t>::max() / size_of(dtype);
++  size_t total_size = 1;
+   while (!shape_str.empty()) {
+     // Read current number and get position of comma
+     size_t pos;
+     int dim = std::stoi(shape_str, &pos);
++
++    // Reject negative dims and a total byte count that overflows size_t
++    if (dim < 0) {
++      throw std::runtime_error(
++          "[load] Negative dimension in shape in " + in_stream->label());
++    }
++    if (dim != 0 && total_size > max_size / dim) {
++      throw std::runtime_error(
++          "[load] Shape is too large in " + in_stream->label());
++    }
++    total_size *= dim;
+     shape.push_back(dim);
+ 
+     // Skip the comma and space and read the next number
+diff --git a/python/tests/test_load.py b/python/tests/test_load.py
+index d767088257..d3c17fde78 100644
+--- a/python/tests/test_load.py
++++ b/python/tests/test_load.py
+@@ -99,6 +99,26 @@ def test_load_npy_read_error(self):
+         with self.assertRaises(RuntimeError):
+             mx.eval(out)
+ 
++    def test_load_npy_invalid_shape(self):
++        def write_npy(path, shape):
++            header = "{'descr': '<f4', 'fortran_order': False, 'shape': %s, }" % shape
++            header += " " * ((16 - (11 + len(header)) % 16) % 16) + "\n"
++            with open(path, "wb") as f:
++                f.write(b"\x93NUMPY\x01\x00")
++                f.write(struct.pack("<H", len(header)))
++                f.write(header.encode())
++                f.write(b"\x00" * 64)
++
++        for name, shape in [
++            ("negative", "(-1,)"),
++            ("negative_nd", "(4, -2)"),
++        ]:
++            with self.subTest(shape=shape):
++                save_file = os.path.join(self.test_dir, f"invalid_{name}.npy")
++                write_npy(save_file, shape)
++                with self.assertRaises(RuntimeError):
++                    mx.load(save_file, stream=mx.cpu)
++
+     def test_async_load_npy_read_error_across_streams(self):
+         save_file = os.path.join(self.test_dir, "truncated_async.npy")
+         expected = np.arange(16, dtype=np.float32)

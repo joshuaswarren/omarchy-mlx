@@ -1,0 +1,820 @@
+// Legacy per-row GDN decode variant, restored verbatim from the
+// pre-shared-tile kernel (main f0f142776^). The staged state tile wins
+// +3.1..3.9% decode on G13C (T6001) but loses ~3.8% on G13G (T8103);
+// dispatch selects this variant on the G13 parts unless
+// MLX_OMARCHY_GDN_DECODE_TILE forces the tile. Arithmetic is
+// bit-identical to the tiled variant (dg_bitcheck arms).
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Fused gated-delta-rule decode step (GatedDeltaUpdate, T=1). Replaces the
+// composed per-token op chain that Qwen3.5-style GDN linear-attention layers
+// run per decoded token: state decay, kv reduction, delta, outer-product
+// state update, and the output projection over the updated state.
+//
+// One workgroup per (batch, v-head), one thread per Dv row. The thread's row
+// of the state is read twice (kv pass, update+output pass) instead of being
+// held in registers; k and q ride shared memory. Every intermediate is
+// float32 and each row reduces sequentially over Dk in ascending order, so
+// the arithmetic matches the composed fallback's per-row sums.
+//
+// Exactness contract (bf16 arm): q/k/v are bf16 bit patterns widened exactly
+// (bf16 bits are the f32 top half); g/beta arrive f32 (the fast.cpp caller
+// promotes them to the q/k dtype; bf16 widening is exact); state rides f32,
+// or bf16 in the -DSTATE_BF16 builds (each word widened, and the final store
+// rounded, through the same bf16_load/bf16_store RNE sites); the output
+// store rounds to bf16 RNE, the same store cast.comp applies everywhere.
+// See receipts/2026-09-21-gdn-decode-fused.
+
+// GDN_COMPOSED_ORDER builds a separate kernel (the *Composed entries in
+// compute.h) that primitives.cpp dispatches only for flag bit 9 (A_log f32,
+// the Qwen3.5-9B raw route): C++-fallback rounding sites in the gate chain
+// and the walks, bit-identical to the composed chain. The default build
+// (no define) is the v0.7.26 source token-for-token: leave the
+// `#ifndef GDN_COMPOSED_ORDER` branches untouched. bf16-A_log models
+// (Qwen3.8 2B/4B) depend on their exact codegen, and restructuring shared
+// code changed their greedy output on G13 Mesa even with the same math.
+
+#version 460
+
+#extension GL_EXT_shader_16bit_storage : require
+#if defined(QKV_BF16) || defined(STATE_BF16)
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
+
+#if defined(GDN_CONV_FUSED) && (defined(GDN_COMPOSED_ORDER) || defined(GDN_NATIVE_GQA_INDEX))
+#error GDN_CONV_FUSED covers the default-order equal-head build only
+#endif
+#if defined(GDN_NORM_FUSED) && !defined(GDN_CONV_FUSED)
+#error GDN_NORM_FUSED extends GDN_CONV_FUSED
+#endif
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+#ifndef GDN_CONV_FUSED
+layout(set = 0, binding = 0, std430) readonly buffer QBuf  { uint16_t v[]; } q_buf;
+layout(set = 0, binding = 1, std430) readonly buffer KBuf  { uint16_t v[]; } k_buf;
+layout(set = 0, binding = 2, std430) readonly buffer VBuf  { uint16_t v[]; } v_buf;
+#else /* GDN_CONV_FUSED */
+// Fused GDN decode conv + gated-delta step (fast::gdn_conv_delta_update): the conv
+// inputs ride slots 0..2 and the conv carry-out state slot 10; every other slot is as below.
+//   0 conv state [B, K-1, C]   1 qkv row [B, 1, C]   2 conv weight [C, K, 1]   10 conv state out
+layout(set = 0, binding = 0, std430) readonly buffer ConvState { uint16_t v[]; } conv_state;
+layout(set = 0, binding = 1, std430) readonly buffer ConvX     { uint16_t v[]; } conv_x;
+layout(set = 0, binding = 2, std430) readonly buffer ConvW     { uint16_t v[]; } conv_w;
+layout(set = 0, binding = 10, std430) buffer ConvStateOut      { uint16_t v[]; } conv_state_out;
+#ifdef GDN_NORM_FUSED
+// Gated-norm epilogue (rms_norm_gated over each head's 128 outputs): 11 gate z [B, 1, Hv, 128], 12 norm weight [128].
+layout(set = 0, binding = 11, std430) readonly buffer NormGate   { uint16_t v[]; } norm_gate;
+layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[]; } norm_w;
+#endif /* GDN_NORM_FUSED */
+#endif /* GDN_CONV_FUSED */
+layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
+layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
+#ifdef STATE_BF16
+layout(set = 0, binding = 5, std430) readonly buffer SIn   { u16vec4  v[]; } s_in;
+#else
+layout(set = 0, binding = 5, std430) readonly buffer SIn   { vec4     v[]; } s_in;
+#endif
+layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint16_t v[]; } y_buf;
+#ifdef STATE_BF16
+layout(set = 0, binding = 7, std430) buffer         SOut  { u16vec4  v[]; } s_out;
+#else
+layout(set = 0, binding = 7, std430) buffer         SOut  { vec4     v[]; } s_out;
+#endif
+// Raw-gates mode (flag bit 8): the gate chain rides in-kernel. Slot 3
+// carries a, slot 4 carries b (bf16); slots 8/9 carry A_log (bf16) and
+// dt_bias (bf16).
+layout(set = 0, binding = 8, std430) readonly buffer ALogBuf { uint16_t v[]; } alog_buf;
+layout(set = 0, binding = 9, std430) readonly buffer DtBuf   { uint16_t v[]; } dt_buf;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;   // Dk
+  uint matrix_n;   // Dv
+  uint matrix_k;   // Hv
+  uint flags;
+  float alpha;
+  float beta_f;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if ((bits & 0x7fff0000u) == 0x7f800000u) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+// STATE_BF16 builds read and store the recurrent state as bf16: the vec4
+// state words widen and store through gdn_s_load4/gdn_s_save4. Four bf16
+// words pack into one u16vec4 exactly as four f32 words pack into one vec4,
+// so the vec4 index math and the dispatch offset checks are unchanged. The
+// default builds expand the GDN_SLOAD4/GDN_SSAVE4 macros to the original
+// expressions token for token.
+#ifdef STATE_BF16
+vec4 gdn_s_load4(u16vec4 w) {
+  return vec4(bf16_load(w.x), bf16_load(w.y), bf16_load(w.z), bf16_load(w.w));
+}
+
+u16vec4 gdn_s_save4(float a, float b, float c, float d) {
+  return u16vec4(
+      bf16_store(a), bf16_store(b), bf16_store(c), bf16_store(d));
+}
+#define GDN_SLOAD4(idx) gdn_s_load4(s_in.v[idx])
+#define GDN_SSAVE4(a, b, c, d) gdn_s_save4(a, b, c, d)
+#else
+#define GDN_SLOAD4(idx) s_in.v[idx]
+#define GDN_SSAVE4(a, b, c, d) vec4(a, b, c, d)
+#endif
+
+shared float sk[128];
+shared float sq[128];
+shared float sdelta[128];
+
+// Prefetching walks (H95). The per-row loops of the untiled kernel are
+// runtime-count loops whose state load is waited on before its fma, so a row
+// pays one memory round trip per element (256 per row). Here eight state words
+// are loaded ahead of the eight in-order fma steps. The contraction grouping is
+// written out so it equals what the untiled source compiles to (AGX NIR/ISA,
+// receipts/2026-09-29-jw16-decode-gdn-lse-argmax): kv = fma(s, k[i] * g, kv),
+// ns = fma(s, g, delta * k[i]), o = fma(ns, q[i], o), with k[i] * g and
+// delta * k[i] each rounded once.
+shared float skg[128];
+
+#if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
+// Wide prefetch (dk a multiple of 32, checked at dispatch): the eight state words of the plain walk become thirty-two. All eight
+// vec4 loads of a block are issued before the first of its thirty-two fma steps, so a row pays one memory round trip per block instead
+// of one per eight words. The fma chain is the plain walk's, element for element in the same order.
+float gdn_kv_walk_wide(uint sbase, uint dk) {
+  float kv = 0.0f;
+  uint q = sbase >> 2u;
+  for (uint i = 0u; i < dk; i += 32u) {
+    vec4 w0 = GDN_SLOAD4(q + (i >> 2u));
+    vec4 w1 = GDN_SLOAD4(q + (i >> 2u) + 1u);
+    vec4 w2 = GDN_SLOAD4(q + (i >> 2u) + 2u);
+    vec4 w3 = GDN_SLOAD4(q + (i >> 2u) + 3u);
+    vec4 w4 = GDN_SLOAD4(q + (i >> 2u) + 4u);
+    vec4 w5 = GDN_SLOAD4(q + (i >> 2u) + 5u);
+    vec4 w6 = GDN_SLOAD4(q + (i >> 2u) + 6u);
+    vec4 w7 = GDN_SLOAD4(q + (i >> 2u) + 7u);
+    kv = fma(w0.x, skg[i], kv);
+    kv = fma(w0.y, skg[i + 1u], kv);
+    kv = fma(w0.z, skg[i + 2u], kv);
+    kv = fma(w0.w, skg[i + 3u], kv);
+    kv = fma(w1.x, skg[i + 4u], kv);
+    kv = fma(w1.y, skg[i + 5u], kv);
+    kv = fma(w1.z, skg[i + 6u], kv);
+    kv = fma(w1.w, skg[i + 7u], kv);
+    kv = fma(w2.x, skg[i + 8u], kv);
+    kv = fma(w2.y, skg[i + 9u], kv);
+    kv = fma(w2.z, skg[i + 10u], kv);
+    kv = fma(w2.w, skg[i + 11u], kv);
+    kv = fma(w3.x, skg[i + 12u], kv);
+    kv = fma(w3.y, skg[i + 13u], kv);
+    kv = fma(w3.z, skg[i + 14u], kv);
+    kv = fma(w3.w, skg[i + 15u], kv);
+    kv = fma(w4.x, skg[i + 16u], kv);
+    kv = fma(w4.y, skg[i + 17u], kv);
+    kv = fma(w4.z, skg[i + 18u], kv);
+    kv = fma(w4.w, skg[i + 19u], kv);
+    kv = fma(w5.x, skg[i + 20u], kv);
+    kv = fma(w5.y, skg[i + 21u], kv);
+    kv = fma(w5.z, skg[i + 22u], kv);
+    kv = fma(w5.w, skg[i + 23u], kv);
+    kv = fma(w6.x, skg[i + 24u], kv);
+    kv = fma(w6.y, skg[i + 25u], kv);
+    kv = fma(w6.z, skg[i + 26u], kv);
+    kv = fma(w6.w, skg[i + 27u], kv);
+    kv = fma(w7.x, skg[i + 28u], kv);
+    kv = fma(w7.y, skg[i + 29u], kv);
+    kv = fma(w7.z, skg[i + 30u], kv);
+    kv = fma(w7.w, skg[i + 31u], kv);
+  }
+  return kv;
+}
+#endif /* GDN_PF_WIDE */
+
+#ifndef GDN_COMPOSED_ORDER
+float gdn_kv_walk(uint sbase, uint dk) {
+#else /* GDN_COMPOSED_ORDER */
+// Composed-chain order (C++ raw fallback): state_next = state*g rounded
+// per element, kv term = state_next*k rounded per element, serial ascending
+// sum from 0.0 (ReduceF32 single-chunk order). Bit 9 = C++-fallback-
+// equivalent arithmetic (A_log-f32 models); the default keeps the
+// Metal-kernel fma association (k*g precomputed, fma accumulate).
+float gdn_kv_walk(uint sbase, uint dk, float g, bool mlx_order) {
+#endif /* GDN_COMPOSED_ORDER */
+  float kv = 0.0f;
+  uint q = sbase >> 2u;
+  for (uint i = 0u; i < dk; i += 8u) {
+    vec4 a = GDN_SLOAD4(q + (i >> 2u));
+    vec4 b = GDN_SLOAD4(q + (i >> 2u) + 1u);
+#ifndef GDN_COMPOSED_ORDER
+    kv = fma(a.x, skg[i], kv);
+    kv = fma(a.y, skg[i + 1u], kv);
+    kv = fma(a.z, skg[i + 2u], kv);
+    kv = fma(a.w, skg[i + 3u], kv);
+    kv = fma(b.x, skg[i + 4u], kv);
+    kv = fma(b.y, skg[i + 5u], kv);
+    kv = fma(b.z, skg[i + 6u], kv);
+    kv = fma(b.w, skg[i + 7u], kv);
+#else /* GDN_COMPOSED_ORDER */
+    if (mlx_order) {
+      precise float t0 = a.x * g;
+      precise float t1 = a.y * g;
+      precise float t2 = a.z * g;
+      precise float t3 = a.w * g;
+      precise float t4 = b.x * g;
+      precise float t5 = b.y * g;
+      precise float t6 = b.z * g;
+      precise float t7 = b.w * g;
+      precise float c0 = t0 * sk[i];
+      precise float c1 = t1 * sk[i + 1u];
+      precise float c2 = t2 * sk[i + 2u];
+      precise float c3 = t3 * sk[i + 3u];
+      precise float c4 = t4 * sk[i + 4u];
+      precise float c5 = t5 * sk[i + 5u];
+      precise float c6 = t6 * sk[i + 6u];
+      precise float c7 = t7 * sk[i + 7u];
+      kv += c0;
+      kv += c1;
+      kv += c2;
+      kv += c3;
+      kv += c4;
+      kv += c5;
+      kv += c6;
+      kv += c7;
+    } else {
+      kv = fma(a.x, skg[i], kv);
+      kv = fma(a.y, skg[i + 1u], kv);
+      kv = fma(a.z, skg[i + 2u], kv);
+      kv = fma(a.w, skg[i + 3u], kv);
+      kv = fma(b.x, skg[i + 4u], kv);
+      kv = fma(b.y, skg[i + 5u], kv);
+      kv = fma(b.z, skg[i + 6u], kv);
+      kv = fma(b.w, skg[i + 7u], kv);
+    }
+#endif /* GDN_COMPOSED_ORDER */
+  }
+  return kv;
+}
+
+float gdn_dk_term(float sd, float kk) {
+  precise float t = sd * kk;
+  return t;
+}
+
+#ifndef GDN_COMPOSED_ORDER
+float gdn_update_walk(uint sbase, uint obase, uint dk, float g, float sd) {
+#else /* GDN_COMPOSED_ORDER */
+float gdn_update_walk(uint sbase, uint obase, uint dk, float g, float sd,
+                      bool mlx_order) {
+#endif /* GDN_COMPOSED_ORDER */
+  float o = 0.0f;
+  uint qi = sbase >> 2u;
+  uint qo = obase >> 2u;
+  for (uint i = 0u; i < dk; i += 8u) {
+    vec4 a = GDN_SLOAD4(qi + (i >> 2u));
+    vec4 b = GDN_SLOAD4(qi + (i >> 2u) + 1u);
+#ifndef GDN_COMPOSED_ORDER
+    float n0 = fma(a.x, g, gdn_dk_term(sd, sk[i]));
+    float n1 = fma(a.y, g, gdn_dk_term(sd, sk[i + 1u]));
+    float n2 = fma(a.z, g, gdn_dk_term(sd, sk[i + 2u]));
+    float n3 = fma(a.w, g, gdn_dk_term(sd, sk[i + 3u]));
+    float n4 = fma(b.x, g, gdn_dk_term(sd, sk[i + 4u]));
+    float n5 = fma(b.y, g, gdn_dk_term(sd, sk[i + 5u]));
+    float n6 = fma(b.z, g, gdn_dk_term(sd, sk[i + 6u]));
+    float n7 = fma(b.w, g, gdn_dk_term(sd, sk[i + 7u]));
+#else /* GDN_COMPOSED_ORDER */
+    precise float d0 = gdn_dk_term(sd, sk[i]);
+    precise float d1 = gdn_dk_term(sd, sk[i + 1u]);
+    precise float d2 = gdn_dk_term(sd, sk[i + 2u]);
+    precise float d3 = gdn_dk_term(sd, sk[i + 3u]);
+    precise float d4 = gdn_dk_term(sd, sk[i + 4u]);
+    precise float d5 = gdn_dk_term(sd, sk[i + 5u]);
+    precise float d6 = gdn_dk_term(sd, sk[i + 6u]);
+    precise float d7 = gdn_dk_term(sd, sk[i + 7u]);
+    precise float n0;
+    precise float n1;
+    precise float n2;
+    precise float n3;
+    precise float n4;
+    precise float n5;
+    precise float n6;
+    precise float n7;
+    if (mlx_order) {
+      // Composed chain: ns = (state*g) + (delta*k), each op rounded
+      // separately - no fma contraction.
+      precise float s_g0 = a.x * g;
+      precise float s_g1 = a.y * g;
+      precise float s_g2 = a.z * g;
+      precise float s_g3 = a.w * g;
+      precise float s_g4 = b.x * g;
+      precise float s_g5 = b.y * g;
+      precise float s_g6 = b.z * g;
+      precise float s_g7 = b.w * g;
+      n0 = s_g0 + d0;
+      n1 = s_g1 + d1;
+      n2 = s_g2 + d2;
+      n3 = s_g3 + d3;
+      n4 = s_g4 + d4;
+      n5 = s_g5 + d5;
+      n6 = s_g6 + d6;
+      n7 = s_g7 + d7;
+    } else {
+      n0 = fma(a.x, g, d0);
+      n1 = fma(a.y, g, d1);
+      n2 = fma(a.z, g, d2);
+      n3 = fma(a.w, g, d3);
+      n4 = fma(b.x, g, d4);
+      n5 = fma(b.y, g, d5);
+      n6 = fma(b.z, g, d6);
+      n7 = fma(b.w, g, d7);
+    }
+#endif /* GDN_COMPOSED_ORDER */
+    s_out.v[qo + (i >> 2u)] = GDN_SSAVE4(n0, n1, n2, n3);
+    s_out.v[qo + (i >> 2u) + 1u] = GDN_SSAVE4(n4, n5, n6, n7);
+#ifndef GDN_COMPOSED_ORDER
+    o = fma(n0, sq[i], o);
+    o = fma(n1, sq[i + 1u], o);
+    o = fma(n2, sq[i + 2u], o);
+    o = fma(n3, sq[i + 3u], o);
+    o = fma(n4, sq[i + 4u], o);
+    o = fma(n5, sq[i + 5u], o);
+    o = fma(n6, sq[i + 6u], o);
+    o = fma(n7, sq[i + 7u], o);
+#else /* GDN_COMPOSED_ORDER */
+    if (mlx_order) {
+      precise float p0 = n0 * sq[i];
+      precise float p1 = n1 * sq[i + 1u];
+      precise float p2 = n2 * sq[i + 2u];
+      precise float p3 = n3 * sq[i + 3u];
+      precise float p4 = n4 * sq[i + 4u];
+      precise float p5 = n5 * sq[i + 5u];
+      precise float p6 = n6 * sq[i + 6u];
+      precise float p7 = n7 * sq[i + 7u];
+      o += p0;
+      o += p1;
+      o += p2;
+      o += p3;
+      o += p4;
+      o += p5;
+      o += p6;
+      o += p7;
+    } else {
+      o = fma(n0, sq[i], o);
+      o = fma(n1, sq[i + 1u], o);
+      o = fma(n2, sq[i + 2u], o);
+      o = fma(n3, sq[i + 3u], o);
+      o = fma(n4, sq[i + 4u], o);
+      o = fma(n5, sq[i + 5u], o);
+      o = fma(n6, sq[i + 6u], o);
+      o = fma(n7, sq[i + 7u], o);
+    }
+#endif /* GDN_COMPOSED_ORDER */
+  }
+  return o;
+}
+
+#if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
+// Wide update walk: the same thirty-two-word blocks as gdn_kv_walk_wide, eight vec4 loaded before the first of the block's four
+// eight-word steps. Each step is the plain walk's body, in the same order, so the stores and the o chain are unchanged.
+float gdn_update_walk_wide(uint sbase, uint obase, uint dk, float g, float sd) {
+  float o = 0.0f;
+  uint qi = sbase >> 2u;
+  uint qo = obase >> 2u;
+  for (uint i = 0u; i < dk; i += 32u) {
+    vec4 w0 = GDN_SLOAD4(qi + (i >> 2u) + 0u);
+    vec4 w1 = GDN_SLOAD4(qi + (i >> 2u) + 1u);
+    vec4 w2 = GDN_SLOAD4(qi + (i >> 2u) + 2u);
+    vec4 w3 = GDN_SLOAD4(qi + (i >> 2u) + 3u);
+    vec4 w4 = GDN_SLOAD4(qi + (i >> 2u) + 4u);
+    vec4 w5 = GDN_SLOAD4(qi + (i >> 2u) + 5u);
+    vec4 w6 = GDN_SLOAD4(qi + (i >> 2u) + 6u);
+    vec4 w7 = GDN_SLOAD4(qi + (i >> 2u) + 7u);
+    { // words 0..7 of the block
+      float n0 = fma(w0.x, g, gdn_dk_term(sd, sk[i]));
+      float n1 = fma(w0.y, g, gdn_dk_term(sd, sk[i + 1u]));
+      float n2 = fma(w0.z, g, gdn_dk_term(sd, sk[i + 2u]));
+      float n3 = fma(w0.w, g, gdn_dk_term(sd, sk[i + 3u]));
+      float n4 = fma(w1.x, g, gdn_dk_term(sd, sk[i + 4u]));
+      float n5 = fma(w1.y, g, gdn_dk_term(sd, sk[i + 5u]));
+      float n6 = fma(w1.z, g, gdn_dk_term(sd, sk[i + 6u]));
+      float n7 = fma(w1.w, g, gdn_dk_term(sd, sk[i + 7u]));
+      s_out.v[qo + (i >> 2u) + 0u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 1u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o = fma(n0, sq[i], o);
+      o = fma(n1, sq[i + 1u], o);
+      o = fma(n2, sq[i + 2u], o);
+      o = fma(n3, sq[i + 3u], o);
+      o = fma(n4, sq[i + 4u], o);
+      o = fma(n5, sq[i + 5u], o);
+      o = fma(n6, sq[i + 6u], o);
+      o = fma(n7, sq[i + 7u], o);
+    }
+    { // words 8..15 of the block
+      float n0 = fma(w2.x, g, gdn_dk_term(sd, sk[i + 8u]));
+      float n1 = fma(w2.y, g, gdn_dk_term(sd, sk[i + 9u]));
+      float n2 = fma(w2.z, g, gdn_dk_term(sd, sk[i + 10u]));
+      float n3 = fma(w2.w, g, gdn_dk_term(sd, sk[i + 11u]));
+      float n4 = fma(w3.x, g, gdn_dk_term(sd, sk[i + 12u]));
+      float n5 = fma(w3.y, g, gdn_dk_term(sd, sk[i + 13u]));
+      float n6 = fma(w3.z, g, gdn_dk_term(sd, sk[i + 14u]));
+      float n7 = fma(w3.w, g, gdn_dk_term(sd, sk[i + 15u]));
+      s_out.v[qo + (i >> 2u) + 2u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 3u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o = fma(n0, sq[i + 8u], o);
+      o = fma(n1, sq[i + 9u], o);
+      o = fma(n2, sq[i + 10u], o);
+      o = fma(n3, sq[i + 11u], o);
+      o = fma(n4, sq[i + 12u], o);
+      o = fma(n5, sq[i + 13u], o);
+      o = fma(n6, sq[i + 14u], o);
+      o = fma(n7, sq[i + 15u], o);
+    }
+    { // words 16..23 of the block
+      float n0 = fma(w4.x, g, gdn_dk_term(sd, sk[i + 16u]));
+      float n1 = fma(w4.y, g, gdn_dk_term(sd, sk[i + 17u]));
+      float n2 = fma(w4.z, g, gdn_dk_term(sd, sk[i + 18u]));
+      float n3 = fma(w4.w, g, gdn_dk_term(sd, sk[i + 19u]));
+      float n4 = fma(w5.x, g, gdn_dk_term(sd, sk[i + 20u]));
+      float n5 = fma(w5.y, g, gdn_dk_term(sd, sk[i + 21u]));
+      float n6 = fma(w5.z, g, gdn_dk_term(sd, sk[i + 22u]));
+      float n7 = fma(w5.w, g, gdn_dk_term(sd, sk[i + 23u]));
+      s_out.v[qo + (i >> 2u) + 4u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 5u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o = fma(n0, sq[i + 16u], o);
+      o = fma(n1, sq[i + 17u], o);
+      o = fma(n2, sq[i + 18u], o);
+      o = fma(n3, sq[i + 19u], o);
+      o = fma(n4, sq[i + 20u], o);
+      o = fma(n5, sq[i + 21u], o);
+      o = fma(n6, sq[i + 22u], o);
+      o = fma(n7, sq[i + 23u], o);
+    }
+    { // words 24..31 of the block
+      float n0 = fma(w6.x, g, gdn_dk_term(sd, sk[i + 24u]));
+      float n1 = fma(w6.y, g, gdn_dk_term(sd, sk[i + 25u]));
+      float n2 = fma(w6.z, g, gdn_dk_term(sd, sk[i + 26u]));
+      float n3 = fma(w6.w, g, gdn_dk_term(sd, sk[i + 27u]));
+      float n4 = fma(w7.x, g, gdn_dk_term(sd, sk[i + 28u]));
+      float n5 = fma(w7.y, g, gdn_dk_term(sd, sk[i + 29u]));
+      float n6 = fma(w7.z, g, gdn_dk_term(sd, sk[i + 30u]));
+      float n7 = fma(w7.w, g, gdn_dk_term(sd, sk[i + 31u]));
+      s_out.v[qo + (i >> 2u) + 6u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + (i >> 2u) + 7u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o = fma(n0, sq[i + 24u], o);
+      o = fma(n1, sq[i + 25u], o);
+      o = fma(n2, sq[i + 26u], o);
+      o = fma(n3, sq[i + 27u], o);
+      o = fma(n4, sq[i + 28u], o);
+      o = fma(n5, sq[i + 29u], o);
+      o = fma(n6, sq[i + 30u], o);
+      o = fma(n7, sq[i + 31u], o);
+    }
+  }
+  return o;
+}
+#endif /* GDN_PF_WIDE */
+
+#ifdef GDN_COMPOSED_ORDER
+// Bit-9 gate chain in functions: glslang propagates `precise` backward
+// through everything feeding a precise value inside one function, so an
+// inline prologue in main() would inherit the walks' `precise` and stop
+// matching the composed kernels. See gated_delta_decode.comp for the
+// rounding-site rationale; these four functions are verbatim copies.
+float gdn_log1p_ew(float v) {
+  float u = 1.0f + v;
+  if (u == 1.0f) {
+    return v;
+  }
+  return log(u) * (v / (u - 1.0f));
+}
+
+float gdn_softplus_ew(float x) {
+  float value = max(0.0f, x);
+  if (!isnan(value) && !isinf(value)) {
+    value += gdn_log1p_ew(exp(-abs(0.0f - x)));
+  }
+  return value;
+}
+
+float gdn_g_composed(float x, float a_log) {
+  float sp = gdn_softplus_ew(x);
+  precise float e = exp(a_log);
+  precise float p = e * sp;
+  precise float n = -p;
+  precise float g = exp(n);
+  return g;
+}
+
+// sigmoid(b) rounded to bf16 as the Sigmoid kernel computes it (imprecise).
+float gdn_beta_ew(float b_in) {
+  return bf16_load(bf16_store(1.0f / (1.0f + exp(-b_in))));
+}
+
+#endif /* GDN_COMPOSED_ORDER */
+#ifdef GDN_CONV_FUSED
+// Push-constant fields the fused build reuses (the delta fields it does not need):
+//   operation K (taps)   lhs_size K-1   reduce_size C (channels)   rhs_size key_dim
+//   lhs_offset conv state offset   rhs_offset qkv row offset   aux_size conv weight offset
+//   out_strides[0] conv state out offset   [1] q/k norm eps bits   [2] q scale bits   [3] k scale bits
+shared float gdn_norm_block[256];
+
+// The store gdn_conv_decode.comp uses (it keeps infinities; this file's bf16_store does not).
+uint16_t gdn_conv_bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+// One channel of gdn_conv_decode.comp with flag bit 0 (SiLU): the tap body, the roundings and the
+// SiLU chain are that file's statements verbatim.
+uint16_t gdn_conv_channel(uint channel) {
+  const uint km1 = params.lhs_size;
+  const uint channels = params.reduce_size;
+  float accumulator = 0.0;
+  for (uint tap = 0u; tap < params.operation; ++tap) {
+    float value = tap < km1
+        ? bf16_load(conv_state.v[params.lhs_offset + tap * channels + channel])
+        : bf16_load(conv_x.v[params.rhs_offset + channel]);
+    accumulator += value *
+        bf16_load(conv_w.v[params.aux_size + channel * params.operation + tap]);
+  }
+  uint16_t conv_out = gdn_conv_bf16_store(accumulator);
+  float value = bf16_load(conv_out);
+  float sigmoid_value = 1.0 / (1.0 + exp(-value));
+  uint16_t sig_b = gdn_conv_bf16_store(sigmoid_value);
+  float silu = value * bf16_load(sig_b);
+  return gdn_conv_bf16_store(silu);
+}
+
+// The q/k rms-norm epilogue of gdn_conv_decode.comp (flag bit 1), non-APPLE build: given the
+// stored activated value, the half's reduced sum of squares and the scale bits.
+uint16_t gdn_conv_qk_norm(uint16_t activated, float sum_squares, uint scale_bits) {
+  float norm_value = bf16_load(activated);
+  float eps = uintBitsToFloat(params.out_strides[1]);
+  float mean_square = sum_squares / 128.0;
+  float norm = inversesqrt(mean_square + eps);
+  float scale = bf16_load(gdn_conv_bf16_store(uintBitsToFloat(scale_bits)));
+  precise float result = norm_value * (norm * 1.0);
+  float normed = bf16_load(gdn_conv_bf16_store(result));
+  return gdn_conv_bf16_store(normed * scale);
+}
+
+// The carry-out conv state of one channel: rows shift up, the last row is this step's x.
+void gdn_conv_state_out(uint channel) {
+  const uint km1 = params.lhs_size;
+  const uint channels = params.reduce_size;
+  for (uint r = 0u; r + 1u < km1; ++r) {
+    conv_state_out.v[params.out_strides[0] + r * channels + channel] =
+        conv_state.v[params.lhs_offset + (r + 1u) * channels + channel];
+  }
+  conv_state_out.v[params.out_strides[0] + (km1 - 1u) * channels + channel] =
+      conv_x.v[params.rhs_offset + channel];
+}
+
+// Replaces the q, k and v reads: this thread owns the q, k and v channel of its value row (equal key
+// and value head counts, head dim 128). Fills sq[row] and sk[row]; returns the value element.
+float gdn_conv_prologue(uint head, uint row) {
+  const uint key_dim = params.rhs_size;
+  const uint q_channel = head * 128u + row;
+  const uint k_channel = key_dim + head * 128u + row;
+  const uint v_channel = 2u * key_dim + head * params.matrix_n + row;
+  uint16_t q_act = gdn_conv_channel(q_channel);
+  uint16_t k_act = gdn_conv_channel(k_channel);
+  float q_value = bf16_load(q_act);
+  float k_value = bf16_load(k_act);
+  gdn_norm_block[row] = q_value * q_value;
+  gdn_norm_block[128u + row] = k_value * k_value;
+  barrier();
+  for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+    if (row < stride) {
+      gdn_norm_block[row] += gdn_norm_block[row + stride];
+      gdn_norm_block[128u + row] += gdn_norm_block[128u + row + stride];
+    }
+    barrier();
+  }
+  sq[row] = bf16_load(gdn_conv_qk_norm(q_act, gdn_norm_block[0], params.out_strides[2]));
+  sk[row] = bf16_load(gdn_conv_qk_norm(k_act, gdn_norm_block[128], params.out_strides[3]));
+  uint16_t v_act = gdn_conv_channel(v_channel);
+  gdn_conv_state_out(q_channel);
+  gdn_conv_state_out(k_channel);
+  gdn_conv_state_out(v_channel);
+  return bf16_load(v_act);
+}
+#ifdef GDN_NORM_FUSED
+// Epilogue: rms_norm_gated (fast_norm_gated.comp mode 0, the default non-APPLE row reduction, which
+// serves 128-wide rows) over this head's 128 outputs, replacing the y store. Statements are that
+// file's. Extra fields: params.shape[3] gate item offset, params.output_size norm weight item offset,
+// params.alpha the norm eps. The reduction is the file's 256-slot tree with the stride-128 step omitted
+// (it only ever adds the +0.0 of the 128 idle slots).
+shared float gdn_out_block[128];
+
+void gdn_norm_epilogue(uint head, uint row, float o_acc) {
+  // the delta kernel's own bf16 store of y, then the widen the norm kernel's input read performs
+  float value = bf16_load(bf16_store(o_acc));
+  float local_sq = 0.0;
+  local_sq += value * value;
+  gdn_out_block[row] = local_sq;
+  barrier();
+  for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+    if (row < stride) {
+      gdn_out_block[row] += gdn_out_block[row + stride];
+    }
+    barrier();
+  }
+  float mean_square = gdn_out_block[0] / 128.0;
+  barrier();
+  float norm = inversesqrt(mean_square + params.alpha);
+  float weight = bf16_load(norm_w.v[params.output_size + row]);
+  precise float norm_weight = norm * weight;
+  precise float result = value * norm_weight;
+  float normed = bf16_load(gdn_conv_bf16_store(result));
+  float gate = bf16_load(norm_gate.v[params.shape[3] + head * 128u + row]);
+  float sigmoid_value = 1.0 / (1.0 + exp(-gate));
+  precise float silu = gate * sigmoid_value;
+  precise float prod = silu * normed;
+  y_buf.v[params.output_offset + head * params.matrix_n + row] = gdn_conv_bf16_store(prod);
+}
+#endif /* GDN_NORM_FUSED */
+#define GDN_V_ELEM gdn_v_elem
+#else /* GDN_CONV_FUSED */
+#define GDN_V_ELEM bf16_load(v_buf.v[params.aux_size + head * dv + row])
+#endif /* GDN_CONV_FUSED */
+
+void main() {
+  uint dk = params.matrix_m;
+  uint dv = params.matrix_n;
+  uint hv = params.matrix_k;
+  uint head = gl_WorkGroupID.x;
+  uint row = gl_LocalInvocationID.x;   // one dv row per thread
+
+  if (head >= hv) {
+    return;
+  }
+#ifdef GDN_NATIVE_GQA_INDEX
+  // Native GQA (only with GDN_COMPOSED_ORDER, the f32-A_log raw route): q and k keep their Hk heads.
+  // in_strides[3] carries Hk (0 = q and k already carry Hv heads), in_strides[2] carries Hv. Value head j
+  // reads key head j / (Hv / Hk), the order mx.repeat on the head axis produces, per batch row (head runs
+  // over B * Hv). The same index as gated_delta_decode.comp. Every other build keeps the loop below.
+  uint khead = head;
+  if (params.in_strides[3] != 0u) {
+    uint hv_b = params.in_strides[2];
+    uint hk_b = params.in_strides[3];
+    khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
+  }
+  for (uint i = row; i < dk; i += 128u) {
+    sk[i] = bf16_load(k_buf.v[params.rhs_offset + khead * dk + i]);
+    sq[i] = bf16_load(q_buf.v[params.lhs_offset + khead * dk + i]);
+  }
+#else
+#ifdef GDN_CONV_FUSED
+  const float gdn_v_elem = gdn_conv_prologue(head, row);
+#else /* GDN_CONV_FUSED */
+  for (uint i = row; i < dk; i += 128u) {
+    sk[i] = bf16_load(k_buf.v[params.rhs_offset + head * dk + i]);
+    sq[i] = bf16_load(q_buf.v[params.lhs_offset + head * dk + i]);
+  }
+#endif /* GDN_CONV_FUSED */
+#endif
+  barrier();
+
+  float g;
+  float beta;
+  if ((params.flags & 8u) != 0u) {
+    // Raw-gates prologue. Matches the composed decode chain's rounding:
+    // beta = sigmoid(b) in f32 then rounded to bf16; g =
+    // exp(-exp(A_log_f32) * softplus(a + dt_bias)) in f32 then rounded to
+    // bf16 (the same roundings the eager chain applies before the kernel
+    // widened the bf16 values exactly).
+    float b_in = bf16_load(b_buf.v[params.aux_offset + head]);
+#ifndef GDN_COMPOSED_ORDER
+    float beta_f = 1.0f / (1.0f + exp(-b_in));
+    beta = bf16_load(bf16_store(beta_f));
+#else /* GDN_COMPOSED_ORDER */
+    if ((params.flags & 512u) != 0u) {
+      beta = gdn_beta_ew(b_in);
+    } else {
+      float beta_f = 1.0f / (1.0f + exp(-b_in));
+      beta = bf16_load(bf16_store(beta_f));
+    }
+#endif /* GDN_COMPOSED_ORDER */
+    float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
+    // A_log: flag bit 9 selects an f32 A_log (Qwen3.5-9B conversion) read
+    // as two little-endian u16 words - the same f32 word the eager chain's
+    // astype(f32) leaves untouched, so no rounding difference.
+    // head runs over B * Hv (batched decode); A_log and dt_bias are per model
+    // head, so they index head % Hv (in_strides[2] = Hv).
+    uint ph = head % params.in_strides[2];
+    float a_log;
+    if ((params.flags & 512u) != 0u) {
+      uint base = params.in_strides[0] + 2u * ph;
+      a_log = uintBitsToFloat(uint(alog_buf.v[base]) |
+                              (uint(alog_buf.v[base + 1u]) << 16u));
+    } else {
+      a_log = bf16_load(alog_buf.v[params.in_strides[0] + ph]);
+    }
+    // dt_bias rides bf16 in the Qwen3.8 checkpoint; widening is exact.
+    float dt = bf16_load(dt_buf.v[params.in_strides[1] + ph]);
+    // The eager chain rounds x = a + dt_bias to bf16 (bf16 + bf16 stays
+#ifndef GDN_COMPOSED_ORDER
+    // bf16) and softplus(x) to bf16; replicate those roundings exactly.
+#else /* GDN_COMPOSED_ORDER */
+    // bf16); the widen is exact.
+#endif /* GDN_COMPOSED_ORDER */
+    float x = bf16_load(bf16_store(a_in + dt));
+#ifndef GDN_COMPOSED_ORDER
+    // softplus = logaddexp(0, x): the eager chain lowers nn.softplus to
+    // LogAddExp, computed here with the elementwise kernel's exact
+    // formula max(a,b) + log1p(exp(-|a-b|)) (log1p in the corrected
+    // ratio form, log(u) * x / (u - 1)), then rounded to bf16.
+    float u = 1.0f + exp(-abs(x));
+    float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+    // The C++ raw fallback (fast.cpp) keeps softplus in f32 (logaddexp
+    // output is f32); the python eager chain rounds it to bf16. Bit 9
+    // (f32 A_log) selects the models whose serving reference is the C++
+    // fallback - keep sp f32 there so the fused path is bit-identical to
+    // the composed chain those models actually run. bf16-A_log models
+    // (Qwen3.8) keep the bf16 round and their shipped numerics.
+    float sp_raw = max(x, 0.0f) + l1p;
+    float sp = ((params.flags & 512u) != 0u) ? sp_raw
+                                             : bf16_load(bf16_store(sp_raw));
+    // The eager chain keeps g in f32 end to end (compute_g returns f32);
+    // exp(A_log) and the product stay f32, so no bf16 round here: the
+    // bf16 roundings the eager path applies are on x, sp, and beta.
+    g = exp(-(exp(a_log) * sp));
+#else /* GDN_COMPOSED_ORDER */
+    if ((params.flags & 512u) != 0u) {
+      // Bit 9 (f32 A_log) selects the models whose serving reference is
+      // the C++ raw fallback, whose softplus output stays f32.
+      g = gdn_g_composed(x, a_log);
+    } else {
+      // softplus = logaddexp(0, x) with the elementwise kernel's formula
+      // max(a,b) + log1p(exp(-|a-b|)) (log1p in the corrected ratio form,
+      // log(u) * x / (u - 1)), rounded to bf16 as the python eager chain
+      // rounds it (bf16-A_log models, Qwen3.8: their shipped numerics).
+      float u = 1.0f + exp(-abs(x));
+      float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+      float sp = bf16_load(bf16_store(max(x, 0.0f) + l1p));
+      g = exp(-(exp(a_log) * sp));
+    }
+#endif /* GDN_COMPOSED_ORDER */
+  } else {
+    g = bf16_load(g_buf.v[params.shape[0] + head]);
+    beta = bf16_load(b_buf.v[params.aux_offset + head]);
+  }
+  uint head_base = head * dv * dk;
+  uint row_base = head_base + row * dk;
+  for (uint i = row; i < dk; i += 128u) {
+    skg[i] = sk[i] * g;
+  }
+  barrier();
+
+#if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
+  float kv_acc = gdn_kv_walk_wide(params.shape[1] + row_base, dk);
+#elif !defined(GDN_COMPOSED_ORDER)
+  float kv_acc = gdn_kv_walk(params.shape[1] + row_base, dk);
+#else /* GDN_COMPOSED_ORDER */
+  float kv_acc = gdn_kv_walk(params.shape[1] + row_base, dk, g,
+                             (params.flags & 512u) != 0u);
+#endif /* GDN_COMPOSED_ORDER */
+  float delta = (GDN_V_ELEM - kv_acc) * beta;
+  sdelta[row] = delta;
+  barrier();
+
+#if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
+  float o_acc = gdn_update_walk_wide(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row]);
+#elif !defined(GDN_COMPOSED_ORDER)
+  float o_acc = gdn_update_walk(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row]);
+#else /* GDN_COMPOSED_ORDER */
+  float o_acc = gdn_update_walk(params.shape[1] + row_base, params.shape[2] + head_base + row * dk, dk, g, sdelta[row],
+                                (params.flags & 512u) != 0u);
+#endif /* GDN_COMPOSED_ORDER */
+#ifdef GDN_NORM_FUSED
+  gdn_norm_epilogue(head, row, o_acc);
+#else /* GDN_NORM_FUSED */
+  y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
+#endif /* GDN_NORM_FUSED */
+}

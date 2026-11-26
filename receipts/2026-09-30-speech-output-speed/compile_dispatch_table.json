@@ -1,0 +1,9 @@
+{
+  "baseline_dispatches_per_iter": 33073041,
+  "compiled_dispatches_per_iter": 17701859,
+  "dispatch_reduction_pct": 46.5,
+  "baseline_p50_ms": 87.3,
+  "compiled_p50_ms": 87.89,
+  "wall_time_change_pct": 0.7,
+  "interpretation": "Compile reduces dispatch count 46.5% but does not change wall time. Per-step GPU compute (~87ms) is the fixed floor, not dispatch overhead."
+}

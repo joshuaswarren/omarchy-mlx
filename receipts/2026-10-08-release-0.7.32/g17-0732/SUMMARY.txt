@@ -1,0 +1,5 @@
+g17 mlx-lm 0.31.3: apply1 rc=0 idempotent rc=0
+g17 mlx-lm 0.32.0: apply1 rc=0 idempotent rc=0
+G17_0732_DONE ok=4/4
+runner: /tmp/g17-0732-run.sh (dev box, CPU-only, pristine pip wheels mlx_lm-0.31.3 / mlx_lm-0.32.0)
+apply script: origin/main 0bdba12e8 scripts/apply-mlx-lm-patches.sh (SERIES_PATCHES includes mlx-lm-last-logits-qwen3.patch in both lines)

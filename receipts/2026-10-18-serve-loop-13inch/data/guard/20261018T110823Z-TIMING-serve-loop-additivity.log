@@ -1,0 +1,95 @@
+IDLE-GUARD-JOB-START 20261018T110823Z TIMING serve-loop additivity 13-inch-M1 gemma-4-E4B: G mlx_lm generator in-process against GM, GL, GML (both removals) and the phase-timed GMLT, A bench_decode anchor; one wheel (tree e57cb301), governor performance, 3 rounds
+KERNEL-CMDLINE kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.39 SETTLED
+GPU-TIMEOUTS before=0 boot=<id>
+FLIP flip-e4b-20261018T110823Z 11:08:23 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 boot <id> kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.39 tokens 128 reqs 2 rounds 3
+FLIP flip-e4b-20261018T110823Z 11:08:23 governors:       2 performance  (read only)
+FLIP flip-e4b-20261018T110823Z 11:08:24 tree $WORK/score/main81 libmlx 9a225264dcf2dbcb
+FLIP flip-e4b-20261018T110823Z 11:08:24 sha256 prefixes: script 6784f69b3d6c1f62 bench_decode.py f5062d88f34b0845 run_clamped.py 9249ca2a2ec08145 servegen_inproc.py a6f339aa962fd623 thread_table.py 2bef8caee53b2909 flip_analyze.py 3f89b7f5dcebfa5c
+FLIP flip-e4b-20261018T110823Z 11:08:24 sampler csv /var/tmp/sampler/rows-flip-e4b-20261018T110823Z.csv
+FLIP flip-e4b-20261018T110823Z 11:08:39 round 1 arm A load1=0.31 start_epoch=1792321719
+FLIP flip-e4b-20261018T110823Z 11:08:52 round 1 arm A rc=0 decode 15.46 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:6e98b674dcae2e22 n=128 first=100,45518,107 last=8797,496,3479
+FLIP flip-e4b-20261018T110823Z 11:08:52 round 1 arm A end_epoch=1792321732
+FLIP flip-e4b-20261018T110823Z 11:09:07 round 1 arm G load1=0.26 start_epoch=1792321747
+FLIP flip-e4b-20261018T110823Z 11:09:37 round 1 arm G rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:09:37 round 1 arm G end_epoch=1792321777
+FLIP flip-e4b-20261018T110823Z 11:09:52 round 1 arm GM load1=0.43 start_epoch=1792321792
+FLIP flip-e4b-20261018T110823Z 11:10:21 round 1 arm GM rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:10:21 round 1 arm GM end_epoch=1792321821
+FLIP flip-e4b-20261018T110823Z 11:10:36 round 1 arm GL load1=0.38 start_epoch=1792321836
+FLIP flip-e4b-20261018T110823Z 11:11:05 round 1 arm GL rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:11:05 round 1 arm GL end_epoch=1792321865
+FLIP flip-e4b-20261018T110823Z 11:11:20 round 1 arm GML load1=0.45 start_epoch=1792321880
+FLIP flip-e4b-20261018T110823Z 11:11:48 round 1 arm GML rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:11:48 round 1 arm GML end_epoch=1792321908
+FLIP flip-e4b-20261018T110823Z 11:12:03 round 1 arm GMLT load1=0.31 start_epoch=1792321923
+FLIP flip-e4b-20261018T110823Z 11:12:31 round 1 arm GMLT rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:12:31 round 1 arm GMLT end_epoch=1792321951
+FLIP flip-e4b-20261018T110823Z 11:12:46 round 2 arm G load1=0.35 start_epoch=1792321966
+FLIP flip-e4b-20261018T110823Z 11:13:16 round 2 arm G rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:13:16 round 2 arm G end_epoch=1792321996
+FLIP flip-e4b-20261018T110823Z 11:13:31 round 2 arm GM load1=0.36 start_epoch=1792322011
+FLIP flip-e4b-20261018T110823Z 11:14:00 round 2 arm GM rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:14:00 round 2 arm GM end_epoch=1792322040
+FLIP flip-e4b-20261018T110823Z 11:14:15 round 2 arm GL load1=0.38 start_epoch=1792322055
+FLIP flip-e4b-20261018T110823Z 11:14:44 round 2 arm GL rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:14:44 round 2 arm GL end_epoch=1792322084
+FLIP flip-e4b-20261018T110823Z 11:14:59 round 2 arm GML load1=0.60 start_epoch=1792322099
+FLIP flip-e4b-20261018T110823Z 11:15:27 round 2 arm GML rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:15:27 round 2 arm GML end_epoch=1792322127
+FLIP flip-e4b-20261018T110823Z 11:15:42 round 2 arm GMLT load1=0.41 start_epoch=1792322142
+FLIP flip-e4b-20261018T110823Z 11:16:09 round 2 arm GMLT rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:16:09 round 2 arm GMLT end_epoch=1792322169
+FLIP flip-e4b-20261018T110823Z 11:16:24 round 2 arm A load1=0.51 start_epoch=1792322184
+FLIP flip-e4b-20261018T110823Z 11:16:37 round 2 arm A rc=0 decode 15.52 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:6e98b674dcae2e22 n=128 first=100,45518,107 last=8797,496,3479
+FLIP flip-e4b-20261018T110823Z 11:16:37 round 2 arm A end_epoch=1792322197
+FLIP flip-e4b-20261018T110823Z 11:16:52 round 3 arm GM load1=0.36 start_epoch=1792322212
+FLIP flip-e4b-20261018T110823Z 11:17:21 round 3 arm GM rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:17:21 round 3 arm GM end_epoch=1792322241
+FLIP flip-e4b-20261018T110823Z 11:17:36 round 3 arm GL load1=0.40 start_epoch=1792322256
+FLIP flip-e4b-20261018T110823Z 11:18:05 round 3 arm GL rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:18:05 round 3 arm GL end_epoch=1792322285
+FLIP flip-e4b-20261018T110823Z 11:18:20 round 3 arm GML load1=0.56 start_epoch=1792322300
+FLIP flip-e4b-20261018T110823Z 11:18:48 round 3 arm GML rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:18:48 round 3 arm GML end_epoch=1792322328
+FLIP flip-e4b-20261018T110823Z 11:19:03 round 3 arm GMLT load1=0.57 start_epoch=1792322343
+FLIP flip-e4b-20261018T110823Z 11:19:30 round 3 arm GMLT rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:19:30 round 3 arm GMLT end_epoch=1792322370
+FLIP flip-e4b-20261018T110823Z 11:19:45 round 3 arm A load1=0.63 start_epoch=1792322385
+FLIP flip-e4b-20261018T110823Z 11:19:58 round 3 arm A rc=0 decode 15.53 tok/s over 127 tokens (128 requested, EOS suppressed) generated_ids sha256:6e98b674dcae2e22 n=128 first=100,45518,107 last=8797,496,3479
+FLIP flip-e4b-20261018T110823Z 11:19:58 round 3 arm A end_epoch=1792322398
+FLIP flip-e4b-20261018T110823Z 11:20:13 round 3 arm G load1=0.50 start_epoch=1792322413
+FLIP flip-e4b-20261018T110823Z 11:20:43 round 3 arm G rc=0 pairs 2
+FLIP flip-e4b-20261018T110823Z 11:20:43 round 3 arm G end_epoch=1792322443
+SERVEFLIP RESULT ts decode tok/s: A median 15.52 (m 64.45 ms) n 3 run medians [15.46, 15.52, 15.53] spread 0.5% | G median 13.04 (m 76.67 ms) n 6 run medians [12.98, 13.07, 13.05] spread 0.7% | GM median 14.04 (m 71.24 ms) n 6 run medians [13.97, 14.04, 14.04] spread 0.5% | GL median 13.65 (m 73.26 ms) n 6 run medians [13.67, 13.59, 13.62] spread 0.6% | GML median 14.63 (m 68.33 ms) n 6 run medians [14.64, 14.57, 14.59] spread 0.5% | GMLT median 14.63 (m 68.33 ms) n 6 run medians [14.65, 14.63, 14.63] spread 0.1%
+SERVEFLIP GAP m(G) - m(A) = +12.22 ms (+19.0% of m(A); threshold 1.93 ms) REAL
+SERVEFLIP GAINS over G: GM +5.43 ms REAL; GL +3.41 ms REAL; GML +8.33 ms REAL; GM + GL = +8.84 ms
+SERVEFLIP ADDITIVITY d = GML gain - (GM gain + GL gain) = -0.50 ms -> ADDITIVE
+SERVEFLIP REMAINDER m(GML) - m(A) = +3.88 ms (+6.0% of m(A)) REAL
+SERVEFLIP VERDICT by the rule registered before the run: ADDITIVE; remainder REAL (+3.88 ms)
+SERVEFLIP DIGESTS ids equal in all arms: 6e98b674dcae2e22
+SERVEFLIP PHASES (GMLT, 6 pairs, per decoded token): wall 68.32 ms; next() 68.31 ms of which mx.eval -0.00, mx.async_eval 67.03, host rest 1.28; outside next() 0.02 ms; next() calls per token 1.00
+SERVEFLIP arm G THREADS pid 1149369 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GM THREADS pid 1151193 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GL THREADS pid 1152965 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GML THREADS pid 1155574 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GMLT THREADS pid 1157398 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm G THREADS pid 1159238 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GM THREADS pid 1161238 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GL THREADS pid 1163078 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GML THREADS pid 1164998 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GMLT THREADS pid 1166864 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GM THREADS pid 1170411 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GL THREADS pid 1172193 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GML THREADS pid 1174131 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm GMLT THREADS pid 1175828 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP arm G THREADS pid 1178706 total 18 util_min>=1024 10 util_min=0 8 unreadable 0
+SERVEFLIP CLOCK arm A: mean P-cluster 2988 MHz, heatpipe power 9.6 W over 39 one-second samples (whole runs, load and warm-up included)
+SERVEFLIP CLOCK arm G: mean P-cluster 2988 MHz, heatpipe power 11.1 W over 87 one-second samples (whole runs, load and warm-up included)
+SERVEFLIP CLOCK arm GL: mean P-cluster 2988 MHz, heatpipe power 11.6 W over 85 one-second samples (whole runs, load and warm-up included)
+SERVEFLIP CLOCK arm GM: mean P-cluster 2988 MHz, heatpipe power 11.1 W over 86 one-second samples (whole runs, load and warm-up included)
+SERVEFLIP CLOCK arm GML: mean P-cluster 2988 MHz, heatpipe power 11.7 W over 84 one-second samples (whole runs, load and warm-up included)
+SERVEFLIP CLOCK arm GMLT: mean P-cluster 2988 MHz, heatpipe power 11.8 W over 80 one-second samples (whole runs, load and warm-up included)
+FLIP flip-e4b-20261018T110823Z 11:20:43 DONE
+GPU-TIMEOUTS after=0 delta=0

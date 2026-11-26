@@ -1,0 +1,16 @@
+device Device(gpu, 0) mlx 0.32.4.dev202610160709+6f26e88
+mlx file $HOME/tree-6f26e88/mlx/core.cpython-314-aarch64-linux-gnu.so | libmlx loaded {'$HOME/tree-6f26e88/mlx/lib/libmlx.so': '61431e6d22f493f6'}
+bf16 host decode vs mx.dequantize (CPU stream) on 256 rows: max rel diff 0.00e+00
+bf16 variant=d rows=1 N=202048 K=8192 g64 6-bit: steps: >0.5 0.00e+00, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [10, 616]; median 4.094 ms per call (min 4.027, max 6.001, 20 calls)
+bf16 variant=d rows=2 N=202048 K=8192 g64 6-bit: steps: >0.5 0.00e+00, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [10, 617]; median 13.781 ms per call (min 13.756, max 14.176, 20 calls)
+bf16 variant=d rows=4 N=202048 K=8192 g64 6-bit: steps: >0.5 0.00e+00, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [10, 617]; median 14.160 ms per call (min 14.142, max 14.272, 20 calls)
+bf16 variant=d rows=8 N=202048 K=8192 g64 6-bit: steps: >0.5 0.00e+00, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [10, 617]; median 14.572 ms per call (min 14.542, max 14.954, 20 calls)
+bf16 variant=d rows=17 N=202048 K=8192 g64 6-bit: steps: >0.5 0.00e+00, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [10, 617]; median 46.427 ms per call (min 42.632, max 47.714, 20 calls)
+bf16 variant=d rows=32 N=202048 K=8192 g64 6-bit: steps: >0.5 0.00e+00, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [10, 617]; median 67.149 ms per call (min 63.462, max 69.557, 20 calls)
+f16 host decode vs mx.dequantize (CPU stream) on 256 rows: max rel diff 0.00e+00
+f16 variant=d rows=1 N=202048 K=8192 g64 6-bit: steps: >0.5 0.00e+00, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [8, 614]; median 4.065 ms per call (min 4.013, max 4.755, 20 calls)
+f16 variant=d rows=2 N=202048 K=8192 g64 6-bit: steps: >0.5 0.00e+00, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [8, 615]; median 11.184 ms per call (min 11.157, max 12.000, 20 calls)
+f16 variant=d rows=4 N=202048 K=8192 g64 6-bit: steps: >0.5 0.00e+00, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [8, 615]; median 11.616 ms per call (min 11.574, max 11.713, 20 calls)
+f16 variant=d rows=8 N=202048 K=8192 g64 6-bit: steps: >0.5 0.00e+00, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [8, 615]; median 14.100 ms per call (min 13.502, max 14.205, 20 calls)
+f16 variant=d rows=17 N=202048 K=8192 g64 6-bit: steps: >0.5 2.39e-04, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [8, 615]; median 38.397 ms per call (min 38.199, max 38.648, 20 calls)
+f16 variant=d rows=32 N=202048 K=8192 g64 6-bit: steps: >0.5 6.36e-04, >1.5 0.00e+00, >2.5 0.00e+00, max 0.50 (rule: >1.5 and >2.5 = 0) ok; finite True; kernel ids [8, 615]; median 54.977 ms per call (min 54.381, max 55.751, 20 calls)

@@ -1,0 +1,229 @@
+{
+  "loadavg": "0.02 0.06 0.07 1/321 1785",
+  "gpu_procs": "huawarren/voice-site <home>/.local/share/mlx-omarchy/venv/bin/python -u <home>/agents/SpeechOutputFast/profile/perop.py <home>/mlx-tts-home <home>/agents/SpeechOutputFast/profile/perop.json > <home>/agents/SpeechOutputFast/profile/perop.log 2>&1; echo EXIT=$? >> <home>/agents/SpeechOutputFast/profile/perop.log; sync\n   1781       00:00 flock /tmp/m2-gpu.lock timeout -k 20 12m bash -c PYTHONPATH=<home>/voice-site <home>/.local/share/mlx-omarchy/venv/bin/python -u <home>/agents/SpeechOutputFast/profile/perop.py <home>/mlx-tts-home <home>/agents/SpeechOutputFast/profile/perop.json > <home>/agents/SpeechOutputFast/profile/perop.log 2>&1; echo EXIT=$? >> <home>/agents/SpeechOutputFast/profile/perop.log; sync\n   1782       00:00 timeout -k 20 12m bash -c PYTHONPATH=<home>/voice-site <home>/.local/share/mlx-omarchy/venv/bin/python -u <home>/agents/SpeechOutputFast/profile/perop.py <home>/mlx-tts-home <home>/agents/SpeechOutputFast/profile/perop.json > <home>/agents/SpeechOutputFast/profile/perop.log 2>&1; echo EXIT=$? >> <home>/agents/SpeechOutputFast/profile/perop.log; sync\n   1783       00:00 bash -c PYTHONPATH=<home>/voice-site <home>/.local/share/mlx-omarchy/venv/bin/python -u <home>/agents/SpeechOutputFast/profile/perop.py <home>/mlx-tts-home <home>/agents/SpeechOutputFast/profile/perop.json > <home>/agents/SpeechOutputFast/profile/perop.log 2>&1; echo EXIT=$? >> <home>/agents/SpeechOutputFast/profile/perop.log; sync\n   1784       00:00 <home>/.local/share/mlx-omarchy/venv/bin/python -u <home>/agents/SpeechOutputFast/profile/perop.py <home>/mlx-tts-home <home>/agents/SpeechOutputFast/profile/perop.json\n",
+  "mlx_version": "0.32.3.dev202609282218+29cba8e",
+  "barrier_floor_ms": 0.149,
+  "prefill_len": 10,
+  "kv_cache_class": "mlx_audio.lm.models.cache.KVCache",
+  "kv_keys_shape_after_prefill": [
+    1,
+    8,
+    256,
+    128
+  ],
+  "kv_offset_after_prefill": 10,
+  "talker_decode_step_ms": 38.649,
+  "kv_keys_shape_after_decode": [
+    1,
+    8,
+    256,
+    128
+  ],
+  "kv_offset_after_decode": 33,
+  "talker_layer0_qmv": {
+    "mlp.down_proj": {
+      "in": 3072,
+      "out": 1024,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.172,
+      "GBps": 10.29,
+      "x_dtype": "bfloat16",
+      "scale_dtype": "mlx.core.bfloat16"
+    },
+    "mlp.up_proj": {
+      "in": 1024,
+      "out": 3072,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.169,
+      "GBps": 10.47,
+      "x_dtype": "bfloat16",
+      "scale_dtype": "mlx.core.bfloat16"
+    },
+    "mlp.gate_proj": {
+      "in": 1024,
+      "out": 3072,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.175,
+      "GBps": 10.11,
+      "x_dtype": "bfloat16",
+      "scale_dtype": "mlx.core.bfloat16"
+    },
+    "self_attn.o_proj": {
+      "in": 2048,
+      "out": 1024,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.177,
+      "GBps": 6.66,
+      "x_dtype": "bfloat16",
+      "scale_dtype": "mlx.core.bfloat16"
+    },
+    "self_attn.v_proj": {
+      "in": 1024,
+      "out": 1024,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.174,
+      "GBps": 3.39,
+      "x_dtype": "bfloat16",
+      "scale_dtype": "mlx.core.bfloat16"
+    },
+    "self_attn.k_proj": {
+      "in": 1024,
+      "out": 1024,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.172,
+      "GBps": 3.43,
+      "x_dtype": "bfloat16",
+      "scale_dtype": "mlx.core.bfloat16"
+    },
+    "self_attn.q_proj": {
+      "in": 1024,
+      "out": 2048,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.174,
+      "GBps": 6.78,
+      "x_dtype": "bfloat16",
+      "scale_dtype": "mlx.core.bfloat16"
+    }
+  },
+  "talker_rmsnorm_ms": 0.17,
+  "talker_mrope_ms": 0.832,
+  "talker_self_attn_total_ms": 1.37,
+  "talker_mlp_total_ms": 0.364,
+  "talker_layer_total_ms": 1.726,
+  "talker_codec_head_ms": 0.202,
+  "talker_x_dtype_in_model": "mlx.core.bfloat16",
+  "cp_layer0_qmv": {
+    "mlp.down_proj": {
+      "in": 3072,
+      "out": 1024,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.203
+    },
+    "mlp.up_proj": {
+      "in": 1024,
+      "out": 3072,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.199
+    },
+    "mlp.gate_proj": {
+      "in": 1024,
+      "out": 3072,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.2
+    },
+    "self_attn.o_proj": {
+      "in": 2048,
+      "out": 1024,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.199
+    },
+    "self_attn.v_proj": {
+      "in": 1024,
+      "out": 1024,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.196
+    },
+    "self_attn.k_proj": {
+      "in": 1024,
+      "out": 1024,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.194
+    },
+    "self_attn.q_proj": {
+      "in": 1024,
+      "out": 2048,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.196
+    }
+  },
+  "cp_lm_head0": {
+    "type": "QuantizedLinear",
+    "ms": 0.195
+  },
+  "cp_15_pass_decode_ms": 130.411,
+  "sample_upstream_ms": 4.289,
+  "sample_no_sup_no_rep_ms": 3.717,
+  "sample_cp_ms": 2.841,
+  "real_step_single_eval_ms": 256.96,
+  "kv_offset_end": 93,
+  "chat2b_layer0_qmv": {
+    "language_model.model.layers.0.mlp.up_proj": {
+      "in": 2048,
+      "out": 6144,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.193,
+      "GBps": 36.67
+    },
+    "language_model.model.layers.0.mlp.down_proj": {
+      "in": 6144,
+      "out": 2048,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.188,
+      "GBps": 37.65
+    },
+    "language_model.model.layers.0.mlp.gate_proj": {
+      "in": 2048,
+      "out": 6144,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.179,
+      "GBps": 39.54
+    },
+    "language_model.model.layers.0.linear_attn.out_proj": {
+      "in": 2048,
+      "out": 2048,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.162,
+      "GBps": 14.56
+    },
+    "language_model.model.layers.0.linear_attn.in_proj_a": {
+      "in": 2048,
+      "out": 16,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.147,
+      "GBps": 0.13
+    },
+    "language_model.model.layers.0.linear_attn.in_proj_b": {
+      "in": 2048,
+      "out": 16,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.152,
+      "GBps": 0.12
+    },
+    "language_model.model.layers.0.linear_attn.in_proj_z": {
+      "in": 2048,
+      "out": 2048,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.158,
+      "GBps": 14.93
+    },
+    "language_model.model.layers.0.linear_attn.in_proj_qkv": {
+      "in": 2048,
+      "out": 6144,
+      "bits": 4,
+      "group_size": 64,
+      "ms": 0.188,
+      "GBps": 37.65
+    }
+  }
+}

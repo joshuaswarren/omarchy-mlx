@@ -1,0 +1,23 @@
+IDLEPOW idlepow-20261017T211019Z 21:10:19 start boot BOOT kernel 7.1.12-2-12.6-sep-ARCH load1 0.48 window 180s skip 40s ac_online=1 sessions=5
+IDLEPOW idlepow-20261017T211019Z 21:10:19 found governors: policy0=performance policy2=performance policy6=performance 
+IDLEPOW idlepow-20261017T211019Z 21:10:19 sha256 prefixes: script 24b8dbba2abb58af analyze d0207ac4e5e88ed9 sampler 384b88da4660a314
+IDLEPOW idlepow-20261017T211019Z 21:10:19 sampler csv $WORK/sampler/rows-idlepow-20261017T211019Z.csv
+IDLEPOW idlepow-20261017T211019Z 21:10:19 window 1 arm P governors=performance, start_epoch=1792271419
+IDLEPOW idlepow-20261017T211019Z 21:13:19 window 1 arm P end_epoch=1792271599 load1=0.03
+IDLEPOW idlepow-20261017T211019Z 21:13:19 window 2 arm S governors=schedutil, start_epoch=1792271599
+IDLEPOW idlepow-20261017T211019Z 21:16:19 window 2 arm S end_epoch=1792271779 load1=0.16
+IDLEPOW idlepow-20261017T211019Z 21:16:19 window 3 arm S governors=schedutil, start_epoch=1792271779
+IDLEPOW idlepow-20261017T211019Z 21:19:19 window 3 arm S end_epoch=1792271959 load1=0.16
+IDLEPOW idlepow-20261017T211019Z 21:19:19 window 4 arm P governors=performance, start_epoch=1792271959
+IDLEPOW idlepow-20261017T211019Z 21:22:19 window 4 arm P end_epoch=1792272139 load1=0.06
+IDLEPOW window 1 arm P: sys_W 10.65 (n=138), heatpipe_W 5.91 (n=138), pcluster_MHz 3036.00 (n=138), fan1_rpm 1520.62 (n=138), hotspot_C 31.86 (n=138)
+IDLEPOW window 2 arm S: sys_W 8.40 (n=137), heatpipe_W 4.47 (n=137), pcluster_MHz 1398.74 (n=137), fan1_rpm 0.00 (n=137), hotspot_C 31.37 (n=137)
+IDLEPOW window 3 arm S: sys_W 8.38 (n=137), heatpipe_W 4.52 (n=137), pcluster_MHz 1395.85 (n=137), fan1_rpm 0.00 (n=137), hotspot_C 31.03 (n=137)
+IDLEPOW window 4 arm P: sys_W 10.02 (n=138), heatpipe_W 5.80 (n=138), pcluster_MHz 3036.00 (n=138), fan1_rpm 0.00 (n=138), hotspot_C 30.77 (n=138)
+IDLEPOW sys_W: P 10.33 (windows 10.65, 10.02), S 8.39 (windows 8.40, 8.38), P minus S +1.94 (+23.1 percent), window gaps 0.63 and 0.02: a difference above the window gap
+IDLEPOW heatpipe_W: P 5.86 (windows 5.91, 5.80), S 4.50 (windows 4.47, 4.52), P minus S +1.36 (+30.2 percent), window gaps 0.12 and 0.05: a difference above the window gap
+IDLEPOW pcluster_MHz: P 3036.00 (windows 3036.00, 3036.00), S 1397.30 (windows 1398.74, 1395.85), P minus S +1638.70 (+117.3 percent), window gaps 0.00 and 2.89: a difference above the window gap
+IDLEPOW fan1_rpm: P 760.31 (windows 1520.62, 0.00), S 0.00 (windows 0.00, 0.00), P minus S +760.31 (+nan percent), window gaps 1520.62 and 0.00: no difference above the window gap
+IDLEPOW hotspot_C: P 31.32 (windows 31.86, 30.77), S 31.20 (windows 31.37, 31.03), P minus S +0.12 (+0.4 percent), window gaps 1.09 and 0.34: no difference above the window gap
+IDLEPOW idlepow-20261017T211019Z 21:22:19 DONE
+IDLEPOW idlepow-20261017T211019Z 21:22:19 restored governors: policy0=performance policy2=performance policy6=performance 

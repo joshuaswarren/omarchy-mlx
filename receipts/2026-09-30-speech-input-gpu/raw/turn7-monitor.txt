@@ -1,0 +1,564 @@
+14:47:22
+0.13 0.22 0.11 2/374 6074
+
+    PID %CPU   RSS     ELAPSED CMD
+    743  2.2 65648       05:04 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.4 17952       05:18 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+    678  0.6 11392       05:04 avahi-daemon: running [<project-m2>-2.local]
+    121  0.3     0       05:15 [kworker/u52:1-rtkit-2a6c00000.aop]
+14:47:24
+0.20 0.23 0.11 2/404 6170
+/dev/dri/renderD128:  6092m  6129m
+
+    PID %CPU   RSS     ELAPSED CMD
+   6129  236 127616      00:00 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6092  114 94016       00:01 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/smoke_path.py
+    743  2.2 65648       05:06 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.4 17952       05:20 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:47:26
+0.20 0.23 0.11 1/404 6225
+/dev/dri/renderD128:  6092m  6129m
+
+    PID %CPU   RSS     ELAPSED CMD
+   6129 83.3 132480      00:02 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6092 55.3 106816      00:03 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/smoke_path.py
+    743  2.2 65648       05:08 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.4 17952       05:22 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:47:28
+0.20 0.23 0.11 3/414 6461
+/dev/dri/renderD128:  6092m  6366m
+
+    PID %CPU   RSS     ELAPSED CMD
+   6366  239 127648      00:00 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6092 37.9 101424      00:05 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/smoke_path.py
+   6331 24.2 28864       00:00 cmake <home>/src/mlx-omarchy-attn128/.work/mlx -DCMAKE_INSTALL_PREFIX=<home>/src/mlx-omarchy-attn128/.work/mlx/build/lib.linux-aarch64-cpython-31
+   6299 13.6 49920       00:01 <home>/src/mlx-omarchy-attn128/.work/venv-attn128/bin/python -m pip wheel --no-build-isolation --no-deps --wheel-dir <home>/src/mlx-omarchy-attn1
+14:47:30
+0.27 0.24 0.12 2/403 6697
+
+    PID %CPU   RSS     ELAPSED CMD
+   6638  271 50000       00:00 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+   6331 11.7 34432       00:02 cmake <home>/src/mlx-omarchy-attn128/.work/mlx -DCMAKE_INSTALL_PREFIX=<home>/src/mlx-omarchy-attn128/.work/mlx/build/lib.linux-aarch64-cpython-31
+   6299  5.7 49920       00:03 <home>/src/mlx-omarchy-attn128/.work/venv-attn128/bin/python -m pip wheel --no-build-isolation --no-deps --wheel-dir <home>/src/mlx-omarchy-attn1
+   6681  5.5 17584       00:00 /usr/lib/git-core/git-remote-https origin https://github.com/fmtlib/fmt.git
+14:47:32
+0.27 0.24 0.12 3/410 6884
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   6718  135 130272      00:01 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638 81.4 49776       00:02 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+   6331  7.8 35248       00:05 cmake <home>/src/mlx-omarchy-attn128/.work/mlx -DCMAKE_INSTALL_PREFIX=<home>/src/mlx-omarchy-attn128/.work/mlx/build/lib.linux-aarch64-cpython-31
+   6299  3.6 49920       00:05 <home>/src/mlx-omarchy-attn128/.work/venv-attn128/bin/python -m pip wheel --no-build-isolation --no-deps --wheel-dir <home>/src/mlx-omarchy-attn1
+14:47:34
+0.25 0.24 0.12 2/415 7015
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   6718 66.2 130640      00:03 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638 45.4 48592       00:04 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+   6331  5.5 35248       00:07 cmake <home>/src/mlx-omarchy-attn128/.work/mlx -DCMAKE_INSTALL_PREFIX=<home>/src/mlx-omarchy-attn128/.work/mlx/build/lib.linux-aarch64-cpython-31
+   6299  2.6 49920       00:07 <home>/src/mlx-omarchy-attn128/.work/venv-attn128/bin/python -m pip wheel --no-build-isolation --no-deps --wheel-dir <home>/src/mlx-omarchy-attn1
+14:47:36
+0.25 0.24 0.12 15/424 7423
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   7392  100 89920       00:00 /usr/bin/glslc -O --target-env=vulkan1.3 <home>/src/mlx-omarchy-attn128/.work/mlx/mlx/backend/omarchy/shaders/compare_bool.comp -o <home>/src/mlx
+   7403  100 63200       00:00 /usr/bin/glslc -O --target-env=vulkan1.3 -DUSE_FP16=1 <home>/src/mlx-omarchy-attn128/.work/mlx/mlx/backend/omarchy/shaders/gather_take.comp -o /home/joshuawa
+   7414  100 36944       00:00 /usr/bin/glslc -O --target-env=vulkan1.3 -DUSE_U16=1 <home>/src/mlx-omarchy-attn128/.work/mlx/mlx/backend/omarchy/shaders/gather_take.comp -o /home/joshuawar
+   7416  100 48656       00:00 /usr/bin/glslc -O --target-env=vulkan1.3 -DUSE_I64=1 <home>/src/mlx-omarchy-attn128/.work/mlx/mlx/backend/omarchy/shaders/gather_take.comp -o /home/joshuawar
+14:47:38
+0.25 0.24 0.12 13/388 8076
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   8078  200 25568       00:00 /usr/bin/glslc -O --target-env=vulkan1.3 -DFP_MODE=1 <home>/src/mlx-omarchy-attn128/.work/mlx/mlx/backend/omarchy/shaders/qmm_tile.comp -o <home>
+   8056  100 56880       00:00 /usr/bin/glslc -O --target-env=vulkan1.3 -DFP_MODE=1 -DUSE_BF16=1 <home>/src/mlx-omarchy-attn128/.work/mlx/mlx/backend/omarchy/shaders/qmm.comp -o /home/josh
+   8064  100 87280       00:00 /usr/bin/glslc -O --target-env=vulkan1.3 -DFP_MODE=1 -DUSE_FP16=1 <home>/src/mlx-omarchy-attn128/.work/mlx/mlx/backend/omarchy/shaders/qmm_vec.comp -o /home/
+   8067  100 77888       00:00 /usr/bin/glslc -O --target-env=vulkan1.3 -DFP_MODE=1 -DUSE_BF16=1 <home>/src/mlx-omarchy-attn128/.work/mlx/mlx/backend/omarchy/shaders/qmm_vec.comp -o /home/
+14:47:40
+1.19 0.43 0.18 16/388 8767
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   8758  100 18096       00:00 /usr/bin/cmake -DINPUT=<home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/mlx/backend/omarchy/shaders/cast_f32_i32.spv -D
+   6718 34.8 133120      00:09 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638 19.9 50656       00:10 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+   7113  2.4  6464       00:05 /usr/bin/make -s -f mlx/backend/omarchy/CMakeFiles/omarchy_shaders.dir/build.make mlx/backend/omarchy/CMakeFiles/omarchy_shaders.dir/build
+14:47:42
+1.19 0.43 0.18 15/406 9773
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9719  100 322544      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9722  100 317280      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9725  100 338624      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9727  100 319696      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:47:44
+2.05 0.63 0.24 13/406 9860
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9854  100 46928       00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9802 99.3 338448      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9735 99.3 514192      00:02 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9722 98.9 413120      00:02 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:47:46
+2.05 0.63 0.24 13/405 9961
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9943  100 160000      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9947  100 137856      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9727 99.4 479840      00:05 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9735 99.4 601168      00:05 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:47:48
+2.05 0.63 0.24 14/406 10034
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9727 99.2 483712      00:07 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9735 99.2 666224      00:07 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9725 99.0 855984      00:07 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9933 98.8 353488      00:02 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:47:50
+3.09 0.87 0.32 13/406 10109
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9725 99.2 880112      00:09 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9933 99.1 385776      00:04 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9735 99.0 732704      00:09 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10059 98.8 317856      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:47:52
+3.09 0.87 0.32 13/406 10176
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10059 99.4 365296      00:03 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10131 99.4 306064      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10134 99.4 342416      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9933 99.3 465536      00:06 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:47:54
+3.88 1.07 0.39 13/406 10255
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10201 99.3 356784      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10073 99.2 407520      00:05 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10222 99.0 220400      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 99.0 833040      00:08 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:47:56
+3.88 1.07 0.39 14/406 10334
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10316  100 204624      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10280 99.4 322160      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10222 99.3 370896      00:03 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10073 99.3 504384      00:07 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:47:58
+3.88 1.07 0.39 13/406 10415
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10401  100 132976      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10201 99.4 482352      00:05 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10073 99.2 523920      00:09 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10222 99.2 462016      00:05 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:48:00
+4.53 1.25 0.45 14/406 10482
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10201 99.3 484816      00:07 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10073 99.0 529152      00:11 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.5 924912      00:14 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10222 98.4 493552      00:07 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:48:02
+4.53 1.25 0.45 13/406 10559
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10556  105 71280       00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10539  101 153024      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10563  100 29408       00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10073 99.1 529152      00:13 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:48:04
+5.13 1.43 0.52 13/407 10623
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10621  100 11664       00:00 as -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/json-src/single_include/nlohmann -I <home>/src
+  10556 99.1 320512      00:02 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.7 989728      00:19 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10222 98.6 620800      00:11 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:48:07
+5.13 1.43 0.52 13/407 10702
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10700  125 12000       00:00 as -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/json-src/single_include/nlohmann -I <home>/src
+  10684  100 86800       00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10687  100 176496      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10556 99.3 441392      00:04 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:48:09
+5.13 1.43 0.52 14/407 10792
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10758  100 153360      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10742 99.1 210208      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10722 98.9 262592      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10687 98.9 367344      00:02 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:48:11
+5.76 1.62 0.58 13/407 10871
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10837  100 195488      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10841  100 308688      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10857  100 110208      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10805 99.4 327168      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:48:13
+5.76 1.62 0.58 13/407 10954
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10937  102 110688      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10940  100 106448      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10882 99.4 288208      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10841 99.2 451376      00:02 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:48:15
+6.18 1.78 0.64 9/399 11017
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10882 99.1 377664      00:03 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10900 99.0 303728      00:03 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10222 98.5 676144      00:21 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.4 1017056     00:29 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:48:17
+6.18 1.78 0.64 7/395 11075
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  11073  100  9152       00:00 as -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/json-src/single_include/nlohmann -I <home>/src
+  10884 98.6 467696      00:05 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10222 98.5 698224      00:23 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.5 1017056     00:31 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+14:48:19
+6.01 1.81 0.66 4/389 11134
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 98.7 731216      00:25 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.5 1017056     00:33 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  10821 97.7 537776      00:09 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 17.5 137168      00:48 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+14:48:21
+6.01 1.81 0.66 3/387 11190
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 98.8 731472      00:27 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.6 1027296     00:35 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 17.2 137376      00:50 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  4.7 50656       00:51 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:23
+6.01 1.81 0.66 3/387 11245
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 98.8 657952      00:29 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.7 1031904     00:37 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 17.0 137552      00:52 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  4.6 50656       00:53 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:25
+5.69 1.82 0.67 3/387 11300
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 98.9 657952      00:31 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.7 1023808     00:39 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.9 139152      00:54 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  4.4 52896       00:55 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:27
+5.69 1.82 0.67 3/387 11359
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 98.9 659936      00:33 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.7 1023936     00:41 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.6 139344      00:56 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  4.3 52176       00:57 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:29
+5.47 1.84 0.68 3/387 11414
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 98.9 660992      00:35 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.8 1023936     00:43 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.4 139648      00:58 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  4.1 54432       00:59 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:31
+5.47 1.84 0.68 3/387 11469
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 98.9 652656      00:37 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.8 1024592     00:45 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.2 139872      01:00 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  4.0 55136       01:01 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:33
+5.47 1.84 0.68 3/387 11524
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 99.0 652720      00:39 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.9 1025472     00:47 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.0 140112      01:02 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.9 52512       01:03 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:35
+5.19 1.84 0.69 4/387 11579
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 99.0 652720      00:41 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.9 980880      00:49 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.7 140368      01:04 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.8 54560       01:05 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:37
+5.19 1.84 0.69 3/387 11636
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 99.1 599088      00:43 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.9 981632      00:51 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.5 140576      01:06 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.8 52128       01:07 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:39
+4.94 1.84 0.69 3/387 11691
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 99.1 599088      00:45 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 98.9 982400      00:53 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.4 140960      01:08 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.7 48800       01:09 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:41
+4.94 1.84 0.69 3/387 11752
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 99.1 599216      00:47 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 99.0 983376      00:55 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.4 141120      01:10 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.6 48800       01:11 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:43
+4.94 1.84 0.69 3/387 11807
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+  10222 99.1 600240      00:50 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   9929 99.0 938880      00:57 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.4 141312      01:12 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.5 48800       01:13 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+14:48:45
+4.70 1.85 0.70 2/385 11869
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.0 939648      00:59 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.3 141504      01:14 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.4 49712       01:15 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64208       06:27 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:48:47
+4.70 1.85 0.70 2/385 11924
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.0 940352      01:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.4 141648      01:16 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.4 49712       01:17 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64208       06:29 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:48:49
+4.40 1.83 0.70 3/385 11979
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.0 940976      01:03 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.3 141856      01:18 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.3 49712       01:19 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64480       06:32 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:48:51
+4.40 1.83 0.70 2/385 12034
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.0 943600      01:05 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.4 142016      01:20 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.2 48864       01:21 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64496       06:34 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:48:53
+4.40 1.83 0.70 2/385 12089
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.1 979008      01:07 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.6 142208      01:22 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.1 49264       01:23 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64528       06:36 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:48:55
+4.13 1.82 0.70 2/385 12144
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.1 979008      01:09 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 15.8 142400      01:24 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.1 48800       01:25 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64528       06:38 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:48:57
+4.13 1.82 0.70 2/385 12201
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.1 979072      01:11 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.0 142560      01:26 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.0 49856       01:27 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64544       06:40 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:48:59
+4.12 1.85 0.72 2/385 12291
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.1 885168      01:13 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.1 142768      01:28 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  3.0 48800       01:30 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64816       06:42 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:01
+4.12 1.85 0.72 2/385 12346
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.1 885744      01:15 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.1 142944      01:30 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  2.9 48800       01:32 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64816       06:44 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:03
+4.12 1.85 0.72 3/385 12401
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.1 885744      01:18 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.2 143104      01:32 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  2.9 48800       01:34 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64832       06:46 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:06
+3.87 1.84 0.72 3/387 12458
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.1 885744      01:20 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.1 143280      01:34 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  2.8 48800       01:36 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64832       06:48 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:08
+3.87 1.84 0.72 2/387 12513
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.2 921472      01:22 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.2 143440      01:36 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  2.7 48800       01:38 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64832       06:50 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:10
+3.64 1.83 0.73 3/387 12568
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.2 916640      01:24 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.3 143616      01:38 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  2.7 48800       01:40 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64832       06:52 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:12
+3.64 1.83 0.73 2/387 12623
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.1 916640      01:26 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.3 143760      01:41 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  2.6 48800       01:42 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64864       06:54 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:14
+3.64 1.83 0.73 3/384 12678
+/dev/dri/renderD128:  6718m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.2 916768      01:28 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+   6718 16.5 132352      01:43 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   6638  2.6 48816       01:44 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/eval_run.py <home>/agents/SpeechInputGpu/runs/turn7/eval
+    743  1.9 64912       06:56 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:16
+3.51 1.83 0.73 3/387 12765
+/dev/dri/renderD128: 12736m
+
+    PID %CPU   RSS     ELAPSED CMD
+  12736  251 127632      00:00 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  12700  116 56256       00:01 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/overlimit.py <home>/agents/SpeechInputGpu/runs/turn7/eva
+   9929 99.2 916768      01:30 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+    743  1.9 64912       06:58 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:18
+3.51 1.83 0.73 14/370 12837
+
+    PID %CPU   RSS     ELAPSED CMD
+  12824  675 26016       00:00 <home>/.local/share/mlx-omarchy/venv/bin/python <home>/agents/SpeechInputGpu/build_frames.py <home>/agents/SpeechInputGpu/corpus/mani
+   9929 99.2 916864      01:32 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+    743  1.9 64912       07:00 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      1  1.0 17952       07:14 /usr/lib/systemd/systemd --switched-root --system --deserialize=54 splash
+14:49:20
+3.39 1.83 0.74 4/394 12933
+/dev/dri/renderD128: 12880m
+
+    PID %CPU   RSS     ELAPSED CMD
+  12880  107 130640      00:01 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+   9929 99.2 869312      01:34 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  12859 64.2 268480      00:01 gdb -batch -x <home>/agents/SpeechInputGpu/count_cpu.gdb.py --args <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_s
+    743  1.9 64912       07:02 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:22
+3.39 1.83 0.74 2/394 12988
+/dev/dri/renderD128: 12880m
+
+    PID %CPU   RSS     ELAPSED CMD
+   9929 99.2 877520      01:36 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-cpython-314/mlx.core/_deps/
+  12880 57.8 132000      00:03 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  12859 31.0 268480      00:03 gdb -batch -x <home>/agents/SpeechInputGpu/count_cpu.gdb.py --args <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_s
+    743  1.9 64912       07:04 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+14:49:24
+4.16 2.02 0.81 14/417 13092
+/dev/dri/renderD128: 12880m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13056  100 142576      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I <home>/src/mlx-omarchy-attn128/.work/mlx -MD CMakeFiles/mlx-omarchy-info.dir/main.cpp.d -MF C
+  13082  100 124176      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I /usr/include/python3.14 -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-
+  13076 95.4 124544      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I /usr/include/python3.14 -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-
+  13080 95.2 125024      00:00 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I /usr/include/python3.14 -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-
+14:49:26
+4.16 2.02 0.81 8/406 13218
+/dev/dri/renderD128: 12880m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13149 99.0 327408      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I /usr/include/python3.14 -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-
+  13087 98.6 350416      00:02 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I /usr/include/python3.14 -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-
+  13137 98.5 413184      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I /usr/include/python3.14 -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-
+  13145 98.3 341200      00:01 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I /usr/include/python3.14 -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-
+14:49:28
+4.16 2.02 0.81 2/394 13279
+/dev/dri/renderD128: 12880m
+
+    PID %CPU   RSS     ELAPSED CMD
+  13137 99.4 592336      00:03 /usr/lib/gcc/aarch64-unknown-linux-gnu/16.1.1/cc1plus -quiet -I /usr/include/python3.14 -I <home>/src/mlx-omarchy-attn128/.work/mlx/build/temp.linux-aarch64-
+  12880 33.4 133232      00:09 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_stt_worker --model-dir <app-home>/voice/parak
+  12859 12.1 268480      00:10 gdb -batch -x <home>/agents/SpeechInputGpu/count_cpu.gdb.py --args <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant.gpu_s
+    743  1.9 64912       07:10 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641

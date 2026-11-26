@@ -1,0 +1,4 @@
+loadavg_before=1.92 2.28 1.36 2/350 40630 uname_r=7.1.13-3-1-ARCH fuser_before= (empty)
+quality27b_perf_api rc=0
+loadavg_after=2.31 1.36 1.17 9/366 45922
+fuser_after= (empty)

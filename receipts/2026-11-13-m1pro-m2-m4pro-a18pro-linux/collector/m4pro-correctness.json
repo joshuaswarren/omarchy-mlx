@@ -1,0 +1,87 @@
+{
+  "_redaction": {
+    "home_path": 2
+  },
+  "available": true,
+  "device": "Device(gpu, 0)",
+  "error": null,
+  "import_error": null,
+  "mlx_version": "0.32.4.dev202611111431+8380f002",
+  "ops": [
+    {
+      "detail": null,
+      "ms": 4.78,
+      "op": "add",
+      "pass": true
+    },
+    {
+      "detail": null,
+      "ms": 0.282,
+      "op": "matmul",
+      "pass": true
+    },
+    {
+      "detail": null,
+      "ms": 0.216,
+      "op": "softmax",
+      "pass": true
+    },
+    {
+      "detail": null,
+      "ms": 5.214,
+      "op": "argmax",
+      "pass": true
+    },
+    {
+      "detail": null,
+      "ms": 1.272,
+      "op": "cumsum",
+      "pass": true
+    },
+    {
+      "detail": null,
+      "ms": 12.168,
+      "op": "value_and_grad",
+      "pass": true
+    }
+  ],
+  "ops_passed": 6,
+  "probe": {
+    "argv": [
+      "[home]/mlxpr/venv/bin/python",
+      "-c",
+      "\nimport json, math, time\nres = {\"available\": False, \"device\": None, \"mlx_version\": None,\n       \"import_error\": None, \"ops\": []}\ntry:\n    import mlx.core as mx\nexcept Exception as exc:\n    res[\"import_error\"] = f\"{type(exc).__name__}: {exc}\"\n    print(json.dumps(res))\n    raise SystemExit(0)\nres[\"available\"] = True\nres[\"device\"] = str(mx.default_device())\nres[\"mlx_version\"] = getattr(mx, \"__version__\", None)\n\nimport sys as _sys\n_sys.path.insert(0, \"[home]/mlxpr/omx/scripts\")\nfrom mlx_provenance import prepare_probe\n\ntry:\n    res[\"provenance\"] = prepare_probe(mx)\n    res[\"device\"] = str(mx.default_device())\nexcept Exception as exc:\n    res[\"available\"] = False\n    res[\"error\"] = f\"{type(exc).__name__}: {exc}\"\n    print(json.dumps(res))\n    raise SystemExit(0)\nif res[\"provenance\"].get(\"verified\") == \"mismatch\":\n    res[\"available\"] = False\n    res[\"error\"] = (\"refusing to emit correctness numbers: \"\n                    + res[\"provenance\"][\"mismatch\"])\n    print(json.dumps(res))\n    raise SystemExit(0)\n\ndef close(a, b, tol=1e-5):\n    if isinstance(a, list) and isinstance(b, list):\n        return len(a) == len(b) and all(close(x, y, tol) for x, y in zip(a, b))\n    if isinstance(a, list):\n        return False\n    return abs(a - b) <= tol * max(1.0, abs(a), abs(b))\n\ndef record(name, fn, expect):\n    entry = {\"op\": name, \"pass\": False, \"detail\": None, \"ms\": None}\n    start = time.perf_counter()\n    try:\n        got = fn()\n        got = got.tolist() if hasattr(got, \"tolist\") else got\n        entry[\"pass\"] = bool(close(got, expect))\n        if not entry[\"pass\"]:\n            entry[\"detail\"] = f\"expected {expect}, got {got}\"\n    except Exception as exc:\n        entry[\"detail\"] = f\"{type(exc).__name__}: {exc}\"\n    entry[\"ms\"] = round((time.perf_counter() - start) * 1000, 3)\n    res[\"ops\"].append(entry)\n\nrecord(\"add\", lambda: mx.array([1.0, 2.0]) + mx.array([3.0, 4.0]), [4.0, 6.0])\nrecord(\"matmul\", lambda: mx.array([[1.0, 2.0], [3.0, 4.0]])\n       @ mx.array([[5.0, 6.0], [7.0, 8.0]]),\n       [[19.0, 22.0], [43.0, 50.0]])\nrecord(\"softmax\", lambda: mx.softmax(mx.array([1.0, 2.0, 3.0])),\n       [0.09003057, 0.24472847, 0.66524096])\nrecord(\"argmax\", lambda: mx.argmax(mx.array([-1.0, 5.0, 3.0])), 1)\nrecord(\"cumsum\", lambda: mx.cumsum(mx.array([1.0, 2.0, 3.0])),\n       [1.0, 3.0, 6.0])\n\nxv, wv = [0.5, -0.25], [[1.0, 2.0], [3.0, 4.0]]\nxw = [xv[0] * wv[0][j] + xv[1] * wv[1][j] for j in range(2)]\ngrad_expect = [[2.0 * xw[j] * xv[i] for j in range(2)] for i in range(2)]\n\ndef _grad():\n    x = mx.array(xv)\n    def f(w):\n        return mx.sum((x @ w) ** 2)\n    return mx.value_and_grad(f)(mx.array(wv))[1]\n\nrecord(\"value_and_grad\", _grad, grad_expect)\nprint(json.dumps(res))\n"
+    ],
+    "available": true,
+    "duration_ms": 84,
+    "error": null,
+    "exit_code": 0,
+    "label": "correctness probe",
+    "stderr": "provenance: mlx-omarchy 0.32.4.dev202611111431+8380f002 mx=0.32.4.dev202611111431+8380f002 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:aa7a9d17160b9ff5",
+    "stdout": "{\"available\": true, \"device\": \"Device(gpu, 0)\", \"mlx_version\": \"0.32.4.dev202611111431+8380f002\", \"import_error\": null, \"ops\": [{\"op\": \"add\", \"pass\": true, \"detail\": null, \"ms\": 4.78}, {\"op\": \"matmul\", \"pass\": true, \"detail\": null, \"ms\": 0.282}, {\"op\": \"softmax\", \"pass\": true, \"detail\": null, \"ms\": 0.216}, {\"op\": \"argmax\", \"pass\": true, \"detail\": null, \"ms\": 5.214}, {\"op\": \"cumsum\", \"pass\": true, \"detail\": null, \"ms\": 1.272}, {\"op\": \"value_and_grad\", \"pass\": true, \"detail\": null, \"ms\": 12.168}], \"provenance\": {\"dist\": \"mlx-omarchy\", \"verified\": \"match\", \"mismatch\": null, \"files\": [{\"path\": \"mlx/core.cpython-314-aarch64-linux-gnu.so\", \"label\": \"mlx.core extension\", \"sha256\": \"615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc\", \"record_sha256\": \"615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc\", \"match\": true}, {\"path\": \"mlx/lib/libmlx.so\", \"label\": \"mlx/lib/libmlx.so\", \"sha256\": \"aa7a9d17160b9ff50686b88634b21fba770a0855005acf013e3f5bd1d3bc7e3f\", \"record_sha256\": \"aa7a9d17160b9ff50686b88634b21fba770a0855005acf013e3f5bd1d3bc7e3f\", \"match\": true}], \"dist_version\": \"0.32.4.dev202611111431+8380f002\", \"mx_version\": \"0.32.4.dev202611111431+8380f002\", \"version_match\": true}}"
+  },
+  "provenance": {
+    "dist": "mlx-omarchy",
+    "dist_version": "0.32.4.dev202611111431+8380f002",
+    "files": [
+      {
+        "label": "mlx.core extension",
+        "match": true,
+        "path": "mlx/core.cpython-314-aarch64-linux-gnu.so",
+        "record_sha256": "615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc",
+        "sha256": "615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc"
+      },
+      {
+        "label": "mlx/lib/libmlx.so",
+        "match": true,
+        "path": "mlx/lib/libmlx.so",
+        "record_sha256": "aa7a9d17160b9ff50686b88634b21fba770a0855005acf013e3f5bd1d3bc7e3f",
+        "sha256": "aa7a9d17160b9ff50686b88634b21fba770a0855005acf013e3f5bd1d3bc7e3f"
+      }
+    ],
+    "mismatch": null,
+    "mx_version": "0.32.4.dev202611111431+8380f002",
+    "verified": "match",
+    "version_match": true
+  }
+}

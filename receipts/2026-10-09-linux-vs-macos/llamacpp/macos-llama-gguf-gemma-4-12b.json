@@ -1,0 +1,52 @@
+[
+ {
+  "build_commit": "unknown",
+  "build_number": 0,
+  "gpu_info": "Apple M1 Max",
+  "backends": "MTL,BLAS",
+  "model_type": "gemma4 ?B Q4_K - Medium",
+  "model_size": 7106035904,
+  "model_n_params": 11907350576,
+  "n_batch": 2048,
+  "n_ubatch": 512,
+  "n_threads": 8,
+  "n_gpu_layers": -1,
+  "flash_attn": -1,
+  "n_prompt": 512,
+  "n_gen": 0,
+  "avg_ts": 310.790267,
+  "stddev_ts": 2.17411,
+  "samples_ts": [
+   308.549,
+   308.4,
+   311.514,
+   312.823,
+   312.665
+  ]
+ },
+ {
+  "build_commit": "unknown",
+  "build_number": 0,
+  "gpu_info": "Apple M1 Max",
+  "backends": "MTL,BLAS",
+  "model_type": "gemma4 ?B Q4_K - Medium",
+  "model_size": 7106035904,
+  "model_n_params": 11907350576,
+  "n_batch": 2048,
+  "n_ubatch": 512,
+  "n_threads": 8,
+  "n_gpu_layers": -1,
+  "flash_attn": -1,
+  "n_prompt": 0,
+  "n_gen": 128,
+  "avg_ts": 29.266203,
+  "stddev_ts": 0.044454,
+  "samples_ts": [
+   29.2867,
+   29.2878,
+   29.2975,
+   29.2705,
+   29.1886
+  ]
+ }
+]

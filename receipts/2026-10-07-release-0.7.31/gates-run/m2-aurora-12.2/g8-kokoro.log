@@ -1,0 +1,11 @@
+BEGIN 2026-10-07T19:24:07Z tag=v0.7.31 boot_id=022f601c-c945-488a-ac10-b408c59b7091 uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202610071347+9b5c938 (sha=a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
+PREPARE {'engine': 'kokoro-82m-bf16', 'downloaded': True, 'verified': True, 'path': '$HOME/mlx-tts-home/voice/kokoro-82m-bf16', 'bytes': 328684463, 'engines': [{'engine': 'kokoro-82m-bf16', 'downloaded': True, 'verified': True, 'path': '$HOME/mlx-tts-home/voice/kokoro-82m-bf16', 'bytes': 328684463}, {'engine': 'qwen3-tts-0.6b-customvoice-4bit', 'downloaded': False, 'verified': False}]}
+DEFAULT_ENGINE kokoro-82m-bf16 DEFAULT_VOICE af_heart
+KOKORO_SMOKE audio_s=4.000 wall_s=4.334 rtf=0.923
+LOAD before=0.33/0.10/0.03 after=0.30/0.09/0.03 PSI_CPU_AVG10 before=0.00 after=0.00
+KOKORO_SMOKE PASS
+G8_KOKORO_EXIT 0
+KOKORO_SMOKE audio_s=4.000 wall_s=4.334 rtf=0.923
+LOAD before=0.33/0.10/0.03 after=0.30/0.09/0.03 PSI_CPU_AVG10 before=0.00 after=0.00
+KOKORO_SMOKE PASS

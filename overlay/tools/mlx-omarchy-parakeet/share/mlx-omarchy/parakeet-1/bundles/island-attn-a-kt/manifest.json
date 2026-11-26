@@ -1,0 +1,321 @@
+{
+  "compiler": {
+    "host_build": "Linux 6.17.2-1-pve x86_64",
+    "target": "h13",
+    "toolchain": "mil-hwxc b61de468d1ca37b687d5fa371e489be16cd84ed1 sha256:42120c27ddfa2bf2c7c2582edcc311f385ec7328f29ddb0e2803685d5d6caaeb"
+  },
+  "dispatch_plan": [
+    0,
+    1
+  ],
+  "driver_abi_major": 1,
+  "graph_hash": "85325f3059a345dee7c62c53a0072b2e869c0c8116385c992e8963587714ff88",
+  "inputs": [
+    {
+      "byte_size": 768000,
+      "dtype": "float16",
+      "index": 0,
+      "name": "k_headsT",
+      "shape": [
+        1,
+        8,
+        128,
+        375
+      ],
+      "stride": 786432
+    },
+    {
+      "byte_size": 1533952,
+      "dtype": "float16",
+      "index": 1,
+      "name": "pos_kT",
+      "shape": [
+        1,
+        8,
+        128,
+        749
+      ],
+      "stride": 1572864
+    },
+    {
+      "byte_size": 768000,
+      "dtype": "float16",
+      "index": 2,
+      "name": "q_scaled",
+      "shape": [
+        1,
+        8,
+        375,
+        128
+      ],
+      "stride": 770048
+    },
+    {
+      "byte_size": 768000,
+      "dtype": "float16",
+      "index": 3,
+      "name": "q_v",
+      "shape": [
+        1,
+        8,
+        375,
+        128
+      ],
+      "stride": 770048
+    }
+  ],
+  "intermediates": [],
+  "logical_results": [
+    {
+      "conversion": "identity",
+      "dtype": "float16",
+      "element_count": 2247000,
+      "element_offset": 0,
+      "name": "attention_scores_1",
+      "shape": [
+        1,
+        8,
+        375,
+        749
+      ],
+      "tensor": "attention_scores_1"
+    },
+    {
+      "conversion": "identity",
+      "dtype": "float16",
+      "element_count": 1125000,
+      "element_offset": 0,
+      "name": "matmul_0",
+      "shape": [
+        1,
+        8,
+        375,
+        375
+      ],
+      "tensor": "matmul_0"
+    }
+  ],
+  "manifest_version": 4,
+  "name": "parakeet-encoder-island-attn-a-kt",
+  "outputs": [
+    {
+      "byte_size": 4494000,
+      "dtype": "float16",
+      "index": 0,
+      "name": "attention_scores_1",
+      "shape": [
+        1,
+        8,
+        375,
+        749
+      ],
+      "stride": 4620288
+    },
+    {
+      "byte_size": 2250000,
+      "dtype": "float16",
+      "index": 1,
+      "name": "matmul_0",
+      "shape": [
+        1,
+        8,
+        375,
+        375
+      ],
+      "stride": 2310144
+    }
+  ],
+  "payloads": [
+    {
+      "byte_size": 182400,
+      "path": "program-0.anec",
+      "role": "anec",
+      "sha256": "cf0ecac223e6fc8e4ee49d31544ed878d12c7466ccd715cdf4b89eb30b92db45"
+    },
+    {
+      "byte_size": 182400,
+      "path": "program-1.anec",
+      "role": "anec",
+      "sha256": "b801f6212f65da3f5ffdab3d6e21cd49e5ae0c16b709ff945de9aaee93fcb629"
+    }
+  ],
+  "programs": [
+    {
+      "encoder": "apple-parity-batched-matmul",
+      "inputs": [
+        {
+          "allocation_bytes": 1572864,
+          "channel": 5,
+          "dtype": "float16",
+          "element_count": 766976,
+          "element_offset": 0,
+          "logical_bytes": 1533952,
+          "nchw": [
+            1,
+            8,
+            128,
+            749,
+            196608,
+            1536
+          ],
+          "physical_elements": 766976,
+          "shape": [
+            1,
+            8,
+            128,
+            749
+          ],
+          "tensor": "pos_kT"
+        },
+        {
+          "allocation_bytes": 770048,
+          "channel": 6,
+          "dtype": "float16",
+          "element_count": 384000,
+          "element_offset": 0,
+          "logical_bytes": 768000,
+          "nchw": [
+            1,
+            8,
+            375,
+            128,
+            96000,
+            256
+          ],
+          "physical_elements": 384000,
+          "shape": [
+            1,
+            8,
+            375,
+            128
+          ],
+          "tensor": "q_v"
+        }
+      ],
+      "operation": "matmul",
+      "outputs": [
+        {
+          "allocation_bytes": 4620288,
+          "channel": 4,
+          "dtype": "float16",
+          "element_count": 2247000,
+          "element_offset": 0,
+          "logical_bytes": 4494000,
+          "nchw": [
+            1,
+            8,
+            375,
+            749,
+            576000,
+            1536
+          ],
+          "physical_elements": 2247000,
+          "shape": [
+            1,
+            8,
+            375,
+            749
+          ],
+          "tensor": "attention_scores_1"
+        }
+      ],
+      "payload": "program-0.anec",
+      "scratch_bytes": 0,
+      "task_descriptors": 208
+    },
+    {
+      "encoder": "apple-parity-batched-matmul",
+      "inputs": [
+        {
+          "allocation_bytes": 786432,
+          "channel": 5,
+          "dtype": "float16",
+          "element_count": 384000,
+          "element_offset": 0,
+          "logical_bytes": 768000,
+          "nchw": [
+            1,
+            8,
+            128,
+            375,
+            98304,
+            768
+          ],
+          "physical_elements": 384000,
+          "shape": [
+            1,
+            8,
+            128,
+            375
+          ],
+          "tensor": "k_headsT"
+        },
+        {
+          "allocation_bytes": 770048,
+          "channel": 6,
+          "dtype": "float16",
+          "element_count": 384000,
+          "element_offset": 0,
+          "logical_bytes": 768000,
+          "nchw": [
+            1,
+            8,
+            375,
+            128,
+            96000,
+            256
+          ],
+          "physical_elements": 384000,
+          "shape": [
+            1,
+            8,
+            375,
+            128
+          ],
+          "tensor": "q_scaled"
+        }
+      ],
+      "operation": "matmul",
+      "outputs": [
+        {
+          "allocation_bytes": 2310144,
+          "channel": 4,
+          "dtype": "float16",
+          "element_count": 1125000,
+          "element_offset": 0,
+          "logical_bytes": 2250000,
+          "nchw": [
+            1,
+            8,
+            375,
+            375,
+            288000,
+            768
+          ],
+          "physical_elements": 1125000,
+          "shape": [
+            1,
+            8,
+            375,
+            375
+          ],
+          "tensor": "matmul_0"
+        }
+      ],
+      "payload": "program-1.anec",
+      "scratch_bytes": 0,
+      "task_descriptors": 208
+    }
+  ],
+  "provenance": {
+    "exported_at": "2026-09-15",
+    "source_commit": "b61de468d1ca37b687d5fa371e489be16cd84ed1",
+    "source_repo": "mil-hwxc"
+  },
+  "release_asset": {
+    "model": "/tmp/split-islands/mil/island-attn-a-kt.mil",
+    "model_sha256": "e9362c1dff001a13a96aa2f2b64965d6a344e5142ed731293d6f7779b24e39a1"
+  },
+  "state": [],
+  "task_descriptors": 416
+}

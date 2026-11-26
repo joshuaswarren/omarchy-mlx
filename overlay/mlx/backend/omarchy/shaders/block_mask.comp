@@ -1,0 +1,94 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Block-mask application for BlockMaskedMM. One thread owns one element
+// of the dense output stack: it reads the source element through its own
+// strides, multiplies it by the owning block's mask value, and writes the
+// product. Bool masks arrive pre-cast to float32 (false -> 0.0, true ->
+// 1.0), so zeroing a block and scaling it by a float mask factor share
+// one multiply. Reading through source strides means one dispatch both
+// materializes a broadcast operand into the dense temp and applies the
+// mask; in-place use (out bound as both data and output) is a
+// per-element map.
+//
+// Push-constant routing: matrix_m/n/k are the rows, columns, and block
+// size; aux_size/aux_offset are the data row/column strides in elements;
+// lhs_size/rhs_size are the mask grid's row/column strides in elements;
+// dims/shape/in_strides[] route the data batch (0 = broadcast axis) and
+// out_strides[] the mask batch.
+//
+// Every load is a straight-line per-thread read at a computed linear
+// address inside a uniform-trip-count loop (Honeykrisp caution: no
+// per-lane divergent word loads, no broadcast-unravel addressing beyond
+// the div/mod decode qmm.comp already uses).
+
+#version 460
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputData {
+  float values[];
+} input_data;
+layout(set = 0, binding = 1, std430) readonly buffer InputMask {
+  float values[];
+} input_mask;
+layout(set = 0, binding = 2, std430) writeonly buffer Output {
+  float values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+void main() {
+  uint index = gl_GlobalInvocationID.x;
+  uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+  uint matrix_size = params.matrix_m * params.matrix_n;
+  while (index < params.count) {
+    uint batch_index = index / matrix_size;
+    uint within = index - batch_index * matrix_size;
+    uint row = within / params.matrix_n;
+    uint column = within - row * params.matrix_n;
+    uint remaining = batch_index;
+    uint data_batch = 0u;
+    uint mask_batch = 0u;
+    for (uint axis = params.dims; axis > 0u; --axis) {
+      uint coord = remaining % params.shape[axis - 1u];
+      remaining /= params.shape[axis - 1u];
+      data_batch += coord * params.in_strides[axis - 1u];
+      mask_batch += coord * params.out_strides[axis - 1u];
+    }
+    uint data_index = data_batch + row * params.aux_size +
+        column * params.aux_offset;
+    uint mask_index = mask_batch +
+        (row / params.matrix_k) * params.lhs_size +
+        (column / params.matrix_k) * params.rhs_size;
+    output_data.values[params.output_offset + index] =
+        input_data.values[params.lhs_offset + data_index] *
+        input_mask.values[params.rhs_offset + mask_index];
+    if (params.count - index <= stride) {
+      break;
+    }
+    index += stride;
+  }
+}

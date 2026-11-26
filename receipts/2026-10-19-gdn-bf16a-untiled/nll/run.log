@@ -1,0 +1,28 @@
+NLL35 start 2026-10-19T21:46:48Z kernel=7.1.12-2-12.6-sep-ARCH boot=<id> governor=performance load1=1.30
+NLL35 env GDN/MLX/HK/AGX present: 0
+NLL35 nll_pair abdf0dcdbf3b16eb nll_cmp 2ff32652d390afce text e7c41800016e3620
+NLL35 == arm D env MLX_AB_UNUSED=1 21:46:48
+NLL35 arm D rc=0 NLL mean 0.65607 over 8192 positions; top1_digest 2fe15a6f8fe2d1d0; last_logits_digest 2fbe8c9e193b0d73; step_median_ms 43.52
+NLL35 == arm U env MLX_OMARCHY_GDN_DECODE_TILE=0 21:58:52
+NLL35 arm U rc=0 NLL mean 0.65689 over 8192 positions; top1_digest f90bf181ef50b41e; last_logits_digest fbc5db5899560af8; step_median_ms 41.14
+NLL35 == arm D2 env MLX_AB_UNUSED=1 22:10:35
+NLL35 arm D2 rc=0 NLL mean 0.65607 over 8192 positions; top1_digest 2fe15a6f8fe2d1d0; last_logits_digest 2fbe8c9e193b0d73; step_median_ms 43.51
+NLL35 compare U minus D
+U minus D: prefixes 128 (windows 0..127), positions 8192
+  mean NLL A 0.65689  B 0.65607
+  paired mean +0.00082  cluster SE 0.00225  interval [-0.00369, +0.00533]  position-level SE 0.00243
+  bound +-0.02: ACCEPT (interval inside)
+  VACUITY GUARD: positions with nll A != nll B 7964 of 8192; windows with any difference 128 of 128
+  argmax disagreements 203 of 8192 positions; first at (prefix, step) (0, 14)
+  top1 digest A f90bf181ef50b41e  B 2fe15a6f8fe2d1d0
+  per-prefix mean differences: +0.040 -0.018 -0.110 +0.027 +0.018 +0.000 +0.014 -0.008 -0.008 -0.024 +0.031 -0.065 +0.021 +0.003 -0.037 +0.007 +0.011 +0.037 +0.001 +0.067 +0.033 -0.017 -0.005 +0.011 +0.008 +0.002 +0.012 -0.013 -0.039 -0.036 +0.020 -0.011 -0.017 +0.012 -0.000 -0.058 +0.056 +0.015 +0.016 +0.018 +0.008 -0.010 +0.010 -0.019 -0.021 +0.024 +0.014 -0.019 +0.002 +0.023 -0.005 +0.009 +0.014 +0.037 +0.015 +0.017 +0.039 +0.029 +0.038 -0.044 -0.007 -0.010 -0.008 -0.026 -0.002 -0.002 -0.005 -0.000 -0.015 -0.029 -0.003 +0.024 -0.004 -0.005 +0.014 -0.010 +0.018 -0.016 +0.007 +0.010 +0.011 -0.002 -0.028 +0.003 +0.014 -0.010 +0.019 +0.026 -0.025 +0.001 -0.038 +0.004 +0.010 +0.003 +0.054 +0.025 +0.006 +0.024 +0.015 -0.025 -0.005 +0.006 +0.011 +0.037 +0.006 -0.053 -0.005 -0.009 -0.013 -0.003 +0.030 -0.003 +0.002 +0.015 +0.010 -0.021 -0.012 -0.028 -0.004 -0.003 +0.050 +0.003 -0.023 +0.029 -0.059 +0.013 -0.041 -0.018
+NLL35 compare D2 minus D (determinism)
+D2 minus D: prefixes 128 (windows 0..127), positions 8192
+  mean NLL A 0.65607  B 0.65607
+  paired mean +0.00000  cluster SE 0.00000  interval [+0.00000, +0.00000]  position-level SE 0.00000
+  bound +-0.02: ACCEPT (interval inside)
+  VACUITY GUARD: positions with nll A != nll B 0 of 8192; windows with any difference 0 of 128  (ZERO: the route switch changed nothing; the interval is VOID)
+  argmax disagreements 0 of 8192 positions; first at (prefix, step) None
+  top1 digest A 2fe15a6f8fe2d1d0  B 2fe15a6f8fe2d1d0
+  per-prefix mean differences: +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000
+NLL35 end 2026-10-19T22:22:38Z

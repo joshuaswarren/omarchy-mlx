@@ -1,0 +1,12 @@
+decode profile 9B 20261028T1540Z load 0.32
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba libs {"libmlx.so": "7df7c9750388ed67"} snapshot fields 10 HF_HUB_OFFLINE 1
+MICRO roundtrip one tiny op eval+sync: median 111 us (min 99, max 367)
+MICRO chain of 200 dependent tiny ops: median 2.5 ms = 12.6 us per op; counters dispatches 200 submissions 1 barriers 201
+MICRO chain of 800 dependent tiny ops: median 10.0 ms = 12.5 us per op; counters dispatches 800 submissions 1 barriers 801
+MICRO elementwise over 1 GiB (read+write 2 GiB): median 58.3 GB/s (max 58.6)
+MICRO qmm M=1 K=N=4096 4-bit, 48 distinct weights (9.4 MB each): 156 us per matmul = 60.3 GB/s; counters dispatches 12 submissions 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: prefill 97.1 tok/s
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 256: 11.92 tok/s (83.9 ms/token, min 83.5, max 88.3); per token: dispatches 399 submissions 6 commits-with-work 6 barriers 387 copies 16 fills 0 finalize 1
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 4096: prefill 93.2 tok/s
+DECODE mlx-community/Qwen3.5-9B-4bit ctx 4096: 9.35 tok/s (107.0 ms/token, min 106.8, max 134.5); per token: dispatches 399 submissions 6 commits-with-work 6 barriers 387 copies 16 fills 0 finalize 1
+DONE

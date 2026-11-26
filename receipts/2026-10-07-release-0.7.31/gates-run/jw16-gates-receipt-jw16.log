@@ -1,0 +1,289 @@
+== stage 0: assets + tag tree ==
+ASSETS_OK
+== stage 1: wheel build tree (CPU) ==
+=== build-wheel 15:03:27 ===
+== prepare upstream tree ==
+  % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
+                                 Dload  Upload  Total   Spent   Left   Speed
+  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0
+  0      0   0      0   0      0      0      0                              0100  4.28M   0  4.28M   0      0  4.47M      0                              0100  4.28M   0  4.28M   0      0  4.47M      0                              0100  4.28M   0  4.28M   0      0  4.45M      0                              0
+patching file CMakeLists.txt
+Hunk #2 succeeded at 167 (offset 1 line).
+Hunk #3 succeeded at 430 (offset 1 line).
+patching file mlx/CMakeLists.txt
+Hunk #1 succeeded at 109 (offset 6 lines).
+patching file tests/CMakeLists.txt
+Hunk #1 succeeded at 51 (offset 5 lines).
+patching file mlx/device.cpp
+patching file mlx/transforms.cpp
+Hunk #2 succeeded at 233 (offset 6 lines).
+patching file mlx/transforms.h
+patching file mlx/transforms.cpp
+patching file mlx/fast.h
+patching file mlx/fast.cpp
+patching file mlx/fast_primitives.h
+patching file python/src/fast.cpp
+patching file setup.py
+patching file mlx/io/safetensors.cpp
+patching file mlx/io/load.cpp
+Hunk #1 succeeded at 13 (offset 2 lines).
+Hunk #2 succeeded at 241 (offset 6 lines).
+patching file mlx/export.cpp
+Hunk #2 succeeded at 900 (offset 1 line).
+patching file mlx/linalg.cpp
+patching file python/src/buffer.h
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1207 (offset 154 lines).
+Hunk #2 succeeded at 1310 (offset 154 lines).
+patching file mlx/ops.cpp
+Hunk #2 succeeded at 5185 (offset 135 lines).
+Hunk #3 succeeded at 5443 (offset 134 lines).
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1090 (offset 151 lines).
+patching file mlx/backend/common/metal_kernel.cpp
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1327 (offset 150 lines).
+patching file mlx/fast.h
+Hunk #1 succeeded at 99 (offset 29 lines).
+patching file mlx/fast_primitives.h
+Hunk #1 succeeded at 413 (offset 13 lines).
+Hunk #2 succeeded at 453 (offset 13 lines).
+patching file python/src/fast.cpp
+Hunk #1 succeeded at 461 (offset 50 lines).
+patching file setup.py
+patching file mlx/fast.h
+patching file mlx/fast.cpp
+patching file mlx/fast_primitives.h
+patching file python/src/fast.cpp
+patching file mlx/fast.h
+Hunk #1 succeeded at 131 (offset -6 lines).
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1605 (offset 23 lines).
+patching file mlx/fast_primitives.h
+Hunk #1 succeeded at 516 (offset -30 lines).
+patching file python/src/fast.cpp
+patching file mlx/fast.h
+Hunk #1 succeeded at 160 with fuzz 1 (offset 41 lines).
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1731 with fuzz 1 (offset 254 lines).
+patching file mlx/fast_primitives.h
+Hunk #1 succeeded at 450 (offset 14 lines).
+Hunk #2 succeeded at 460 (offset 14 lines).
+patching file mlx/backend/no_gpu/primitives.cpp
+Hunk #1 succeeded at 190 with fuzz 3.
+patching file python/src/fast.cpp
+Hunk #1 succeeded at 549 (offset 50 lines).
+patching file mlx/fast.h
+Hunk #1 succeeded at 180 (offset -6 lines).
+patching file mlx/fast.cpp
+Hunk #1 succeeded at 1786 (offset 23 lines).
+patching file mlx/fast_primitives.h
+patching file mlx/backend/no_gpu/primitives.cpp
+patching file python/src/fast.cpp
+patching file mlx/backend/gpu/primitives.cpp
+patching file python/tests/test_ops.py
+patching file mlx/transforms.cpp
+Hunk #1 succeeded at 368 (offset 36 lines).
+patching file python/tests/test_eval.py
+patching file mlx/backend/common/common.cpp
+patching file python/tests/test_ops.py
+patching file tests/ops_tests.cpp
+patching file mlx/backend/cpu/primitives.cpp
+patching file mlx/backend/gpu/primitives.cpp
+patching file python/tests/test_ops.py
+patching file mlx/backend/cpu/primitives.cpp
+patching file mlx/backend/gpu/primitives.cpp
+patching file python/tests/test_ops.py
+patching file python/mlx/optimizers/optimizers.py
+patching file python/tests/test_optimizers.py
+patching file mlx/backend/common/common.cpp
+patching file mlx/backend/common/slicing.cpp
+patching file tests/ops_tests.cpp
+patching file python/src/convert.cpp
+patching file python/tests/test_zero_copy.py
+patching file mlx/primitives.cpp
+Hunk #1 succeeded at 4610 (offset -29 lines).
+patching file python/tests/test_vmap.py
+patching file mlx/ops.cpp
+Hunk #1 succeeded at 4442 (offset 2 lines).
+patching file python/tests/test_ops.py
+Hunk #1 succeeded at 2618 (offset -26 lines).
+patching file mlx/backend/cpu/reduce.cpp
+patching file mlx/backend/common/utils.cpp
+patching file mlx/fft.cpp
+patching file mlx/primitives.cpp
+Hunk #1 succeeded at 2195 (offset -29 lines).
+Hunk #2 succeeded at 2263 (offset -29 lines).
+patching file mlx/primitives.h
+patching file python/tests/test_fft.py
+Hunk #1 succeeded at 470 (offset -12 lines).
+patching file mlx/backend/cpu/compiled.cpp
+patching file mlx/backend/cpu/primitives.cpp
+patching file python/mlx/optimizers/optimizers.py
+Hunk #1 succeeded at 985 (offset -5 lines).
+patching file mlx/backend/cpu/quantized.cpp
+~/v0.7.31-src/.work/mlx
+prepare-mlx: Python fast bindings have matching mlx/fast.h declarations
+== stage whole-encoder bundle ==
+[bundle] staged ~/v0.7.31-src/.work/mlx/tools/mlx-omarchy-parakeet/share/mlx-omarchy/parakeet-1/bundles/parakeet-encoder-whole (manifest 08769793f8ee3299381f499bf90537d620e23635000a6dbc54b9b5c6a55a54ab, program 13c744231524d440b0a774155343df9ade0bbcbc37edc4b1ccf9698e580d5453)
+== verify pinned runtime assets ==
+OK: ~/v0.7.31-src/.work/mlx/tools/mlx-omarchy-parakeet/share/mlx-omarchy/parakeet-1: pinned runtime assets verified
+== build venv (~/v0.7.31-src/.work/venv-build) ==
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+ModuleNotFoundError: No module named 'setuptools'
+Collecting setuptools>=80
+  Using cached setuptools-84.0.0-py3-none-any.whl.metadata (6.6 kB)
+Requirement already satisfied: typing_extensions in /usr/lib/python3.14/site-packages (4.16.0)
+Using cached setuptools-84.0.0-py3-none-any.whl (818 kB)
+Installing collected packages: setuptools
+Successfully installed setuptools-84.0.0
+== wheel build ==
+Processing ~/v0.7.31-src/.work/mlx
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: mlx-omarchy
+  Building wheel for mlx-omarchy (pyproject.toml): started
+  Building wheel for mlx-omarchy (pyproject.toml): still running...
+  Building wheel for mlx-omarchy (pyproject.toml): still running...
+  Building wheel for mlx-omarchy (pyproject.toml): finished with status 'done'
+  Created wheel for mlx-omarchy: filename=mlx_omarchy-0.32.4.dev202610071503+9b5c938-cp314-cp314-linux_aarch64.whl size=416666217 sha256=cd62979d8437c85cc7d86fc23f28717d7955a823aee8e112946367a50dd3384d
+  Stored in directory: /tmp/pip-ephem-wheel-cache-71eb52k3/wheels/35/21/d1/655eac44d6b3946da4cd47c990d9f1680810063c6952538239
+Successfully built mlx-omarchy
+== receipt ==
+[receipt] wheel: ~/v0.7.31-src/dist/mlx_omarchy-0.32.4.dev202610071503+9b5c938-cp314-cp314-linux_aarch64.whl
+[receipt] size: 416666217 bytes
+[receipt] sha256: cd62979d8437c85cc7d86fc23f28717d7955a823aee8e112946367a50dd3384d
+[receipt] source commit: 9b5c938
+[receipt] NEXT STEP - do not skip: after you upload this wheel to a
+[receipt] release, verify the UPLOADED asset with
+[receipt]   python3 scripts/verify-release-assets.py <tag>
+[receipt] It must print VERIFIED before the release is announced as
+[receipt] usable. See docs/release.md. A local build check does not
+[receipt] verify what users download.
+STEP build-wheel_RC=0 wall=169s
+=== g13-build 15:06:16 ===
+BEGIN 2026-10-07T15:06:16Z tag=v0.7.31 boot_id=dfab0139-e430-4b09-958e-d567aaeac0fb uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+== reconfigure omarchy+tests (CPU-only, no GPU) ==
+CMAKE_CONFIGURE_EXIT 0
+== build target ==
+BUILD_EXIT 0
+BIN ~/v0.7.31-src/.work/mlx/tests/omarchy/omarchy_gdn_maskless_correctness_tests
+GATE13_BUILD_EXIT 0
+STEP g13-build_RC=0 wall=258s
+=== g15-build 15:10:34 ===
+BEGIN 2026-10-07T15:10:34Z tag=v0.7.31 boot_id=dfab0139-e430-4b09-958e-d567aaeac0fb uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+== reconfigure omarchy+tests (CPU-only) ==
+CMAKE_CONFIGURE_EXIT 0
+== build targets ==
+BUILD_EXIT 0
+BIN ~/v0.7.31-src/.work/mlx/tests/omarchy/omarchy_eq_math_tests
+BIN ~/v0.7.31-src/.work/mlx/tests/omarchy/omarchy_trig_reduction_tests
+GATE15_BUILD_EXIT 0
+STEP g15-build_RC=0 wall=8s
+=== g7c 15:10:42 ===
+BEGIN 2026-10-07T15:12:50Z tag=v0.7.31 boot_id=dfab0139-e430-4b09-958e-d567aaeac0fb uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+loadavg_before=2.12 2.73 2.76 1/480 51490
+psi_cpu_before=some avg10=5.68 avg60=3.18 avg300=2.99 total=103000083
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+SERVING_VENV=~/.local/share/mlx-omarchy/venv PRIVATE_VENV=~/v0731-gates/v0.7.31-gate-home/.local/share/mlx-omarchy/venv
+vendor_wheel_count=36
+lock_lines=36
+INSTALL_EXIT 0
+mlx_omarchy 0.32.4.dev202610071347+9b5c938
+numpy 2.5.3
+protobuf ~/v0731-gates/v0.7.31-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/google/protobuf/__init__.py
+-rwxr-xr-x 1 joshuawarren joshuawarren 161744 Oct  7 10:12 ~/v0731-gates/v0.7.31-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-ane-worker
+-rwxr-xr-x 1 joshuawarren joshuawarren 147824 Oct  7 10:12 ~/v0731-gates/v0.7.31-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-info
+-rwxr-xr-x 1 joshuawarren joshuawarren  62958 Oct  7 10:12 ~/v0731-gates/v0.7.31-gate-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-parakeet
+OK: 12 files verified in ~/.cache/mlx-omarchy/parakeet-reference/mweinbach1/parakeet-tdt-0.6b-v3-coreml/b650695c2322ee5281dff48d7345b2f3a58ff018
+OK: audio fixture verified in ~/.cache/mlx-omarchy/parakeet-reference/mweinbach1/parakeet-tdt-0.6b-v3-coreml/b650695c2322ee5281dff48d7345b2f3a58ff018/audio/fixture.flac
+running golden e2e verify (pinned fixture, full pin checks)
+{
+  "status": "match",
+  "checks_failed": [],
+  "emissions": 104,
+  "total_pipeline_ms": 1419.932,
+  "out": "~/.cache/mlx-omarchy/parakeet-reference/transcriptions/20261007T151308Z",
+  "transcript": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick, peppered, flour-fattened sauce........................................... Юн Ю"
+}
+VERIFY_EXIT 0
+G7C_TRACE_ABI_BEGIN
+trace_abi ok size=80 wave=1 dispatches=24 emitted=9 skipped=7
+G7C_TRACE_ABI_EXIT 0
+REPORT_PATH=~/.cache/mlx-omarchy/parakeet-reference/transcriptions/20261007T151308Z/transcribe-report.json
+import json, sys
+d = json.load(open(sys.argv[1]))
+ex = d.get("execution", {})
+print("status", "=", d.get("status"))
+print("ane_mode", "=", ex.get("ane_mode"))
+print("cpu_tensor_events", "=", ex.get("cpu_tensor_events"))
+print("emissions", "=", d.get("emissions"))
+print("transcript_sha256", "=", d.get("transcript_sha256"))
+print("total_pipeline_ms", "=", d.get("timing", {}).get("total_pipeline_ms"))
+for c in d.get("verification", {}).get("checks", []):
+    print("  check", c.get("check"), "pass=", c.get("pass"))
+POST_RUN active=inactive
+GATE7C_EXIT 0
+STEP g7c_RC=0 wall=148s
+=== g7d 15:13:10 ===
+BEGIN 2026-10-07T15:13:10Z tag=v0.7.31 boot_id=dfab0139-e430-4b09-958e-d567aaeac0fb uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+mode=ane gate7d_home=~/v0731-gates/v0.7.31-gate7d-home cache=~/.cache/mlx-omarchy
+INSTALL_EXIT 0
+mlx_omarchy 0.32.4.dev202610071347+9b5c938
+CACHE_STAGE_EXIT 0
+CACHE_STAGED ~/.cache/mlx-omarchy
+SYSTEM_INTERPRETER_DEPLESS /usr/bin/python3
+ENTRY ~/v0731-gates/v0.7.31-gate7d-home/.local/share/mlx-omarchy/venv/lib/python3.14/site-packages/mlx/bin/mlx-omarchy-parakeet (launcher=none: packaged data file)
+--- transcribe (entry) ---
+TRANSCRIBE_EXIT[entry] 0
+--- transcribe (bare-S) ---
+TRANSCRIBE_EXIT[bare-S] 0
+REPORT ~/.cache/mlx-omarchy/parakeet-reference/transcriptions/20261007T151352Z/transcribe-report.json
+status = match ane_mode = True cpu_tensor_events = 0 checks_failed = None
+  check mel_sha256 pass = True
+  check encoder_hidden_sha256 pass = True
+  check emissions pass = True
+  check token_ids pass = True
+  check frame_indices pass = True
+  check durations pass = True
+  check transcript pass = True
+transcript_sha256 = db501a8c080380ea027ffa50a4b4956c39df77cb692c4fb78e556311a11a0790
+golden_pin = db501a8c080380ea027ffa50a4b4956c39df77cb692c4fb78e556311a11a0790
+GOLDEN_MATCH PASS
+GATE7D_EXIT 0
+STEP g7d_RC=0 wall=43s
+=== g13-run 15:13:54 ===
+BIN ~/v0.7.31-src/.work/mlx/tests/omarchy/omarchy_gdn_maskless_correctness_tests
+loadavg_before=1.45 2.43 2.65 2/480 51905
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:   5 |   5 passed | 0 failed | 0 skipped
+[doctest] assertions: 632 | 632 passed | 0 failed |
+[doctest] Status: SUCCESS!
+DOCTEST_EXIT 0
+GATE13_EXIT 0
+STEP g13-run_RC=0 wall=135s
+=== g15-run 15:16:09 ===
+BIN ~/v0.7.31-src/.work/mlx/tests/omarchy/omarchy_eq_math_tests
+loadavg_before=1.34 1.99 2.45 1/472 52123
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:   7 |   7 passed | 0 failed | 0 skipped
+[doctest] assertions: 128 | 128 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_eq_math_tests_EXIT 0
+BIN ~/v0.7.31-src/.work/mlx/tests/omarchy/omarchy_trig_reduction_tests
+loadavg_before=1.34 1.99 2.45 1/472 52138
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:  4 |  4 passed | 0 failed | 0 skipped
+[doctest] assertions: 49 | 49 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_trig_reduction_tests_EXIT 0
+GATE15_EXIT 0
+STEP g15-run_RC=0 wall=1s
+JW16_GATES_PASS receipt=~/v0731-gates/jw16-gates-receipt.log

@@ -1,0 +1,45 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+
+// Decode GEMV: out[n] = sum_k x[k] * W[n,k], fp32 weights.
+// One workgroup per output element; 128 threads split K; shared reduction.
+#version 450
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(constant_id = 0) const uint N = 1;
+layout(constant_id = 1) const uint K = 1;
+
+layout(set = 0, binding = 0) readonly buffer XBuf { float x[]; };
+layout(set = 0, binding = 1) readonly buffer WBuf { float w[]; };
+layout(set = 0, binding = 2) writeonly buffer OBuf { float out_v[]; };
+
+shared float partial[128];
+
+void main() {
+  uint n = gl_WorkGroupID.x;
+  uint tid = gl_LocalInvocationID.x;
+  if (n >= N) {
+    return;
+  }
+
+  float acc = 0.0;
+  for (uint k = tid; k < K; k += 128u) {
+    acc += x[k] * w[n * K + k];
+  }
+  partial[tid] = acc;
+  barrier();
+  memoryBarrierShared();
+
+  // Tree reduction over 128 entries.
+  for (uint stride = 64u; stride >= 1u; stride >>= 1u) {
+    if (tid < stride) {
+      partial[tid] += partial[tid + stride];
+    }
+    barrier();
+    memoryBarrierShared();
+  }
+
+  if (tid == 0u) {
+    out_v[n] = partial[0];
+  }
+}

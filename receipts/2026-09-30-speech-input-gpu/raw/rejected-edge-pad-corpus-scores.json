@@ -1,0 +1,222 @@
+{
+ "parakeet_gpu": {
+  "test-clean": {
+   "n": 60,
+   "scored": 60,
+   "ref_words": 1227,
+   "edits": 41,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0334,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 473.7,
+   "latency_p95_ms": 885.6
+  },
+  "short": {
+   "n": 12,
+   "scored": 12,
+   "ref_words": 52,
+   "edits": 1,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0192,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 334.6,
+   "latency_p95_ms": 408.9
+  },
+  "test-other": {
+   "n": 40,
+   "scored": 40,
+   "ref_words": 685,
+   "edits": 30,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0438,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 480.0,
+   "latency_p95_ms": 862.8
+  },
+  "accented": {
+   "n": 35,
+   "scored": 35,
+   "ref_words": 524,
+   "edits": 22,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.042,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 446.6,
+   "latency_p95_ms": 616.9
+  },
+  "silence": {
+   "n": 10,
+   "scored": 10,
+   "ref_words": 0,
+   "edits": 0,
+   "empty": 10,
+   "errors": 0,
+   "wer": null,
+   "empty_rate": 1.0,
+   "latency_p50_ms": 366.5,
+   "latency_p95_ms": 495.7
+  },
+  "noise": {
+   "n": 10,
+   "scored": 10,
+   "ref_words": 0,
+   "edits": 0,
+   "empty": 10,
+   "errors": 0,
+   "wer": null,
+   "empty_rate": 1.0,
+   "latency_p50_ms": 369.1,
+   "latency_p95_ms": 382.0
+  },
+  "final-chunk": {
+   "n": 5,
+   "scored": 5,
+   "ref_words": 67,
+   "edits": 1,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0149,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 449.7,
+   "latency_p95_ms": 508.3
+  },
+  "mixed_10dB": {
+   "n": 10,
+   "scored": 10,
+   "ref_words": 171,
+   "edits": 4,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0234,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 429.2,
+   "latency_p95_ms": 729.7
+  },
+  "mixed_0dB": {
+   "n": 10,
+   "scored": 10,
+   "ref_words": 175,
+   "edits": 17,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0971,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 451.5,
+   "latency_p95_ms": 748.9
+  }
+ },
+ "parakeet_gpu_raw_submission": {
+  "test-clean": {
+   "n": 60,
+   "scored": 59,
+   "ref_words": 1227,
+   "edits": 99,
+   "empty": 0,
+   "errors": 1,
+   "wer": 0.0807,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 473.7,
+   "latency_p95_ms": 885.6
+  },
+  "short": {
+   "n": 12,
+   "scored": 12,
+   "ref_words": 52,
+   "edits": 1,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0192,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 334.6,
+   "latency_p95_ms": 408.9
+  },
+  "test-other": {
+   "n": 40,
+   "scored": 40,
+   "ref_words": 685,
+   "edits": 30,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0438,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 480.0,
+   "latency_p95_ms": 862.8
+  },
+  "accented": {
+   "n": 35,
+   "scored": 35,
+   "ref_words": 524,
+   "edits": 22,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.042,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 446.6,
+   "latency_p95_ms": 616.9
+  },
+  "silence": {
+   "n": 10,
+   "scored": 10,
+   "ref_words": 0,
+   "edits": 0,
+   "empty": 10,
+   "errors": 0,
+   "wer": null,
+   "empty_rate": 1.0,
+   "latency_p50_ms": 366.5,
+   "latency_p95_ms": 495.7
+  },
+  "noise": {
+   "n": 10,
+   "scored": 10,
+   "ref_words": 0,
+   "edits": 0,
+   "empty": 10,
+   "errors": 0,
+   "wer": null,
+   "empty_rate": 1.0,
+   "latency_p50_ms": 369.1,
+   "latency_p95_ms": 382.0
+  },
+  "final-chunk": {
+   "n": 5,
+   "scored": 5,
+   "ref_words": 67,
+   "edits": 1,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0149,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 449.7,
+   "latency_p95_ms": 508.3
+  },
+  "mixed_10dB": {
+   "n": 10,
+   "scored": 10,
+   "ref_words": 171,
+   "edits": 4,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0234,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 429.2,
+   "latency_p95_ms": 729.7
+  },
+  "mixed_0dB": {
+   "n": 10,
+   "scored": 10,
+   "ref_words": 175,
+   "edits": 17,
+   "empty": 0,
+   "errors": 0,
+   "wer": 0.0971,
+   "empty_rate": 0.0,
+   "latency_p50_ms": 451.5,
+   "latency_p95_ms": 748.9
+  }
+ }
+}

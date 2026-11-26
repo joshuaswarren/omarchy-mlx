@@ -1,0 +1,33 @@
+{
+  "version": "2026-09-29.1",
+  "status": "frozen-held-out",
+  "rule": "FROZEN before scoring. Do not edit cases after a model has seen them. SHA-256 of this file is committed and referenced in the receipt. Each prompt is paired with the expected behaviour: 'card' (a card MUST be promoted) or 'none' (no card MUST appear).",
+  "sha256": "bafd7724d1944454cfce0173565a30159de74f90252368e215b80d55bab23c00",
+  "card_kinds": ["checklist", "timeline", "comparison", "facts"],
+  "prompts": [
+    {"id": "ho-01", "category": "card-worthy", "kind": "checklist", "text": "Make me a checklist for moving into a new apartment.", "expect": "card"},
+    {"id": "ho-02", "category": "card-worthy", "kind": "checklist", "text": "List the steps to publish a Python package on PyPI.", "expect": "card"},
+    {"id": "ho-03", "category": "card-worthy", "kind": "checklist", "text": "Give me a pre-flight checklist for a small drone flight.", "expect": "card"},
+    {"id": "ho-04", "category": "card-worthy", "kind": "comparison", "text": "Compare SQLite, Postgres, and DuckDB on three criteria.", "expect": "card"},
+    {"id": "ho-05", "category": "card-worthy", "kind": "comparison", "text": "Side-by-side: REST and GraphQL on schema, caching, error handling.", "expect": "card"},
+    {"id": "ho-06", "category": "card-worthy", "kind": "comparison", "text": "Compare jq and gron as JSON tools on three criteria.", "expect": "card"},
+    {"id": "ho-07", "category": "card-worthy", "kind": "timeline", "text": "Lay out the milestones of a 12-week product launch.", "expect": "card"},
+    {"id": "ho-08", "category": "card-worthy", "kind": "timeline", "text": "Give me a timeline of the Roman kingdom, republic, and empire transitions.", "expect": "card"},
+    {"id": "ho-09", "category": "card-worthy", "kind": "timeline", "text": "Plan my Tuesday: standup at 9:30, design review at 11, lunch at 12:30, deploy at 3.", "expect": "card"},
+    {"id": "ho-10", "category": "card-worthy", "kind": "facts", "text": "Give me three facts about Mars from my note: a Mars day is 24h 37m, Mars has two moons, Mars is the fourth planet.", "expect": "card"},
+    {"id": "ho-11", "category": "card-worthy", "kind": "facts", "text": "Three quick facts about the city in my message: capital Tokyo, population 14 million, language Japanese.", "expect": "card"},
+    {"id": "ho-12", "category": "card-worthy", "kind": "checklist", "text": "Checklist of cleanup tasks before ending a release branch.", "expect": "card"},
+    {"id": "ho-13", "category": "plain", "kind": "none", "text": "What is the capital of Iceland?", "expect": "none"},
+    {"id": "ho-14", "category": "plain", "kind": "none", "text": "Hello, how are you today?", "expect": "none"},
+    {"id": "ho-15", "category": "plain", "kind": "none", "text": "Why is the ocean salty?", "expect": "none"},
+    {"id": "ho-16", "category": "plain", "kind": "none", "text": "Explain a hash table in plain words.", "expect": "none"},
+    {"id": "ho-17", "category": "plain", "kind": "none", "text": "Summarize the AGPL license in two sentences.", "expect": "none"},
+    {"id": "ho-18", "category": "plain", "kind": "none", "text": "Tell me a short joke.", "expect": "none"},
+    {"id": "ho-19", "category": "near-miss", "kind": "short-list", "text": "Name three primary colours.", "expect": "none"},
+    {"id": "ho-20", "category": "near-miss", "kind": "short-list", "text": "Give me two CSS units for length.", "expect": "none"},
+    {"id": "ho-21", "category": "near-miss", "kind": "list-in-prose", "text": "Give me three colours that pair well with navy blue, in a paragraph.", "expect": "none"},
+    {"id": "ho-22", "category": "near-miss", "kind": "list-in-prose", "text": "Give me the steps to make tea in a paragraph.", "expect": "none"},
+    {"id": "ho-23", "category": "near-miss", "kind": "code-only", "text": "Show me a Python function that reverses a string.", "expect": "none"},
+    {"id": "ho-24", "category": "near-miss", "kind": "code-only", "text": "Write a hello world program in Rust.", "expect": "none"}
+  ]
+}

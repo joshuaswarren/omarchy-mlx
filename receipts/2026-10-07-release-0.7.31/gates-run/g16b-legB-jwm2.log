@@ -1,0 +1,8 @@
+B=2 m=16 N=256 default: batched=[0.4894 0.4979] flat_max=0.4979 bad=[] ok
+B=4 m=16 N=256 default: batched=[0.4935 0.4983 0.4963 0.4994] flat_max=0.4994 bad=[] ok
+B=2 m=128 N=2048 default: batched=[0.8336 0.9989] flat_max=0.9989 bad=[] ok
+B=4 m=128 N=2048 default: batched=[0.9077 0.8973 0.9216 0.5765] flat_max=0.9216 bad=[] ok
+B=2 m=128 N=2048 MLX_OMARCHY_QMM_TWON=1: batched=[0.8336 0.9989] flat_max=0.9989 bad=[] ok
+B=4 m=128 N=2048 MLX_OMARCHY_QMM_TWON=1: batched=[0.9077 0.8973 0.9216 0.5765] flat_max=0.9216 bad=[] ok
+RESULT: PASS (all coopmat build variants batch-clean)
+g16b-legB_RC=0

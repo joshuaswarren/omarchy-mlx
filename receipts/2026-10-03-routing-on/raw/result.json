@@ -1,0 +1,3047 @@
+{
+  "turns": [
+    {
+      "label": "chat-1",
+      "payload": {
+        "text": "Tell me a short fact about tea.",
+        "max_tokens": 64
+      },
+      "wall_s": 8.376,
+      "events": [
+        {
+          "type": "status",
+          "data": {
+            "state": "working"
+          }
+        },
+        {
+          "type": "status",
+          "data": {
+            "state": "generating",
+            "context_tokens": 1009,
+            "context_limit": 4096,
+            "output_tokens": 64
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Here"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " is"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " a"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " short"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " fact"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " about"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " tea"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ":"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Te"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "a"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " is"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " the"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " world"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "'s"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " most"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " consumed"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " beverage"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " after"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " water"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " It"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " is"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " made"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " by"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " inf"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "using"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " dried"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " leaves"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " of"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " the"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " plant"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " *"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Cam"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "ell"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "ia"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " sin"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "ensis"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "*"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " in"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " hot"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " water"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Unlike"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " coffee"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " or"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " cocoa"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ","
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " tea"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " is"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " not"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " a"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " fruit"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ";"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " it"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " comes"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " from"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " the"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " leaves"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " of"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " an"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " ever"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "green"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " shr"
+          }
+        },
+        {
+          "type": "status",
+          "data": {
+            "state": "output_truncated",
+            "message": "The response reached the output allowance. Send Continue to keep going.",
+            "continue": true
+          }
+        },
+        {
+          "type": "done",
+          "data": {
+            "stopped": false
+          }
+        }
+      ]
+    },
+    {
+      "label": "auto-grey-cold",
+      "payload": {
+        "text": "Help me choose between the tram and the ferry.",
+        "mode": "auto",
+        "max_tokens": 64
+      },
+      "wall_s": 4.631,
+      "events": [
+        {
+          "type": "status",
+          "data": {
+            "state": "working"
+          }
+        },
+        {
+          "type": "routing",
+          "data": {
+            "policy_version": "3",
+            "route": "clarify",
+            "reason": "missing_options_or_criteria",
+            "probabilities": {
+              "conversation": 0.2081,
+              "structured_decision": 0.6145,
+              "clarify": 0.1773
+            },
+            "runner_up_margin": 0.40640000000000004,
+            "act_probability": 1.0,
+            "latency_ms": 198.07542999842553,
+            "timed_out": false,
+            "options": [
+              "the tram",
+              "the ferry"
+            ],
+            "criteria": "",
+            "use_chat_model_available": true,
+            "model": "laya-mlx"
+          }
+        },
+        {
+          "type": "status",
+          "data": {
+            "state": "generating",
+            "context_tokens": 181,
+            "context_limit": 4096,
+            "output_tokens": 64
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "To"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " help"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " you"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " choose"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ","
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " I"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " need"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " a"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " little"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " more"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " information"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " about"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " your"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " trip"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "!"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Please"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " tell"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " me"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ":"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "1"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "  **"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Where"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " are"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " you"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " starting"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " and"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " where"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " do"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " you"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " need"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " to"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " go"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "?**"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " ("
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "e"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ".g"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ".,"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " City"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Center"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " to"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " the"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Beach"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ")"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "2"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "  **"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "What"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " is"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " your"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " main"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " priority"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "?**"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " ("
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "e"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ".g"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ".,"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Speed"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ","
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Sc"
+          }
+        },
+        {
+          "type": "status",
+          "data": {
+            "state": "output_truncated",
+            "message": "The response reached the output allowance. Send Continue to keep going.",
+            "continue": true
+          }
+        },
+        {
+          "type": "done",
+          "data": {
+            "stopped": false
+          }
+        }
+      ]
+    },
+    {
+      "label": "auto-grey-warm",
+      "payload": {
+        "text": "Help me choose between the tram and the ferry.",
+        "mode": "auto",
+        "max_tokens": 64
+      },
+      "wall_s": 4.752,
+      "events": [
+        {
+          "type": "status",
+          "data": {
+            "state": "working"
+          }
+        },
+        {
+          "type": "routing",
+          "data": {
+            "policy_version": "3",
+            "route": "clarify",
+            "reason": "missing_options_or_criteria",
+            "probabilities": {
+              "conversation": 0.2081,
+              "structured_decision": 0.6145,
+              "clarify": 0.1773
+            },
+            "runner_up_margin": 0.40640000000000004,
+            "act_probability": 1.0,
+            "latency_ms": 190.82956700003706,
+            "timed_out": false,
+            "options": [
+              "the tram",
+              "the ferry"
+            ],
+            "criteria": "",
+            "use_chat_model_available": true,
+            "model": "laya-mlx"
+          }
+        },
+        {
+          "type": "status",
+          "data": {
+            "state": "generating",
+            "context_tokens": 265,
+            "context_limit": 4096,
+            "output_tokens": 64
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "To"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " give"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " you"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " a"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " helpful"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " recommendation"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ","
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " I"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " need"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " to"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " know"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " your"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " specific"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " situation"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "!"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Please"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " tell"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " me"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ":"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "1"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "  **"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Where"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " are"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " you"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " starting"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " and"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " where"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " do"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " you"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " need"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " to"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " go"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "?**"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "2"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "  **"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "What"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " is"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " your"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " main"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " priority"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "?**"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " ("
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "e"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ".g"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ".,"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Speed"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ","
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Sc"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "enic"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " views"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ","
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Cost"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ","
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " or"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " avoiding"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " traffic"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "?)"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n"
+          }
+        },
+        {
+          "type": "status",
+          "data": {
+            "state": "output_truncated",
+            "message": "The response reached the output allowance. Send Continue to keep going.",
+            "continue": true
+          }
+        },
+        {
+          "type": "done",
+          "data": {
+            "stopped": false
+          }
+        }
+      ]
+    },
+    {
+      "label": "auto-routed-decision",
+      "payload": {
+        "text": "Which should I take? Options: tram; ferry. Criteria: lowest cost.",
+        "mode": "auto"
+      },
+      "wall_s": 21.444,
+      "events": [
+        {
+          "type": "status",
+          "data": {
+            "state": "working"
+          }
+        },
+        {
+          "type": "routing",
+          "data": {
+            "policy_version": "3",
+            "route": "structured_decision",
+            "reason": "explicit_structure",
+            "probabilities": {},
+            "runner_up_margin": null,
+            "act_probability": null,
+            "latency_ms": null,
+            "timed_out": false,
+            "options": [
+              "tram",
+              "ferry"
+            ],
+            "criteria": "lowest cost",
+            "use_chat_model_available": true,
+            "model": "laya-mlx"
+          }
+        },
+        {
+          "type": "decision",
+          "data": {
+            "type": "choice",
+            "choice": "option-1",
+            "probabilities": {
+              "option-1": 0.7314,
+              "option-2": 0.2686
+            },
+            "confidence": 0.1606,
+            "rl_agent": {
+              "act_probability": 1.0
+            },
+            "abstained": false,
+            "options": [
+              {
+                "id": "option-1",
+                "label": "tram"
+              },
+              {
+                "id": "option-2",
+                "label": "ferry"
+              }
+            ],
+            "criteria": "lowest cost",
+            "model": "laya-mlx",
+            "input_scope": "Which should I take? Options: tram; ferry. Criteria: lowest cost."
+          }
+        },
+        {
+          "type": "status",
+          "data": {
+            "state": "generating",
+            "context_tokens": 2402,
+            "context_limit": 4096,
+            "output_tokens": 1024
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Based"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " on"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " the"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " criteria"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " of"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " **"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "lowest"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " cost"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "**,"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " here"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " is"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " a"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " comparison"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " between"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " the"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " two"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " options"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ":"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "|"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Option"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Estimated"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Cost"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " ("
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "USD"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ")"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Notes"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "|"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " :"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "---"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " :"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "---"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " :"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "---"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "|"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " **"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Tr"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "am"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "**"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " $"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "2"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "5"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "0"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " -"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " $"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "3"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "5"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "0"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Typically"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " cheaper"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ";"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " often"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " included"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " in"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " city"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " passes"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "|"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " **"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "F"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "erry"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "**"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " $"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "1"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "5"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "0"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "0"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " -"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " $"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "3"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "0"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "0"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "0"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "+"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Usually"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " more"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " expensive"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ";"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " may"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " require"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " a"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " vehicle"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " fee"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " |"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "**"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Recommend"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "ation"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ":**"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Take"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " the"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " **"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "tram"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "**."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " It"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " is"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " almost"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " universally"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " less"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " expensive"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " than"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " a"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " ferry"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " ride"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " for"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " standard"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " passenger"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " transport"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "\n\n"
+          }
+        },
+        {
+          "type": "done",
+          "data": {
+            "stopped": true
+          }
+        }
+      ]
+    },
+    {
+      "label": "chat-2",
+      "payload": {
+        "text": "Name one tea variety.",
+        "max_tokens": 32
+      },
+      "wall_s": 5.963,
+      "events": [
+        {
+          "type": "status",
+          "data": {
+            "state": "working"
+          }
+        },
+        {
+          "type": "status",
+          "data": {
+            "state": "generating",
+            "context_tokens": 311,
+            "context_limit": 4096,
+            "output_tokens": 32
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "One"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " common"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " tea"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " variety"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " is"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " **"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Green"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " Tea"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "**."
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " It"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " is"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " made"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " from"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " the"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " leaves"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " of"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " the"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " *"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "Cam"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "ell"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "ia"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " sin"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "ensis"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "*"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " plant"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " that"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " are"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " un"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "oxid"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": "ized"
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": ","
+          }
+        },
+        {
+          "type": "text",
+          "data": {
+            "text": " giving"
+          }
+        },
+        {
+          "type": "status",
+          "data": {
+            "state": "output_truncated",
+            "message": "The response reached the output allowance. Send Continue to keep going.",
+            "continue": true
+          }
+        },
+        {
+          "type": "done",
+          "data": {
+            "stopped": false
+          }
+        }
+      ]
+    }
+  ],
+  "status": {
+    "state": "ready",
+    "pairs": [
+      {
+        "id": "everyday",
+        "label": "Everyday",
+        "chat_model": "qwen3.5-9b-mlx-4bit",
+        "decision_model": "laya-mlx",
+        "priority": 1,
+        "qualification": {
+          "status": "untested",
+          "receipt": null,
+          "date": null
+        },
+        "first_text_budget_ms": null
+      },
+      {
+        "id": "quality",
+        "label": "Quality",
+        "chat_model": "qwen3.8-27b-4bit",
+        "decision_model": "laya-mlx",
+        "priority": 2,
+        "qualification": {
+          "status": "untested",
+          "receipt": null,
+          "date": null
+        },
+        "first_text_budget_ms": 6500
+      },
+      {
+        "id": "compact",
+        "label": "Compact",
+        "chat_model": "qwen3-4b-instruct-2507-4bit",
+        "decision_model": "laya-mlx",
+        "priority": 3,
+        "qualification": {
+          "status": "untested",
+          "receipt": null,
+          "date": null
+        },
+        "first_text_budget_ms": null
+      }
+    ],
+    "active_pair": {
+      "id": "everyday",
+      "label": "Everyday",
+      "chat_model": "qwen3.5-9b-mlx-4bit",
+      "decision_model": "laya-mlx",
+      "priority": 1,
+      "qualification": {
+        "status": "untested",
+        "receipt": null,
+        "date": null
+      },
+      "first_text_budget_ms": null,
+      "ready_offline": false
+    },
+    "context": {
+      "context_tokens": 4096,
+      "limits": {
+        "model": 262144,
+        "backend": null,
+        "memory": 1048576,
+        "latency": null
+      },
+      "binding": "backend",
+      "backend_context_qualified": false,
+      "reserve_bytes": 5748983398,
+      "available_bytes": 57489833984,
+      "max_tokens": 4096,
+      "limit_tokens": 4096,
+      "step_tokens": 1
+    },
+    "error": null,
+    "ready_offline": false,
+    "recommended_pair": "everyday",
+    "recommendation_error": null,
+    "download_components": [
+      {
+        "id": "qwen3.5-9b-mlx-4bit",
+        "label": "qwen3.5-9b-mlx-4bit",
+        "bytes": 5950221072,
+        "state": "cached"
+      },
+      {
+        "id": "laya-mlx",
+        "label": "laya-mlx",
+        "bytes": 842609210,
+        "state": "cached"
+      }
+    ],
+    "download_has_unknown": false,
+    "total_download_bytes": 0,
+    "qualification": {
+      "pair": {
+        "status": "untested",
+        "receipt": null,
+        "date": null
+      },
+      "chat": {
+        "generation": {
+          "status": "qualified",
+          "receipt": "receipts/2026-09-30-chat-model-bench/README.md",
+          "date": "2026-10-01"
+        },
+        "http": {
+          "status": "qualified",
+          "receipt": "receipts/2026-09-30-card-promotion/README.md",
+          "date": "2026-10-01"
+        },
+        "managed": {
+          "status": "qualified",
+          "receipt": "receipts/2026-09-30-pair-gates/README.md",
+          "date": "2026-10-01"
+        }
+      },
+      "decision": {
+        "generation": {
+          "status": "qualified",
+          "receipt": "receipts/2026-09-20-laya-gpu-qual-the T6021 qualification host.md",
+          "date": "2026-09-20"
+        },
+        "http": {
+          "status": "qualified",
+          "receipt": "receipts/2026-09-20-laya-gpu-qual-the T6021 qualification host.md",
+          "date": "2026-09-20"
+        },
+        "managed": {
+          "status": "untested",
+          "receipt": null,
+          "date": null
+        }
+      }
+    },
+    "theme": {
+      "name": "Tokyo Night",
+      "slug": "tokyo-night",
+      "source": "fallback",
+      "status": "Tokyo Night: no readable colors.toml under ~/.local/state/omarchy/current/theme (redacted); using built-in fallback",
+      "mode": "dark",
+      "css": {
+        "--mlx-canvas": "#1a1b26",
+        "--mlx-panel": "#383a4b",
+        "--mlx-border": "#6a6b71",
+        "--mlx-text": "#c0caf5",
+        "--mlx-dim": "#b1b3c0",
+        "--mlx-focus": "#7aa2f7",
+        "--mlx-focus-ink": "#000000",
+        "--mlx-ready": "#9ece6a",
+        "--mlx-error": "#f7768e",
+        "--mlx-warn": "#e0af68",
+        "--mlx-mode": "dark",
+        "--mlx-font-sans": "\"Liberation Sans\"",
+        "--mlx-font-mono": "\"JetBrainsMono Nerd Font\""
+      }
+    },
+    "voice": {
+      "recognition": {
+        "state": "missing",
+        "ready": false,
+        "usable": false,
+        "qualified": false,
+        "reasons": [
+          "mlx-audio 0.5.6 is required (found None); install with bash install.sh --voice",
+          "speech recognition model not downloaded (missing: config.json, model.safetensors, tokenizer.model, tokenizer.vocab, vocab.txt); enable voice in model setup"
+        ],
+        "qualification": {
+          "kind": "gpu_stt",
+          "model": {
+            "repo": "mlx-community/parakeet-tdt-0.6b-v3",
+            "revision": "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15"
+          },
+          "asset_bytes": {
+            "weights_bytes": 2508288736
+          },
+          "mlx_audio": null,
+          "device": "Device(gpu, 0)",
+          "cache": "missing",
+          "weight_bytes": 0
+        },
+        "model": {
+          "repo": "mlx-community/parakeet-tdt-0.6b-v3",
+          "revision": "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15"
+        },
+        "memory": {
+          "runtime_estimate_bytes": 2776724192,
+          "estimate": true,
+          "estimate_basis": {
+            "weights_bytes": 2508288736,
+            "conservative_margin_bytes": 268435456
+          }
+        },
+        "max_duration_seconds": 30.0,
+        "sample_rate": 16000,
+        "encoding": "mono PCM WAV (s16/s32/f32), float32 to 16 kHz"
+      },
+      "synthesis": {
+        "pack": {
+          "id": "kokoro-82m-bf16",
+          "repo": "mlx-community/Kokoro-82M-bf16",
+          "revision": "a71e4d38b236d968966a2002c4c895dbd12b1c3c",
+          "license": "apache-2.0",
+          "label": "Kokoro 82M",
+          "voice": "af_heart",
+          "engine": "kokoro-82m-bf16",
+          "voice_default": "af_heart",
+          "voice_options": [
+            {
+              "label": "Heart",
+              "accent": "American English",
+              "id": "af_heart",
+              "engine": "kokoro-82m-bf16",
+              "engine_label": "Kokoro 82M"
+            },
+            {
+              "label": "Bella",
+              "accent": "American English",
+              "id": "af_bella",
+              "engine": "kokoro-82m-bf16",
+              "engine_label": "Kokoro 82M"
+            },
+            {
+              "label": "Michael",
+              "accent": "American English",
+              "id": "am_michael",
+              "engine": "kokoro-82m-bf16",
+              "engine_label": "Kokoro 82M"
+            },
+            {
+              "label": "Serena",
+              "accent": "Chinese-native; English has an accent",
+              "id": "serena",
+              "engine": "qwen3-tts-0.6b-customvoice-4bit",
+              "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+            },
+            {
+              "label": "Vivian",
+              "accent": "Chinese-native; English has an accent",
+              "id": "vivian",
+              "engine": "qwen3-tts-0.6b-customvoice-4bit",
+              "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+            },
+            {
+              "label": "Uncle Fu",
+              "accent": "Chinese-native; English has an accent",
+              "id": "uncle_fu",
+              "engine": "qwen3-tts-0.6b-customvoice-4bit",
+              "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+            },
+            {
+              "label": "Ryan",
+              "accent": "English",
+              "id": "ryan",
+              "engine": "qwen3-tts-0.6b-customvoice-4bit",
+              "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+            },
+            {
+              "label": "Aiden",
+              "accent": "American English",
+              "id": "aiden",
+              "engine": "qwen3-tts-0.6b-customvoice-4bit",
+              "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+            },
+            {
+              "label": "Ono Anna",
+              "accent": "Japanese-native; English has an accent",
+              "id": "ono_anna",
+              "engine": "qwen3-tts-0.6b-customvoice-4bit",
+              "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+            },
+            {
+              "label": "Sohee",
+              "accent": "Korean-native; English has an accent",
+              "id": "sohee",
+              "engine": "qwen3-tts-0.6b-customvoice-4bit",
+              "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+            },
+            {
+              "label": "Eric",
+              "accent": "Sichuan dialect (Chinese)",
+              "id": "eric",
+              "engine": "qwen3-tts-0.6b-customvoice-4bit",
+              "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+            },
+            {
+              "label": "Dylan",
+              "accent": "Beijing dialect (Chinese)",
+              "id": "dylan",
+              "engine": "qwen3-tts-0.6b-customvoice-4bit",
+              "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+            }
+          ],
+          "voices": [
+            "af_heart",
+            "af_bella",
+            "am_michael"
+          ],
+          "sample_rate": 24000,
+          "runtime": {
+            "mlx_audio": {
+              "version": "0.5.6",
+              "wheel_sha256": "7cf7b49135f6f681988a9e0b9d2fbfdd2e9be783b0a3204d0c4028e0cf2d8b4c"
+            },
+            "requires": [
+              "mlx",
+              "mlx_audio",
+              "numpy",
+              "misaki",
+              "num2words",
+              "spacy",
+              "en-core-web-sm",
+              "phonemizer",
+              "espeakng-loader"
+            ],
+            "constraints": {
+              "mlx_audio": "==0.5.6",
+              "misaki": "==0.7.4",
+              "num2words": "==0.5.14",
+              "spacy": ">=3.8.0",
+              "en-core-web-sm": "==3.8.0",
+              "phonemizer": ">=3.2.1",
+              "espeakng-loader": "==0.2.4"
+            }
+          }
+        },
+        "engines": [
+          {
+            "id": "kokoro-82m-bf16",
+            "label": "Kokoro 82M",
+            "repo": "mlx-community/Kokoro-82M-bf16",
+            "revision": "a71e4d38b236d968966a2002c4c895dbd12b1c3c",
+            "license": "apache-2.0",
+            "voice_default": "af_heart",
+            "voices": [
+              "af_heart",
+              "af_bella",
+              "am_michael"
+            ],
+            "voice_options": [
+              {
+                "label": "Heart",
+                "accent": "American English",
+                "id": "af_heart",
+                "engine": "kokoro-82m-bf16",
+                "engine_label": "Kokoro 82M"
+              },
+              {
+                "label": "Bella",
+                "accent": "American English",
+                "id": "af_bella",
+                "engine": "kokoro-82m-bf16",
+                "engine_label": "Kokoro 82M"
+              },
+              {
+                "label": "Michael",
+                "accent": "American English",
+                "id": "am_michael",
+                "engine": "kokoro-82m-bf16",
+                "engine_label": "Kokoro 82M"
+              }
+            ],
+            "assets": {
+              "path": "/var/tmp/routingon-home/voice/kokoro-82m-bf16",
+              "present": false,
+              "verified": false,
+              "bytes": 0,
+              "expected_bytes": 328684463
+            },
+            "dependencies": {
+              "present": [
+                "mlx",
+                "numpy",
+                "misaki",
+                "num2words",
+                "spacy",
+                "en-core-web-sm",
+                "phonemizer",
+                "espeakng-loader"
+              ],
+              "missing": [
+                "mlx_audio"
+              ],
+              "detail": {
+                "mlx": {
+                  "version": "unknown"
+                },
+                "mlx_audio": "ModuleNotFoundError: No module named 'mlx_audio'",
+                "numpy": {
+                  "version": "2.5.3"
+                },
+                "misaki": {
+                  "version": "0.7.4",
+                  "constraint": "==0.7.4",
+                  "satisfies": true
+                },
+                "num2words": {
+                  "version": "0.5.14",
+                  "constraint": "==0.5.14",
+                  "satisfies": true
+                },
+                "spacy": {
+                  "version": "3.8.16",
+                  "constraint": ">=3.8.0",
+                  "satisfies": true
+                },
+                "en-core-web-sm": {
+                  "version": "3.8.0",
+                  "constraint": "==3.8.0",
+                  "satisfies": true
+                },
+                "phonemizer": {
+                  "version": "3.4.0",
+                  "constraint": ">=3.2.1",
+                  "satisfies": true
+                },
+                "espeakng-loader": {
+                  "version": "0.2.4",
+                  "constraint": "==0.2.4",
+                  "satisfies": true
+                }
+              }
+            },
+            "usable": false
+          },
+          {
+            "id": "qwen3-tts-0.6b-customvoice-4bit",
+            "label": "Qwen3-TTS 0.6B CustomVoice",
+            "repo": "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit",
+            "revision": "08c72cad5e2fd0f41730c8bd1f28149585e46361",
+            "license": "apache-2.0",
+            "voice_default": "aiden",
+            "voices": [
+              "serena",
+              "vivian",
+              "uncle_fu",
+              "ryan",
+              "aiden",
+              "ono_anna",
+              "sohee",
+              "eric",
+              "dylan"
+            ],
+            "voice_options": [
+              {
+                "label": "Serena",
+                "accent": "Chinese-native; English has an accent",
+                "id": "serena",
+                "engine": "qwen3-tts-0.6b-customvoice-4bit",
+                "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+              },
+              {
+                "label": "Vivian",
+                "accent": "Chinese-native; English has an accent",
+                "id": "vivian",
+                "engine": "qwen3-tts-0.6b-customvoice-4bit",
+                "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+              },
+              {
+                "label": "Uncle Fu",
+                "accent": "Chinese-native; English has an accent",
+                "id": "uncle_fu",
+                "engine": "qwen3-tts-0.6b-customvoice-4bit",
+                "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+              },
+              {
+                "label": "Ryan",
+                "accent": "English",
+                "id": "ryan",
+                "engine": "qwen3-tts-0.6b-customvoice-4bit",
+                "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+              },
+              {
+                "label": "Aiden",
+                "accent": "American English",
+                "id": "aiden",
+                "engine": "qwen3-tts-0.6b-customvoice-4bit",
+                "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+              },
+              {
+                "label": "Ono Anna",
+                "accent": "Japanese-native; English has an accent",
+                "id": "ono_anna",
+                "engine": "qwen3-tts-0.6b-customvoice-4bit",
+                "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+              },
+              {
+                "label": "Sohee",
+                "accent": "Korean-native; English has an accent",
+                "id": "sohee",
+                "engine": "qwen3-tts-0.6b-customvoice-4bit",
+                "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+              },
+              {
+                "label": "Eric",
+                "accent": "Sichuan dialect (Chinese)",
+                "id": "eric",
+                "engine": "qwen3-tts-0.6b-customvoice-4bit",
+                "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+              },
+              {
+                "label": "Dylan",
+                "accent": "Beijing dialect (Chinese)",
+                "id": "dylan",
+                "engine": "qwen3-tts-0.6b-customvoice-4bit",
+                "engine_label": "Qwen3-TTS 0.6B CustomVoice"
+              }
+            ],
+            "assets": {
+              "path": "/var/tmp/routingon-home/voice/qwen3-tts-0.6b-customvoice-4bit",
+              "present": false,
+              "verified": false,
+              "bytes": 0,
+              "expected_bytes": 1693602151
+            },
+            "dependencies": {
+              "present": [
+                "mlx",
+                "transformers",
+                "numpy"
+              ],
+              "missing": [
+                "mlx_audio"
+              ],
+              "detail": {
+                "mlx": {
+                  "version": "unknown"
+                },
+                "mlx_audio": "ModuleNotFoundError: No module named 'mlx_audio'",
+                "transformers": {
+                  "version": "5.18.0",
+                  "constraint": ">=5.14.0",
+                  "satisfies": true
+                },
+                "numpy": {
+                  "version": "2.5.3",
+                  "constraint": ">=1.26.4",
+                  "satisfies": true
+                }
+              }
+            },
+            "usable": false
+          }
+        ],
+        "assets": {
+          "path": "/var/tmp/routingon-home/voice/kokoro-82m-bf16",
+          "present": false,
+          "verified": false,
+          "bytes": 0,
+          "expected_bytes": 328684463
+        },
+        "accelerator": {
+          "available": true,
+          "device": "Device(gpu, 0)",
+          "detail": "Device(gpu, 0)"
+        },
+        "dependencies": {
+          "present": [
+            "mlx",
+            "numpy",
+            "misaki",
+            "num2words",
+            "spacy",
+            "en-core-web-sm",
+            "phonemizer",
+            "espeakng-loader"
+          ],
+          "missing": [
+            "mlx_audio"
+          ],
+          "detail": {
+            "mlx": {
+              "version": "unknown"
+            },
+            "mlx_audio": "ModuleNotFoundError: No module named 'mlx_audio'",
+            "numpy": {
+              "version": "2.5.3"
+            },
+            "misaki": {
+              "version": "0.7.4",
+              "constraint": "==0.7.4",
+              "satisfies": true
+            },
+            "num2words": {
+              "version": "0.5.14",
+              "constraint": "==0.5.14",
+              "satisfies": true
+            },
+            "spacy": {
+              "version": "3.8.16",
+              "constraint": ">=3.8.0",
+              "satisfies": true
+            },
+            "en-core-web-sm": {
+              "version": "3.8.0",
+              "constraint": "==3.8.0",
+              "satisfies": true
+            },
+            "phonemizer": {
+              "version": "3.4.0",
+              "constraint": ">=3.2.1",
+              "satisfies": true
+            },
+            "espeakng-loader": {
+              "version": "0.2.4",
+              "constraint": "==0.2.4",
+              "satisfies": true
+            }
+          }
+        },
+        "memory": {
+          "asset_bytes": 328684463,
+          "weights_bytes": 328682112,
+          "runtime_estimate_bytes": 585000000,
+          "estimate": true
+        },
+        "state": "missing",
+        "usable": false,
+        "ready": false,
+        "generated": false,
+        "primed": false,
+        "busy": false,
+        "worker": {
+          "alive": false,
+          "pid": null
+        },
+        "last_error": null,
+        "voice_choice_error": null,
+        "qualification": {
+          "qualified": false,
+          "receipt": null,
+          "reason": "no qualification receipt (audible listener check, zero CPU tensor dispatches, latency measurement)"
+        }
+      },
+      "state": "unqualified",
+      "detail": "Speech readiness is verified separately for input and output.",
+      "download_bytes": 328684463
+    },
+    "routing": {
+      "enabled": true,
+      "disabled_reason": null,
+      "policy_version": "3",
+      "head_ready": true,
+      "pair_state": "ready",
+      "last_head_ms": null,
+      "last_route": "structured_decision",
+      "last_reason": "explicit_structure",
+      "last_timed_out": false,
+      "last_at": "2026-10-03T19:09:32Z"
+    },
+    "setup": {
+      "state": "complete",
+      "ready_offline": false
+    }
+  },
+  "errors": [],
+  "setup_state": "ready",
+  "setup_error": null
+}

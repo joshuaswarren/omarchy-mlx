@@ -1,0 +1,22 @@
+[
+  {
+    "pid": 830,
+    "rss_bytes": 181092352,
+    "cmd": "Hyprland --watchdog-fd 4 --config /usr/share/sddm/hyprland.lua"
+  },
+  {
+    "pid": 843,
+    "rss_bytes": 126533632,
+    "cmd": "/usr/bin/sddm-greeter-qt6 --socket /tmp/sddm--smLyRt --theme /usr/share/sddm/themes/omarchy"
+  },
+  {
+    "pid": 694,
+    "rss_bytes": 82083840,
+    "cmd": "/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641"
+  },
+  {
+    "pid": 860,
+    "rss_bytes": 74940416,
+    "cmd": "Xwayland :0 -rootless -core -listenfd 46 -listenfd 47 -displayfd 79 -wm 76"
+  }
+]

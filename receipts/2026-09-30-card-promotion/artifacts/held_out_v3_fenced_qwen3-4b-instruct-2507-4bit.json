@@ -1,0 +1,1222 @@
+{
+  "suite_sha256": "5cce5bb75b02b3c7815c5e7ecc48212e51ffc5168af17d099f95fa51985a6ebb",
+  "chat_model": "qwen3-4b-instruct-2507-4bit",
+  "prompts": [
+    {
+      "id": "v3-01",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 33.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "- Turn off all appliances and unplug electronics  \n- Drain the water heater and shut off the main water supply  \n- Empty and clean the washing machine, dryer, and dishwasher  \n- Remove all furniture and store it in a dry, protected area  \n- Seal windows and doors with weather stripping or caulk  \n- Inspect the roof for damage and repair any leaks  \n- Clear snow from gutters and downspouts to prevent clogging  \n- Empty the trash and dispose of it properly  \n- Remove pets, plants, or garden items from the cabin  \n- Store outdoor tools and equipment in a dry place  \n- Check the heating system and ensure it\u2019s winterized  \n- Fill up the gas tank (if applicable) and store fuel safely  \n- Label all stored items with dates for future reference  \n- Take a photo of the cabin\u2019s condition before closing  \n- Update your winter maintenance log with dates and actions  \n\nThis checklist ensures the cabin is safe, dry, and ready for winter use."
+    },
+    {
+      "id": "v3-02",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 39.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "- Send out invitations 2 weeks in advance  \n- Confirm guest dietary restrictions (vegetarian, gluten-free, etc.)  \n- Create a shopping list for groceries and ingredients  \n- Plan the menu (main courses, sides, desserts)  \n- Choose a date and time for dinner (ideally Friday or Saturday evening)  \n- Reserve the dining table and ensure seating is comfortable  \n- Purchase or order a turkey (or alternative protein)  \n- Buy side dishes: stuffing, mashed potatoes, cranberry sauce, etc.  \n- Prepare desserts (pie, cookies, or pumpkin dessert)  \n- Set up the kitchen and prep ingredients ahead of time  \n- Decorate the table with Thanksgiving-themed items (plates, napkins, centerpieces)  \n- Assign tasks to family members or friends (e.g., one person handles appetizers, another handles dessert)  \n- Test the oven and ensure it\u2019s working properly  \n- Prepare a backup plan for weather or unexpected issues (e.g., if it rains, have an indoor option)  \n- Serve and enjoy the meal!  \n\nMake sure to allow at least 2 days for prep before the dinner. Consider timing so that guests arrive on time and are not left waiting."
+    },
+    {
+      "id": "v3-03",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Steps to Replace a Bike Inner Tube"
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 91.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "1. Gather tools and materials: new inner tube, tire levers, pump (or air compressor), and a spare patch or glue if needed.  \n2. Deflate the tire completely by using the pump in reverse (or a manual valve).  \n3. Use tire levers to gently pry open the rim and remove the old inner tube.  \n4. Inspect the tire for cuts, punctures, or damage\u2014note any signs of wear or debris.  \n5. Clean the rim and tire bead area to remove dirt, grime, or old adhesive.  \n6. Slide the new inner tube into the tire, starting from the valve stem and working it around the rim.  \n7. Ensure the tube is seated evenly, avoiding wrinkles or folds that could cause a pinch.  \n8. Reinstall the tire by placing it back onto the rim and using the tire levers to help position it.  \n9. Inflate the tire slowly (start with 1\u20132 psi) to avoid damaging the new tube.  \n10. Once properly seated, inflate fully as needed for your riding conditions.\n\nNote: Always check the new tube\u2019s size and type (e.g., width, material) to match your tire.  \n\nChecklist of steps:\n- [ ] Deflate the tire  \n- [ ] Remove old tube with tire levers  \n- [ ] Inspect tire and rim  \n- [ ] Clean the area  \n- [ ] Insert new inner tube  \n- [ ] Reinstall tire  \n- [ ] Inflate slowly, then fully  \n\nThis process typically takes 10\u201320 minutes depending on experience.  \nAlways ensure the tube is not pinched or folded during installation to prevent premature failure.  \n\n"
+    },
+    {
+      "id": "v3-04",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 28.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "- Business attire (suit, dress shirt, blazer)  \n- Dress shoes or comfortable walking shoes  \n- Suit jacket or lightweight coat for cooler evenings  \n- Laptop and charger  \n- Notebook and pen  \n- Power adapter (U.S. plug standard: 120V, 60Hz)  \n- Business card holder or wallet  \n- Driver\u2019s license and ID  \n- Credit cards (and backup)  \n- Phone and charger  \n- Water bottle or reusable cup  \n- Snacks and a small first-aid kit (band-aids, hand sanitizer)  \n- Hotel or meeting address details and contact list  \n- Meeting agenda or itinerary (printed or digital)  \n- Travel insurance documents (if applicable)  \n\nOptional:  \n- Small umbrella or raincoat (Chicago can be rainy)  \n- Noise-canceling headphones (for flights or meetings)  \n- Travel-sized toiletries  \n\nRemember to check the weather forecast before departure and pack accordingly."
+    },
+    {
+      "id": "v3-05",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 36.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "- **Cost**: Electric stoves typically have a higher upfront cost than gas stoves, but they are often cheaper to operate due to lower energy costs. Gas stoves have a lower initial cost but may incur higher long-term expenses due to gas prices and the need for regular servicing.\n\n- **Cooking Speed**: Electric stoves heat up more slowly than gas stoves, which can result in longer cooking times. Gas stoves provide instant heat and are generally faster for searing or high-temperature tasks.\n\n- **Maintenance**: Electric stoves require minimal maintenance\u2014mainly occasional cleaning of the burners and surface. Gas stoves may need more frequent servicing, such as checking for gas leaks or cleaning the burner ports.\n\nHere is a side-by-side comparison:\n\n| Feature         | Electric Stove                     | Gas Stove                          |\n|-----------------|------------------------------------|-------------------------------------|\n| Cost (upfront)  | Higher                            | Lower                              |\n| Cost (operating)| Lower                            | Higher                             |\n| Cooking speed   | Slower                           | Faster                            |\n| Maintenance     | Low                              | Moderate (requires more checks)  |\n\nThis comparison helps in deciding based on budget, cooking preferences, and convenience."
+    },
+    {
+      "id": "v3-06",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 52.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "A comparison of Kindle versus paperback books across price, portability, and eye strain:\n\n- **Price**:  \n  - Kindle: Lower long-term cost due to digital storage and no physical printing. A single Kindle book can be cheaper than purchasing a paperback, especially with bulk purchases or library access.  \n  - Paperback: Higher per-book cost due to printing and shipping, though some titles may be cheaper in physical form.  \n\n- **Portability**:  \n  - Kindle: Highly portable\u2014stores thousands of books in a single device, with lightweight design and no need to carry multiple physical copies.  \n  - Paperback: Less portable\u2014each book requires individual carrying, and large collections take up more space.  \n\n- **Eye strain**:  \n  - Kindle: Can cause eye strain in low-light conditions or with poor screen settings, but adjustable brightness and text size reduce discomfort.  \n  - Paperback: Generally causes less eye strain in well-lit environments, as the physical page is easier on the eyes for some readers.  \n\nSummary:  \n- Choose Kindle for cost efficiency and portability, especially if reading frequently or in low-light settings.  \n- Choose paperback for reduced eye strain and tactile experience, ideal for readers who prefer physical books or read in bright environments.  \n\nA side-by-side comparison is provided below:\n\n| Feature         | Kindle                          | Paperback                        |\n|-----------------|----------------------------------|----------------------------------|\n| Price           | Lower (long-term)               | Higher per book                 |\n| Portability     | High (stores thousands of books)| Low (one book at a time)       |\n| Eye strain      | Possible in low light           | Generally lower, in bright env. |\n\nThis comparison helps readers decide based on personal preferences and reading habits."
+    },
+    {
+      "id": "v3-07",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 36.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Sure! Here's a tabular comparison of the three largest U.S. mobile carriers\u2014AT&T, Verizon, and T-Mobile\u2014based on coverage, price (average monthly plan), and perks:\n\n| Carrier     | Coverage (U.S. footprint) | Average Monthly Price (starting plan) | Key Perks |\n|------------|----------------------------|----------------------------------------|----------|\n| AT&T       | Strong in urban & suburban; limited rural coverage | $40\u2013$60 | Unlimited data, good for streaming, 5G in major cities |\n| Verizon    | Broadest nationwide coverage; excellent rural and urban | $50\u2013$70 | Best 5G network, strong in rural areas, nationwide coverage |\n| T-Mobile   | Strong urban and suburban; improving rural access via \"T-Mobile 5G\" | $40\u2013$60 | Best value, unlimited data, nationwide 5G rollout |\n\nNote: Prices and coverage can vary by region and plan. Perks may include data, text, and call allowances depending on the specific package.\n\nLet me know if you'd like a more detailed breakdown or comparisons by specific regions."
+    },
+    {
+      "id": "v3-08",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 171.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The interface was incomplete; it was not rendered."
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a side-by-side comparison of renting and buying a home over five years:\n\n| Category               | Renting                          | Buying                            |\n|------------------------|----------------------------------|-----------------------------------|\n| Initial Cost           | One-time security deposit (1\u20132 months' rent) | Down payment (3%\u201320%) + closing costs (~1\u20133% of home value) |\n| Monthly Expense        | Rent (e.g., $1,500/month)       | Mortgage payment (principal + interest), property taxes, insurance (~$1,800\u2013$3,500/month) |\n| Maintenance Responsibility | Tenant (usually none)         | Owner (repairs, upkeep, etc.)    |\n| Potential Appreciation | None                           | Home value may increase over time (average 2\u20133% annually) |\n| Flexibility            | High \u2013 easy to move             | Low \u2013 tied to property, limited resale flexibility |\n| Long-term Cost         | Fixed rent (no equity built)   | Higher upfront, but potential for equity growth |\n| Total 5-Year Cost (estimate) | ~$90,000 (rent at $1,500/month) | ~$120,000\u2013$180,000 (depending on home price and interest rates) |\n\nNote: Costs vary by location, market conditions, and individual circumstances. Renting may be more predictable, while buying offers long-term potential for wealth building if the property appreciates and is held long-term.\n\n"
+    },
+    {
+      "id": "v3-09",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 99.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Here\u2019s a suggested schedule for your Saturday garage cleanout starting at 8 AM:\n\n- **8:00 AM \u2013 8:30 AM**: Begin with a quick walkthrough and inventory. Sort items into categories (e.g., keep, donate, discard).\n- **8:30 AM \u2013 9:30 AM**: Remove and organize items by category (e.g., tools, seasonal gear, office supplies).\n- **9:30 AM \u2013 10:30 AM**: Label and pack items for donation or sale. Prepare boxes and bags.\n- **10:30 AM \u2013 11:30 AM**: Dispose of non-essential items (e.g., expired, damaged). Follow local waste disposal rules.\n- **11:30 AM \u2013 12:30 PM**: Clean and sanitize the garage (dust, vacuum, wipe surfaces).\n- **12:30 PM \u2013 1:30 PM**: Lunch break. Take a short walk or relax.\n- **1:30 PM \u2013 2:30 PM**: Organize and label storage bins or shelves.\n- **2:30 PM \u2013 3:30 PM**: Final review of remaining items. Decide what to keep, donate, or sell.\n- **3:30 PM \u2013 4:00 PM**: Wrap up and tidy the garage. Ensure all items are stored properly.\n- **4:00 PM \u2013 5:00 PM**: Review and reflect. Note what worked well or what could be improved.\n\nThis schedule allows for a balanced, efficient cleanout while giving you time to rest and reflect. Adjust times based on your pace or specific needs.\n\nassistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"timeline\", \"entries\": [{\"id\": \"e1\", \"when\": \"8:00 AM\", \"text\": \"Start with a walkthrough and inventory\"}, {\"id\": \"e2\", \"when\": \"8:30 AM\", \"text\": \"Organize items by category (tools, seasonal gear, etc.)\"}, {\"id\": \"e3\", \"when\": \"9:30 AM\", \"text\": \"Pack items for donation or sale\"}, {\"id\": \"e4\", \"when\": \"10:30 AM\", \"text\": \"Dispose of non-essential items\"}, {\"id\": \"e5\", \"when\": \"11:30 AM\", \"text\": \"Clean and sanitize the garage\"}, {\"id\": \"e6\", \"when\": \"12:30 PM\", \"text\": \"Lunch break\"}, {\"id\": \"e7\", \"when\": \"1:30 PM\", \"text\": \"Organize and label storage bins\"}, {\"id\": \"e8\", \"when\": \"2:30 PM\", \"text\": \"Final review of items\"}, {\"id\": \"e9\", \"when\": \"3:30 PM\", \"text\": \"Wrap up and tidy the garage\"}, {\"id\": \"e10\", \"when\": \"4:00 PM\", \"text\": \"Review and reflect on the process\"}]}]}\n"
+    },
+    {
+      "id": "v3-10",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 200.4,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The interface was incomplete; it was not rendered."
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "A 6-month roadmap for learning Spanish can be structured into phased milestones, with clear goals and actionable steps. Here's a practical, balanced plan:\n\n**Phase 1: Foundation (Month 1)**\n- Learn the basics of Spanish grammar and vocabulary\n- Focus on high-frequency words (greetings, numbers, food, family)\n- Practice pronunciation and listening skills\n- Start with a beginner-level textbook or app (e.g., Duolingo, Babbel)\n- Begin daily 20\u201330 minute study sessions\n\n**Phase 2: Building Fluency (Months 2\u20134)**\n- Expand vocabulary in daily life contexts (shopping, travel, work)\n- Study common verb tenses: present, past, future\n- Practice speaking with language exchange partners (e.g., Tandem, HelloTalk)\n- Watch Spanish-language content with subtitles\n- Read simple texts (e.g., children\u2019s books, news headlines)\n\n**Phase 3: Real-World Application (Months 5\u20136)**\n- Focus on conversation and real-life scenarios\n- Practice writing short emails, messages, or journal entries\n- Take a beginner-level Spanish course (e.g., via Coursera or edX)\n- Prepare for a conversation or travel situation\n- Review and assess progress with a language test (e.g., DELE, CELTA)\n\nKey elements:\n- Consistency: 30 minutes daily is ideal\n- Immersion: Use Spanish in media, music, and social settings\n- Feedback: Regularly practice with native speakers or tutors\n\nThis plan balances structure, realism, and adaptability to your goals.\n\n"
+    },
+    {
+      "id": "v3-11",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 48.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "A typical wedding-day timeline generally spans from early morning to late afternoon or evening, with key events occurring in sequence. Here's a general structure:\n\n- **6:00\u20137:30 AM**: Bride and groom arrive at the venue; hair and makeup begin (often starting 1\u20132 hours before the ceremony).\n- **7:30\u20138:30 AM**: Hair and makeup complete; couple may have a final photo session or meet with the officiant.\n- **8:30\u20139:00 AM**: Final check-in with the wedding party; guests arrive for the ceremony.\n- **9:00\u201310:00 AM**: Ceremony (with readings, vows, and officiant).\n- **10:00\u201311:30 AM**: Reception begins (guests arrive, music starts, first dance).\n- **11:30 AM\u20132:00 PM**: Reception continues with food, dancing, and mingling.\n- **2:00\u20134:00 PM**: Guests depart; send-off (e.g., a group photo, farewell toast).\n- **4:00 PM onward**: Final clean-up and post-wedding activities.\n\nThis timeline can vary based on the couple\u2019s preferences, venue size, and whether there's a pre-wedding or post-wedding reception. Some couples opt for a more relaxed send-off, while others include a formal farewell or group photo.\n\nNote: This is a general estimate and may differ based on wedding style, location, or cultural traditions."
+    },
+    {
+      "id": "v3-12",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 13.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Here\u2019s your Friday plan:\n\n- **8:30 AM**: Dentist appointment  \n- **10:00 AM**: Team sync meeting  \n- **12:00 PM**: Gym session  \n- **7:00 PM**: Dinner with Sam  \n\nMake sure to account for travel time and schedule buffer between activities. Let me know if you'd like a timeline or checklist version!"
+    },
+    {
+      "id": "v3-13",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        "Facts (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 11.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "- Vehicle: 2019 Honda Civic  \n- Mileage: 48,000 miles  \n- Last oil change: June (specific year not provided)  \n- Model year: 2019  \n- Make and model confirmed: Honda Civic  \n\nThese are the key facts based on your input."
+    },
+    {
+      "id": "v3-14",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        "Facts (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 7.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Key points from the message:\n\n- The meeting has been rescheduled to Thursday.  \n- The budget is currently frozen (no changes can be made).  \n- Dana is leading the redesign initiative."
+    },
+    {
+      "id": "v3-15",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        "Facts (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 18.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "1. The Eiffel Tower was originally built as the entrance to the 1889 World's Fair and stands 300 meters tall, making it one of the tallest structures in the world when completed.\n\n2. It was designed by engineer Gustave Eiffel and constructed using 18,038 iron lattice pieces joined by over two million rivets.\n\n3. The Eiffel Tower was initially criticized by some French artists and intellectuals, who considered it an eyesore, but it has since become a global icon of Paris and France."
+    },
+    {
+      "id": "v3-16",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 64.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "**Comparison: Zoom vs. Google Meet**\n\n| Feature               | Zoom                          | Google Meet                   |\n|-----------------------|------------------------------|-------------------------------|\n| Video Quality         | High (up to 1080p)           | Good (up to 720p)             |\n| Audio Quality         | Excellent                    | Good                         |\n| Meeting Duration      | Up to 24 hours               | Up to 60 minutes             |\n| Screen Sharing        | Yes, with advanced tools    | Yes, simple and intuitive    |\n| Recording             | Yes (cloud & local)         | Yes (automatically saved)    |\n| Integration with G Suite | Full integration          | Native Google ecosystem      |\n| Mobile App Support    | Strong (iOS & Android)      | Strong                       |\n| Meeting Links         | Customizable                | Automatically generated      |\n| Free Tier             | 105 minutes/month           | Unlimited (for G Suite users)|\n| Virtual Backgrounds   | Yes                         | Yes                          |\n| Breakout Rooms        | Yes                         | Yes                          |\n| Customization         | High (branding, themes)     | Limited                      |\n\n**Agenda for First Call**\n\n1. **Welcome & Objectives (5 min)**  \n   - Introduce team members and purpose of the meeting.  \n   - Clarify goals for this call (e.g., compare tools, decide on adoption).\n\n2. **Tool Comparison Discussion (15 min)**  \n   - Review the features above in detail.  \n   - Discuss preferences for video/audio, screen sharing, and recording.\n\n3. **Pricing & Setup (10 min)**  \n   - Compare costs for individual and team use.  \n   - Walk through onboarding process (setup, access, permissions).\n\n4. **Q&A & Decision Vote (10 min)**  \n   - Open floor for questions.  \n   - Vote on preferred platform using a simple decision card.\n\n5. **Next Steps (5 min)**  \n   - Assign responsibilities for onboarding and testing.  \n   - Schedule a follow-up call to evaluate performance.\n\nLet me know if you'd like this as a downloadable document or formatted in another way."
+    },
+    {
+      "id": "v3-17",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 140.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The generated interface was invalid. The text answer remains available."
+        }
+      ],
+      "pass": true,
+      "reply": "- Clear debris and dead plants from the garden beds  \n- Remove weeds and loosen soil to improve aeration  \n- Test soil pH and nutrient levels; amend as needed (add compost, lime, or fertilizer)  \n- Inspect for pests and diseases; treat with organic solutions if needed  \n- Prune dead or damaged branches from perennials and shrubs  \n- Water the garden deeply to encourage root growth  \n- Add a layer of organic compost or mulch (2\u20133 inches) to retain moisture and suppress weeds  \n- Install or repair garden tools, hoses, and irrigation systems  \n- Purchase or order spring planting seeds and seedlings  \n\n**Planting Timeline by Month:**  \n\n- **March**:  \n  - Start cold-hardy plants (e.g., kale, spinach) indoors or in protected areas  \n  - Begin planting cool-season crops (e.g., peas, radishes) in frost-free zones  \n\n- **April**:  \n  - Plant cool-season vegetables (e.g., lettuce, carrots) in garden beds  \n  - Start planting early varieties of tomatoes and peppers (in warm zones)  \n\n- **May**:  \n  - Plant heat-tolerant vegetables like peppers, tomatoes, and cucumbers (after last frost)  \n  - Begin planting flowers such as marigolds, zinnias, and petunias  \n\n- **June**:  \n  - Expand vegetable planting with beans, corn, and squash (following the \"three sisters\" method)  \n  - Continue planting flowers for pollination support  \n\n- **July**:  \n  - Focus on maintenance: water regularly, thin plants, and monitor for pests  \n\n- **August**:  \n  - Harvest early crops; prepare beds for fall planting if needed  \n\n- **September**:  \n  - Begin planting cool-season crops (e.g., broccoli, cabbage) for fall harvest  \n\n- **October**:  \n  - Prepare garden beds for winter by adding mulch and covering plants with frost cloths  \n\n"
+    },
+    {
+      "id": "v3-18",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 7.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Action items from today's standup:\n- Priya: Fixes the login bug  \n- Omar: Updates the docs  \n- You: Review the PR"
+    },
+    {
+      "id": "v3-19",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 28.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Cats purr for several reasons, including:\n\n- **Self-soothing and comfort**: Purring often occurs when a cat is relaxed, content, or being petted.\n- **Pain relief and healing**: Research suggests that the frequency of purring (around 20\u2013150 Hz) may promote tissue repair and reduce pain, possibly due to the vibrations stimulating bone and soft tissue regeneration.\n- **Communication**: Purring can signal a cat's intentions, such as seeking attention or indicating that it is safe and comfortable.\n- **Bonding**: Purring may strengthen the bond between a cat and its owner, especially during interactions or when the cat feels secure.\n\nIt's also possible that purring serves as a form of communication to other cats, though this is less understood. While the exact reasons are still being studied, purring is widely believed to be a mix of emotional and physiological signals."
+    },
+    {
+      "id": "v3-20",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 31.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Inflation is primarily caused by increases in the money supply, rising demand for goods and services, higher production costs, and changes in global commodity prices. Key factors include:\n\n1. **Money Supply Growth**: When central banks increase the money supply faster than economic output, it can lead to more spending and higher prices.\n2. **Demand-Pull Inflation**: When aggregate demand exceeds the economy's ability to produce goods and services, prices rise.\n3. **Cost-Push Inflation**: When production costs (like wages or raw materials) increase, businesses pass these higher costs onto consumers through price hikes.\n4. **Supply Shocks**: Events like natural disasters, wars, or pandemics can disrupt supply chains and raise prices.\n5. **Expectations**: If consumers and businesses expect inflation, they may demand higher wages or prices, perpetuating the cycle.\n6. **Fiscal Policy**: Government spending increases can boost demand and drive up prices.\n\nOther contributing factors include wage-price spirals, import price changes (e.g., oil), and monetary policy decisions."
+    },
+    {
+      "id": "v3-21",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 38.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "A heat pump works in winter by reversing the refrigeration cycle to extract heat from the outside air (even when it's cold) and transfer it indoors. Here\u2019s a simplified explanation:\n\n1. **Evaporator Coil (outside):** The refrigerant absorbs heat from the cold outdoor air, even at temperatures below freezing. This causes the refrigerant to evaporate (change from liquid to gas).\n\n2. **Compressor:** The gaseous refrigerant is compressed, raising its temperature significantly (to around 100\u2013150\u00b0F).\n\n3. **Condenser Coil (inside):** The hot refrigerant releases its heat to the indoor air through the condenser coil, cooling down and condensing back into a liquid.\n\n4. **Expansion Valve:** The refrigerant passes through an expansion valve, reducing its pressure and temperature before returning to the outdoor evaporator.\n\nThis process allows a heat pump to provide heating efficiently, even in cold weather\u2014though it\u2019s most effective when outdoor temperatures are above 25\u00b0F. In extremely cold conditions, a heat pump may struggle and require supplemental heating (like electric resistance heaters).\n\nNote: Heat pumps are more energy-efficient than traditional furnaces in cold climates, but their performance drops as outdoor temperatures decrease."
+    },
+    {
+      "id": "v3-22",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 15.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "No, it is not safe to eat raw cookie dough. Raw cookie dough contains eggs, butter, and flour, which can harbor harmful bacteria such as Salmonella or E. coli. These bacteria can cause foodborne illness, especially if the dough is not properly cooked or baked. Baking the dough kills these bacteria, making it safe to consume. For this reason, eating raw cookie dough is not recommended and can pose a health risk."
+    },
+    {
+      "id": "v3-23",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 62.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Once upon a time, on the edge of a stormy coastline stood a lone lighthouse named *Serenity Point*. Its beam cut through the fog like a silver thread, guiding ships home. The keeper of this beacon was an old man named Elias, known to the sailors not just for his steady hands but for his quiet wisdom.\n\nElias had lived in the lighthouse for 40 years. He didn\u2019t speak much, but his routines spoke volumes: checking the wick every morning, polishing the glass at dusk, and tending to the clockwork that kept time even when the wind howled. Each night, he\u2019d sit by the window and watch the sea, listening to its whispers.\n\nOne winter, a storm so fierce it cracked the waves against the rocks, a ship was lost. The crew had been swept into the deep, and no one could find them. But Elias noticed something strange\u2014on the edge of the fog, a faint red light flickered once, then disappeared.\n\nHe didn\u2019t report it. He believed the sea had its own language, and sometimes, when storms were at their peak, the waves carried messages. So he began to record them in a journal\u2014small notes, sketches of patterns, and one line: *\"The sea remembers.\"*\n\nYears passed. A new lighthouse was built nearby, and the coast guard said it would replace Serenity Point. But Elias refused to leave.\n\n\u201cI don\u2019t just keep a light,\u201d he said one evening, as the wind carried the scent of salt and pine. \u201cI keep a promise\u2014to the sea, to the ships, to the silence between waves.\u201d\n\nAnd so, even when the new tower lit up with brighter beams, Elias stayed. He said the old lighthouse still worked\u2014because sometimes, a light doesn\u2019t need to shine for everyone to see it. It just needs to be seen by someone who listens.\n\nAnd every night, when the fog rolls in, sailors still say they hear a soft hum\u2014like a lullaby from the deep.\n\nThe end."
+    },
+    {
+      "id": "v3-24",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 19.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Baking soda (sodium bicarbonate) is a base that requires an acid (like vinegar or buttermilk) to activate and produce carbon dioxide, which helps leaven baked goods. Baking powder is a mixture of baking soda and an acid (usually cream of tartar), so it only needs moisture to activate. This means baking powder is often used in recipes that don't include acidic ingredients, while baking soda requires an acid to work effectively. Baking powder typically contains about 1/4 teaspoon of baking soda and 3/4 teaspoon of cream of tartar per cup, making it a more convenient option for general baking."
+    },
+    {
+      "id": "v3-25",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 47.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Compound interest is the process where interest is earned not only on the original principal amount of a loan or investment but also on the accumulated interest from previous periods. This means that over time, the growth of an investment or debt accelerates because interest is calculated on a growing balance.\n\nFor example, if you invest $1,000 at an annual interest rate of 5% compounded annually, after one year you earn $50 in interest (1,000 \u00d7 0.05), bringing your total to $1,050. In the second year, interest is calculated on $1,050 (the new balance), so you earn 5% of $1,050 = $52.50, bringing the total to $1,102.50.\n\nThis effect grows exponentially over time\u2014small differences in interest rates or investment duration can lead to significantly larger returns (or debts) over long periods.\n\nKey points:\n- Compound interest grows faster than simple interest.\n- The more frequently interest is compounded (e.g., monthly vs. annually), the greater the final amount.\n- The formula for compound interest is:  \n  A = P(1 + r/n)^(nt)  \n  where:\n    - A is the final amount\n    - P is the principal (initial investment)\n    - r is the annual interest rate (as a decimal)\n    - n is the number of times interest is compounded per year\n    - t is the time in years\n\nThis compounding effect is why investing early and consistently can lead to substantial wealth over decades."
+    },
+    {
+      "id": "v3-26",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 6.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Crisp air whispers low,  \nLeaves dance in silver streams\u2014  \nAutumn rain stirs the soil."
+    },
+    {
+      "id": "v3-27",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 35.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "A good way to apologize to a coworker is to be sincere, specific, and timely. Here\u2019s how you can do it effectively:\n\n1. **Acknowledge the mistake or action** \u2013 Clearly state what happened and take responsibility.\n2. **Express regret** \u2013 Use language that shows you understand the impact on your coworker (e.g., \"I'm sorry this caused you stress\").\n3. **Explain briefly** \u2013 Offer a short explanation without defensiveness.\n4. **Apologize directly** \u2013 Use \"I'm sorry\" or \"I apologize\" followed by the specific issue.\n5. **Offer a solution** \u2013 Suggest how you\u2019ll prevent it from happening again or make things right.\n6. **Listen and validate** \u2013 Give space for your coworker to share their feelings.\n\nExample:  \n\"I'm sorry I missed the deadline. I realize this impacted your work and caused delays. I didn\u2019t prioritize it properly, and I take full responsibility. To prevent this in the future, I\u2019ve updated my schedule and will check deadlines earlier. Can we talk to align on next steps?\"\n\nThis approach builds trust and shows accountability."
+    },
+    {
+      "id": "v3-28",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 24.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Photosynthesis is the process by which green plants, algae, and some bacteria convert light energy into chemical energy. The steps of photosynthesis are as follows: first, sunlight is absorbed by chlorophyll molecules in the plant's chloroplasts. This energy drives the splitting of water molecules (H\u2082O) into oxygen (O\u2082), protons, and electrons in a process called photolysis. The electrons move through an electron transport chain, generating ATP and NADPH. These energy carriers are then used in the Calvin cycle, where carbon dioxide (CO\u2082) is fixed into organic molecules, eventually forming glucose (C\u2086H\u2081\u2082O\u2086). Oxygen is released as a byproduct, and glucose serves as an energy source for the plant."
+    },
+    {
+      "id": "v3-29",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 32.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "The moon goes through a cycle of changing appearance as it orbits Earth, driven by its position relative to the Sun and Earth. This cycle begins with the new moon, when the moon is positioned between Earth and the Sun, making its dark side face us. As the moon moves in its orbit, a sliver of light becomes visible on the eastern horizon\u2014this is the crescent moon. Over time, more of the illuminated side becomes visible, culminating in a first quarter moon when half of the moon's surface is lit. The waxing gibbous phase follows, where the illuminated portion grows beyond half and reaches its peak at full moon. During this time, Earth sees the entire sunlit side of the moon. After full moon, the light begins to fade as the moon moves into the waning gibbous phase. It then reaches the last quarter, where only half of the moon is visible again, and continues into a waning crescent. In this phase, only a small sliver of light remains visible before the cycle returns to new moon."
+    },
+    {
+      "id": "v3-30",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 4.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Mercury, Venus, Earth, Mars."
+    },
+    {
+      "id": "v3-31",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 9.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Two good houseplants for low light are the Snake Plant (Sansevieria) and the Pothos (Epipremnum aureum). Both are highly adaptable and thrive in low to moderate light conditions, making them ideal for rooms with limited natural sunlight."
+    },
+    {
+      "id": "v3-32",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 5.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "```bash\nfind . -name \"*.txt\" -type f | xargs wc -l\n```"
+    },
+    {
+      "id": "v3-33",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 5.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "SELECT * \nFROM orders \nORDER BY order_date DESC \nLIMIT 10;"
+    },
+    {
+      "id": "v3-34",
+      "category": "near-miss",
+      "kind": "table-noun",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 26.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "A lookup table in databases is a predefined table used to store mappings between values, such as key-value pairs. It allows applications or queries to quickly retrieve related data by referencing a specific key (e.g., an ID) instead of storing and managing the full value in the main data table. For example, a lookup table might map user role IDs to their corresponding names (e.g., 1 \u2192 \"Admin\", 2 \u2192 \"User\"). This improves data consistency, reduces redundancy, and simplifies queries by centralizing static or frequently accessed reference data.\n\nCommon use cases include:\n- Mapping status codes to readable labels (e.g., 0 \u2192 \"Active\", 1 \u2192 \"Inactive\")\n- Converting numeric codes to text descriptions\n- Storing currency conversion rates or country codes\n\nLookup tables are often used in relational databases and can be joined with other tables to provide human-readable data without duplicating values across records."
+    },
+    {
+      "id": "v3-35",
+      "category": "near-miss",
+      "kind": "explanation-with-bullets",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 16.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Vaccines train the immune system by introducing a harmless version of a pathogen (such as a virus or bacteria) or its components, which triggers an immune response without causing disease.\n\n- The immune system recognizes the vaccine as foreign and mounts a defense, producing antibodies and memory cells.\n- This creates immunological memory, so if the real pathogen later enters the body, the immune system can respond faster and more effectively.\n- The response is specific to that pathogen, providing long-term protection against future infections."
+    },
+    {
+      "id": "v3-36",
+      "category": "near-miss",
+      "kind": "history",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 25.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "The French Revolution (1789\u20131799) was a period of radical social and political upheaval in France. It began with demands for reform due to economic hardship, inequality, and poor governance. Key events include:\n\n- The storming of the Bastille (1789), symbolizing resistance against royal authority.\n- The abolition of feudal privileges and the establishment of a constitutional monarchy.\n- Rise of radical factions, leading to the Reign of Terror (1793\u20131794), during which thousands were executed.\n- The eventual fall of the monarchy and the rise of the First French Republic in 1792.\n- The revolution ended with Napoleon Bonaparte's rise to power, marking the end of revolutionary ideals.\n\nIt fundamentally transformed French society and inspired future revolutions worldwide."
+    }
+  ],
+  "_path": "<home>/agents/MarkdownCards/results/held_out_v3_fenced_qwen3-4b-instruct-2507-4bit.json"
+}

@@ -1,0 +1,41 @@
+bad files: []
+P1 A n 5 median 40.5654 min 40.4923 max 40.6535 [40.4923, 40.5434, 40.5989, 40.5654, 40.6535]
+P1 B n 5 median 43.2872 min 43.1983 max 43.4523 [43.1983, 43.2429, 43.4523, 43.3336, 43.2872]
+P1 C n 5 median 43.871 min 43.7823 max 44.0419 [43.7823, 43.871, 44.0419, 43.822, 43.9]
+P1 B vs A: +6.71 percent, every B above every A: True
+P1 C vs A: +8.15 percent, every C above every A: True
+P1 C vs B: +1.35 percent, every C above every B: True
+P1 digests [('A', '0a1a64828ea650e8', 64), ('B', '0a1a64828ea650e8', 64), ('C', '0a1a64828ea650e8', 64)]
+P1 per-round C vs B {'C>B': 5}
+P2 A n 5 median 40.503 min 40.4821 max 40.6321 [40.4821, 40.503, 40.6321, 40.4899, 40.5234]
+P2 B n 5 median 43.2659 min 43.1938 max 43.3557 [43.2659, 43.2468, 43.3457, 43.1938, 43.3557]
+P2 C n 5 median 43.9192 min 43.8378 max 43.9917 [43.9192, 43.8612, 43.9917, 43.8378, 43.9568]
+P2 B vs A: +6.82 percent, every B above every A: True
+P2 C vs A: +8.43 percent, every C above every A: True
+P2 C vs B: +1.51 percent, every C above every B: True
+P2 digests [('A', 'fd33be8b314efb95', 64), ('B', 'fd33be8b314efb95', 64), ('C', 'fd33be8b314efb95', 64)]
+P2 per-round C vs B {'C>B': 5}
+P1 A B {'n': 128, 'ids_equal': True, 'first_divergence': None}
+P1 B C {'n': 128, 'ids_equal': True, 'first_divergence': None}
+P1 C C2 {'n': 128, 'ids_equal': True, 'first_divergence': None}
+P1 A C {'n': 128, 'ids_equal': True, 'first_divergence': None}
+P2 A B {'n': 128, 'ids_equal': True, 'first_divergence': None}
+P2 B C {'n': 128, 'ids_equal': True, 'first_divergence': None}
+P2 C C2 {'n': 128, 'ids_equal': True, 'first_divergence': None}
+P2 A C {'n': 128, 'ids_equal': True, 'first_divergence': None}
+A dispatches per token 306.0 kernels with per-token change: {58: 8.0, 233: 65.0, 425: 120.0, 463: 24.0, 464: 24.0, 465: 8.0, 481: 8.0, 507: 16.0, 514: 24.0}
+A ids 636 per token None 514 24.0 516 None 58 8.0 total128 40743
+B dispatches per token 354.0 kernels with per-token change: {58: 56.0, 233: 65.0, 425: 120.0, 463: 24.0, 464: 24.0, 465: 8.0, 481: 8.0, 507: 16.0, 516: 24.0}
+B ids 636 per token None 514 None 516 24.0 58 56.0 total128 46935
+C dispatches per token 306.0 kernels with per-token change: {58: 8.0, 233: 65.0, 425: 120.0, 463: 24.0, 464: 24.0, 465: 8.0, 481: 8.0, 507: 16.0, 636: 24.0}
+C ids 636 per token 24.0 514 None 516 None 58 8.0 total128 40743
+P1 A B ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 max|d| top20 0.0 KL 0.0
+P1 B C ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 max|d| top20 0.0 KL 0.0
+P1 C C2 ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 max|d| top20 0.0 KL 0.0
+P1 A C ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 max|d| top20 0.0 KL 0.0
+P1 A C2 ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 max|d| top20 0.0 KL 0.0
+P2 A B ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 max|d| top20 0.0 KL 0.0
+P2 B C ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 max|d| top20 0.0 KL 0.0
+P2 C C2 ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 max|d| top20 0.0 KL 0.0
+P2 A C ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 max|d| top20 0.0 KL 0.0
+P2 A C2 ids_equal True full_steps 32 max|d| full 0.0 elements differ 0 top1 128/128 top5 128/128 max|d| top20 0.0 KL 0.0

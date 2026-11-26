@@ -1,0 +1,5 @@
+arm	decode_tok_s_median	prefill_tok_s_median	rounds	digest
+main	63.50	689.1	5	8e68ea1ec2d62fcc
+rule	66.00	689.8	5	8e68ea1ec2d62fcc
+fused	63.50	688.9	5	8e68ea1ec2d62fcc
+ledger	63.60	688.6	5	8e68ea1ec2d62fcc

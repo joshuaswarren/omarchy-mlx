@@ -1,0 +1,1 @@
+Timed-run spot check (lock held): sentence-1 -> "The local assistant is ready to help." (exact); sentence-4 -> "Please check the camping list before you leave on Friday." (exact).

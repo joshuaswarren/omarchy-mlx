@@ -1,0 +1,24 @@
+## prefill_bench.py mlx-community/granite-4.0-1b-4bit 128 4 [HK_APPLE9_COOPMAT=0]
+  A main+a69d9e6 n=2 median=21.5 values=[21.5, 21.5] argmax [279] peak_gpu_gib=0.932 temps_c=31.627-39.902 load1_before<=0.30908203125
+  B p6+89b54a0 n=2 median=181.75 values=[181.8, 181.7] argmax [279] peak_gpu_gib=0.932 temps_c=31.448-39.781 load1_before<=0.13232421875
+  B/A = 8.453
+## prefill_bench.py mlx-community/granite-4.0-1b-4bit 512 4 [HK_APPLE9_COOPMAT=0]
+  A main+a69d9e6 n=2 median=21.1 values=[21.1, 21.1] argmax [13] peak_gpu_gib=1.104 temps_c=31.627-45.128 load1_before<=0.0224609375
+  B p6+89b54a0 n=2 median=171.9 values=[171.9, 171.9] argmax [13] peak_gpu_gib=1.104 temps_c=32.251-43.648 load1_before<=0.0166015625
+  B/A = 8.147
+## prefill_bench.py mlx-community/Qwen3.5-2B-MLX-4bit 512 4 [HK_APPLE9_COOPMAT=0]
+  A main+a69d9e6 n=2 median=15.7 values=[15.7, 15.7] argmax [13] peak_gpu_gib=1.653 temps_c=33.306-47.925 load1_before<=0.15185546875
+  B p6+89b54a0 n=2 median=63.55 values=[63.6, 63.5] argmax [13] peak_gpu_gib=1.653 temps_c=33.682-46.64 load1_before<=0.1923828125
+  B/A = 4.048
+## decode_bench.py mlx-community/granite-4.0-1b-4bit 64 4 [HK_APPLE9_COOPMAT=0]
+  A main+a69d9e6 n=2 median=38.802499999999995 values=[38.8, 38.805] prompt_med 22.5 ids ['259a3ad0945ce5ef'] peak_gpu_gib=0.902 temps_c=34.04-47.828 load1_before<=0.1650390625
+  B p6+89b54a0 n=2 median=38.8 values=[38.805, 38.795] prompt_med 112.42500000000001 ids ['259a3ad0945ce5ef'] peak_gpu_gib=0.902 temps_c=34.204-46.695 load1_before<=0.1806640625
+  B/A = 1.000
+## prefill_bench.py mlx-community/granite-4.0-1b-4bit 512 4
+  A main+a69d9e6 n=2 median=374.75 values=[374.8, 374.7] argmax [13] peak_gpu_gib=1.104 temps_c=33.682-44.367 load1_before<=0.04345703125
+  B p6+89b54a0 n=2 median=374.8 values=[374.8, 374.8] argmax [13] peak_gpu_gib=1.104 temps_c=33.773-44.039 load1_before<=0.078125
+  B/A = 1.000
+## decode_bench.py mlx-community/granite-4.0-1b-4bit 64 4
+  A main+a69d9e6 n=2 median=38.855000000000004 values=[38.86, 38.85] prompt_med 161.025 ids ['259a3ad0945ce5ef'] peak_gpu_gib=0.902 temps_c=33.405-43.476 load1_before<=0.224609375
+  B p6+89b54a0 n=2 median=38.855000000000004 values=[38.855000000000004, 38.855000000000004] prompt_med 161.175 ids ['259a3ad0945ce5ef'] peak_gpu_gib=0.902 temps_c=33.583-43.25 load1_before<=0.18994140625
+  B/A = 1.000

@@ -1,0 +1,30 @@
+# Upstream: ml-explore/mlx cd30780ddc364964a84d16629d592333c428472c (Fix pickle bfloat16 strides, #4649)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/python/src/array.cpp b/python/src/array.cpp
+index c4796df7a6..e634bf31b7 100644
+--- a/python/src/array.cpp
++++ b/python/src/array.cpp
+@@ -516,7 +516,7 @@ void init_array(nb::module_& m) {
+                      nd.ndim(),
+                      reinterpret_cast<const size_t*>(nd.shape_ptr()),
+                      owner,
+-                     nullptr,
++                     nd.stride_ptr(),
+                      nb::dtype<mx::bfloat16_t>()),
+                   mx::bfloat16));
+             } else {
+diff --git a/python/tests/test_array.py b/python/tests/test_array.py
+index bdb80e544a..40753fe091 100644
+--- a/python/tests/test_array.py
++++ b/python/tests/test_array.py
+@@ -1117,6 +1117,10 @@ def test_array_pickle(self):
+             state = pickle.dumps(x)
+             y = pickle.loads(state)
+             self.assertEqualArray(y, x)
++            # F-contiguous
++            x = x.T
++            y = pickle.loads(pickle.dumps(x))
++            self.assertEqualArray(y, x)
+ 
+     def test_array_copy(self):
+         dtypes = [

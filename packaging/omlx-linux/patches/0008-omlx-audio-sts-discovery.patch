@@ -1,0 +1,79 @@
+diff --git a/omlx/model_discovery.py b/omlx/model_discovery.py
+index 09cf030..ba47b17 100644
+--- a/omlx/model_discovery.py
++++ b/omlx/model_discovery.py
+@@ -532,6 +532,59 @@ def _looks_like_kokoro_config(config: dict) -> bool:
+     )
+ 
+ 
++def _looks_like_deepfilternet_config(config: dict) -> bool:
++    """Return True for DeepFilterNet exports that omit HF ``model_type``.
++
++    mlx-community/DeepFilterNet-mlx keeps the original DeepFilterNet training
++    config (``df_order`` / ``nb_erb`` / ``nb_df`` spectral fields plus a
++    ``model_version`` string like ``DeepFilterNet3``) with no HF-style
++    ``model_type`` or ``architectures``.  The STS engine loads these by
++    family, but discovery must classify them as ``audio_sts`` or they fall
++    through to the LLM engine and fail with ``KeyError: 'model_type'``.
++    """
++    if not isinstance(config, dict):
++        return False
++    version = config.get("model_version")
++    return (
++        "df_order" in config
++        and "nb_erb" in config
++        and "nb_df" in config
++        and isinstance(version, str)
++        and version.startswith("DeepFilterNet")
++    )
++
++
++def _looks_like_sam_audio_config(config: dict) -> bool:
++    """Return True for SAM Audio exports that omit HF ``model_type``.
++
++    mlx-community/sam-audio-small keeps the original SAM Audio config with
++    component sections (``audio_codec``, ``text_encoder``, ``transformer``,
++    ...) and no HF ``model_type``/``architectures``.  Requiring
++    ``span_predictor`` alongside ``audio_codec`` keeps the heuristic away
++    from other codecs that only share a codec section.
++    """
++    if not isinstance(config, dict):
++        return False
++    return isinstance(config.get("audio_codec"), dict) and "span_predictor" in config
++
++
++def _audio_sts_name_hint(model_path: Path) -> str | None:
++    """Return the STS family implied by the model directory name, if any.
++
++    Mirrors the family rules in :func:`omlx.engine.sts._detect_sts_family` so
++    discovery and the engine agree on directory names like
++    ``DeepFilterNet-mlx`` or ``sam-audio-base``.
++    """
++    name_lower = _model_name_hint(model_path)
++    if "deepfilter" in name_lower:
++        return "deepfilternet"
++    if "mossformer" in name_lower:
++        return "mossformer2"
++    if "sam-audio" in name_lower or "sam_audio" in name_lower:
++        return "sam_audio"
++    return None
++
++
+ def _looks_like_nemo_asr_config(config: dict) -> bool:
+     """Return True for NeMo ASR exports that omit HF ``model_type``.
+ 
+@@ -794,6 +847,14 @@ def detect_model_type(model_path: Path) -> ModelType:
+     for arch in architectures:
+         if arch in AUDIO_STS_ARCHITECTURES:
+             return "audio_sts"
++    # DeepFilterNet / SAM Audio exports ship their original training configs
++    # (no HF model_type/architectures).  The STS engine resolves these
++    # families by name or shape, so discovery must too, or they fall through
++    # to the LLM engine and fail with ``KeyError: 'model_type'``.
++    if _looks_like_deepfilternet_config(config) or _looks_like_sam_audio_config(config):
++        return "audio_sts"
++    if _audio_sts_name_hint(model_path) is not None:
++        return "audio_sts"
+ 
+     # model_type check (dynamically loaded from mlx-audio when available).
+     # Check TTS before STT because some model_type values (e.g. "vibevoice")

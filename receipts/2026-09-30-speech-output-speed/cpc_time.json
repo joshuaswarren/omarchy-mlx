@@ -1,0 +1,21 @@
+{
+  "loadavg": "0.00 0.15 0.13 12/330 1296",
+  "mlx": "0.32.3.dev202609282218+29cba8e",
+  "trace": "0",
+  "compiled_vs_loop_frames_identical_of_10": 10,
+  "compiled_vs_loop_token_mismatches": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "upstream_ms_p50": 174.89,
+  "loop_ms_p50": 165.92,
+  "compiled_ms_p50": 156.0
+}

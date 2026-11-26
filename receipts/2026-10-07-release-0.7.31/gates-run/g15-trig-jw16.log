@@ -1,0 +1,138 @@
+BEGIN 2026-10-07T15:10:34Z tag=v0.7.31 boot_id=dfab0139-e430-4b09-958e-d567aaeac0fb uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+== reconfigure omarchy+tests (CPU-only) ==
+-- Building MLX for aarch64 processor on Linux
+-- Found CCache: /usr/bin/ccache
+-- Vulkan found: include /usr/include, libs /usr/lib/libvulkan.so
+-- Accelerate not found, using default backend.
+-- Lapack lib /usr/lib/libopenblas.so-lm-ldl
+-- Lapack include /usr/include
+-- Blas lib /usr/lib/libopenblas.so
+-- Blas include /usr/include
+-- Downloading json
+-- Using the multi-header code from ~/v0.7.31-src/.work/mlx/_deps/json-src/include/
+-- Downloading gguflib
+-- omarchy: bf16 direct GEMM shaders enabled (GL_EXT_bfloat16)
+-- {fmt} version: 12.1.0
+-- Build type: 
+CMake Warning (deprecated) at _deps/doctest-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
+
+-- Configuring done (1.5s)
+-- Generating done (0.2s)
+-- Build files have been written to: ~/v0.7.31-src/.work/mlx
+CMAKE_CONFIGURE_EXIT 0
+== build targets ==
+[  0%] Built target gguflib
+[ 91%] Built target omarchy_shaders
+[ 91%] Built target mlx_version
+[ -3%] Built target cpu_compiled_preamble
+[100%] Built target mlx
+[100%] Building CXX object tests/omarchy/CMakeFiles/omarchy_eq_math_tests.dir/test_eq_math.cpp.o
+In file included from ~/v0.7.31-src/.work/mlx/mlx/event.h:8,
+                 from ~/v0.7.31-src/.work/mlx/mlx/array.h:14,
+                 from ~/v0.7.31-src/.work/mlx/mlx/backend/omarchy/encoder.h:20,
+                 from ~/v0.7.31-src/.work/mlx/tests/omarchy/test_eq_math.cpp:16:
+~/v0.7.31-src/.work/mlx/mlx/error.h: In member function 'void mlx::core::Error::set_message(Message)':
+~/v0.7.31-src/.work/mlx/mlx/error.h:17:22: warning: 'void std::atomic_store(shared_ptr<_Tp>*, shared_ptr<_Tp>) [with _Tp = __cxx11::basic_string<char>]' is deprecated: use 'std::atomic<std::shared_ptr<T>>' instead [-Wdeprecated-declarations]
+   17 |     std::atomic_store(&message_, std::move(msg));
+      |     ~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/c++/16.1.1/memory:83,
+                 from ~/v0.7.31-src/.work/mlx/mlx/backend/omarchy/encoder.h:13:
+/usr/include/c++/16.1.1/bits/shared_ptr_atomic.h:183:5: note: declared here
+  183 |     atomic_store(shared_ptr<_Tp>* __p, shared_ptr<_Tp> __r)
+      |     ^~~~~~~~~~~~
+~/v0.7.31-src/.work/mlx/mlx/error.h: In member function 'bool mlx::core::Error::valid() const':
+~/v0.7.31-src/.work/mlx/mlx/error.h:21:32: warning: 'std::shared_ptr<_Tp> std::atomic_load(const shared_ptr<_Tp>*) [with _Tp = __cxx11::basic_string<char>]' is deprecated: use 'std::atomic<std::shared_ptr<T>>' instead [-Wdeprecated-declarations]
+   21 |     auto msg = std::atomic_load(&message_);
+      |                ~~~~~~~~~~~~~~~~^~~~~~~~~~~
+/usr/include/c++/16.1.1/bits/shared_ptr_atomic.h:142:5: note: declared here
+  142 |     atomic_load(const shared_ptr<_Tp>* __p)
+      |     ^~~~~~~~~~~
+~/v0.7.31-src/.work/mlx/mlx/error.h: In member function 'bool mlx::core::Error::store_if_valid(const mlx::core::Error*)':
+~/v0.7.31-src/.work/mlx/mlx/error.h:28:37: warning: 'std::shared_ptr<_Tp> std::atomic_load(const shared_ptr<_Tp>*) [with _Tp = __cxx11::basic_string<char>]' is deprecated: use 'std::atomic<std::shared_ptr<T>>' instead [-Wdeprecated-declarations]
+   28 |       Message msg = std::atomic_load(&ptr->message_);
+      |                     ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~
+/usr/include/c++/16.1.1/bits/shared_ptr_atomic.h:142:5: note: declared here
+  142 |     atomic_load(const shared_ptr<_Tp>* __p)
+      |     ^~~~~~~~~~~
+~/v0.7.31-src/.work/mlx/mlx/error.h: In member function 'void mlx::core::Error::check()':
+~/v0.7.31-src/.work/mlx/mlx/error.h:39:36: warning: 'std::shared_ptr<_Tp> std::atomic_exchange(shared_ptr<_Tp>*, shared_ptr<_Tp>) [with _Tp = __cxx11::basic_string<char>]' is deprecated: use 'std::atomic<std::shared_ptr<T>>' instead [-Wdeprecated-declarations]
+   39 |     auto msg = std::atomic_exchange(&message_, {});
+      |                ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~
+/usr/include/c++/16.1.1/bits/shared_ptr_atomic.h:225:5: note: declared here
+  225 |     atomic_exchange(shared_ptr<_Tp>* __p, shared_ptr<_Tp> __r)
+      |     ^~~~~~~~~~~~~~~
+[100%] Linking CXX executable omarchy_eq_math_tests
+[100%] Built target omarchy_eq_math_tests
+[  0%] Built target gguflib
+[ 91%] Built target omarchy_shaders
+[ 91%] Built target mlx_version
+[ 91%] Built target cpu_compiled_preamble
+[100%] Built target mlx
+[100%] Building CXX object tests/omarchy/CMakeFiles/omarchy_trig_reduction_tests.dir/test_trig_reduction.cpp.o
+In file included from ~/v0.7.31-src/.work/mlx/mlx/event.h:8,
+                 from ~/v0.7.31-src/.work/mlx/mlx/array.h:14,
+                 from ~/v0.7.31-src/.work/mlx/mlx/backend/omarchy/encoder.h:20,
+                 from ~/v0.7.31-src/.work/mlx/tests/omarchy/test_trig_reduction.cpp:34:
+~/v0.7.31-src/.work/mlx/mlx/error.h: In member function 'void mlx::core::Error::set_message(Message)':
+~/v0.7.31-src/.work/mlx/mlx/error.h:17:22: warning: 'void std::atomic_store(shared_ptr<_Tp>*, shared_ptr<_Tp>) [with _Tp = __cxx11::basic_string<char>]' is deprecated: use 'std::atomic<std::shared_ptr<T>>' instead [-Wdeprecated-declarations]
+   17 |     std::atomic_store(&message_, std::move(msg));
+      |     ~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/c++/16.1.1/memory:83,
+                 from ~/v0.7.31-src/.work/mlx/mlx/backend/omarchy/encoder.h:13:
+/usr/include/c++/16.1.1/bits/shared_ptr_atomic.h:183:5: note: declared here
+  183 |     atomic_store(shared_ptr<_Tp>* __p, shared_ptr<_Tp> __r)
+      |     ^~~~~~~~~~~~
+~/v0.7.31-src/.work/mlx/mlx/error.h: In member function 'bool mlx::core::Error::valid() const':
+~/v0.7.31-src/.work/mlx/mlx/error.h:21:32: warning: 'std::shared_ptr<_Tp> std::atomic_load(const shared_ptr<_Tp>*) [with _Tp = __cxx11::basic_string<char>]' is deprecated: use 'std::atomic<std::shared_ptr<T>>' instead [-Wdeprecated-declarations]
+   21 |     auto msg = std::atomic_load(&message_);
+      |                ~~~~~~~~~~~~~~~~^~~~~~~~~~~
+/usr/include/c++/16.1.1/bits/shared_ptr_atomic.h:142:5: note: declared here
+  142 |     atomic_load(const shared_ptr<_Tp>* __p)
+      |     ^~~~~~~~~~~
+~/v0.7.31-src/.work/mlx/mlx/error.h: In member function 'bool mlx::core::Error::store_if_valid(const mlx::core::Error*)':
+~/v0.7.31-src/.work/mlx/mlx/error.h:28:37: warning: 'std::shared_ptr<_Tp> std::atomic_load(const shared_ptr<_Tp>*) [with _Tp = __cxx11::basic_string<char>]' is deprecated: use 'std::atomic<std::shared_ptr<T>>' instead [-Wdeprecated-declarations]
+   28 |       Message msg = std::atomic_load(&ptr->message_);
+      |                     ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~
+/usr/include/c++/16.1.1/bits/shared_ptr_atomic.h:142:5: note: declared here
+  142 |     atomic_load(const shared_ptr<_Tp>* __p)
+      |     ^~~~~~~~~~~
+~/v0.7.31-src/.work/mlx/mlx/error.h: In member function 'void mlx::core::Error::check()':
+~/v0.7.31-src/.work/mlx/mlx/error.h:39:36: warning: 'std::shared_ptr<_Tp> std::atomic_exchange(shared_ptr<_Tp>*, shared_ptr<_Tp>) [with _Tp = __cxx11::basic_string<char>]' is deprecated: use 'std::atomic<std::shared_ptr<T>>' instead [-Wdeprecated-declarations]
+   39 |     auto msg = std::atomic_exchange(&message_, {});
+      |                ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~
+/usr/include/c++/16.1.1/bits/shared_ptr_atomic.h:225:5: note: declared here
+  225 |     atomic_exchange(shared_ptr<_Tp>* __p, shared_ptr<_Tp> __r)
+      |     ^~~~~~~~~~~~~~~
+[100%] Linking CXX executable omarchy_trig_reduction_tests
+[100%] Built target omarchy_trig_reduction_tests
+BUILD_EXIT 0
+BIN ~/v0.7.31-src/.work/mlx/tests/omarchy/omarchy_eq_math_tests
+BIN ~/v0.7.31-src/.work/mlx/tests/omarchy/omarchy_trig_reduction_tests
+GATE15_BUILD_EXIT 0
+BIN ~/v0.7.31-src/.work/mlx/tests/omarchy/omarchy_eq_math_tests
+loadavg_before=1.34 1.99 2.45 1/472 52123
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:   7 |   7 passed | 0 failed | 0 skipped
+[doctest] assertions: 128 | 128 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_eq_math_tests_EXIT 0
+BIN ~/v0.7.31-src/.work/mlx/tests/omarchy/omarchy_trig_reduction_tests
+loadavg_before=1.34 1.99 2.45 1/472 52138
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:  4 |  4 passed | 0 failed | 0 skipped
+[doctest] assertions: 49 | 49 passed | 0 failed |
+[doctest] Status: SUCCESS!
+omarchy_trig_reduction_tests_EXIT 0
+GATE15_EXIT 0

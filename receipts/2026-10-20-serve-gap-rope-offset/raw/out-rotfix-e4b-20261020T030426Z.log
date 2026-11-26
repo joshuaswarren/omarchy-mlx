@@ -1,0 +1,42 @@
+ROTFIX rotfix-e4b-20261020T030426Z 03:04:26 start key e4b model $HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2 boot <id> kernel 7.1.12-2-20261013.18-sep-ARCH load1 0.44 tokens 128 reqs 2 rounds 3
+ROTFIX rotfix-e4b-20261020T030426Z 03:04:26 libmlx 9a225264dcf2dbcb cache.py fix 7dcc85f3223f9786 fix7 99ffd1ef2a190719
+ROTFIX rotfix-e4b-20261020T030426Z 03:04:26 sha256 prefixes: script e4ef989cad44c574 bench_decode.py f5062d88f34b0845 run_clamped.py 9249ca2a2ec08145 servegen_gap.py b505d98d4ea1b358 rotfix_analyze.py f8faab4702af1581
+ROTFIX rotfix-e4b-20261020T030426Z 03:05:03 CENSUS R kernel=103 count=1 dispatches: 0 (TOKENS 24 run), 0 (TOKENS 40 run): 0.0 per decoded token (tree main81-fix measured 20.0 on out-gapcensus-e4b-20261019T205434Z)
+ROTFIX rotfix-e4b-20261020T030426Z 03:05:03 CENSUS R JOIN rope_offset_scalar: 60 (TOKENS 24 run), 60 (TOKENS 40 run): 0.0 per decoded token (tree main81-fix measured 24.0 per token for BatchGenerator on out-reason-e4b-20261020T022729Z)
+started /var/tmp/sampler/rows-rotfix-e4b-20261020T030426Z.csv pid 33675
+ROTFIX rotfix-e4b-20261020T030426Z 03:05:03 sampler csv /var/tmp/sampler/rows-rotfix-e4b-20261020T030426Z.csv
+ROTFIX rotfix-e4b-20261020T030426Z 03:05:18 round 1 arm A load1=0.32 start_epoch=1792465518
+ROTFIX rotfix-e4b-20261020T030426Z 03:05:31 round 1 arm A rc=0 decode 15.47 tok/s over 127 tokens (128 requested, EOS suppressed)
+ROTFIX rotfix-e4b-20261020T030426Z 03:05:31 round 1 arm A end_epoch=1792465531
+ROTFIX rotfix-e4b-20261020T030426Z 03:05:46 round 1 arm F load1=0.21 start_epoch=1792465546
+ROTFIX rotfix-e4b-20261020T030426Z 03:06:14 round 1 arm F tree main81-fix rc=0 pairs 2
+ROTFIX rotfix-e4b-20261020T030426Z 03:06:14 round 1 arm F end_epoch=1792465574
+ROTFIX rotfix-e4b-20261020T030426Z 03:06:29 round 1 arm R load1=0.33 start_epoch=1792465589
+ROTFIX rotfix-e4b-20261020T030426Z 03:06:55 round 1 arm R tree main81-fix7 rc=0 pairs 2
+ROTFIX rotfix-e4b-20261020T030426Z 03:06:55 round 1 arm R end_epoch=1792465615
+ROTFIX rotfix-e4b-20261020T030426Z 03:07:10 round 2 arm F load1=0.17 start_epoch=1792465630
+ROTFIX rotfix-e4b-20261020T030426Z 03:07:37 round 2 arm F tree main81-fix rc=0 pairs 2
+ROTFIX rotfix-e4b-20261020T030426Z 03:07:37 round 2 arm F end_epoch=1792465657
+ROTFIX rotfix-e4b-20261020T030426Z 03:07:52 round 2 arm R load1=0.30 start_epoch=1792465672
+ROTFIX rotfix-e4b-20261020T030426Z 03:08:19 round 2 arm R tree main81-fix7 rc=0 pairs 2
+ROTFIX rotfix-e4b-20261020T030426Z 03:08:19 round 2 arm R end_epoch=1792465699
+ROTFIX rotfix-e4b-20261020T030426Z 03:08:34 round 2 arm A load1=0.39 start_epoch=1792465714
+ROTFIX rotfix-e4b-20261020T030426Z 03:08:47 round 2 arm A rc=0 decode 15.48 tok/s over 127 tokens (128 requested, EOS suppressed)
+ROTFIX rotfix-e4b-20261020T030426Z 03:08:47 round 2 arm A end_epoch=1792465727
+ROTFIX rotfix-e4b-20261020T030426Z 03:09:02 round 3 arm R load1=0.38 start_epoch=1792465742
+ROTFIX rotfix-e4b-20261020T030426Z 03:09:28 round 3 arm R tree main81-fix7 rc=0 pairs 2
+ROTFIX rotfix-e4b-20261020T030426Z 03:09:28 round 3 arm R end_epoch=1792465768
+ROTFIX rotfix-e4b-20261020T030426Z 03:09:43 round 3 arm A load1=0.47 start_epoch=1792465783
+ROTFIX rotfix-e4b-20261020T030426Z 03:09:56 round 3 arm A rc=0 decode 15.53 tok/s over 127 tokens (128 requested, EOS suppressed)
+ROTFIX rotfix-e4b-20261020T030426Z 03:09:56 round 3 arm A end_epoch=1792465796
+ROTFIX rotfix-e4b-20261020T030426Z 03:10:11 round 3 arm F load1=0.60 start_epoch=1792465811
+ROTFIX rotfix-e4b-20261020T030426Z 03:10:39 round 3 arm F tree main81-fix rc=0 pairs 2
+ROTFIX rotfix-e4b-20261020T030426Z 03:10:39 round 3 arm F end_epoch=1792465839
+stopped /var/tmp/sampler/rows-rotfix-e4b-20261020T030426Z.csv (332 rows)
+ROTFIX RESULT decode tok/s: A median 15.48 (m 64.59 ms) run medians [15.47, 15.48, 15.53] spread 0.4% | F median 14.64 (m 68.30 ms) run medians [14.63, 14.64, 14.64] spread 0.1% | R median 15.51 (m 64.46 ms) run medians [15.51, 15.44, 15.52] spread 0.5%
+ROTFIX GAP m(F) - m(A) = +3.71 ms (threshold 1.94) REAL
+ROTFIX GAIN m(F) - m(R) = +3.84 ms (+5.9% of m(A)) REAL; share of gap 103%
+ROTFIX REMAINDER m(R) - m(A) = -0.13 ms not real
+ROTFIX VERDICT by the rule registered before the run: FIX WORKS (gain +3.84 ms of gap +3.71 ms; remainder -0.13 ms not real)
+ROTFIX DIGESTS ids equal in all arms: 6e98b674dcae2e22
+ROTFIX rotfix-e4b-20261020T030426Z 03:10:39 DONE

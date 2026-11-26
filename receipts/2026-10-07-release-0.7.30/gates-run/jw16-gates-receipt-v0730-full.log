@@ -1,0 +1,16 @@
+== stage 0: assets + tag tree ==
+ASSETS_OK
+== stage 1: wheel build tree (CPU) ==
+=== g13-build 11:10:49 ===
+STEP g13-build_RC=0 wall=3s
+=== g15-build 11:10:52 ===
+STEP g15-build_RC=0 wall=2s
+=== g7c 11:10:54 ===
+STEP g7c_RC=0 wall=17s
+=== g7d 11:11:11 ===
+STEP g7d_RC=0 wall=40s
+=== g13-run 11:11:51 ===
+STEP g13-run_RC=0 wall=123s
+=== g15-run 11:13:54 ===
+STEP g15-run_RC=0 wall=0s
+JW16_GATES_PASS receipt=~/v0.7.30-gates/jw16-receipt-v0730-full.log

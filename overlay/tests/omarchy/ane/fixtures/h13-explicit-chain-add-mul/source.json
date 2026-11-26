@@ -1,0 +1,18 @@
+{
+  "artifact_format": "anec",
+  "compiler_binary_sha256": "b3587e4d87bad93d95c1b1e69c3164d7f445787c65f9bdf2d81978e17d128a9e",
+  "compiler_manifest_sha256": "5a9d3605d824919925ee1b50be066a697cd6c9feb0a2e7b69f6fd4fa3cdbad0e",
+  "compiler_executable_source_commit": "b12b03f17619c76b77c48a83510847de2245ea1a",
+  "compiler_repository_receipt_commit": "de7fdebd8ed2a430986efb74aa0141ccf974863d",
+  "generation_command": "$COMPILER/build/mil-hwxc --target H13 --format anec --mil $WORK/model.mil --model-root $WORK --output $WORK/pkg-explicit",
+  "graph_source_sha256": "5584d0fd8d40027229890408e924e6f7930cd5f02516466a442193408482ce76",
+  "hardware_executed": false,
+  "payloads": {
+    "program-0.anec": "9a6a6a9a701ce207d4a8ea80ee1ca6d5ade076be2115b73a9aed6f4236aa56ab",
+    "program-1.anec": "62595e4a61db24066b83a4f7c077d459c69a6a740109098ee0122b4b46dcd3cc"
+  },
+  "qualification_scope": "Explicit --format anec package structure and loader adaptation only; no device or compiler-wide qualification.",
+  "schema": "mil-hwxc.h13-anec-package.v2",
+  "target": "H13",
+  "compiler_host_build": "Linux 6.17.2-1-pve x86_64"
+}

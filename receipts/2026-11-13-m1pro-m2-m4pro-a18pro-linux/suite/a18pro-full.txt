@@ -1,0 +1,41 @@
+== a18pro full omarchy_runtime_tests output, same ec849019 build, 2026-11-13T14:13Z, kernel 7.3.0-aurora-fleet64
+[child/reopen] fresh process device reopen ok
+[rtmod] SUBMIT-RECOVER tid=33319 resubmitted 1 stalled batch(es) through cv>=1 (round 1, fresh signals)
+[rtmod] SUBMIT-RECOVER tid=33319 resubmitted 1 stalled batch(es) through cv>=1 (round 2, fresh signals)
+[rtmod] SUBMIT-RECOVER tid=33443 resubmitted 1 stalled batch(es) through cv>=9 (round 1, fresh signals)
+[rtmod] SUBMIT-RECOVER tid=33443 resubmitted 1 stalled batch(es) through cv>=9 (round 2, fresh signals)
+[child/reused_slot_blocked_dependency] [omarchy] Vulkan timeline counter failed to advance for 200 ms (last observed=8, target=9). The device may be hung; no CPU fallback is available.
+[child/unrelated_work_event_wait] [omarchy] Vulkan timeline counter failed to advance for 100 ms (last observed=0, target=1). The device may be hung; no CPU fallback is available.
+[rtmod] SUBMIT-RECOVER tid=33591 resubmitted 2 stalled batch(es) through cv>=3 (round 1, fresh signals)
+[rtmod] SUBMIT-RECOVER tid=33591 resubmitted 2 stalled batch(es) through cv>=3 (round 2, fresh signals)
+[child/completed_marker_behind_handler] [omarchy] Vulkan timeline counter failed to advance for 100 ms (last observed=2, target=3). The device may be hung; no CPU fallback is available.
+[child/long_matmul_progress] valid matmul completed
+[child/watchdog_teardown] submit completed before the watchdog fired; teardown is the assertion
+[omarchy] submit stuck: waiting for timeline value=1001, counter frozen at 1, reserved through 1, no progress for 1 s, last dispatched kernel=-1 (pid 33621). The submission started but has not retired; a longer freeze means a wedged GPU job.
+[omarchy] submit stuck: waiting for timeline value=1001, counter frozen at 1, reserved through 1, no progress for 1 s, last dispatched kernel=-1 (pid 33621). The submission started but has not retired; a longer freeze means a wedged GPU job.
+[child/stuck_warning] warning fired before the wall typed error
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+Skipping: needs the development override and a non-Honeykrisp driver.
+Skipping: a qualifying GPU is present; the refusal path is exercised by the classification tests and this test is meaningless there.
+[receipt] compute queue families expose 8 queue(s)
+[receipt] device exposes 8 queue(s); measuring overlap on one VkQueue
+[receipt] iters=400 serialized_median=0.0959702s concurrent_median=0.219752s ratio=0.436721
+===============================================================================
+[home]/mlxpr/suite/omarchy-mlx/.work/mlx/tests/omarchy/test_runtime.cpp:2237:
+TEST CASE:  independent streams measure against the serialized sum
+
+[home]/mlxpr/suite/omarchy-mlx/.work/mlx/tests/omarchy/test_runtime.cpp:2352: ERROR: CHECK( ratio > 0.95 ) is NOT correct!
+  values: CHECK( 0.436721 >  0.95 )
+
+===============================================================================
+[doctest] test cases:    60 |    59 passed | 1 failed | 0 skipped
+[doctest] assertions: 27086 | 27085 passed | 1 failed |
+[doctest] Status: FAILURE!
+== three more runs of -tc="independent streams*"
+[receipt] iters=153 serialized_median=0.0371788s concurrent_median=0.0841029s ratio=0.442063
+[doctest] test cases: 1 | 0 passed | 1 failed | 59 skipped
+[receipt] iters=156 serialized_median=0.03405s concurrent_median=0.0887533s ratio=0.383648
+[doctest] test cases: 1 | 0 passed | 1 failed | 59 skipped
+[receipt] iters=153 serialized_median=0.0331942s concurrent_median=0.0855901s ratio=0.387827
+[doctest] test cases: 1 | 0 passed | 1 failed | 59 skipped

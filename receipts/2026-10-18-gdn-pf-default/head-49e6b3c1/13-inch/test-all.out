@@ -1,0 +1,20 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[provenance] gdn_gqa_bf16a mlx=0.32.4 device="Apple M1 (G13G B1)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[gdn_gqa_bf16a] B=1: expanded route 3 dispatches, repeated 1, native 1
+[gdn_gqa_bf16a] B=1, q/k views with a buffer offset: expanded route 3 dispatches, repeated 1, native 1
+[gdn_gqa_bf16a] B=3 batched decode: expanded route 3 dispatches, repeated 1, native 1
+[gdn_gqa_bf16a] B=3, q/k views with a buffer offset: expanded route 5 dispatches, repeated 1, native 3
+[provenance] gdn_gqa_bf16a_outside mlx=0.32.4 device="Apple M1 (G13G B1)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[provenance] gdn_pf_gqa mlx=0.32.4 device="Apple M1 (G13G B1)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[gdn_pf_gqa] B=1: expanded 3 dispatches, repeated 1, native 1
+[gdn_pf_gqa] B=1, q/k views with a buffer offset: expanded 3 dispatches, repeated 1, native 1
+[gdn_pf_gqa] B=3 batched decode: expanded 3 dispatches, repeated 1, native 1
+[gdn_pf_gqa] B=3, q/k views with a buffer offset: expanded 5 dispatches, repeated 1, native 3
+[provenance] gdn_pf_gqa_outside mlx=0.32.4 device="Apple M1 (G13G B1)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[provenance] gdn_pf_gqa_default mlx=0.32.4 device="Apple M1 (G13G B1)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[gdn_pf_gqa_default] device "Apple M1 (G13G B1)" measured 0 legacy 1: default 3 dispatches kernel 516, tiled 1, untiled 3
+===============================================================================
+[doctest] test cases:  5 |  5 passed | 0 failed | 0 skipped
+[doctest] assertions: 89 | 89 passed | 0 failed |
+[doctest] Status: SUCCESS!

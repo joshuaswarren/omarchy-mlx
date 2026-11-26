@@ -1,0 +1,11 @@
+--- a/mlx_lm/models/qwen3_5.py
++++ b/mlx_lm/models/qwen3_5.py
+@@ -171,7 +171,6 @@
+-                conv_state, qkv, self.conv1d.weight
++                conv_state, qkv, self.conv1d.weight, activate=True
+             )
+             cache[0] = new_state
+-            conv_out = nn.silu(conv_out)
+         else:
+             conv_input = mx.concatenate([conv_state, qkv], axis=1)
+             if cache is not None:

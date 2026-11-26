@@ -1,0 +1,45 @@
+# scenario: chat-escape (chat: Escape stops response)
+# total utterances: 42
+
+[21:08:31.012361] Context cap in tokens 0 spin button.
+[21:08:31.015595] s 
+[21:08:31.018708] No more separators.
+[21:08:31.023280] t 
+[21:08:31.025182] No more tables.
+[21:08:31.037989] space 
+[21:08:31.050526] m 
+[21:08:31.053071] Wrapping to top.
+[21:08:31.092890] banner MLX Chat.
+[21:08:31.092957] Start a new conversation push button.
+[21:08:31.092974] Open conversation history push button.
+[21:08:31.092983] opens dialog
+[21:08:31.092998] Prepare another computer or install an offline bundle push button.
+[21:08:31.093006] opens dialog
+[21:08:31.093019] Open model and memory details push button.
+[21:08:31.093028] opens dialog
+[21:08:31.094132] e 
+[21:08:31.107376] Context cap in tokens 0 spin button.
+[21:08:31.110055] s 
+[21:08:31.111700] No more separators.
+[21:08:31.112972] s 
+[21:08:31.114838] No more separators.
+[21:08:31.116229] a 
+[21:08:31.120333] Wrapping to top.
+[21:08:31.133435] No more clickables.
+[21:08:31.135534] g 
+[21:08:31.138802] No more images.
+[21:08:31.139874] e 
+[21:08:31.143863] Wrapping to top.
+[21:08:31.155902] Context cap in tokens 0 spin button.
+[21:08:31.462637] return 
+[21:08:31.608479] Starting setup…
+[21:08:32.836245] main content
+[21:08:32.836299] information
+[21:08:32.836315] Message entry Type a message. Enter sends, Shift+Enter adds a newline.
+[21:08:32.837014] Focus mode
+[21:08:32.862621] Composer controls tool bar
+[21:08:32.862691] Output allowance in tokens combo box collapsed
+[21:08:32.862707] Answer length: automatic.
+[21:08:32.913352] Speech: Voice pack missing
+[21:08:33.024097] Dictation: Voice pack missing
+[21:08:35.500505] escape 

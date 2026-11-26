@@ -1,0 +1,52 @@
+{
+  "model": "qwen3-4b-instruct-2507-4bit",
+  "n": 30,
+  "host_before": {
+    "loadavg": "1.33 1.04 0.55 1/322 102296",
+    "boot_id": "95675db4-da91-42e5-bdee-dfb3329e7369",
+    "gpu_processes": "102285       00:00 bash <home>/bin/gpu-turn -m 15 -- env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_latency.py --model qwen3-4b-instruct-2507-4bit\n 102294       00:00 flock /tmp/m2-gpu.lock timeout -k 20 15m env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_latency.py --model qwen3-4b-instruct-2507-4bit\n 102295       00:00 timeout -k 20 15m env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_latency.py --model qwen3-4b-instruct-2507-4bit\n 102296       00:00 <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_latency.py --model qwen3-4b-instruct-2507-4bit",
+    "provenance": "{\n  \"dist\": \"mlx-omarchy\",\n  \"verified\": \"match\",\n  \"mismatch\": null,\n  \"files\": [\n    {\n      \"path\": \"mlx/core.cpython-314-aarch64-linux-gnu.so\",\n      \"label\": \"mlx.core extension\",\n      \"sha256\": \"0b720eb9dcbe78dfd35e3c8fec3113ba46c4c7c83b3590c91d8920ec1d282621\",\n      \"record_sha256\": \"0b720eb9dcbe78dfd35e3c8fec3113ba46c4c7c83b3590c91d8920ec1d282621\",\n      \"match\": true\n    },\n    {\n      \"path\": \"mlx/lib/libmlx.so\",\n      \"label\": \"mlx/lib/libmlx.so\",\n      \"sha256\": \"004d24b6c951a253044a1c0eb7e2ca788b6b5ee84cea3fa1dfb6df5b240d9a29\",\n      \"record_sha256\": \"004d24b6c951a253044a1c0eb7e2ca788b6b5ee84cea3fa1dfb6df5b240d9a29\",\n      \"match\": true\n    }\n  ],\n  \"dist_version\": \"0.32.3.dev202609291615+06711ad\",\n  \"mx_version\": \"0.32.3.dev202609291615+06711ad\",\n  \"version_match\": true\n}"
+  },
+  "host_after": {
+    "loadavg": "0.73 0.81 0.58 1/344 104866",
+    "boot_id": "95675db4-da91-42e5-bdee-dfb3329e7369",
+    "gpu_processes": "102285       05:05 bash <home>/bin/gpu-turn -m 15 -- env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_latency.py --model qwen3-4b-instruct-2507-4bit\n 102294       05:05 flock /tmp/m2-gpu.lock timeout -k 20 15m env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_latency.py --model qwen3-4b-instruct-2507-4bit\n 102295       05:05 timeout -k 20 15m env MARKCARDS_HOME=<home> <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_latency.py --model qwen3-4b-instruct-2507-4bit\n 102296       05:05 <home>/.local/share/mlx-omarchy/venv/bin/python receipts/2026-09-30-card-promotion/run_latency.py --model qwen3-4b-instruct-2507-4bit\n 102304       05:05 <home>/.local/share/mlx-omarchy/venv/bin/python -m mlx_omarchy_assistant --home <home>/agents/MarkdownCards/homes/qwen3-4b-instruct-2507-4bit --no-browser --resume",
+    "provenance": "{\n  \"dist\": \"mlx-omarchy\",\n  \"verified\": \"match\",\n  \"mismatch\": null,\n  \"files\": [\n    {\n      \"path\": \"mlx/core.cpython-314-aarch64-linux-gnu.so\",\n      \"label\": \"mlx.core extension\",\n      \"sha256\": \"0b720eb9dcbe78dfd35e3c8fec3113ba46c4c7c83b3590c91d8920ec1d282621\",\n      \"record_sha256\": \"0b720eb9dcbe78dfd35e3c8fec3113ba46c4c7c83b3590c91d8920ec1d282621\",\n      \"match\": true\n    },\n    {\n      \"path\": \"mlx/lib/libmlx.so\",\n      \"label\": \"mlx/lib/libmlx.so\",\n      \"sha256\": \"004d24b6c951a253044a1c0eb7e2ca788b6b5ee84cea3fa1dfb6df5b240d9a29\",\n      \"record_sha256\": \"004d24b6c951a253044a1c0eb7e2ca788b6b5ee84cea3fa1dfb6df5b240d9a29\",\n      \"match\": true\n    }\n  ],\n  \"dist_version\": \"0.32.3.dev202609291615+06711ad\",\n  \"mx_version\": \"0.32.3.dev202609291615+06711ad\",\n  \"version_match\": true\n}"
+  },
+  "samples_ms": [
+    6455.9,
+    6488.2,
+    6526.0,
+    6768.1,
+    6819.0,
+    6863.7,
+    6908.0,
+    6921.4,
+    6928.6,
+    7041.5,
+    7074.7,
+    7466.9,
+    7573.4,
+    7576.2,
+    7654.2,
+    7667.4,
+    7702.6,
+    7770.7,
+    7932.1,
+    7951.2,
+    7953.2,
+    7960.1,
+    8095.8,
+    8402.5,
+    8605.9,
+    8716.2,
+    9057.4,
+    9406.6,
+    9512.0,
+    10058.8
+  ],
+  "p50_ms": 7667.4,
+  "p95_ms": 9512.0,
+  "gate_ms": 2000,
+  "gate_pass": false
+}

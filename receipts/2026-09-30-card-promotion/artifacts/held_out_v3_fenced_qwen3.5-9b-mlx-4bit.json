@@ -1,0 +1,858 @@
+{
+  "suite_sha256": "5cce5bb75b02b3c7815c5e7ecc48212e51ffc5168af17d099f95fa51985a6ebb",
+  "chat_model": "qwen3.5-9b-mlx-4bit",
+  "prompts": [
+    {
+      "id": "v3-01",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 175.5,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a checklist for closing up your lake cabin for the winter:\n\n"
+    },
+    {
+      "id": "v3-02",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 107.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a comprehensive to-do list for hosting Thanksgiving dinner for twelve people, broken down by timeline:\n\n**2-3 Weeks Before (Planning & Prep)**\n*   [ ] Finalize the guest list and confirm headcount.\n*   [ ] Create a detailed menu (e.g., turkey, stuffing, cranberry sauce, rolls, veggies).\n*   [ ] Draft a shopping list based on the menu and headcount.\n*   [ ] Book any necessary reservations (e.g., if you need a caterer or specific equipment rental).\n*   [ ] Check your pantry for staples (oil, salt, pepper, spices, flour).\n*   [ ] Order hard-to-find items (e.g., specific wines, specialty herbs) to ensure they arrive in time.\n*   [ ] Plan the seating arrangement for 12 guests.\n\n**1 Week Before (Preparation)**\n*   [ ] Thaw the turkey completely if frozen (allow 24 hours per 4-5 lbs).\n*   [ ] Clean and sanitize all dishes, glasses, silverware, and serving platters.\n*   [ ] Deep clean the kitchen (scrub oven, degrease range hood, sanitize counters).\n*   [ ] Set up the dining table (linens, centerpieces, place cards).\n*   [ ] Pre-make items that hold well (e.g., cranberry sauce, gravy mix, rolls).\n*   [ ] Prep vegetables for roasting or steaming.\n\n**2-3 Days Before (Final Prep)**\n*   [ ] Confirm all guests are attending.\n*   [ ] Buy fresh produce, meat, and dairy not yet purchased.\n*   [ ] Marinate the turkey or prepare brine (if using).\n*   [ ] Chop vegetables for stuffing and sides.\n*   [ ] Set up the kitchen workspace (mise en place).\n\n**Day Before (Rest & Final Touches)**\n*   [ ] Rest the turkey in the fridge if brined.\n*   [ ] Bake rolls or breads (if not pre-made).\n*   [ ] Make the gravy base.\n*   [ ] Set out serving dishes and utensils on the table.\n*   [ ] Prepare a playlist for background music.\n\n**Thanksgiving Day (Execution)**\n*   [ ] Preheat oven to the correct temperature.\n*   [ ] Roast vegetables or sides while turkey cooks (to save time).\n*   [ ] Start the turkey in the oven.\n*   [ ] Make cranberry sauce and stuffing while turkey roasts.\n*   [ ] Rest the turkey for 20-30 minutes after cooking before carving.\n*   [ ] Carve the turkey and make gravy.\n*   [ ] Serve dinner promptly (keep food warm).\n\n**Post-Dinner (Cleanup)**\n*   [ ] Clear the table immediately after eating.\n*   [ ] Wash and dry all used dishes, pots, and pans.\n*   [ ] Clean the oven (if you roasted anything inside).\n*   [ ] Tidy up the living room and dining area.\n\n"
+    },
+    {
+      "id": "v3-03",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 137.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The interface was incomplete; it was not rendered."
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Here are the steps you should follow to replace a bike inner tube:\n\n1.  **Inflate the tire slightly:** Pump a little air into the tire (just enough to give it shape) so you can easily remove the wheel from the frame.\n2.  **Remove the wheel:** Take the bike wheel off the bicycle frame.\n3.  **Deflate completely:** Press the valve core to release all remaining air from the tire and tube.\n4.  **Remove the tire:** Use a tire lever (plastic or metal) to pry one side of the tire bead over the rim, then work your way around until the other side is off.\n5.  **Remove the old tube:** Pull the inner tube out from inside the tire. Check the inside of the tire and rim for any sharp objects (glass, thorns) that could puncture a new tube.\n6.  **Inspect the rim:** Look for any burrs or sharp edges on the metal rim that could damage the new tube.\n7.  **Insert the valve:** Push the valve of the new inner tube through the rim hole and tighten the locknut if it has one.\n8.  **Insert the tube:** Place the new inner tube inside the tire, ensuring it sits evenly in the center of the rim.\n9.  **Seat the tire:** Push the tire bead back onto the rim, starting opposite the valve hole. Use your hands to work it on; if you can't get the last bit over, use tire levers carefully (avoid pinching the tube).\n10. **Inflate:** Pump up the tire to the recommended pressure (check the sidewall of the tube or tire).\n11. **Check:** Spin the wheel and squeeze the tire to ensure it is seated evenly all around and hasn't pinched the tube (a \"pinch flat\").\n12. **Reinstall wheel:** Put the wheel back onto the bicycle frame and secure it with the quick-release or thru-axle.\n\n"
+    },
+    {
+      "id": "v3-04",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 96.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The interface was incomplete; it was not rendered."
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a practical packing list for a three-day business trip to Chicago, tailored for professional settings and the city's variable weather (often cool with potential rain or wind):\n\n**Clothing & Professional Wear**\n*   **Suit/Blazer:** One business suit or matching blazer and trousers/skirt (Chicago offices are generally professional but may be slightly less formal than NYC or DC).\n*   **Dress Shirts/Blouses:** 3\u20134 button-down shirts or blouses (mix of cotton and breathable fabrics).\n*   **Bottoms:** 2 pairs of dress pants or a skirt; consider one pair of dark, high-quality jeans if your company culture allows.\n*   **Outerwear:** A trench coat or a structured wool blend jacket (Chicago can be windy and chilly, even in summer).\n*   **Sweater/Cardigan:** One lightweight layer for air-conditioned offices or cooler evenings.\n*   **Shoes:** 1 pair of professional dress shoes (break them in before leaving); 1 pair of comfortable walking shoes for exploring the city.\n*   **Socks/Underwear:** 5\u20136 pairs of socks; 4\u20135 sets of underwear.\n*   **Sleepwear:** 1 set (hotel robes are common, but having your own is nice).\n\n**Toiletries & Personal Care**\n*   **Travel-sized toiletry kit:** Toothbrush, toothpaste, deodorant, face wash.\n*   **Skincare basics:** Moisturizer and sunscreen (Chicago sun can be deceptive).\n*   **Hair care:** Travel-sized shampoo/conditioner or a small bottle if you have specific needs.\n*   **Medications:** Any prescription meds (keep in original containers) and a small first-aid kit.\n\n**Tech & Office Essentials**\n*   **Laptop:** Ensure it is charged and has a protective sleeve.\n*   **Chargers/Cables:** Laptop charger, phone charger, universal adapter (if coming from outside the US).\n*   **Power bank:** For long days of meetings and walking.\n*   **Notebook & Pen:** Always useful for quick notes or whiteboard sessions.\n*   **Business cards:** A small pocket-sized pack.\n\n**Miscellaneous & Comfort**\n*   **Umbrella:** A compact, wind-resistant travel umbrella (Chicago rain can be sudden).\n*   **Reusable water bottle:** Stay hydrated during long days.\n*   **Snacks:** Granola bars or nuts for quick energy between meetings.\n*   **Laundry bag:** To keep clean and dirty clothes separate (you may need to do a quick wash if the trip extends).\n*   **Reading material:** A book or e-reader for downtime.\n\n**Pro-Tips for Chicago Travelers:**\n*   **Weather Check:** Always check the forecast 24 hours before leaving; Chicago weather can change rapidly.\n*   **Layering:** The \"Chicago wind\" makes layers essential; a good coat is non-negotiable.\n*   **Transportation:** If using the \"L\" (train), wear shoes that are easy to slip on and off quickly.\n\n"
+    },
+    {
+      "id": "v3-05",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 124.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The generated interface was invalid. The text answer remains available."
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a comparison of electric and gas stoves based on cost, cooking speed, and maintenance:\n\n| Feature | Gas Stove | Electric Stove (Coil/Flat) |\n| :--- | :--- | :--- |\n| **Initial Cost** | Higher upfront cost for unit and installation (requires gas line). | Lower to moderate upfront cost; standard outlets often suffice. |\n| **Operating Cost** | Generally higher per BTU of heat; efficiency is lower (heat escapes into kitchen). | Generally lower per BTU of heat; higher efficiency (heat stays in pan), but electricity rates vary. |\n| **Cooking Speed** | Faster heating; immediate flame control for high-heat searing. | Slower to reach high temperatures; takes longer to boil water or sear meat. |\n| **Maintenance** | Requires regular cleaning of burners, grates, and checking for gas leaks. | Easier to clean (especially glass tops); no burners or grates to manage, but coils can be hard to wipe. |\n\n"
+    },
+    {
+      "id": "v3-06",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 57.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a comparison of Kindle e-books versus paperback books based on price, portability, and eye strain:\n\n| Feature | Kindle (E-book) | Paperback Book |\n| :--- | :--- | :--- |\n| **Price** | Generally cheaper; often free or on sale. Prices fluctuate based on digital rights and publisher strategy. | Generally more expensive than the e-book version of the same title; fixed physical production costs. |\n| **Portability** | Extremely high; thousands of books fit in a single lightweight device. Easy to carry anywhere without bulk. | Low to moderate; carrying many books requires a bag or backpack and adds significant weight/bulk. |\n| **Eye Strain** | High potential for strain on LCD/OLED screens, especially in low light or during long reading sessions. | Very low; reading on high-quality paper is generally easier on the eyes for extended periods, though lighting still matters. |\n\n"
+    },
+    {
+      "id": "v3-07",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 86.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a comparison of the three biggest US mobile carriers (Verizon, AT&T, and T-Mobile) based on general market data. Please note that specific prices and perks vary significantly by plan type (e.g., postpaid vs. prepaid, 5G Ultra Wideband vs. standard 5G) and device subsidies.\n\n| Carrier | Coverage (General) | Price Range (Unlimited Postpaid)* | Key Perks / Differentiators |\n| :--- | :--- | :--- | :--- |\n| **Verizon** | Widest 5G Ultra Wideband coverage; strong in rural areas. | $70 - $80/month (per line) | 5G Ultra Wideband speeds; robust international roaming; no contract required on most plans. |\n| **AT&T** | Extensive 5G network; strong in urban/suburban areas. | $60 - $70/month (per line) | 5G E and 5G+ networks; international roaming included on many plans; device financing options. |\n| **T-Mobile** | Largest 5G network by total coverage; strong in urban areas. | $60 - $70/month (per line) | 5G Home Internet included; Magenta Max perks (streaming, music); transparent pricing with no hidden fees. |\n\n*\\*Prices are estimates for standard unlimited postpaid plans without device subsidies or taxes/fees. Prepaid and MVNO options (like Visible, Cricket, Mint Mobile) often offer similar perks at lower prices ($30-$50/month).\n\n"
+    },
+    {
+      "id": "v3-08",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 180.6,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The interface was incomplete; it was not rendered."
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": false,
+      "reply": "Here is a side-by-side comparison of renting versus buying a home over a five-year period. Please note that these figures are **estimates** based on average US market conditions and assume a 30-year fixed mortgage with no extra principal payments, no home equity line of credit (HELOC) usage for the buyer, and a standard 1% annual rent increase. Actual results will vary significantly based on location, interest rates, and specific property conditions.\n\n"
+    },
+    {
+      "id": "v3-09",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 145.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a suggested schedule for your Saturday garage cleanout, starting at 8:00 AM.\n\n**Timeline Overview:**\n*   **8:00 AM \u2013 9:30 AM (Phase 1): Setup & Sorting**\n    *   Set up sorting zones inside the garage (Keep, Donate/Sell, Trash/Recycle).\n    *   Gather necessary tools (boxes, bags, gloves, tape measure).\n    *   Quickly scan the room to identify major categories of clutter.\n\n*   **9:30 AM \u2013 12:00 PM (Phase 2): The \"Keep\" Zone**\n    *   Focus on items you definitely want to keep.\n    *   Organize these into specific storage areas (shelves, bins).\n    *   Discard any \"maybe\" items that don't fit neatly into a keep category.\n\n*   **12:00 PM \u2013 1:30 PM (Phase 3): Lunch Break**\n    *   Take a break to eat and hydrate.\n    *   Step outside for fresh air.\n\n*   **1:30 PM \u2013 3:30 PM (Phase 4): The \"Donate/Sell\" Zone**\n    *   Box up items for donation or sale.\n    *   Take photos of high-value items if selling online.\n    *   Load donation boxes into your vehicle.\n\n*   **3:30 PM \u2013 5:00 PM (Phase 5): The \"Trash/Recycle\" Zone**\n    *   Bag up trash and recyclables.\n    *   Load all waste into your vehicle or arrange for pickup if needed.\n\n*   **5:00 PM \u2013 6:30 PM (Phase 6): Deep Clean & Final Touches**\n    *   Sweep the floor.\n    *   Wipe down walls and shelves.\n    *   Dust storage bins.\n\n*   **6:30 PM \u2013 7:30 PM (Phase 7): Final Walkthrough**\n    *   Do a quick walk-through to ensure no items are left behind.\n    *   Enjoy the empty, organized space!\n\n"
+    },
+    {
+      "id": "v3-10",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 93.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a phased roadmap for learning Spanish over six months, designed to take you from absolute beginner (A0) to a solid intermediate level (B1).\n\n### Phase 1: Foundations & Pronunciation (Weeks 1-4)\n*   **Goal:** Master the sounds, basic grammar structures, and high-frequency vocabulary.\n*   **Key Actions:**\n    *   Learn the Spanish alphabet and specific pronunciation rules (e.g., rolled R, \u00f1, stressed syllables).\n    *   Memorize the most common 100-200 words (pronouns, verbs like *ser/estar*, articles, prepositions).\n    *   Understand sentence structure (SVO vs. VSO) and gender/number agreement for nouns and adjectives.\n    *   Start listening to slow Spanish (e.g., \"Dreaming in Spanish\" or podcasts for beginners).\n*   **Daily Habit:** 20-30 minutes of focused study + 10 minutes of listening.\n\n### Phase 2: Building Core Vocabulary & Present Tenses (Weeks 5-8)\n*   **Goal:** Hold simple conversations about daily life and describe current states.\n*   **Key Actions:**\n    *   Conjugate regular verbs in the present tense (-ar, -er, -ir).\n    *   Learn irregular present tense verbs (e.g., *tener*, *ir*, *hacer*).\n    *   Expand vocabulary to 500+ words (food, family, hobbies, city life).\n    *   Start using language exchange apps or tutors for short speaking sessions.\n*   **Daily Habit:** 30 minutes study + 15 minutes active speaking practice.\n\n### Phase 3: Past Tenses & Narrative Skills (Weeks 9-12)\n*   **Goal:** Talk about your past experiences and tell stories.\n*   **Key Actions:**\n    *   Master the Preterite (simple past) for completed actions.\n    *   Learn the Imperfect tense for ongoing past habits or descriptions.\n    *   Introduce reflexive verbs (e.g., *levantarse*, *dormirse*).\n    *   Begin consuming authentic content (children's books, simple news clips like \"News in Slow Spanish\").\n*   **Daily Habit:** 30 minutes study + 20 minutes reading/listening.\n\n### Phase 4: Future Tenses & Subjunctive Intro (Weeks 13-16)\n*   **Goal:** Discuss plans, hopes, and opinions; handle more complex grammar.\n*   **Key Actions:**\n    *   Learn the Future tense (both simple future and \"ir + a\" construction).\n    *   Introduce the Present Subjunctive (used for doubts, wishes, and emotions).\n    *   Focus on connecting ideas using conjunctions (*pero*, *porque*, *aunque*).\n    *   Watch Spanish TV shows or movies with subtitles (start with dubbed content, move to subtitled).\n*   **Daily Habit:** 35 minutes study + 20 minutes immersive media consumption.\n\n### Phase 5: Intermediate Expansion & Fluency Push (Weeks 17-20)\n*   **Goal:** Navigate real-world situations and express nuanced thoughts.\n*"
+    },
+    {
+      "id": "v3-11",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 146.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a typical wedding-day timeline, broken down by phase from the start of hair and makeup through the send-off.\n\n### Pre-Ceremony Phase\n*   **8:00 AM \u2013 10:30 AM:** Hair and makeup appointments for the bride, bridesmaids, and mothers.\n*   **10:30 AM \u2013 12:00 PM:** Dress fitting, final touches (jewelry, shoes), and getting into the dress.\n*   **12:00 PM \u2013 1:30 PM:** Groom and groomsmen get ready (hair, suits, shoes).\n*   **1:30 PM \u2013 2:30 PM:** Bridal party photos (without the couple).\n*   **2:30 PM \u2013 3:30 PM:** Couple's first look or private photos.\n*   **3:30 PM \u2013 4:30 PM:** Couple's formal portraits and family group photos.\n*   **5:00 PM \u2013 6:00 PM:** Arrival at the ceremony venue.\n\n### Ceremony Phase\n*   **5:30 PM \u2013 6:30 PM:** Guest seating and final pre-ceremony rituals (e.g., lighting candles, signing the book).\n*   **6:30 PM \u2013 7:30 PM:** The wedding ceremony.\n*   **7:30 PM \u2013 8:00 PM:** Immediate post-ceremony photos (couple only or with immediate family).\n\n### Reception Phase\n*   **8:00 PM \u2013 9:30 PM:** Cocktail hour for guests (drinks and hors d'oeuvres).\n*   **9:30 PM \u2013 10:00 PM:** Grand entrance of the wedding party and couple.\n*   **10:00 PM \u2013 10:30 PM:** Welcome speech, toasts, and first dance.\n*   **10:30 PM \u2013 11:30 PM:** Dinner service.\n*   **11:30 PM \u2013 12:30 AM:** Cake cutting, bouquet toss, and open bar/dancing begins.\n*   **12:30 AM \u2013 1:30 AM:** Continued dancing and party activities.\n*   **1:30 AM \u2013 2:00 AM:** Send-off (sparklers, confetti, or limo ride).\n\n"
+    },
+    {
+      "id": "v3-12",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 28.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Here is your planned Friday schedule:\n\n*   **8:30 AM**: Dentist appointment\n*   **10:00 AM**: Team sync meeting\n*   **12:00 PM**: Gym session\n*   **7:00 PM**: Dinner with Sam\n\n"
+    },
+    {
+      "id": "v3-13",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 24.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Here are the key facts based on your message:\n\n*   **Vehicle Model:** 2019 Honda Civic\n*   **Current Mileage:** 48,000 miles\n*   **Last Maintenance:** Oil change performed in June\n\n"
+    },
+    {
+      "id": "v3-14",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        "Facts (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 129.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The generated interface was invalid. The text answer remains available."
+        }
+      ],
+      "pass": true,
+      "reply": "Here are the key points from your message:\n\n*   The meeting has been rescheduled to Thursday.\n*   The budget is currently frozen.\n*   Dana is leading the redesign effort.\n\n"
+    },
+    {
+      "id": "v3-15",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        "Facts (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 107.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "b68db721-a72a-4192-a9d5-6bf965e369e5",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The generated interface was invalid. The text answer remains available."
+        }
+      ],
+      "pass": true,
+      "reply": "Here are three quick facts about the Eiffel Tower:\n\n1.  **Height**: The tower is approximately 330 meters (1,083 feet) tall, though it can expand up to 15 cm due to thermal expansion on hot days.\n2.  **Location**: It is located in the center of Paris, France, standing on the Champ de Mars.\n3.  **Construction**: It was built by Gustave Eiffel and completed in March 1889 for the Exposition Universelle (World's Fair) held that year.\n\n"
+    },
+    {
+      "id": "v3-16",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 181.5,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "0e2c3743-68d3-41ed-8893-585e2b3e9efc",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The interface was incomplete; it was not rendered."
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a comparison of Zoom and Google Meet, followed by an agenda for your first call.\n\n### Comparison: Zoom vs. Google Meet\n\n| Feature | Zoom | Google Meet |\n| :--- | :--- | :--- |\n| **Best For** | Large meetings, webinars, and users outside the Google ecosystem. | Teams already using Google Workspace (Gmail, Drive, Calendar). |\n| **Ease of Joining** | Requires downloading the app or using a client; link-based entry is standard. | Click-to-meet via browser; no download required for basic features. |\n| **Integration** | Works with many third-party apps (Slack, Salesforce, etc.). | Deeply integrated into Google Calendar and Gmail. |\n| **Recording** | Cloud recording included in Pro/Business plans; local recording available for free. | Recordings saved to Google Drive (requires paid Workspace add-on). |\n| **Cost** | Free tier has a 40-minute limit for group meetings. | Free tier allows unlimited duration (with some feature limits). |\n| **Video Quality** | Generally higher resolution and better background blur effects. | Good quality, but can be slightly lower than Zoom on weaker connections. |\n| **Waiting Room** | Available in paid plans; host controls entry manually. | Host can admit people individually or automatically (depending on settings). |\n\n### Agenda for Your First Call\n\n**Meeting Title:** Introduction and Goal Setting\n**Duration:** 30 Minutes\n\n1.  **Welcome & Introductions (5 mins)**\n    *   Brief round-robin introductions.\n    *   Confirm the purpose of the meeting and desired outcomes.\n\n2.  **Review of Objectives (10 mins)**\n    *   Discuss the primary goal we are trying to achieve.\n    *   Review any pre-meeting materials or data provided.\n\n3.  **Key Discussion Points (10 mins)**\n    *   Address the main topic(s) on the agenda.\n    *   Open floor for initial questions or concerns.\n\n4.  **Next Steps & Action Items (5 mins)**\n    *   Assign specific tasks to attendees.\n    *   Set deadlines for follow-up actions.\n    *   Confirm the date/time for the next meeting (if applicable).\n\n5.  **Closing (Optional)**\n    *   Quick recap of decisions made.\n    *   Thank you and sign-off.\n\n"
+    },
+    {
+      "id": "v3-17",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "checklist",
+        "timeline"
+      ],
+      "titles": [
+        "",
+        ""
+      ],
+      "promoted": [
+        false,
+        false
+      ],
+      "elapsed_s": 171.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "0e2c3743-68d3-41ed-8893-585e2b3e9efc",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Here is your spring garden preparation checklist and a monthly planting timeline to get you started.\n\n### Spring Garden Prep Checklist\n- [ ] Clear away winter debris (leaves, twigs) from garden beds.\n- [ ] Test soil pH and nutrient levels to determine amendments needed.\n- [ ] Apply compost or organic fertilizer based on soil test results.\n- [ ] Loosen topsoil to a depth of 6\u20138 inches for better root growth.\n- [ ] Install or repair irrigation systems and check for leaks.\n- [ ] Clean and sharpen hand tools (shovels, pruners, rakes).\n- [ ] Mulch garden beds to retain moisture and suppress weeds.\n- [ ] Inspect perennial plants for winter damage; divide if necessary.\n\n### Spring Planting Timeline by Month\n- **March:** Start cool-season crops (peas, spinach, lettuce) indoors; prepare soil.\n- **April:** Transplant cool-season crops outdoors; plant bulbs (tulips, daffodils); sow early warm-season seeds if frost risk is low.\n- **May:** Plant tomatoes, peppers, and eggplants after last frost; sow beans, cucumbers, and squash outdoors.\n- **June:** Plant heat-loving crops (basil, okra); transplant seedlings; continue bulb planting for late bloom.\n- **July:** Focus on maintenance (weeding, watering); plant fall crops for next season.\n- **August:** Prepare soil for autumn planting; harvest remaining summer crops.\n- **September:** Plant cool-season crops (kale, carrots); sow cover crops to protect soil over winter.\n\n"
+    },
+    {
+      "id": "v3-18",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 22.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "0e2c3743-68d3-41ed-8893-585e2b3e9efc",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": true,
+      "reply": "Here are the action items from today's standup:\n\n*   **Priya**: Fix the login bug.\n*   **Omar**: Update the documentation.\n*   **You**: Review the PR.\n\n"
+    },
+    {
+      "id": "v3-19",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 166.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "0e2c3743-68d3-41ed-8893-585e2b3e9efc",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        }
+      ],
+      "pass": false,
+      "reply": "Cats purr for several reasons, primarily revolving around communication and self-regulation. Here are the key points:\n\n1.  **Communication of Contentment**: The most common reason cats purr is to express happiness and relaxation, often when being petted or sleeping.\n2.  **Self-Soothing**: Cats may purr when they are stressed, injured, or in pain. The vibration is believed to help them calm themselves down and potentially aid in healing broken bones or soft tissue injuries.\n3.  **Mother-Child Bonding**: Kittens and mother cats purr to locate each other in the dark and to signal that they are safe and content.\n4.  **Attention Seeking**: Adult cats may purr to get attention from their owners, similar to a human humming or sighing.\n5.  **Healing Mechanism**: The frequency of the purr (typically between 20 and 140 Hertz) is thought to have therapeutic effects, potentially stimulating bone growth and reducing inflammation.\n\n"
+    },
+    {
+      "id": "v3-20",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 142.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "0e2c3743-68d3-41ed-8893-585e2b3e9efc",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The interface was incomplete; it was not rendered."
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "Inflation is the rate at which the general level of prices for goods and services is rising, and consequently, the purchasing power of currency is falling. There isn't a single cause; rather, it is usually driven by the interaction of several factors:\n\n1.  **Demand-Pull Inflation**: This occurs when demand for goods and services exceeds the economy's ability to produce them. When consumers, businesses, or governments want to buy more than is currently available, they bid up prices. This often happens during periods of strong economic growth or when government spending increases significantly without a corresponding rise in production.\n2.  **Cost-Push Inflation**: This happens when the costs of producing goods and services rise, forcing producers to increase prices. Common drivers include:\n    *   Rising wages (if productivity doesn't keep pace).\n    *   Increased costs of raw materials or energy (e.g., oil shocks).\n    *   Supply chain disruptions that reduce the availability of inputs.\n3.  **Built-In Inflation (Wage-Price Spiral)**: This is a self-perpetuating cycle where workers demand higher wages to keep up with rising living costs, and businesses pass those increased labor costs on to consumers in the form of higher prices. Expectations that inflation will continue can also fuel this cycle, as workers and businesses anticipate future price hikes.\n4.  **Monetary Factors**: If a central bank prints too much money relative to the output of goods and services, it can lead to inflation. The classic economic theory (Quantity Theory of Money) suggests that if the money supply grows faster than real GDP, prices will rise.\n5.  **Exchange Rate Depreciation**: If a country's currency loses value against foreign currencies, imports become more expensive. Since many economies rely on imported goods (like oil or electronics), this can lead to higher domestic prices.\n6.  **Supply Shocks**: Sudden reductions in the supply of key commodities (like food or energy) due to natural disasters, geopolitical conflicts, or pandemics can cause prices for those specific goods and services to spike, contributing to overall inflation.\n\nOften, these factors interact. For example, a supply shock (like an oil price hike) can trigger cost-push inflation, which then leads workers to demand higher wages, feeding into built-in inflation. Central banks typically try to manage inflation by adjusting interest rates or using other monetary policy tools to balance demand and supply.\n\n"
+    },
+    {
+      "id": "v3-21",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 141.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "kernel": "7.1.13-3-1-ARCH",
+      "boot_id": "0e2c3743-68d3-41ed-8893-585e2b3e9efc",
+      "checkout": "repo-v3fenced",
+      "events": [
+        {
+          "type": "status",
+          "state": "working"
+        },
+        {
+          "type": "status",
+          "state": "generating",
+          "context_tokens": 702,
+          "context_limit": 262144,
+          "output_tokens": 700
+        },
+        {
+          "type": "status",
+          "state": "invalid_component",
+          "message": "The interface was incomplete; it was not rendered."
+        },
+        {
+          "type": "status",
+          "state": "output_truncated",
+          "message": "The response reached the output allowance. Send Continue to keep going.",
+          "continue": true
+        }
+      ],
+      "pass": true,
+      "reply": "A heat pump works in winter by reversing its normal cooling cycle to extract heat from the outside air and move it inside your home. Even when it's cold outside, there is still heat energy in the air (until temperatures drop below about -5\u00b0C to -10\u00b0C, depending on the technology).\n\nHere is how the process works step-by-step:\n\n1.  **Heat Absorption:** The outdoor unit acts as the evaporator. A refrigerant with a very low boiling point flows through coils in the outside unit. As this cold refrigerant passes over the outdoor coil, it absorbs heat from the outside air (even if that air feels cold to you).\n2.  **Compression:** The refrigerant, now a low-pressure gas containing the absorbed heat, is compressed by the compressor. This compression raises the temperature and pressure of the gas significantly, making it much hotter than your indoor air.\n3.  **Heat Release:** The hot, high-pressure gas flows to the indoor unit (which acts as the condenser). As it passes through the indoor coils, it releases its heat into your home's air.\n4.  **Expansion:** The refrigerant then passes through an expansion valve, which drops its pressure and temperature back down, turning it into a cold liquid again. This cycle repeats continuously.\n\n**Key Differences from Summer Mode:**\n*   **Summer:** The outdoor unit is the condenser (releasing heat outside), and the indoor unit is the evaporator (absorbing heat inside).\n*   **Winter:** The roles are swapped. The outdoor unit absorbs heat, and the indoor unit releases it.\n\n**Note on Cold Weather Performance:**\nStandard air-source heat pumps may struggle or stop working efficiently when outdoor temperatures drop significantly (often below -10\u00b0C to -20\u00b0C) because there is less heat energy available in the air. In these extreme cases, a \"backup\" electric resistance heater might kick on to supplement the heat, or you may need a specific type of \"cold-climate\" heat pump designed with better insulation and advanced refrigerants to handle sub-zero temperatures effectively.\n\n"
+    }
+  ],
+  "_path": "<home>/agents/MarkdownCards/results/held_out_v3_fenced_qwen3.5-9b-mlx-4bit.json"
+}

@@ -1,0 +1,178 @@
+{
+  "compiler": {
+    "host_build": "Linux 6.17.2-1-pve x86_64",
+    "target": "h13",
+    "toolchain": "mil-hwxc b61de468d1ca37b687d5fa371e489be16cd84ed1 sha256:42120c27ddfa2bf2c7c2582edcc311f385ec7328f29ddb0e2803685d5d6caaeb"
+  },
+  "dispatch_plan": [
+    0
+  ],
+  "driver_abi_major": 1,
+  "graph_hash": "ed03818974f7e2728daff0c839fcd4486a87282515347e68db7d2219605905c3",
+  "inputs": [
+    {
+      "byte_size": 2250000,
+      "dtype": "float16",
+      "index": 0,
+      "name": "probs",
+      "shape": [
+        1,
+        8,
+        375,
+        375
+      ],
+      "stride": 2310144
+    },
+    {
+      "byte_size": 768000,
+      "dtype": "float16",
+      "index": 1,
+      "name": "v_heads",
+      "shape": [
+        1,
+        8,
+        375,
+        128
+      ],
+      "stride": 770048
+    }
+  ],
+  "intermediates": [],
+  "logical_results": [
+    {
+      "conversion": "identity",
+      "dtype": "float16",
+      "element_count": 384000,
+      "element_offset": 0,
+      "name": "attn_output_1",
+      "shape": [
+        1,
+        8,
+        375,
+        128
+      ],
+      "tensor": "attn_output_1"
+    }
+  ],
+  "manifest_version": 4,
+  "name": "parakeet-encoder-island-pv",
+  "outputs": [
+    {
+      "byte_size": 768000,
+      "dtype": "float16",
+      "index": 0,
+      "name": "attn_output_1",
+      "shape": [
+        1,
+        8,
+        375,
+        128
+      ],
+      "stride": 770048
+    }
+  ],
+  "payloads": [
+    {
+      "byte_size": 182400,
+      "path": "program-0.anec",
+      "role": "anec",
+      "sha256": "3ae36f21cc4d3800c160e8952cfe118b8bcb4573543234c3e0fa3356a8761b5b"
+    }
+  ],
+  "programs": [
+    {
+      "encoder": "apple-parity-batched-matmul",
+      "inputs": [
+        {
+          "allocation_bytes": 770048,
+          "channel": 5,
+          "dtype": "float16",
+          "element_count": 384000,
+          "element_offset": 0,
+          "logical_bytes": 768000,
+          "nchw": [
+            1,
+            8,
+            375,
+            128,
+            96000,
+            256
+          ],
+          "physical_elements": 384000,
+          "shape": [
+            1,
+            8,
+            375,
+            128
+          ],
+          "tensor": "v_heads"
+        },
+        {
+          "allocation_bytes": 2310144,
+          "channel": 6,
+          "dtype": "float16",
+          "element_count": 1125000,
+          "element_offset": 0,
+          "logical_bytes": 2250000,
+          "nchw": [
+            1,
+            8,
+            375,
+            375,
+            288000,
+            768
+          ],
+          "physical_elements": 1125000,
+          "shape": [
+            1,
+            8,
+            375,
+            375
+          ],
+          "tensor": "probs"
+        }
+      ],
+      "operation": "matmul",
+      "outputs": [
+        {
+          "allocation_bytes": 770048,
+          "channel": 4,
+          "dtype": "float16",
+          "element_count": 384000,
+          "element_offset": 0,
+          "logical_bytes": 768000,
+          "nchw": [
+            1,
+            8,
+            375,
+            128,
+            96000,
+            256
+          ],
+          "physical_elements": 384000,
+          "shape": [
+            1,
+            8,
+            375,
+            128
+          ],
+          "tensor": "attn_output_1"
+        }
+      ],
+      "payload": "program-0.anec",
+      "scratch_bytes": 0,
+      "task_descriptors": 208
+    }
+  ],
+  "provenance": {
+    "exported_at": "2026-09-15",
+    "source_commit": "b61de468d1ca37b687d5fa371e489be16cd84ed1",
+    "source_repo": "mil-hwxc"
+  },
+  "release_asset": {
+    "model": "/tmp/split-islands/mil/island-pv.mil",
+    "model_sha256": "a8e8582d06b5aa2a151c7e6305d2c9a5973c9112b393ca5345b126ec69f8aab8"
+  },
+  "state": [],
+  "task_descriptors": 208
+}

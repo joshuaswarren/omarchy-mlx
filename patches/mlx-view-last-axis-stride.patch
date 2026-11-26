@@ -1,0 +1,48 @@
+# Upstream: ml-explore/mlx f56ab23defaeb8752bc1de9b29e150481a8e02df (#4587)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/mlx/backend/cpu/primitives.cpp b/mlx/backend/cpu/primitives.cpp
+index 3299b747..f70a2740 100644
+--- a/mlx/backend/cpu/primitives.cpp
++++ b/mlx/backend/cpu/primitives.cpp
+@@ -380,6 +380,10 @@ void View::eval_cpu(const std::vector<array>& inputs, array& out) {
+       strides[i] *= ibytes;
+       strides[i] /= obytes;
+     }
++    // Last axis can have any stride
++    if (obytes < ibytes) {
++      strides.back() = 1;
++    }
+     out.copy_shared_buffer(
+         in, strides, in.flags(), in.data_size() * ibytes / obytes);
+   } else {
+diff --git a/mlx/backend/gpu/primitives.cpp b/mlx/backend/gpu/primitives.cpp
+index 0bc19c81..72da082c 100644
+--- a/mlx/backend/gpu/primitives.cpp
++++ b/mlx/backend/gpu/primitives.cpp
+@@ -255,6 +255,10 @@ void View::eval_gpu(const std::vector<array>& inputs, array& out) {
+       strides[i] *= ibytes;
+       strides[i] /= obytes;
+     }
++    // Last axis can have any stride
++    if (obytes < ibytes) {
++      strides.back() = 1;
++    }
+     out.copy_shared_buffer(
+         in, strides, in.flags(), in.data_size() * ibytes / obytes);
+   } else {
+diff --git a/python/tests/test_ops.py b/python/tests/test_ops.py
+index d9cc71fc..dd22c329 100644
+--- a/python/tests/test_ops.py
++++ b/python/tests/test_ops.py
+@@ -4162,6 +4162,11 @@ class TestOps(mlx_tests.MLXTestCase):
+             a_out = out.view(mx.int32)
+             self.assertTrue(mx.array_equal(a_out, a, equal_nan=True))
+ 
++        # Size one last axis
++        a = mx.arange(4, dtype=mx.int32).reshape(1, 4).T
++        expected = np.arange(4, dtype=np.int32).reshape(4, 1).view(np.int16)
++        self.assertTrue(np.array_equal(a.view(mx.int16), expected))
++
+         # Byte offsets that are not a multiple of the new item size
+         a = mx.arange(64, dtype=mx.uint8)
+         a_np = np.arange(64, dtype=np.uint8)

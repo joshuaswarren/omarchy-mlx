@@ -1,0 +1,5 @@
+BEGIN 2026-10-07T19:24:17Z tag=v0.7.31 boot_id=022f601c-c945-488a-ac10-b408c59b7091 uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202610071347+9b5c938 (sha=a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
+STATIC_JS $HOME/v0.7.30-gates/v0.7.31-gate-home-3/.local/share/mlx-omarchy/mlx_omarchy_assistant/static/js
+SPEAK_QUEUE_SMOKE PASS chunks=7 overlaps=0 gaps=[] busy=0 order=[1, 2, 3, 4] done=[{'truncated': True, 't': 10.368}] errors=[]
+G9_SPEAK_QUEUE_EXIT 0

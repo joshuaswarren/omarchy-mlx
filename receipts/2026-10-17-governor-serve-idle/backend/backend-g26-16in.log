@@ -1,0 +1,18 @@
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 start key g26 model mlx-community/gemma-4-26b-a4b-it-4bit kernel 7.1.12-2-12.6-sep-ARCH governors performance, load1 0.26
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 packages: asahi-alarm-keyring 20241216-1;asahi-audio 4.1-1;asahi-bless 0.4.2-1;asahi-desktop-meta 4-10;asahi-fwextract 0.8.4-1;asahi-scripts 20260127.1-1;linux-api-headers 7.2-1;linux-aurora 7.1.12.aurora2-20261013.18;linux-aurora-headers 7.1.12.aurora2-12.6;mesa 1:26.2.4-1;mesa-demos 9.0.0-7;mesa-utils 9.0.0-7;omarchy-mlx-vulkan-omarchy 1:26.2.4.git69bde15340-2;vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2;vulkan-headers 1:1.4.363.0-1;vulkan-icd-loader 1.4.363.0-1;vulkan-mesa-implicit-layers 1:26.2.4-1;vulkan-swrast 1:26.2.4-1;vulkan-tools 1.4.363.0-1;vulkan-virtio 1:26.2.4-1;
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 vulkaninfo: 	apiVersion         = 1.4.362
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 vulkaninfo: 	driverVersion      = 26.2.99
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 vulkaninfo: 	deviceName         = Apple M1 Max (G13C C0)
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 vulkaninfo: 	driverName         = Honeykrisp
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 vulkaninfo: 	driverInfo         = Mesa 26.3.0-devel (git-69bde15340)
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 vulkaninfo: 	apiVersion         = 1.4.354
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 vulkaninfo: 	driverVersion      = 26.2.4
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 vulkaninfo: 	deviceName         = llvmpipe (LLVM 23.1.1, 128 bits)
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 serving processes: litellm=0 mlx_lm_server=0
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 provenance script sha256 21337ddd29e79291 bench_decode sha256 f5062d88f34b0845
+CLAMPMETA meta-g26-20261018T040011Z 04:00:11 provenance: mlx-omarchy 0.32.4.dev202610141543+7604d92c mx=0.32.4.dev202610141543+7604d92c verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:7c9c9fff09bbc988
+CLAMPMETA meta-g26-20261018T040011Z 04:00:22 traced run rc=0: decode 16.12 tok/s over 15 tokens (16 requested, EOS suppressed) generated_ids sha256:861c7493240d35df n=16 first=100,45518,107 last=496,11988,236761
+CLAMPMETA meta-g26-20261018T040011Z 04:00:22 traced run provenance: mlx-omarchy 0.32.4.dev202610141543+7604d92c mx=0.32.4.dev202610141543+7604d92c verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:7c9c9fff09bbc988
+CLAMPMETA meta-g26-20261018T040011Z 04:00:22 TRACE dispatch_lines 42207 distinct_kernels 40 max_count 698368 top10(id x lines) 233x6126 414x5788 416x5744 471x2200 79x2154 581x2154 58x1928 504x1800 59x1494 2x1436
+CLAMPMETA meta-g26-20261018T040011Z 04:00:22 device reopen rc=0 reopen Device(gpu, 0) [2.0, 2.0, 2.0, 2.0]
+CLAMPMETA meta-g26-20261018T040011Z 04:00:22 DONE out=$WORK/run/out-meta-g26-20261018T040011Z

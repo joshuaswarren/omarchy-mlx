@@ -1,0 +1,7 @@
+[doctest] test cases:       46 |       45 passed |   1 failed | 0 skipped
+[doctest] assertions: 83473134 | 83472653 passed | 481 failed |
+[doctest] Status: FAILURE!
+--- only failing case ---
+TEST CASE:  gather qmm 2-bit bf16 decode: the default route and the scalar kernel match the host reference
+/var/tmp/mlxcoopfix/omx/.work/mlx/tests/omarchy/test_matmul_family.cpp:5318: ERROR: CHECK_EQ( candidate_values[index], baseline_values[index] ) is NOT correct!
+(481 identical CHECK_EQ candidate==baseline asserts; pre-existing from-source register-block bitexactness, not coopmat)

@@ -1,0 +1,15 @@
+start 2026-10-09T17:06:57Z label green load 0.46 bin f00ccf3dda1e5659
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+$WORK/src/.work/mlx/tests/omarchy/test_fast_ops.cpp:1592:
+TEST CASE:  scaled_dot_product_attention folds bf16 sinks into the denominator
+
+$WORK/src/.work/mlx/tests/omarchy/test_fast_ops.cpp:1592: ERROR: test case THREW exception: [scaled_dot_product_attention] Type of sinks must promote to output type bfloat16.
+
+===============================================================================
+[doctest] test cases:      2 |      1 passed | 1 failed | 44 skipped
+[doctest] assertions: 139526 | 139526 passed | 0 failed |
+[doctest] Status: FAILURE!
+rc=1
+end 2026-10-09T17:06:57Z

@@ -1,0 +1,27 @@
+start 2026-10-09T00:47:15Z chip G13G kernel 7.1.12-2-12.6-sep-ARCH load 0.49
+device Apple M1 (G13G B1)
+vulkaninfo: 	driverVersion = 26.2.99;	deviceName = Apple M1 (G13G B1);	driverName = Honeykrisp;	driverInfo = Mesa 26.3.0-devel (git-6543eeb7df);
+driver library sha256 3546bcafe8ed3995
+family test binary sha256 842a1fd3b9fcb73f
+venv-head: 0.32.4.dev202610081236+50e40389 verified=match version_match=True
+venv-gq: 0.32.4.dev202610090028+7d31d68e verified=match version_match=True
+family (gather qmm cases) rc=0 [doctest] test cases:    2 |    2 passed | 0 failed | 31 skipped [doctest] assertions: 3377 | 3377 passed | 0 failed | [doctest] Status: SUCCESS! 
+[gather-qmm-sub] dtype=bf16 transpose=1 k=128 experts=3 index_count=2 n=64 scalar: relL2=0.00272498 maxabs/ref=0.00236842 | sub: relL2=0.00272498 maxabs/ref=0.00236842 | count=128
+[gather-qmm-sub] dtype=bf16 transpose=1 k=192 experts=3 index_count=2 n=64 scalar: relL2=0.00248547 maxabs/ref=0.00435064 | sub: relL2=0.00248547 maxabs/ref=0.00435064 | count=128
+[gather-qmm-sub] dtype=bf16 transpose=1 k=128 experts=3 index_count=8 n=1408 scalar: relL2=0.00250937 maxabs/ref=0.003215 | sub: relL2=0.00250937 maxabs/ref=0.003215 | count=11264
+[gather-qmm-sub] dtype=bf16 transpose=1 k=2048 experts=3 index_count=8 n=1408 scalar: relL2=0.00251218 maxabs/ref=0.00304939 | sub: relL2=0.00251218 maxabs/ref=0.00304939 | count=11264
+[gather-qmm-sub] dtype=bf16 transpose=1 k=128 experts=48 index_count=48 n=1408 scalar: relL2=0.00245042 maxabs/ref=0.00379938 | sub: relL2=0.00245042 maxabs/ref=0.00379938 | count=67584
+[gather-qmm-sub] z-chunk tail relL2=0.00240393
+[gather-qmm-sub] dtype=f16 transpose=1 k=128 experts=3 index_count=2 n=64 scalar: relL2=0.000310165 maxabs/ref=0.000516028 | sub: relL2=0.000310165 maxabs/ref=0.000516028 | count=128
+[gather-qmm-sub] dtype=f16 transpose=1 k=192 experts=3 index_count=2 n=64 scalar: relL2=0.000290177 maxabs/ref=0.000378226 | sub: relL2=0.000290177 maxabs/ref=0.000378226 | count=128
+[gather-qmm-sub] dtype=f16 transpose=1 k=128 experts=3 index_count=8 n=1408 scalar: relL2=0.000312888 maxabs/ref=0.000393758 | sub: relL2=0.000312801 maxabs/ref=0.000393758 | count=11264
+[gather-qmm-sub] dtype=f16 transpose=1 k=2048 experts=3 index_count=8 n=1408 scalar: relL2=0.000310803 maxabs/ref=0.000344667 | sub: relL2=0.000310708 maxabs/ref=0.000344667 | count=11264
+[gather-qmm-sub] dtype=f16 transpose=1 k=128 experts=48 index_count=48 n=1408 scalar: relL2=0.000316504 maxabs/ref=0.000415392 | sub: relL2=0.000316608 maxabs/ref=0.000415392 | count=67584
+[gather-qmm-sub] z-chunk tail relL2=0.000314901
+probe venv-head
+{"dtype": "fp16", "slots": 40, "iters": 60, "arms": {"gq_default": {"ms": 64.078, "iqr_pct": 1.7, "hash": "c657a8f9917105e2", "err_vs_fp32": 0.000623}, "gq_scalar": {"ms": 64.121, "iqr_pct": 1.9, "hash": "c657a8f9917105e2", "err_vs_fp32": 0.000623}, "take_qmm": {"ms": 4.013, "iqr_pct": 2.2, "hash": "99252d5ea1f72564", "err_vs_fp32": 0.001883}}}
+{"dtype": "bf16", "slots": 40, "iters": 60, "arms": {"gq_default": {"ms": 4.367, "iqr_pct": 0.4, "hash": "3a01a29113ee5445", "err_vs_fp32": 0.005233}, "gq_scalar": {"ms": 64.294, "iqr_pct": 1.4, "hash": "982fc0f142b2d4f6", "err_vs_fp32": 0.005233}, "take_qmm": {"ms": 3.706, "iqr_pct": 14.2, "hash": "ba70e101e3c2d9e4", "err_vs_fp32": 0.005233}}}
+probe venv-gq
+{"dtype": "fp16", "slots": 40, "iters": 60, "arms": {"gq_default": {"ms": 4.129, "iqr_pct": 2.3, "hash": "b0cf3121bfe4c121", "err_vs_fp32": 0.000623}, "gq_scalar": {"ms": 64.11, "iqr_pct": 4.3, "hash": "c657a8f9917105e2", "err_vs_fp32": 0.000623}, "take_qmm": {"ms": 3.893, "iqr_pct": 7.4, "hash": "99252d5ea1f72564", "err_vs_fp32": 0.001883}}}
+{"dtype": "bf16", "slots": 40, "iters": 60, "arms": {"gq_default": {"ms": 4.368, "iqr_pct": 0.4, "hash": "3a01a29113ee5445", "err_vs_fp32": 0.005233}, "gq_scalar": {"ms": 64.393, "iqr_pct": 2.9, "hash": "982fc0f142b2d4f6", "err_vs_fp32": 0.005233}, "take_qmm": {"ms": 4.074, "iqr_pct": 0.7, "hash": "ba70e101e3c2d9e4", "err_vs_fp32": 0.005233}}}
+end 2026-10-09T00:48:43Z

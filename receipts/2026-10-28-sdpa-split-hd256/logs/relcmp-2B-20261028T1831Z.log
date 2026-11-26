@@ -1,0 +1,28 @@
+relcmp 2B 20261028T1831Z load 0.17
+== rep 1 arm P
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 40.45 tok/s (24.7 ms/token, min 24.0, max 24.8); per token: dispatches 265 submissions 3 commits-with-work 3 barriers 254 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 8192: 13.79 tok/s (72.5 ms/token, min 72.2, max 77.1); per token: dispatches 319 submissions 7 commits-with-work 7 barriers 300 copies 12 fills 0 finalize 1
+== rep 1 arm RA
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 41.43 tok/s (24.1 ms/token, min 23.9, max 24.4); per token: dispatches 265 submissions 10 commits-with-work 10 barriers 261 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 8192: 13.77 tok/s (72.6 ms/token, min 72.4, max 73.9); per token: dispatches 319 submissions 14 commits-with-work 14 barriers 307 copies 12 fills 0 finalize 1
+== rep 1 arm RB
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 40.74 tok/s (24.5 ms/token, min 24.4, max 24.7); per token: dispatches 271 submissions 10 commits-with-work 10 barriers 267 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 8192: 33.43 tok/s (29.9 ms/token, min 29.7, max 31.2); per token: dispatches 271 submissions 10 commits-with-work 10 barriers 267 copies 12 fills 0 finalize 1
+== rep 2 arm P
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 40.37 tok/s (24.8 ms/token, min 24.0, max 25.0); per token: dispatches 265 submissions 3 commits-with-work 3 barriers 254 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 8192: 13.77 tok/s (72.6 ms/token, min 72.3, max 75.6); per token: dispatches 319 submissions 7 commits-with-work 7 barriers 300 copies 12 fills 0 finalize 1
+== rep 2 arm RA
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 41.70 tok/s (24.0 ms/token, min 23.9, max 24.3); per token: dispatches 265 submissions 10 commits-with-work 10 barriers 261 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 8192: 13.77 tok/s (72.6 ms/token, min 72.3, max 72.9); per token: dispatches 319 submissions 14 commits-with-work 14 barriers 307 copies 12 fills 0 finalize 1
+== rep 2 arm RB
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 40.64 tok/s (24.6 ms/token, min 24.4, max 25.2); per token: dispatches 271 submissions 10 commits-with-work 10 barriers 267 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 8192: 33.53 tok/s (29.8 ms/token, min 29.6, max 30.1); per token: dispatches 271 submissions 10 commits-with-work 10 barriers 267 copies 12 fills 0 finalize 1
+== rep 3 arm P
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 40.54 tok/s (24.7 ms/token, min 23.9, max 24.9); per token: dispatches 265 submissions 3 commits-with-work 3 barriers 254 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 8192: 13.79 tok/s (72.5 ms/token, min 72.2, max 74.3); per token: dispatches 319 submissions 7 commits-with-work 7 barriers 300 copies 12 fills 0 finalize 1
+== rep 3 arm RA
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 41.67 tok/s (24.0 ms/token, min 23.9, max 24.3); per token: dispatches 265 submissions 10 commits-with-work 10 barriers 261 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 8192: 13.76 tok/s (72.6 ms/token, min 72.5, max 73.4); per token: dispatches 319 submissions 14 commits-with-work 14 barriers 307 copies 12 fills 0 finalize 1
+== rep 3 arm RB
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 256: 40.80 tok/s (24.5 ms/token, min 24.3, max 24.6); per token: dispatches 271 submissions 10 commits-with-work 10 barriers 267 copies 12 fills 0 finalize 1
+DECODE SiddhJagani/Qwen3.8-2B-mlx-4Bit ctx 8192: 33.36 tok/s (30.0 ms/token, min 29.6, max 30.9); per token: dispatches 271 submissions 10 commits-with-work 10 barriers 267 copies 12 fills 0 finalize 1

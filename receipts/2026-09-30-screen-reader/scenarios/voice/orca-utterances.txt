@@ -1,0 +1,47 @@
+# scenario: voice (voice: Tab to disabled microphone)
+# total utterances: 44
+
+[21:10:27.135601] tab 
+[21:10:27.159817] banner
+[21:10:27.159873] Start a new conversation push button.
+[21:10:27.375171] tab 
+[21:10:27.399340] Open conversation history push button.
+[21:10:27.399384] opens dialog
+[21:10:27.400128] Focus mode
+[21:10:27.611841] tab 
+[21:10:27.630641] Prepare another computer or install an offline bundle push button.
+[21:10:27.630696] opens dialog
+[21:10:27.839135] tab 
+[21:10:27.860368] Open model and memory details push button.
+[21:10:27.860407] opens dialog
+[21:10:28.067328] tab 
+[21:10:28.091957] leaving banner.
+[21:10:28.092011] main content
+[21:10:28.092029] region Set up local chat
+[21:10:28.092044] form
+[21:10:28.092054] Balanced Balance response latency with answer quality.
+[21:10:28.092065] selected radio button
+[21:10:28.092757] Browse mode
+[21:10:28.300834] tab 
+[21:10:28.327452] Download the voice pack with this setup Required for spoken replies; the chat path is unaffected. check box not checked.
+[21:10:28.532266] tab 
+[21:10:28.555005] Context cap in tokens 0 spin button.
+[21:10:28.555767] Focus mode
+[21:10:28.764444] tab 
+[21:10:28.791632] Start setup push button.
+[21:10:28.792311] Browse mode
+[21:10:29.001864] tab 
+[21:10:29.022260] Cancel push button.
+[21:10:29.236812] tab 
+[21:10:29.265263] Skip to message box link.
+[21:10:29.466928] tab 
+[21:10:29.487337] banner
+[21:10:29.487393] Start a new conversation push button.
+[21:10:29.699900] tab 
+[21:10:29.721740] Open conversation history push button.
+[21:10:29.721791] opens dialog
+[21:10:29.722481] Focus mode
+[21:10:29.935179] tab 
+[21:10:29.958800] Prepare another computer or install an offline bundle push button.
+[21:10:29.958869] opens dialog
+[21:10:30.170249] tab 

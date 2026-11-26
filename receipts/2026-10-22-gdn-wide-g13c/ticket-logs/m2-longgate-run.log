@@ -1,0 +1,7 @@
+LGATE start 2026-10-22T02:04:33Z boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH governor=performance load1=2.41
+LGATE tfref 96ba38759d169339 text 3972dc9744f6499f model b0d5de688567bf4a new libmlx fd536b16c05e08b0 old libmlx 0f9e6d6529dae3a4
+LGATE arm tile1 rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610211005+a04423e files 2
+LGATE arm new rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610220201+aaef3b6 files 2
+LGATE arm plain rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610220201+aaef3b6 files 2
+LGATE arm tile1b rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610211005+a04423e files 2
+LGATE end 2026-10-22T02:05:52Z

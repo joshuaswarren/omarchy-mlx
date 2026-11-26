@@ -1,0 +1,97 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+
+#version 450
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_basic : require
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(constant_id = 0) const uint N = 1;
+layout(constant_id = 1) const uint K = 256;
+
+layout(set = 0, binding = 0) readonly buffer XBuf { f16vec4 x4[]; };
+layout(set = 0, binding = 1) readonly buffer WBuf { uint wq[]; };
+layout(set = 0, binding = 2) writeonly buffer OBuf { float out_v[]; };
+
+float accumulate_row(
+    uint row,
+    uint nb,
+    uint b,
+    uint v_im,
+    uint qword,
+    f16vec4 by10,
+    f16vec4 by132,
+    f16vec4 by20,
+    f16vec4 by232,
+    f16vec4 bsum,
+    float acc) {
+  if (row >= N) return acc;
+
+  // 40-word GPU block: words 0..7 hold precomputed fp16 d*scale and dmin*min
+  // pairs, words 8..39 are the canonical quant words.
+  uint blk = row * nb * 40u + b * 40u;
+  uint hdr = blk + 4u * v_im;
+  vec2 pos01 = unpackHalf2x16(wq[hdr]);
+  vec2 pos45 = unpackHalf2x16(wq[hdr + 1u]);
+  f16vec2 min01 = f16vec2(unpackHalf2x16(wq[hdr + 2u]));
+  f16vec2 min45 = f16vec2(unpackHalf2x16(wq[hdr + 3u]));
+
+  uint q0 = wq[blk + 8u + qword];
+  uint q64 = wq[blk + 24u + qword];
+  f16vec4 q0lo = f16vec4(unpack8(q0 & 0x0F0F0F0Fu));
+  f16vec4 q0hi = f16vec4(unpack8((q0 >> 4u) & 0x0F0F0F0Fu));
+  f16vec4 q64lo = f16vec4(unpack8(q64 & 0x0F0F0F0Fu));
+  f16vec4 q64hi = f16vec4(unpack8((q64 >> 4u) & 0x0F0F0F0Fu));
+
+  float16_t sx = dot(by10, q0lo);
+  float16_t sy = dot(by132, q0hi);
+  float16_t sz = dot(by20, q64lo);
+  float16_t sw = dot(by232, q64hi);
+  // Min term: per-block activation sums are shared by both output rows.
+  float16_t smin = dot(f16vec4(min01, min45), bsum);
+  return fma(float(sx), pos01.x,
+      fma(float(sy), pos01.y, fma(float(sz), pos45.x,
+          fma(float(sw), pos45.y, acc - float(smin)))));
+}
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint nb = K / 256u;
+  uint first_row = 2u * gl_WorkGroupID.x;
+  if (first_row >= N) return;
+
+  uint ix = lane / 16u;
+  uint itid = lane % 16u;
+  uint il = itid / 4u;
+  uint ir = itid % 4u;
+  uint v_im = il / 2u;
+  uint v_in = il % 2u;
+  uint l0 = 4u * (2u * ir + v_in);
+  uint qword = 8u * v_im + l0 / 4u;
+  float sum0 = 0.0;
+  float sum1 = 0.0;
+  const f16vec4 one = f16vec4(1.0);
+
+  [[unroll]] for (uint b = ix; b < nb; b += 2u) {
+    uint y = 256u * b + 64u * v_im + l0;
+    f16vec4 by10 = x4[y / 4u];
+    f16vec4 by132 = x4[y / 4u + 8u];
+    f16vec4 by20 = x4[y / 4u + 32u];
+    f16vec4 by232 = x4[y / 4u + 40u];
+    f16vec4 bsum = f16vec4(dot(by10, one), dot(by132, one), dot(by20, one), dot(by232, one));
+    sum0 = accumulate_row(first_row, nb, b, v_im, qword, by10, by132, by20, by232, bsum, sum0);
+    sum1 = accumulate_row(first_row + 1u, nb, b, v_im, qword, by10, by132, by20, by232, bsum, sum1);
+  }
+
+  sum0 = subgroupAdd(sum0);
+  sum1 = subgroupAdd(sum1);
+  if (subgroupElect()) {
+    out_v[first_row] = sum0;
+    if (first_row + 1u < N) out_v[first_row + 1u] = sum1;
+  }
+}

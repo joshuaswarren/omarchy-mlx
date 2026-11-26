@@ -1,0 +1,8 @@
+# scenario: voice-escape-cancel (Escape cancels from the focused mic button; Tab still moves)
+# total utterances: 5
+
+[06:13:57.231265] Recording started. Press Escape to cancel.
+[06:13:57.964084] escape 
+[06:13:58.085628] Recording cancelled.
+[06:13:58.497641] tab 
+[06:13:58.525394] Conversation mode check box not checked.

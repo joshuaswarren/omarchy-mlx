@@ -1,0 +1,8 @@
+end: {"k": "end", "t": 7089024083695, "dispatches": 666, "dropped": 0, "submissions": 360, "joins": 1, "barriers": 870, "barriers_skipped": 156}
+    324 CastF16F32
+     16 FastTrioNormF16
+     16 QmmVecQ4MultiSubgroupF16
+     16 QmmVecQ4WordSubgroupF16
+      8 FastTrioSwigluF16
+      8 ElementwiseLiteF16
+      8 FastTrioRopePairF16

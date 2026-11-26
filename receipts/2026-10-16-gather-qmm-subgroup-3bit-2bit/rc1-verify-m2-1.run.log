@@ -1,0 +1,46 @@
+RC1VER wheel mlx_omarchy-0.32.4.dev202610160409+7107ccb8-cp314-cp314-linux_aarch64.whl sha256 3990f5432a7d48937814145e1e2ccd905da1b27cae6f9f34f85fe258bbff3eda
+RC1VER kernel=7.1.12-2-20261013.18-sep-ARCH boot=7dcada54 governor=performance load1=1.45
+RC1VER packages: mesa 1:26.2.4-1;vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2;linux-aurora 7.1.12.aurora2-20261013.18;asahi-fwextract 0.8.4-1;
+RC1VER tree libmlx sha256 754fc031ccdeb439154004cb4aedc47fd1c3f8a489a04a2cbd6c640f08b5cb2f script 8e230ae4c8baee05
+RC1VER gather_bits 2 128 bf16 rc=0 load1_after=1.53
+RC1VER full1: libmlx loaded: ['$HOME/scratch/w6z/rc1-tree/mlx/lib/libmlx.so']
+RC1VER full1: default device: Device(gpu, 0) mlx 0.32.4.dev202610160409+7107ccb8 bits 2 group 128
+RC1VER full1: T=1 k=8 E=16 K=2048 N=1024: cpu-ref 1.946e-02 scale 8.68 | default gpu-ref 1.946e-02 | scalar gpu-ref 1.946e-02 | default-vs-scalar 2.441e-04 OK
+RC1VER full1: T=1 k=8 E=64 K=4096 N=512: cpu-ref 3.103e-02 scale 12.79 | default gpu-ref 3.103e-02 | scalar gpu-ref 3.103e-02 | default-vs-scalar 0.000e+00 OK
+RC1VER full1: T=32 k=8 E=16 K=2048 N=1024: cpu-ref 3.113e-02 scale 10.49 | default gpu-ref 3.113e-02 | scalar gpu-ref 3.113e-02 | default-vs-scalar 1.562e-02 OK
+RC1VER full1: T=3 k=2 E=4 K=256 N=40: cpu-ref 5.755e-03 scale 2.21 | default gpu-ref 5.755e-03 | scalar gpu-ref 5.755e-03 | default-vs-scalar 0.000e+00 OK
+RC1VER full1: T=1 k=8 E=24 K=4096 N=4096: cpu-ref 3.113e-02 scale 13.47 | default gpu-ref 3.113e-02 ms/call 1.61 | scalar gpu-ref 3.113e-02 ms/call 14.20 | default-vs-scalar 3.906e-03 OK
+RC1VER full1: peak memory GiB 2.36
+RC1VER full1: RESULT PASS
+RC1VER full1 stderr lines: 0
+RC1VER gather_bits 2 64 bf16 rc=0 load1_after=1.60
+RC1VER full2: libmlx loaded: ['$HOME/scratch/w6z/rc1-tree/mlx/lib/libmlx.so']
+RC1VER full2: default device: Device(gpu, 0) mlx 0.32.4.dev202610160409+7107ccb8 bits 2 group 64
+RC1VER full2: T=1 k=8 E=16 K=2048 N=1024: cpu-ref 2.244e-02 scale 8.10 | default gpu-ref 2.244e-02 | scalar gpu-ref 2.244e-02 | default-vs-scalar 0.000e+00 OK
+RC1VER full2: T=1 k=8 E=64 K=4096 N=512: cpu-ref 3.087e-02 scale 12.98 | default gpu-ref 3.087e-02 | scalar gpu-ref 3.087e-02 | default-vs-scalar 0.000e+00 OK
+RC1VER full2: T=32 k=8 E=16 K=2048 N=1024: cpu-ref 3.103e-02 scale 10.80 | default gpu-ref 3.103e-02 | scalar gpu-ref 3.103e-02 | default-vs-scalar 1.562e-02 OK
+RC1VER full2: T=3 k=2 E=4 K=192 N=40: cpu-ref 3.655e-03 scale 1.81 | default gpu-ref 3.655e-03 | scalar gpu-ref 3.655e-03 | default-vs-scalar 0.000e+00 OK
+RC1VER full2: T=1 k=8 E=24 K=4096 N=4096: cpu-ref 3.123e-02 scale 13.59 | default gpu-ref 3.123e-02 ms/call 1.73 | scalar gpu-ref 3.123e-02 ms/call 14.27 | default-vs-scalar 6.104e-05 OK
+RC1VER full2: peak memory GiB 2.37
+RC1VER full2: RESULT PASS
+RC1VER full2 stderr lines: 0
+RC1VER trace 2 128 small bf16 rc=0 dispatches:       3 DISPATCH kernel=102;      2 DISPATCH kernel=194;      1 DISPATCH kernel=195;      1 DISPATCH kernel=218;      2 DISPATCH kernel=59;      1 DISPATCH kernel=612;      2 DISPATCH kernel=79;      6 DISPATCH kernel=9;
+RC1VER trace3: libmlx loaded: ['$HOME/scratch/w6z/rc1-tree/mlx/lib/libmlx.so']
+RC1VER trace3: default device: Device(gpu, 0) mlx 0.32.4.dev202610160409+7107ccb8 bits 2 group 128
+RC1VER trace3: T=3 k=2 E=4 K=256 N=40: cpu-ref 3.885e-03 scale 2.05 | default gpu-ref 3.885e-03 | scalar gpu-ref 3.885e-03 | default-vs-scalar 0.000e+00 OK
+RC1VER trace3: peak memory GiB 0.0
+RC1VER trace3: RESULT PASS
+RC1VER trace 2 128 small rc=0 dispatches:       3 DISPATCH kernel=102;      2 DISPATCH kernel=193;      1 DISPATCH kernel=195;      1 DISPATCH kernel=217;      6 DISPATCH kernel=3;      2 DISPATCH kernel=59;      1 DISPATCH kernel=611;      2 DISPATCH kernel=79;
+RC1VER trace4: libmlx loaded: ['$HOME/scratch/w6z/rc1-tree/mlx/lib/libmlx.so']
+RC1VER trace4: default device: Device(gpu, 0) mlx 0.32.4.dev202610160409+7107ccb8 bits 2 group 128
+RC1VER trace4: T=3 k=2 E=4 K=256 N=40: cpu-ref 4.526e-04 scale 2.05 | default gpu-ref 4.526e-04 | scalar gpu-ref 4.526e-04 | default-vs-scalar 0.000e+00 OK
+RC1VER trace4: peak memory GiB 0.0
+RC1VER trace4: RESULT PASS
+RC1VER trace 3 64 small rc=0 dispatches:       3 DISPATCH kernel=102;      2 DISPATCH kernel=193;      1 DISPATCH kernel=195;      1 DISPATCH kernel=217;      6 DISPATCH kernel=3;      2 DISPATCH kernel=59;      1 DISPATCH kernel=613;      2 DISPATCH kernel=79;
+RC1VER trace5: libmlx loaded: ['$HOME/scratch/w6z/rc1-tree/mlx/lib/libmlx.so']
+RC1VER trace5: default device: Device(gpu, 0) mlx 0.32.4.dev202610160409+7107ccb8 bits 3 group 64
+RC1VER trace5: T=3 k=2 E=4 K=192 N=40: cpu-ref 4.860e-04 scale 1.97 | default gpu-ref 4.860e-04 | scalar gpu-ref 4.860e-04 | default-vs-scalar 0.000e+00 OK
+RC1VER trace5: peak memory GiB 0.0
+RC1VER trace5: RESULT PASS
+RC1VER device reopen rc=0 reopen Device(gpu, 0) [2.0, 2.0, 2.0, 2.0]
+RC1VER DONE out=$HOME/scratch/w6z/rc1-verify-m2-1

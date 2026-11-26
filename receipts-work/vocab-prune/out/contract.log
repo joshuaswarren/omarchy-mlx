@@ -1,0 +1,14 @@
+pure_prefill: {'prompt_tokens': 512, 'wall_s': 2.1272, 'gpu_busy_percent_samples': [], 'pure_prefill_tok_rate': 240.69}
+ordered_records_sha256: bc519c03c4ef5fd1204a5346a0aefb537bda5a291e8fc970a2d6bd09c4b47d33
+pure_prefill: {'prompt_tokens': 512, 'wall_s': 2.1298, 'gpu_busy_percent_samples': [], 'pure_prefill_tok_rate': 240.4}
+ordered_records_sha256: bc519c03c4ef5fd1204a5346a0aefb537bda5a291e8fc970a2d6bd09c4b47d33
+pure_prefill: {'prompt_tokens': 512, 'wall_s': 2.1899, 'gpu_busy_percent_samples': [], 'pure_prefill_tok_rate': 233.8}
+ordered_records_sha256: bc519c03c4ef5fd1204a5346a0aefb537bda5a291e8fc970a2d6bd09c4b47d33
+pure_prefill: {'prompt_tokens': 512, 'wall_s': 2.127, 'gpu_busy_percent_samples': [], 'pure_prefill_tok_rate': 240.72}
+ordered_records_sha256: bc519c03c4ef5fd1204a5346a0aefb537bda5a291e8fc970a2d6bd09c4b47d33
+pure_prefill: {'prompt_tokens': 512, 'wall_s': 2.119, 'gpu_busy_percent_samples': [], 'pure_prefill_tok_rate': 241.62}
+ordered_records_sha256: bc519c03c4ef5fd1204a5346a0aefb537bda5a291e8fc970a2d6bd09c4b47d33
+pure_prefill: {'prompt_tokens': 512, 'wall_s': 2.1291, 'gpu_busy_percent_samples': [], 'pure_prefill_tok_rate': 240.48}
+ordered_records_sha256: bc519c03c4ef5fd1204a5346a0aefb537bda5a291e8fc970a2d6bd09c4b47d33
+pure_prefill: {'prompt_tokens': 512, 'wall_s': 2.1638, 'gpu_busy_percent_samples': [], 'pure_prefill_tok_rate': 236.62}
+ordered_records_sha256: bc519c03c4ef5fd1204a5346a0aefb537bda5a291e8fc970a2d6bd09c4b47d33

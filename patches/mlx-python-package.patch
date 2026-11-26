@@ -1,0 +1,12 @@
+diff --git a/setup.py b/setup.py
+--- a/setup.py
++++ b/setup.py
+@@ -311,7 +311,7 @@
+             extras["cpu"] = [f'mlx-cpu=={version}; platform_system == "Linux"']
+
+         _setup(
+-            name="mlx",
++            name="mlx-omarchy",
+             packages=packages,
+             extras_require=extras,
+             entry_points=entry_points,

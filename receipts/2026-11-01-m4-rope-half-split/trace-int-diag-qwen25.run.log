@@ -1,0 +1,6 @@
+int-diag 0 provenance: mlx-omarchy 0.32.4.dev202611020423+diag.749902d mx=0.32.4.dev202611020423+diag.749902d verified=match harness=75cdbbb core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:2ddb5c37713bcae3
+A rainbow is a beautiful natural phenomenon that occurs when light travels through water droplets and other small particles in the atmosphere. The four distinct sentences are:
+
+1.
+[profile_generate] tokens=32 median_inter_token_ms=45.46 mean_inter_token_ms=44.99
+rc=0

@@ -1,0 +1,27 @@
+# 2026-10-06T21:00:58Z tag=h3-f16-occ boot=abc36fa1-7db1-4088-96ed-4523f5ad087e load=0.11 0.04 0.12 icd=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json
+# cmd: ./gemm-bench --dtype f16 --reps 6 --rounds 5 --side rb=sh/matmul_rb.comp:64:64:0 --side v0=sh/matmul_coopmat64.comp:64:64:0 --side v0nu=sh/matmul_coopmat64.comp:64:64:0:-DNO_UNROLL_STAGE=1 --side v3=sh/matmul_coopmat64.comp:128:64:0:-DWG_M=4 --side v3nu=sh/matmul_coopmat64.comp:128:64:0:-DWG_M=4,-DNO_UNROLL_STAGE=1 --side w42=sh/matmul_coopmat64.comp:64:64:0:-DWG_M=4,-DSG_M=2 --side w42nu=sh/matmul_coopmat64.comp:64:64:0:-DWG_M=4,-DSG_M=2,-DNO_UNROLL_STAGE=1
+probing Apple M1 (G13G B1) api=1.4
+sh/matmul_rb.comp
+sh/matmul_coopmat64.comp
+sh/matmul_coopmat64.comp
+sh/matmul_coopmat64.comp
+sh/matmul_coopmat64.comp
+sh/matmul_coopmat64.comp
+sh/matmul_coopmat64.comp
+{"k":"dev","name":"Apple M1 (G13G B1)","subgroupSize":32,"coopmat":true}
+{"k":"problem","dtype":"f16","m":4096,"n":4096,"kdim":4096,"a_t":0,"b_t":0,"samples":4096}
+{"k":"accuracy","side":"rb","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"v0","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"v0nu","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"v3","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"v3nu","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"w42","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"w42nu","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"time","side":"rb","median_us":229359.6,"min_us":229284.9,"max_us":229506.1,"tflops":0.599,"tflops_best":0.599}
+{"k":"time","side":"v0","median_us":160598.2,"min_us":160435.3,"max_us":160921.1,"tflops":0.856,"tflops_best":0.857}
+{"k":"time","side":"v0nu","median_us":168179.1,"min_us":167983.8,"max_us":168462.3,"tflops":0.817,"tflops_best":0.818}
+{"k":"time","side":"v3","median_us":138599.9,"min_us":138538.5,"max_us":138752.5,"tflops":0.992,"tflops_best":0.992}
+{"k":"time","side":"v3nu","median_us":163200.9,"min_us":163160.7,"max_us":163636.8,"tflops":0.842,"tflops_best":0.842}
+{"k":"time","side":"w42","median_us":148240.7,"min_us":148174.4,"max_us":148800.0,"tflops":0.927,"tflops_best":0.928}
+{"k":"time","side":"w42nu","median_us":161844.7,"min_us":161670.8,"max_us":162069.3,"tflops":0.849,"tflops_best":0.850}
+# end 2026-10-06T21:01:39Z rc=0

@@ -1,0 +1,22 @@
+[
+ {
+  "upload": "upload-17.wav",
+  "offset_s": 0.434375,
+  "normalized_corr": 0.32,
+  "captured_rms": 0.0947,
+  "clean_rms": 0.0453,
+  "captured_clipped_fraction": 2e-05,
+  "captured": "",
+  "clean_source": "She promised to do this, and she mentioned to me that when for a moment she had"
+ },
+ {
+  "upload": "upload-16.wav",
+  "offset_s": 70.1144375,
+  "normalized_corr": 0.166,
+  "captured_rms": 0.0866,
+  "clean_rms": 0.0422,
+  "captured_clipped_fraction": 1e-05,
+  "captured": "She promised to do this. And he mentioned to me when for a moment",
+  "clean_source": "She promised to do this. And she mentioned to me that when for a moment"
+ }
+]

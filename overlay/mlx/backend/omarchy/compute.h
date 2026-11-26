@@ -1,0 +1,1289 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+
+#pragma once
+
+#include <vulkan/vulkan.h>
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <mutex>
+#include <span>
+#include <string>
+#include <unordered_map>
+namespace mlx::core::omarchy {
+
+inline constexpr uint32_t kComputeThreadsPerGroup = 256;
+inline constexpr uint32_t kMaxComputeGroupCountX = 65535;
+// Vulkan's guaranteed floor for storage-buffer descriptors in one compute
+// descriptor set layout. Any kernel may assume this many binding slots.
+inline constexpr uint32_t kComputeBindingFloor = 4;
+// Binding slots the backend wants when every shipped kernel gets its full
+// workspace (multi-index scatter needs five). The live budget is fixed once
+// per device at initialization: min(kComputeBindingBudget, the device's
+// reported storage-buffer descriptor limits), and kernels needing more than
+// that budget refuse by name instead of dispatching. The spec floor is why
+// the pre-2026-09-02 four-slot constant was portable, not a device ceiling:
+// real drivers report orders of magnitude more.
+// Twenty-five slots fit the widest kernel today: the multi-weight decode
+// GEMV binds x plus, per weight, packed words, scales, biases, the
+// output, an Add addend, and the Add output (kQmmVecMultiBindings); the
+// out-gate prologue variant adds three more. The triple-index scatter
+// needs six.
+inline constexpr uint32_t kComputeBindingBudget = 28;
+// Bindings of the QmmVecQ4Multi kernels and their per-weight stride.
+// Four weights cover a GatedDeltaNet layer's qkv/z/a/b projections of one
+// normed row in one dispatch.
+inline constexpr uint32_t kQmmVecMultiWeights = 4;
+inline constexpr uint32_t kQmmVecMultiBindingsPerWeight = 6;
+inline constexpr uint32_t kQmmVecMultiBindings =
+    1 + kQmmVecMultiWeights * kQmmVecMultiBindingsPerWeight;
+// Multi-token (verify / small-batch) GEMV route: the largest compiled
+// token dimension (the token16 blob); rows 2..16 route to the token
+// kernels, rows > 16 compose.
+inline constexpr uint32_t kQmmVecTokenRowsMax = 16;
+// The out-gate prologue adds three slots: the gate and pre-multiply
+// vectors it reads, and the materialized product (kQmmVecMultiBindings + 3).
+inline constexpr uint32_t kDenseVecMultiWeights = 3;
+inline constexpr uint32_t kDenseVecMultiBindingsPerWeight = 2;
+inline constexpr uint32_t kDenseVecMultiBindings =
+    1 + kDenseVecMultiWeights * kDenseVecMultiBindingsPerWeight;
+
+constexpr uint32_t compute_dispatch_group_count(uint32_t count) {
+  if (count == 0) {
+    return 0;
+  }
+  uint32_t groups = (count - 1) / kComputeThreadsPerGroup + 1;
+  return groups < kMaxComputeGroupCountX ? groups : kMaxComputeGroupCountX;
+}
+
+constexpr bool compute_index_span_fits(uint64_t offset, uint64_t count) {
+  constexpr uint64_t max_index = std::numeric_limits<uint32_t>::max();
+  return count <= max_index && offset <= max_index &&
+      (count == 0 || count - 1 <= max_index - offset);
+}
+
+// Clamp the final advance so a near-UINT32_MAX count cannot wrap.
+inline constexpr uint32_t kLogicalChunkElements =
+    kMaxComputeGroupCountX * kComputeThreadsPerGroup;
+
+constexpr uint32_t next_logical_chunk_end(uint32_t first, uint32_t count) {
+  const uint32_t remaining = count - first;
+  const uint32_t chunk =
+      remaining < kLogicalChunkElements ? remaining : kLogicalChunkElements;
+  return first + chunk;
+}
+
+enum class ComputeKernel : uint16_t {
+  ElementwiseF32,
+  ElementwiseF16,
+  ElementwiseBF16,
+  CastF16F32,
+  CastBoolF32,
+  CastBoolI32,
+  CastBoolF16,
+  CastBoolBF16,
+  CastF32F16,
+  CastBF16F32,
+  CastF32BF16,
+  CastBF16F16,
+  CastF16BF16,
+  CastI32F32,
+  CastU32F32,
+  CastF32I32,
+  CastI32F16,
+  CastF16I32,
+  CastI32BF16,
+  CastBF16I32,
+  ReduceF32,
+  ReduceF16,
+  ReduceBF16,
+  MatmulF32,
+  MatmulF32Coopmat,
+  MatmulF16,
+  MatmulBF16,
+  // Dense single-row GEMV (decode shape); see shaders/matmul_vec.comp.
+  MatmulVecF32,
+  MatmulVecF16,
+  MatmulVecBF16,
+  FillF32,
+  FillF16,
+  FillBF16,
+  SoftmaxF32,
+  SoftmaxF16,
+  SoftmaxBF16,
+  LogSumExpF32,
+  LogSumExpF16,
+  LogSumExpBF16,
+  SelectF32,
+  SelectF16,
+  SelectBF16,
+  SelectI32,
+  SelectBool,
+  SelectComplex64,
+  SelectI64,
+  CompareF32,
+  CompareF16,
+  CompareBF16,
+  CompareI32,
+  CompareU32,
+  CompareI64,
+  CompareComplex,
+  LogicalOrBool,
+  CompareBool,
+  CopyGeneralF32,
+  CopyGeneralF16,
+  SliceUpdatePairF16,
+  CopyGeneralBF16,
+  CopyGeneralU32,
+  CopyGeneralBool,
+  CopyGeneralU8,
+  CopyGeneralU16,
+  CopyGeneralU64,
+  ArgReduceF32,
+  ArgReduceF16,
+  ArgReduceBF16,
+  ArgReduceI8,
+  ArgReduceU8,
+  ArgReduceI16,
+  ArgReduceU16,
+  ArgReduceI32,
+  ArgReduceU32,
+  ArgReduceI64,
+  ArgReduceU64,
+  ArangeF32,
+  ArangeF16,
+  ArangeBF16,
+  ArangeI32,
+  ArangeU32,
+  ArangeI64,
+  ArangeU64,
+  SortF32,
+  SortF16,
+  SortBF16,
+  SortC64,
+  ArgSortF32,
+  ArgSortF16,
+  ArgSortBF16,
+  ArgSortC64,
+  SortI32,
+  SortU32,
+  SortI8,
+  SortU8,
+  SortI16,
+  SortU16,
+  ArgSortI32,
+  ArgSortU32,
+  ArgSortI8,
+  ArgSortU8,
+  ArgSortI16,
+  ArgSortU16,
+  RandomBitsU32,
+  ElementwiseI32,
+  ElementwiseU32,
+  ScanF32,
+  ScanF16,
+  ScanBF16,
+  SearchSortedF32,
+  SearchSortedF16,
+  SearchSortedBF16,
+  SearchSortedI32,
+  SearchSortedU32,
+  ReduceGeneralF32,
+  ReduceGeneralF16,
+  ReduceGeneralBF16,
+  ReduceGeneralI32,
+  ReduceGeneralU32,
+  ReduceGeneralI8,
+  ReduceGeneralU8,
+  ReduceGeneralI16,
+  ReduceGeneralU16,
+  ReduceGeneralI64,
+  ReduceGeneralU64,
+  ReduceGeneralComplex,
+  AnyAllF32,
+  AnyAllF16,
+  AnyAllBF16,
+  AnyAllI32,
+  AnyAllU32,
+  AnyAllBool,
+  ScanGeneralF32,
+  ScanGeneralF16,
+  ScanGeneralBF16,
+  ScanGeneralI32,
+  ScanGeneralU32,
+  ScanGeneralBool,
+  ScanGeneralI8,
+  ScanGeneralU8,
+  ScanGeneralI16,
+  ScanGeneralU16,
+  ScanGeneralI64,
+  ScanGeneralU64,
+  ScanGeneralComplex,
+  HadamardF32,
+  HadamardF16,
+  HadamardBF16,
+  QmmF32,
+  QmmF16,
+  QmmBF16,
+  DequantF32,
+  DequantF16,
+  ConvF32,
+  ConvF16,
+  ConvBF16,
+  // Wave 5: indexing and scatter. The U32 kernels carry bitwise word
+  // storage, so float32 shares them with int32 and uint32.
+  GatherAxisU32,
+  GatherAxisI64,
+  GatherAxisF16,
+  GatherAxisBF16,
+  GatherAxisBool,
+  GatherAxisComplex64,
+  ScatterU32,
+  ScatterF16,
+  ScatterBF16,
+  ScatterComplex64,
+  ScatterAxisU32,
+  ScatterAxisF16,
+  ScatterAxisBF16,
+  ScatterAxisComplex64,
+  MaskedScatterU32,
+  MaskedScatterF16,
+  MaskedScatterBF16,
+  MaskedScatterBool,
+  ScatterMultiU32,
+  ScatterMultiF16,
+  ScatterMultiBF16,
+  ScatterTripleU32,
+  ScatterTripleF16,
+  ScatterTripleBF16,
+  ScatterBoolTriple,
+  ScatterGeneralU32,
+  ScatterGeneralF16,
+  ScatterGeneralBF16,
+  ScatterGeneralBool,
+  ScatterGeneralU8,
+  ScatterGeneralI8,
+  ScatterGeneralU16,
+  ScatterGeneralI16,
+  SliceUpdateReduceF32,
+  SliceUpdateReduceF16,
+  SliceUpdateReduceBF16,
+  SliceUpdateReduceU32,
+  TakeF32,
+  TakeF16,
+  TakeBF16,
+  TakeU32,
+  TakeU16,
+  TakeI64,
+  TakeBool,
+  TakeComplex64,
+  TakeMultiF32,
+  TakeMultiF16,
+  TakeMultiBF16,
+  TakeMultiU32,
+  TakeMultiU16,
+  TakeMultiI64,
+  TakeMultiBool,
+  TakeMultiComplex64,
+  ClearU32,
+  BlockMaskF32,
+  GatherMmF32,
+  GatherMmF16,
+  GatherMmBF16,
+  SegmentedMmF32,
+  SegmentedMmF16,
+  SegmentedMmBF16,
+  GatherQmmF32,
+  GatherQmmF16,
+  GatherQmmBF16,
+  GatherQmmNbF32,
+  GatherQmmNbF16,
+  GatherQmmNbBF16,
+  // Subgroup gather variants: one workgroup per output element, K
+  // split across lanes with a subgroupAdd reduction. The scalar
+  // gather kernel is latency-bound at decode shapes (m == 1).
+  GatherQmmSubF32,
+  GatherQmmSubF16,
+  GatherQmmSubBF16,
+  GatherQmmNbSubF32,
+  GatherQmmNbSubF16,
+  GatherQmmNbSubBF16,
+  // Wave 8: FFT. FftF32 is the radix-2 Cooley-Tukey pass (complex64 pairs
+  // in shared memory); FftRealF32 strips the real part of a complex64
+  // buffer into float32 for the irfft tail; FftStageF32 runs the
+  // elementwise general-length stages (Cooley-Tukey twiddle multiply,
+  // Bluestein chirp multiply, b-table build, pointwise FFT multiply, and
+  // the Bluestein epilogue), one thread per element.
+  FftF32,
+  FftRealF32,
+  FftStageF32,
+  // Wave 9: fused and custom kernels. Norm forward and VJP kernels run one
+  // workgroup per row with float32 arithmetic; the dw kernel runs a single
+  // workgroup with per-column accumulators. ConvertFP8 pairs travel as
+  // little-endian uint32 word packs of four E4M3 bytes.
+  FastRmsNormF32,
+  FastRmsNormF16,
+  FastRmsNormBF16,
+  FastLayerNormF32,
+  FastLayerNormF16,
+  FastLayerNormBF16,
+  FastRmsNormVjpDxF32,
+  FastRmsNormVjpDxF16,
+  FastRmsNormVjpDxBF16,
+  FastLayerNormVjpDxF32,
+  FastLayerNormVjpDxF16,
+  FastLayerNormVjpDxBF16,
+  FastRmsNormVjpDwF32,
+  FastRmsNormVjpDwF16,
+  FastRmsNormVjpDwBF16,
+  FastLayerNormVjpDwF32,
+  FastLayerNormVjpDwF16,
+  FastLayerNormVjpDwBF16,
+  CrossEntropyVjpF32,
+  CrossEntropyVjpF16,
+  CrossEntropyVjpBF16,
+  CrossEntropyF32,
+  CrossEntropyF16,
+  CrossEntropyBF16,
+  // FusedRoPE: one thread rotates one (position, frequency) pair; the
+  // Freqs variants take a float32 inv-frequencies source, the base
+  // variants compute exp(-i * log(base)/(dims/2)) in-shader from the
+  // precomputed beta push constant. See shaders/fast_rope.comp for the
+  // contract cases and the push-constant field mapping.
+  FastRopeF32,
+  FastRopeF16,
+  FastRopeBF16,
+  FastRopeFreqsF32,
+  FastRopeFreqsF16,
+  FastRopeFreqsBF16,
+  // FusedRoPE+RMSNorm (rope_rms_norm route): one workgroup per rotation row
+  // reproduces the fast_norm.comp reduction inside fast_rope.comp's bf16
+  // word math. bf16 only; every other shape composes the eager chain.
+  FastRopeNormBF16,
+  Fp8ToF32,
+  Fp8ToF16,
+  Fp8ToBF16,
+  Fp8FromF32,
+  Fp8FromF16,
+  Fp8FromBF16,
+  // Wave 7: linear algebra. One workgroup per batch matrix, float32
+  // only, matching the upstream CPU dtype contract; SVD runs as a
+  // sweeps kernel plus a separate finalize kernel.
+  LinalgCholeskyF32,
+  LinalgInverseF32,
+  LinalgLuF32,
+  LinalgQrF32,
+  LinalgEighF32,
+  LinalgEigF32,
+  LinalgSvdF32,
+  LinalgSvdFinalizeF32,
+  // FixFastSdpaAndNorm (W9): dw stage 2 - column sum of the per-row
+  // partials from the VjpDw kernels. The VjpDw enums above are the
+  // partial stage; this one sums rows into the gradient dtype.
+  FastRmsNormVjpDwReduceF32,
+  FastRmsNormVjpDwReduceF16,
+  FastRmsNormVjpDwReduceBF16,
+  // WideRowTopK: one workgroup per row binary-searches the monotone key
+  // and serially emits the argpartition indices. One variant per input
+  // dtype (f32, f16, bf16).
+  // Complex64Transport: complex64 transport and elementwise. One
+  // element is a vec2 (re, im) pair in std430 storage, so offsets and
+  // strides are item offsets exactly like the float32 kernels; no
+  // 16-bit storage features are involved. ComplexElementwise carries
+  // the operation code (conjugate/add/sub/mul/div/negate) in
+  // params.operation; ComplexReal and ComplexImag extract one
+  // component to float32; the Cast* pairs mirror the upstream
+  // static_cast rules (real source promotes to (x, 0), complex64
+  // source reads real()).
+  ComplexElementwise,
+  ComplexReal,
+  ComplexImag,
+  CastF32Complex64,
+  CastI32Complex64,
+  CastU32Complex64,
+  CastBoolComplex64,
+  CastF16Complex64,
+  CastBF16Complex64,
+  CastComplex64F32,
+  FillComplex64,
+  CopyGeneralComplex64,
+  // ComplexAbs: magnitude |z| of a complex64 element into float32,
+  // the value-side counterpart to compare_complex and the missing
+  // piece upstream allclose needs for complex differences. The shader
+  // (shaders/complex_extract.comp, operation 2) implements hypot(re,
+  // im) with overflow-safe scaling so large-magnitude inputs do not
+  ComplexAbs,
+  // ComplexAbsAsComplex: same magnitude kernel but the output buffer
+  // is complex64 (vec2): the magnitude lands in .x and 0 in .y so
+  // the downstream Cast(complex64 -> float32) reads real() and gets
+  // the magnitude. This is the path Abs::eval_gpu takes when ops.cpp
+  // builds the primary output as complex64 and applies a separate
+  // astype Cast downstream.
+  ComplexAbsAsComplex,
+  // ScatterDeterminism: float scatter reductions ride hardware fp32
+  // atomic add where VK_EXT_shader_atomic_float reports
+  // shaderBufferFloat32AtomicAdd (llvmpipe does; the M1 Honeykrisp
+  // does NOT advertise the extension at all - the pre-2026-09-02
+  // "measured on both" note was a misread of llvmpipe's feature list
+  // on a box exposing both devices). The FADD variants accumulate
+  // Sum/Prod in an fp32 per-element scratch and the Bool variants
+  // carry packed-word byte read-modify-write; the f16/bf16 FADD blobs
+  // also serve Prod for those dtypes. The FCAS variants are the
+  // no-extension twins: op 11 is replaced by the op-17 compare-
+  // exchange add, Prod's op 13 CAS is unchanged.
+  ScatterFAddF32,
+  ScatterFAddF16,
+  ScatterFAddBF16,
+  ScatterFAddMultiF32,
+  ScatterFAddTripleF32,
+  ScatterFAddGeneralF32,
+  ScatterFCasF32,
+  ScatterFCasF16,
+  ScatterFCasBF16,
+  ScatterFCasMultiF32,
+  ScatterFCasTripleF32,
+  ScatterFCasGeneralF32,
+  ScatterBool,
+  ScatterBoolMulti,
+  ScatterAxisFAddF32,
+  ScatterAxisFAddF16,
+  ScatterAxisFAddBF16,
+  ScatterAxisFCasF32,
+  ScatterAxisFCasF16,
+  ScatterAxisFCasBF16,
+  ScatterAxisBool,
+  // DecodeGemv: matrix-vector kernel for Qmm when lhs has a single
+  // row (the decode shape). One workgroup owns eight output columns;
+  // lanes stride single k steps so weight reads stay coalesced. The
+  // default reduction is a five-round workgroup-shared tree.
+  QmmVecF32,
+  QmmVecF16,
+  QmmVecBF16,
+  // DecodeGemvSubgroup: same shader compiled with -DUSE_SUBGROUP=1,
+  // replacing the tree with one subgroupAdd per 32-lane slot. Dispatch
+  // is gated in primitives.cpp on caps.subgroup_size == 32 and the
+  // ARITHMETIC subgroup-feature bit; a device that lacks either falls
+  // back to QmmVecF32/16/BF16. These enum values live at the end so
+  // older indices stay stable for the GPU-profile NDJSON stream.
+  QmmVecSubgroupF32,
+  QmmVecSubgroupF16,
+  QmmVecSubgroupBF16,
+  QmmTileF32,
+  QmmTileF16,
+  QmmTileBF16,
+  FusedChainF32,
+  FusedChainF16,
+  QuantizeF32,
+  QuantizeF16,
+  ReduceGeneralBool,
+  // Numeric casts: one blob per source/destination storage-width pair.
+  // Runtime dtype codes preserve integer signedness, floating conversion,
+  // and complex real-part projection without a per-dtype kernel matrix.
+  CastIntW1W1,
+  CastIntW1W2,
+  CastIntW1W4,
+  CastIntW1W8,
+  CastIntW2W1,
+  CastIntW2W2,
+  CastIntW2W4,
+  CastIntW2W8,
+  CastIntW4W1,
+  CastIntW4W2,
+  CastIntW4W4,
+  CastIntW4W8,
+  CastIntW8W1,
+  CastIntW8W2,
+  CastIntW8W4,
+  CastIntW8W8,
+  // NarrowIntTail: widened-word bitwise variants for the 8/16/64-bit
+  // integer family (BitwiseBinary and BitwiseInvert only; the host
+  // refuses every other operation on these dtypes by name). W2 blobs
+  // need 16-bit storage, W8 blobs the shaderInt64 feature.
+  CompareU64,
+  ElementwiseI8,
+  ElementwiseU8,
+  ElementwiseI16,
+  ElementwiseU16,
+  ElementwiseI64,
+  ElementwiseU64,
+  // NarrowIntTail: narrow-int comparisons. Byte variants ride the
+  // packed word transport; 16-bit variants need 16-bit storage.
+  CompareI8,
+  CompareU8,
+  CompareI16,
+  CompareU16,
+  // NarrowIntTail: 8/16-bit Scatter through the packed byte-insert
+  // (8-bit) and plain 16-bit store winner writes, NONE reduce only.
+  ScatterU8,
+  ScatterI8,
+  ScatterU16,
+  ScatterI16,
+  ScatterMultiU8,
+  ScatterMultiI8,
+  ScatterMultiU16,
+  ScatterMultiI16,
+  ScatterTripleU8,
+  ScatterTripleI8,
+  ScatterTripleU16,
+  ScatterTripleI16,
+  // NarrowIntTail: 64-bit and 16-bit non-zero scalar fills; the U64
+  // variant rides shaderInt64, the U16 variant 16-bit storage.
+  FillU64,
+  FillU16,
+  // MultiBlockSort: one global-memory bitonic compare-exchange stage
+  // (shaders/sort_merge.comp) that continues sort_suffix past 1024-wide
+  // rows. The host launches one dispatch per network stage and
+  // alternates a ping-pong buffer pair; ARGSORT variants carry the
+  // source positions in a parallel index buffer for the stable order.
+  SortMergeF32,
+  SortMergeF16,
+  SortMergeBF16,
+  SortMergeI32,
+  SortMergeU32,
+  ArgSortMergeF32,
+  ArgSortMergeF16,
+  ArgSortMergeBF16,
+  ArgSortMergeC64,
+  ArgSortMergeI32,
+  ArgSortMergeU32,
+  // Quantize-mode kernels (mxfp4 / nvfp4 / mxfp8): the affine shaders
+  // compiled with -DFP_MODE=1. Byte-packed fp4/fp8 element codes, byte
+  // scales through a uint word view, no bias term. Appended at the end
+  // so older indices stay stable for the GPU-profile NDJSON stream.
+  QuantizeFpF32,
+  QuantizeFpF16,
+  QuantizeFpBF16,
+  DequantFpF32,
+  DequantFpF16,
+  DequantFpBF16,
+  QmmFpF32,
+  QmmFpF16,
+  QmmFpBF16,
+  QmmVecFpF32,
+  QmmVecFpF16,
+  QmmVecFpBF16,
+  QmmVecSubgroupFpF32,
+  QmmVecSubgroupFpF16,
+  QmmVecSubgroupFpBF16,
+  QmmTileFpF32,
+  QmmTileFpF16,
+  QmmTileFpBF16,
+  // Gathered fp-mode matmul (gather_qmm.comp with -DFP_MODE=1
+  // -DNO_BIAS=1): GatherQMM and GatherQQMM in the mxfp4 / nvfp4 /
+  // mxfp8 modes, no bias term. Appended after the affine fp kernels
+  // so older indices stay stable for the GPU-profile NDJSON stream.
+  GatherQmmNbFpF32,
+  GatherQmmNbFpF16,
+  GatherQmmNbFpBF16,
+  // GatherQmmNbFp plus the nvfp4 output global-scale correction: a
+  // fifth binding carries the float32 global_scale_w word.
+  GatherQmmNbFpHgsF32,
+  GatherQmmNbFpHgsF16,
+  GatherQmmNbFpHgsBF16,
+  MatmulComplex64,
+  // DecodeQ4Word is appended for GPU-profile enum stability. The six
+  // binaries share one affine transposed 4-bit/group-64 kernel shape.
+  QmmVecQ4WordF32,
+  QmmVecQ4WordF16,
+  QmmVecQ4WordBF16,
+  QmmVecQ4WordSubgroupF32,
+  QmmVecQ4WordSubgroupF16,
+  QmmVecQ4WordSubgroupBF16,
+  // Prefill register block for the transposed affine 4-bit/group-64 f16
+  // path. Appended so existing GPU-profile kernel ids stay stable.
+  QmmTileRbF16,
+  // Prefill on the 8x8x8 fp32 cooperative matrix, same layout as
+  // QmmTileRbF16 (shaders/qmm_coopmat.comp).
+  QmmPrefillCoopmatF16,
+  MatmulBF16Coopmat,
+  // Eager BF16 SwiGLU fusion. Appended to keep profile kernel ids stable.
+  FusedChainBF16,
+  // Four-wide binary add/mul/div/sub on 16-bit storage
+  // (shaders/binary_vec.comp); dispatch_float_elementwise_to gates on
+  // alignment. Appended to keep profile kernel ids stable.
+  BinaryVecF16,
+  BinaryVecBF16,
+  // Register-blocked f16 matmul (shaders/matmul_rb.comp), same
+  // arithmetic as MatmulF16 on a 64x64 tile; dispatch_matmul gates on
+  // matrix_m >= 32 and no bias.
+  MatmulRbF16,
+  // Straight-line four-wide SwiGLU chain (shaders/swiglu.comp) with the
+  // fused_chain.comp rounding; dispatch_chain pattern-matches it.
+  SwigluF16,
+  SwigluBF16,
+  // DecodeFusion multi-weight Q4 GEMV (shaders/qmm_vec.comp
+  // QMM_VEC_MULTI): up to four transposed 4-bit/group-64 weights per
+  // dispatch with optional fused Add epilogues. Appended to keep
+  // profile kernel ids stable.
+  QmmVecQ4MultiF32,
+  QmmVecQ4MultiF16,
+  QmmVecQ4MultiBF16,
+  QmmVecQ4MultiSubgroupF32,
+  QmmVecQ4MultiSubgroupF16,
+  QmmVecQ4MultiSubgroupBF16,
+  // Non-contracted large-prefill fallback; appended to preserve profile ids.
+  QmmTileRbPreciseF16,
+  // Native-order single-query f16 attention; append-only profile id.
+  SdpaDecodeNativeF16,
+  // Affine quantize/dequantize bfloat16; append-only profile id.
+  QuantizeBF16,
+  DequantBF16,
+  // Same shader compiled with -DBF16_IO=1 (uint16 word view, exact
+  // widening, RNE stores, f32 internals, composition-exact arm); appended
+  // to keep profile kernel ids stable.
+  SdpaDecodeNativeBF16,
+  // Scalar-FMA prefill kernels that leave the 8x8x8 cooperative matrix
+  // (shaders/qmm_fma.comp, shaders/matmul_fma_bf16.comp); append-only
+  // profile id.
+  QmmPrefillFmaF16,
+  MatmulBf16Fma,
+  // Bench ladder variants of the FMA tile shape; removed once the
+  // shape is picked.
+  QmmPrefillFmaL16C4F16,
+  QmmPrefillFmaL8C4F16,
+  QmmPrefillFmaPreciseF16,
+  MatmulBf16FmaL16C4,
+  // Decode trio pipelines (shaders/fast_trio.comp compiled three
+  // times, f16): near-copies of the standalone RMSNorm row, RoPE pair,
+  // and SwiGLU kernels. One source, one straight-line body per
+  // pipeline; a single mode-switched megashader measurably regressed
+  // decode tok/s on Honeykrisp. Append-only profile ids.
+  FastTrioNormF16,
+  FastTrioRopePairF16,
+  FastTrioSwigluF16,
+  // Symmetric-int8 matmul with runtime-quantized activations
+  // (shaders/int8_matmul.comp); fast::Int8Matmul. Append-only profile id.
+  Int8MatmulOp,
+  Custom,
+  MatmulVecMultiBF16,
+  // Finer-M twin of QmmPrefillCoopmatF16 (shaders/qmm_coopmat.comp with
+  // -DTILE_ROWS=16) for a grid too small to fill a wide part.
+  // Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmatM16F16,
+  // bf16-activation twins of the coopmat pair: identical fp32 coopmat
+  // math and k chain, bf16 x widening and RNE bfloat16 drain.
+  // Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmatBF16,
+  QmmPrefillCoopmatM16BF16,
+  // Direct-global-load A twins of the bf16 coopmat pair: x is widened to
+  // f32 by a cast pass, so the shader coopMatLoads A tiles straight from
+  // the f32 buffer (bf16 -> f32 widening is exact, so the k chain is
+  // bit-identical) and the x_s staging disappears. Append-only ids.
+  QmmPrefillCoopmatBF16X32,
+  QmmPrefillCoopmatM16BF16X32,
+  // FULL_N twins (matrix_n % 32 == 0): column_ok compiled out.
+  QmmPrefillCoopmatBF16X32FullN,
+  QmmPrefillCoopmatM16BF16X32FullN,
+  // M16 LDS_PAD / CHUNK_DEQ twins (q16 verify lever); append-only ids.
+  QmmPrefillCoopmatM16BF16X32FullNLdsPad,
+  QmmPrefillCoopmatM16BF16X32FullNChunk,
+  QmmPrefillCoopmatM16BF16X32FullNChunkPad,
+  // Native-shape two-pass long-context decode SDPA (f16): pass 1 runs one
+  // 32-thread workgroup per (head, block) - native Metal's
+  // sdpa_vector_2pass_1 grid - and writes the fused kernel's exact f16/f32
+  // block partials to a scratch binding; pass 2 folds them with the fused
+  // kernel's pass-2 code unchanged. Append-only profile ids.
+  SdpaDecodeNativeTwoPassP1F16,
+  SdpaDecodeNativeTwoPassP2F16,
+  // Fused gated-delta-rule decode step (GDN linear attention, T=1, bf16
+  // activations, f32 state). Append-only profile id.
+  GatedDeltaDecodeBF16,
+  // Fused gated-delta-rule prefill scan (same contract, T>1, one
+  // workgroup per head scanning the token axis; state rides hf in
+  // place). Append-only profile id.
+  GatedDeltaPrefillBF16,
+  // Chunked cooperative-matrix prefill scan (Metal gated_delta_fused_chunk
+  // shape, C=8): single pass, one 128-thread workgroup per (head, Dv/32
+  // slice), 4 simdgroups each holding an 8-row state slice as sixteen 8x8
+  // f32 coopmat tiles; square bf16 Dk=Dv=128, Hk=Hv, maskless, scalar g,
+  // coopmat device. Append-only profile id.
+  GatedDeltaPrefillCoopmatBF16,
+  // Round-trip-diet variant of the kernel above: identical per-element
+  // arithmetic and order, restructured synchronization (double-buffered
+  // chunk staging, 4-slice state-update waves). Selected only by
+  // MLX_OMARCHY_GDN_BATCH. Append-only profile id.
+  GatedDeltaPrefillCoopmatBatchBF16,
+  // GDN prefill kkt/qkt hoist: pass A computes the state-independent
+  // K.K^T / Q.K^T tiles for every chunk in parallel (bit-identical loop-1
+  // sequence); pass B runs the recurrence off the f32 tiles on the
+  // state-wave body. Default ON for T >= 512; kill switch
+  // MLX_OMARCHY_GDN_HOIST=0.
+  GatedDeltaPrefillKktqkt,
+  GatedDeltaPrefillCoopmatHoistBF16,
+  // macOS-shape per-token recurrent prefill scan (Metal gated_delta_step
+  // shape): one 32-lane subgroup per (hv, dv) row holds the row's
+  // Dk/32 = 4 f32 state elements in registers and walks the token axis
+  // sequentially; kv/o ride hardware subgroupAdd trees, so outputs are
+  // NOT bit-identical to the chunked scan - the gate is the fp64
+  // reference tolerance. Maskless scalar-g square bf16 shape on 32-lane
+  // subgroup devices only. Selected only by MLX_OMARCHY_GDN_RECUR32=1.
+  // Append-only profile id.
+  GatedDeltaPrefillRecur32BF16,
+  // Fused RMSNorm + SwiGLU-gate / RMSNorm + scalar-multiply epilogues
+  // for the GDN decode chain (bf16). Mode 0 replaces
+  // FastRmsNormBF16 + CastBF16F32 x2 + FusedChainF32(sigmoid,mul,mul)
+  // + CastF32BF16; mode 1 replaces FastRmsNormBF16 +
+  // ElementwiseBF16(mul). Same row reduction as fast_norm.comp.
+  // Append-only profile id.
+  FastNormGatedBF16,
+  FastNormGatedOnlyBF16,
+  // GDN decode conv: conv_input = concat(state, x) folded into the
+  // depthwise conv read (T == 1) with the shifted carry-out state
+  // written in-kernel. Replaces CopyGeneral x2 (concat halves) +
+  // ConvBF16 + the trailing contiguous state view. Tap body copied
+  // verbatim from conv.comp. Append-only profile id.
+  GdnConvDecodeBF16,
+  // The composition-exact bf16 decode arm at the Qwen3.8 full-attention
+  // query width (same shader source, -DSDPA_DIM=256; every f32 op and
+  // its order matches the composed path, so the route is bit-identical
+  // to the composition it replaces). Append-only profile id.
+  SdpaDecodeNativeBF16Hd256,
+  // Greedy-argmax decode head (qmm_vec.comp QMM_VEC_GREEDY): bounds,
+  // compaction, exact survivor columns, selection, and the flagged full
+  // path, one kernel selected per stage. Append-only profile id.
+  QmmVecGreedyBF16,
+  // Four-wide contiguous unary Sigmoid on 16-bit storage
+  // (shaders/unary_vec.comp); dispatch_float_elementwise_to gates on
+  // alignment. Appended to keep profile kernel ids stable.
+  UnaryVecF16,
+  UnaryVecBF16,
+  // Lean elementwise.comp builds (-DLITE: ops 0-10 only). Appended to keep profile ids stable.
+  ElementwiseLiteF32,
+  ElementwiseLiteF16,
+  ElementwiseLiteBF16,
+  // Standalone silu chain: shaders/swiglu.comp built with -DSILU_ONLY (up == 1.0).
+  SiluF16,
+  SiluBF16,
+  // Depthwise 1-D conv (shaders/conv_dw1d.comp), bit-exact to conv.comp on that shape.
+  ConvDw1dF32,
+  ConvDw1dF16,
+  ConvDw1dBF16,
+  // f32-score SDPA composition matmuls on bf16 operands (shaders/matmul_coopmat.comp
+  // A_BF16/B_BF16/A_SCALE and B_BF16/OUT_BF16), bit-identical to cast + f32 matmul + cast.
+  MatmulF32CoopmatQkBF16,
+  MatmulF32CoopmatPvBF16,
+  // Legacy per-row GDN decode (shaders/gated_delta_decode_perrow.comp):
+  // the pre-shared-tile kernel, bit-identical arithmetic, slower on
+  // G13C, faster on G13G. Selected per chip; MLX_OMARCHY_GDN_DECODE_TILE
+  // overrides. Append-only profile id.
+  GatedDeltaDecodeBF16Untiled,
+  GatedDeltaDecodeBF16Pf,
+  // Out-gate prologue multi-weight decode GEMV
+  // (qmm_vec.comp -DQMM_VEC_OUTGATE): x = out * sigmoid(gate) is
+  // computed per x quad inside the kernel with the elementwise
+  // arithmetic and rounding, so the standalone Sigmoid and Multiply
+  // dispatches are deleted. bf16 + subgroup only. Append-only profile
+  // id.
+  QmmVecQ4MultiOutgateBF16,
+  // Attn128 decode SDPA widths: the composition-exact bf16 arm at every
+  // multiple of 32 up to 256 (same shader source, -DSDPA_DIM=N; every f32
+  // op and its order matches the composed path, so each width is
+  // bit-identical to the composition it replaces), and the f16 arm at
+  // head_dim 128 (two dim pairs per lane) with its native-shape two-pass
+  // pair. Append-only profile ids.
+  SdpaDecodeNativeBF16Hd32,
+  SdpaDecodeNativeBF16Hd96,
+  SdpaDecodeNativeBF16Hd128,
+  SdpaDecodeNativeBF16Hd160,
+  SdpaDecodeNativeBF16Hd192,
+  SdpaDecodeNativeBF16Hd224,
+  SdpaDecodeNativeF16Hd128,
+  SdpaDecodeNativeTwoPassP1F16Hd128,
+  SdpaDecodeNativeTwoPassP2F16Hd128,
+  // Attn128: one-workgroup-per-row small-k wide-row value Partition
+  // (shaders/partition_smallk.comp) - radix-selects the kth largest key and
+  // bitonic-sorts the k candidates in one dispatch, tail-slice bit-exact to
+  // the wide-row sort path it replaces for finite rows. Append-only
+  // profile ids.
+  PartitionSmallKF32,
+  PartitionSmallKF16,
+  PartitionSmallKBF16,
+  // VjpKernels fused backward kernels (append-only profile ids):
+  // gated-delta-rule state recall + backward (upstream #4565) and the
+  // SDPA VJP row-dot, P/dS, and GQA reduce passes (upstream #4563).
+  GdnVjpSaveBF16,
+  GdnVjpBF16,
+  SdpaVjpOdoF32,
+  SdpaVjpOdoF16,
+  SdpaVjpOdoBF16,
+  SdpaVjpDsF32,
+  SdpaVjpLseF32,
+  SdpaVjpReduceF32,
+  SdpaVjpReduceF16,
+  SdpaVjpReduceBF16,
+  // Jw16NormApple: Apple-tree RMS norm port (one WG per row, per-thread
+  // CONTIGUOUS N_READS=8 loads held in registers, subgroupSum + 1
+  // second-level shared + subgroupSum, 3 barriers; reduction ORDER differs
+  // from the deployed tree; admissible under the w76 numerics policy).
+  FastRmsNormAppleBF16,
+  // Apple-tree reductions for the fused decode RMSNorm epilogues. Same
+  // 32-lane subgroup + shared partial structure as FastRmsNormAppleBF16.
+  FastNormGatedAppleBF16,
+  FastNormGatedOnlyAppleBF16,
+  FastRopeNormAppleBF16,
+  GdnConvDecodeAppleBF16,
+  // Prefill-axes rasterization / issue-quality twins of the x32 FullN
+  // prefill route (receipts/2026-10-03-prefill-axes): a different
+  // workgroup-to-tile mapping (RasterSwap / RasterG2/G4/G8) or two
+  // column tiles per A-tile load (TwoN), same per-output ascending-k
+  // f32 chain - all digest-identical to the shipped kernels by
+  // construction. Env-selected (MLX_OMARCHY_QMM_RASTER / _TWON /
+  // _PERSIST in primitives.cpp). Append-only profile ids.
+  QmmPrefillCoopmatBF16X32FullNRasterSwap,
+  QmmPrefillCoopmatBF16X32FullNRasterG2,
+  QmmPrefillCoopmatBF16X32FullNRasterG4,
+  QmmPrefillCoopmatBF16X32FullNRasterG8,
+  QmmPrefillCoopmatBF16X32FullNTwoN,
+  // GDN decode, composed-order specializations (the three decode shaders
+  // built with -DGDN_COMPOSED_ORDER=1): dispatched only for flag bit 9
+  // (A_log f32) so the default kernels stay the v0.7.26 binaries.
+  // Append-only profile ids.
+  GatedDeltaDecodeBF16Composed,
+  GatedDeltaDecodeBF16UntiledComposed,
+  GatedDeltaDecodeBF16PfComposed,
+  // QmmPeak twins of the g4 route (receipts/2026-10-04-qmm-roofline):
+  // whole-chunk B dequant behind one fence (Chunk) and a padded shared
+  // B-tile row stride (LdsPad), same per-output ascending-k f32 chain
+  // - digest-identical to the shipped kernels by construction.
+  // Env-selected (MLX_OMARCHY_QMM_CHUNK / _LDSPAD in primitives.cpp;
+  // the padded stride is the landed default, =0 opts out).
+  // Append-only profile ids.
+  QmmPrefillCoopmatBF16X32FullNChunk,
+  QmmPrefillCoopmatBF16X32FullNLdsPad,
+  QmmPrefillCoopmatBF16X32FullNChunkPad,
+  // Multi-token (verify / small-batch, q_len 2..16) grouped Q4 GEMV:
+  // the multi-weight kernel with the token dimension inside the k walk
+  // (per-row bit-identical to the single-token column); append-only
+  // profile ids.
+  QmmVecQ4MultiToken4SubgroupBF16,
+  QmmVecQ4MultiToken16SubgroupBF16,
+  QmmVecQ4MultiToken4BF16,
+  QmmVecQ4MultiToken16BF16,
+  QmmVecQ4MultiToken8SubgroupBF16,
+  QmmVecQ4MultiToken8BF16,
+  // Multi-token causal decode attention (q_len 2..16): per-row
+  // single-query arm over the visible key prefix; append-only id.
+  SdpaDecodeRowsBF16Hd128,
+  // Flash-style bf16 SDPA prefill (shaders/sdpa_prefill_flash.comp):
+  // online softmax, no materialized scores, for q_len where the
+  // composed route's f32 score matrix exceeds the uint32 element or
+  // descriptor byte limits. Append-only profile id.
+  SdpaPrefillFlashBF16Hd128,
+  // f16 matmul with fp16-operand cooperative matrices loaded straight
+  // from the buffers (shaders/matmul_coopmat_direct.comp), one build per
+  // orientation: Nn = row-major lhs and rhs, Nt = n-major rhs, Tn =
+  // column-major lhs, Tt = both. Same stored bits as MatmulRbF16.
+  // Append-only profile ids.
+  MatmulDirectF16Nn,
+  MatmulDirectF16Nt,
+  MatmulDirectF16Tn,
+  MatmulDirectF16Tt,
+  // The same kernel on fp32 operand matrices for f32 matmul.
+  // Append-only profile ids.
+  MatmulDirectF32Nn,
+  MatmulDirectF32Nt,
+  MatmulDirectF32Tn,
+  MatmulDirectF32Tt,
+  MatmulDirectF16NtK4S8,
+  MatmulDirectF16TnWS8,
+  MatmulDirectF32NtK4S8,
+  MatmulDirectF32NnK4S8, // retired (MatmulGap H36, H37): no row, no shader; the id stays (append-only)
+  MatmulDirectF32TnWS8,
+  // bf16 direct builds: only with GL_EXT_bfloat16 at build time and a
+  // driver with bf16 cooperative matrices (cooperative_matrix_bf16_8).
+  MatmulDirectBF16Nn,
+  MatmulDirectBF16Nt,
+  MatmulDirectBF16Tn,
+  MatmulDirectBF16Tt,
+  MatmulDirectBF16TnWS8,
+  MatmulDirectBF16NtK4S8,
+  // Batch-shared bf16 decode GEMV (MLX_OMARCHY_QMV_BATCH, default on, B <= 4).
+  QmmVecQ4WordSubgroupBatch4BF16,
+  // Small-row bf16 decode (MLX_OMARCHY_QMM_ROWS, default on, R <= 8 per
+  // pass). Appended after Batch4 so profile kernel ids stay stable.
+  QmmVecQ4WordSubgroupRows8BF16,
+  // Wider batch-shared bf16 decode GEMV (B <= 8): one dispatch for a short
+  // verify pass of 5 to 8 rows, so the weight stream is read once instead of
+  // once per 4-row block. Each row matches QmmVecQ4WordSubgroupBatch4BF16.
+  QmmVecQ4WordSubgroupBatch8BF16,
+  // Bonsai 1-bit / 2-bit affine decode: enum bindings for the shader
+  // lookup tables in compute.cpp. The dispatch tables reference these
+  // names; the matching fast primitives live in mlx/fast.cpp via the
+  // bonsai-qmv patch (patches/mlx-fast-bonsai-qmv.patch).
+  BonsaiQ1QmvSubgroupF32,
+  BonsaiQ1QmvSubgroupF16,
+  BonsaiQ1QmvSubgroupBF16,
+  BonsaiQ1QmvTreeF32,
+  BonsaiQ1QmvTreeF16,
+  BonsaiQ1QmvTreeBF16,
+  BonsaiQ1DequantF32,
+  BonsaiQ1DequantF16,
+  BonsaiQ1DequantBF16,
+  BonsaiQmvWideSubgroupBF16R2,
+  BonsaiQmvWideSubgroupBF16R3,
+  BonsaiQmvWideSubgroupBF16R4,
+  BonsaiQmvWideSubgroupBF16R5,
+  BonsaiQmvWideSubgroupF16R2,
+  BonsaiQmvWideSubgroupF16R3,
+  BonsaiQmvWideSubgroupF16R4,
+  BonsaiQmvWideSubgroupF16R5,
+  // G14C f16 a @ b.T row (MatmulGap H29, H31).
+  MatmulDirectF16NtK2S8,
+  // Byte-identical copy of the pre-tiled int8_matmul.comp, kept selectable
+  // through MLX_OMARCHY_INT8_NAIVE=1 for A/B bit-compare tests and
+  // benchmarks (test_int8_matmul.cpp). Append-only profile id.
+  Int8MatmulNaiveOp,
+  // Cooperative-matrix f16xf16 -> f32 default (shaders/int8_matmul_coop.comp);
+  // dispatched when the device reports cooperative_matrix_f16_8 and
+  // subgroup size 32, the host falls back to the tiled int32-imad kernel
+  // otherwise. Append-only profile id.
+  Int8MatmulCoopOp,
+  // f32-FMA register-blocked route (shaders/int8_matmul_f32fma.comp):
+  // exact integer-valued f32 group accumulation, host-gated to
+  // k_total % 4 == 0 and 32 <= group <= 1024 (the exact-f32 bound is
+  // 16384 * 1024 = 2^24; see the shader header). Append-only profile id.
+  Int8MatmulF32FmaOp,
+  // f32 cooperative-matrix route (shaders/int8_matmul_f32coop.comp): the
+  // host widens int8 X/W to exact f32 temps, the kernel runs per-group
+  // 8x8x8 f32 MMAs (exact by the same 2^24 integer-sum argument; see the
+  // shader header) and flushes per group. Host-gated to
+  // k % 8 == 0, group % 8 == 0, 32 <= group <= 1024, m >= 32, n >= 32,
+  // non-swiglu. Append-only profile id.
+  Int8MatmulF32CoopOp,
+  // Fused-SwiGLU epilogue for the swiglu two-matmul decomposition:
+  // gate/value f32 totals in, silu(gate)*value with one bf16 rounding
+  // out. Append-only profile id.
+  Int8SwigluEpilogueOp,
+  // Masked build of the recur32 prefill scan (same source, -DMASKED=1): a
+  // per-token validity mask [1, T] in the mask binding (shape[3] offset); a
+  // masked token leaves the state untouched and writes zero. Kept separate
+  // from GatedDeltaPrefillRecur32BF16 because the mask branch in the maskless
+  // loop cost the M1 8-12%. Append-only profile id.
+  GatedDeltaPrefillRecur32MaskedBF16,
+  // Causal flash prefill on the 8x8x8 cooperative matrix, bf16 hd 128, 8
+  // query rows per subgroup (shaders/sdpa_prefill_flash_causal_coopmat.comp,
+  // MatmulGap H35). Append-only profile id.
+  SdpaCausalFlashCoopmatBF16,
+  // Byte-table gather lanes (uint8/int8 tables) riding the word
+  // transport of shaders/gather_take.comp USE_U8: BYTE_AT lane
+  // extraction on reads, atomicOr byte merge into a pre-zeroed output.
+  // Append-only profile id.
+  TakeU8,
+  TakeMultiU8,
+  // Tiled sorted-expert gathered 4-bit/group-64 matmul for MoE prefill
+  // (shaders/gather_qmm_tile.comp): 32 rows x 64 columns per workgroup, the
+  // expert's weight tile dequantized once per run of rows. Appended to keep
+  // profile kernel ids stable. Append-only profile id.
+  GatherQmmTileF16,
+  GatherQmmTileBF16,
+  // EXL3 trellis tile decode (fast::Exl3Decode; shaders/exl3_decode.comp).
+  // The packed trellis stays uint16; only the output dtype varies and the
+  // f16/bf16 variants store integer RNE bit patterns.
+  Exl3DecodeF32,
+  Exl3DecodeF16,
+  Exl3DecodeBF16,
+  // Decode gather_qmm_sub reading the scales, biases and index arrays in
+  // place (no per-call staging copy). Append-only profile id.
+  GatherQmmSubDirectF16,
+  GatherQmmSubDirectBF16,
+  // Default coopmat prefill routes for 4-bit group 32, 8-bit group 64 and
+  // 8-bit group 32 affine weights (QBITS/QGROUP builds of qmm_coopmat.comp).
+  // Append-only profile ids.
+  QmmPrefillCoopmatF16Q4G32,
+  QmmPrefillCoopmatM16F16Q4G32,
+  QmmPrefillCoopmatBF16X32Q4G32,
+  QmmPrefillCoopmatM16BF16X32Q4G32,
+  QmmPrefillCoopmatBF16X32FullNQ4G32,
+  QmmPrefillCoopmatM16BF16X32FullNQ4G32,
+  QmmPrefillCoopmatBF16X32FullNLdsPadQ4G32,
+  QmmPrefillCoopmatF16Q8G64,
+  QmmPrefillCoopmatM16F16Q8G64,
+  QmmPrefillCoopmatBF16X32Q8G64,
+  QmmPrefillCoopmatM16BF16X32Q8G64,
+  QmmPrefillCoopmatBF16X32FullNQ8G64,
+  QmmPrefillCoopmatM16BF16X32FullNQ8G64,
+  QmmPrefillCoopmatBF16X32FullNLdsPadQ8G64,
+  QmmPrefillCoopmatF16Q8G32,
+  QmmPrefillCoopmatM16F16Q8G32,
+  QmmPrefillCoopmatBF16X32Q8G32,
+  QmmPrefillCoopmatM16BF16X32Q8G32,
+  QmmPrefillCoopmatBF16X32FullNQ8G32,
+  QmmPrefillCoopmatM16BF16X32FullNQ8G32,
+  QmmPrefillCoopmatBF16X32FullNLdsPadQ8G32,
+  // Multi-row word decode (m == 1) for 4-bit group 32, 8-bit group 64 and
+  // 8-bit group 32 affine weights. Append-only profile ids.
+  QmmVecWordSubgroupF16Q4G32,
+  QmmVecWordSubgroupBF16Q4G32,
+  QmmVecWordSubgroupF16Q8G64,
+  QmmVecWordSubgroupBF16Q8G64,
+  QmmVecWordSubgroupF16Q8G32,
+  QmmVecWordSubgroupBF16Q8G32,
+  // Multi-output forms of the direct decode kernel (4 and 8 outputs per workgroup).
+  GatherQmmSubDirectR4F16,
+  GatherQmmSubDirectR4BF16,
+  GatherQmmSubDirectR8F16,
+  GatherQmmSubDirectR8BF16,
+  // 3-bit direct decode form (8 outputs per workgroup, f16 only): bit-stream codes, appended so earlier ids do not move.
+  GatherQmmSubDirectR8Q3F16,
+  // Streaming 6-bit affine decode (qmm_vec6.comp): 4 columns by 1 row for one activation row, 1 column by 8 rows for 2 to 32 rows.
+  QmmVec6C4R1F16,
+  QmmVec6C1R8F16,
+  QmmVec6C4R1BF16,
+  QmmVec6C1R8BF16,
+  // mxfp4 subgroup decode (gather_qmm_sub.comp -DFP_MODE): appended so earlier ids do not move.
+  GatherQmmNbSubFpF32,
+  GatherQmmNbSubFpF16,
+  GatherQmmNbSubFpBF16,
+  // Workgroup-per-row suffix reduction (reduce_row.comp), appended so earlier ids do not move.
+  ReduceRowF32,
+  ReduceRowF16,
+  ReduceRowBF16,
+  // Word-per-lane gathered 4-bit group-64 decode (bf16, one 32-lane slot per output element).
+  GatherQmmWordBF16,
+  // Chunked ArgMin/ArgMax and LogSumExp for long rows (argreduce_chunk.comp, argreduce_combine.comp,
+  // logsumexp_chunk.comp, logsumexp_combine.comp), appended so earlier ids do not move.
+  ArgReduceChunkF32,
+  ArgReduceChunkF16,
+  ArgReduceChunkBF16,
+  ArgReduceCombine,
+  LogSumExpChunkF32,
+  LogSumExpChunkF16,
+  LogSumExpChunkBF16,
+  LogSumExpCombineF32,
+  LogSumExpCombineF16,
+  LogSumExpCombineBF16,
+  // Default-order GDN decode with the native GQA key-head index (gated_delta_decode.comp -DGDN_NATIVE_GQA_INDEX), appended so earlier ids do not move.
+  GatedDeltaDecodeBF16Gqa,
+  // 2-bit form of the same kernel (bf16, group 64 or 128): 16 codes per word, fp64-gated (no dense 2-bit qmv to match).
+  GatherQmmWord2BF16,
+  // Untiled prefetch GDN decode, composed order, with the native GQA key-head index (gated_delta_decode_perrow_pf.comp -DGDN_COMPOSED_ORDER -DGDN_NATIVE_GQA_INDEX), appended so earlier ids do not move.
+  GatedDeltaDecodeBF16PfComposedGqa,
+  // Untiled prefetch GDN decode with thirty-two state words in flight per round trip (gated_delta_decode_perrow_pf.comp -DGDN_PF_WIDE), default order, bf16 A_log; Dk a multiple of 32. Appended so earlier ids do not move.
+  GatedDeltaDecodeBF16PfWide,
+  // Split-K bf16 single-query decode SDPA, head width 128: pass 1 per (key-value head, block of 128 keys) for 1, 2, 4 or 8 query heads per key-value head (sdpa_decode_split_p1.comp -DSPLIT_R=N), pass 2 per query head (sdpa_decode_split_p2.comp). Appended so earlier ids do not move.
+  SdpaDecodeSplitP1R1BF16Hd128,
+  SdpaDecodeSplitP1R2BF16Hd128,
+  SdpaDecodeSplitP1R4BF16Hd128,
+  SdpaDecodeSplitP1R8BF16Hd128,
+  SdpaDecodeSplitP1VR1BF16Hd128,
+  SdpaDecodeSplitP1VR2BF16Hd128,
+  SdpaDecodeSplitP1VR4BF16Hd128,
+  SdpaDecodeSplitP1VR8BF16Hd128,
+  SdpaDecodeSplitP2BF16Hd128,
+  SdpaDecodeSplitP1VBk64R4BF16Hd128,
+  SdpaDecodeSplitP2Bk64BF16Hd128,
+  // Head width 256 of the split-K pair (sdpa_decode_split_p1.comp / sdpa_decode_split_p2.comp -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Plain pass 1 only.
+  SdpaDecodeSplitP1R1BF16Hd256,
+  SdpaDecodeSplitP1R2BF16Hd256,
+  SdpaDecodeSplitP1R4BF16Hd256,
+  SdpaDecodeSplitP1R8BF16Hd256,
+  SdpaDecodeSplitP2BF16Hd256,
+  // bf16 builds of the scalar-FMA Q4 prefill pair (shaders/qmm_fma.comp
+  // -DUSE_BF16=1) for drivers without the fp32 cooperative matrix.
+  // Appended to keep profile kernel ids stable.
+  QmmPrefillFmaBF16,
+  QmmPrefillFmaPreciseBF16,
+  // FastRope{,Freqs}{BF16,F16} built with only the half-split branch
+  // (shaders/fast_rope.comp -DROPE_HALF_SPLIT_ONLY): decode RoPE, whose
+  // cost on G16 follows code size. Appended to keep profile kernel ids
+  // stable.
+  FastRopeHalfSplitBF16,
+  FastRopeHalfSplitF16,
+  FastRopeFreqsHalfSplitF16,
+  FastRopeFreqsHalfSplitBF16,
+  // Decode column-geometry variants of the bf16 subgroup Q4 word and multi
+  // kernels (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>); appended to keep profile
+  // kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S16,
+  QmmVecQ4MultiSubgroupBF16R2S16,
+  // Fused GDN decode conv + gated-delta step (gated_delta_decode_perrow_pf.comp -DGDN_CONV_FUSED, plain and
+  // -DGDN_PF_WIDE): default order, equal head counts. Appended to keep profile kernel ids stable.
+  GatedDeltaDecodeConvBF16Pf,
+  GatedDeltaDecodeConvBF16PfWide,
+  // The same with the rms_norm_gated epilogue folded in (-DGDN_NORM_FUSED).
+  GatedDeltaDecodeConvNormBF16Pf,
+  GatedDeltaDecodeConvNormBF16PfWide,
+  // Fused gated-delta decode with bf16 recurrent state: every decode route
+  // keeps its own variant (order, head indexing, prefetch shape) and swaps
+  // to the -DSTATE_BF16 twin of the same route when the recurrent state is
+  // bf16. Selection swaps the twin inside the existing route tree, so the
+  // opt-outs and the native GQA key indexing keep working per route.
+  GatedDeltaDecodeStateBF16,
+  GatedDeltaDecodeGqaStateBF16,
+  GatedDeltaDecodeComposedStateBF16,
+  GatedDeltaDecodeUntiledStateBF16,
+  GatedDeltaDecodeUntiledComposedStateBF16,
+  GatedDeltaDecodePfStateBF16,
+  GatedDeltaDecodePfWideStateBF16,
+  GatedDeltaDecodePfComposedStateBF16,
+  GatedDeltaDecodePfComposedGqaStateBF16,
+  // Value-phase variant of the width-256 split-K pass 1, four query heads per key-value head (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4
+  // -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Appended to keep profile kernel ids stable.
+  SdpaDecodeSplitP1VR4BF16Hd256,
+  // 4-bit group-128 decode GEMV: the word-format fast path built with
+  // QGROUP=128 (constant-shift unpack, scale/bias stride K/128). Appended to
+  // keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16G128,
+  // Causal flash Q_CHUNK=8 twin (shaders/sdpa_prefill_flash_causal_coopmat.comp
+  // -DQ_CHUNK=8): eight 8-wide Q panels stay live and are reused across the
+  // four key-blocks of a tile. Appended to keep profile kernel ids stable.
+  SdpaCausalFlashCoopmatBF16Qchunk8,
+  // Env-gated KV_HEADS=2 twin of the Q_CHUNK=8 causal flash kernel (not a
+  // default): two GQA query heads share each K/V tile. Appended to keep
+  // profile kernel ids stable.
+  SdpaCausalFlashCoopmatBF16Qchunk8Heads2,
+  // Dequant:matmad ratio twins of the landed 32-row G4+LdsPad qmm
+  // prefill route (STEP_K=32, TILE_ROWS=64, SG4, CHEAP_DEQ). Opt-in via
+  // MLX_OMARCHY_QMM_COOPMAT_STEPK, MLX_OMARCHY_QMM_COOPMAT_ROWS,
+  // MLX_OMARCHY_QMM_CHEAP_DEQ. Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmatBF16X32FullNLdsPadCheap,
+  QmmPrefillCoopmatBF16X32FullNLdsPadK32,
+  QmmPrefillCoopmatBF16X32FullNLdsPadK32Cheap,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPad,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPadCheap,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPadK32,
+  QmmPrefillCoopmatM64BF16X32FullNLdsPadK32Cheap,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPad,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadCheap,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap,
+  Count,
+};
+
+struct ComputeBinding {
+  VkBuffer buffer;
+  VkDeviceSize offset;
+  VkDeviceSize range;
+  // Owning VulkanBuffer for batch stamping; null for placeholder slots.
+  // A dispatch binds buffers that no add_temporary recorded (plain input
+  // and output arrays), and an unstamped buffer whose array dies before
+  // the batch drains would be recycled or destroyed while the queued
+  // commands still reference it.
+  const void* owner{nullptr};
+};
+
+struct ComputeParams {
+  uint32_t count{0};
+  uint32_t operation{0};
+  uint32_t lhs_size{0};
+  uint32_t rhs_size{0};
+  uint32_t reduce_size{0};
+  uint32_t output_size{0};
+  uint32_t lhs_offset{0};
+  uint32_t rhs_offset{0};
+  uint32_t output_offset{0};
+  uint32_t aux_size{0};
+  uint32_t aux_offset{0};
+  uint32_t matrix_m{0};
+  uint32_t matrix_n{0};
+  uint32_t matrix_k{0};
+  // Elementwise-style broadcast transport selector: 0 keeps the inline
+  // push-constant arrays; nonzero carries the collapsed rank and reads
+  // [extents | lhs strides | rhs strides] from the axis-metadata
+  // storage buffer (the reduce_general.comp binding-3 convention).
+  // Matmul reuses the field as its inner-matrix K.
+  // Matmul flag bits: 1 = rhs transposed, 2 = bias c used,
+  // 4 = lhs transposed. Batch routing is data-driven: dims is the batch
+  // axis count, shape[] the batch extents, and in_strides/out_strides[]
+  // the per-operand batch strides in elements (0 = broadcast axis). The
+  // shader unravels workgroup z over shape[] and offsets each operand.
+  uint32_t flags{0};
+  float alpha{1.0f};
+  float beta{0.0f};
+  // Broadcast rank for elementwise kernels; batch axis count for Matmul
+  // kernels (0 for rank-2).
+  uint32_t dims{0};
+  uint32_t shape[4]{};
+  uint32_t in_strides[4]{};
+  uint32_t out_strides[4]{};
+  // Matmul inner-matrix gaps in elements: the stored row stride, or the
+  // stored column stride under the transposed flag. Dense operands
+  // carry the natural gap; a cache slice carries its row gap and skips
+  // materialization.
+  uint32_t lhs_gap{0};
+  uint32_t rhs_gap{0};
+  // Per-buffer row stride in elements for non-contiguous operands
+  // (the SdpaPrefillFlashBF16Hd128 kernel reads these for H3-style
+  // transpose views of Q/K/V; zero / default for contiguous inputs).
+  uint32_t q_rowstride{0};
+  uint32_t k_rowstride{0};
+  uint32_t v_rowstride{0};
+  uint32_t o_rowstride{0};
+  uint32_t q_headstride{0};
+  uint32_t k_headstride{0};
+  uint32_t v_headstride{0};
+  uint32_t q_batchstride{0};
+  uint32_t k_batchstride{0};
+  uint32_t v_batchstride{0};
+};
+
+class ComputeRuntime {
+ public:
+  ComputeRuntime(
+      VkDevice device,
+      uint32_t binding_limit,
+      uint32_t required_subgroup_size);
+  ~ComputeRuntime();
+
+  ComputeRuntime(const ComputeRuntime&) = delete;
+  ComputeRuntime& operator=(const ComputeRuntime&) = delete;
+
+  VkPipeline pipeline(ComputeKernel kernel);
+  VkPipeline pipeline(
+      const std::string& cache_key,
+      std::span<const uint32_t> spirv);
+  // Dynamic pipeline with an explicit entry point and specialization
+  // constants: clspv-produced modules name their entry after the kernel
+  // and drive the workgroup size from spec constants 0..2. The cache key
+  // must already distinguish the specialization values.
+  VkPipeline pipeline(
+      const std::string& cache_key,
+      std::span<const uint32_t> spirv,
+      const std::string& entry_name,
+      const VkSpecializationInfo* spec);
+  VkPipelineLayout pipeline_layout() const {
+    return pipeline_layout_;
+  }
+  // Storage-buffer binding slots available to any dispatch on this device:
+  // the backend budget clamped by what the physical device reports. A kernel
+  // needing more must refuse by name; kComputeBindingFloor is the minimum a
+  // spec-conformant device reports, so slots up to the floor always exist.
+  uint32_t binding_limit() const {
+    return binding_limit_;
+  }
+  VkDescriptorSetLayout descriptor_layout() const {
+    return descriptor_layout_;
+  }
+  // Per-binding access of a built pipeline, reflected from the SPIR-V
+  // NonWritable/NonReadable member decorations (GLSL readonly/writeonly).
+  // Bit i of read_mask/write_mask set = binding i may be read/written; an
+  // undecorated or unknown binding is read+write (conservative).
+  struct BindingAccess {
+    uint32_t read_mask{~0u};
+    uint32_t write_mask{~0u};
+  };
+  BindingAccess binding_access(VkPipeline pipeline);
+
+ private:
+  VkPipeline create_pipeline(ComputeKernel kernel);
+  VkPipeline create_pipeline(
+      std::span<const uint32_t> spirv,
+      const std::string& entry_name,
+      const VkSpecializationInfo* spec);
+
+  uint32_t binding_limit_{0};
+  uint32_t required_subgroup_size_{0};
+
+  VkDevice device_;
+  VkDescriptorSetLayout descriptor_layout_{VK_NULL_HANDLE};
+  VkPipelineLayout pipeline_layout_{VK_NULL_HANDLE};
+  std::array<VkPipeline, static_cast<size_t>(ComputeKernel::Count)> pipelines_{};
+  std::unordered_map<std::string, VkPipeline> dynamic_pipelines_;
+  std::unordered_map<VkPipeline, BindingAccess> access_;
+  std::mutex mutex_;
+};
+
+} // namespace mlx::core::omarchy

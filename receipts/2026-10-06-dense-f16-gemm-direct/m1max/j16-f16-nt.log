@@ -1,0 +1,18 @@
+# 2026-10-06T21:48:20Z tag=j16-f16-nt boot=79dec028-5b88-4e09-a0bb-2a2f2eced4c9 load=0.83 1.18 0.82 icd=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json cpu_dma_latency=unavailable
+# cmd: ./gemm-bench --dtype f16 --reps 10 --rounds 5 --side rb=sh/matmul_rb.comp:64:64:1 --side d=sh/matmul_coopmat_direct.comp:64:64:1:-DB_T=1
+probing Apple M1 Max (G13C C0) api=1.4
+sh/matmul_rb.comp
+sh/matmul_coopmat_direct.comp
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[1,1,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[0,0,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[0,0,0,0],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[1,1,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[0,0,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[0,0,0,0],"scope":3}
+{"k":"dev","name":"Apple M1 Max (G13C C0)","subgroupSize":32,"coopmat":true}
+{"k":"problem","dtype":"f16","m":4096,"n":4096,"kdim":4096,"a_t":0,"b_t":1,"samples":4096}
+{"k":"accuracy","side":"rb","exact_rounded":0.99463,"mean_ulp":0.2519,"max_ulp":3.422,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"d","exact_rounded":0.99463,"mean_ulp":0.2519,"max_ulp":3.422,"nonfinite":0,"bits_vs_rb":0}
+{"k":"time","side":"rb","median_us":56341.2,"min_us":56194.5,"max_us":56443.5,"tflops":2.439,"tflops_best":2.446}
+{"k":"time","side":"d","median_us":56559.3,"min_us":55967.4,"max_us":57150.1,"tflops":2.430,"tflops_best":2.456}
+# end 2026-10-06T21:48:35Z rc=0

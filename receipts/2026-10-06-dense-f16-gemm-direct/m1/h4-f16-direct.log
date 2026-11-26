@@ -1,0 +1,33 @@
+# 2026-10-06T21:09:29Z tag=h4-f16-direct boot=abc36fa1-7db1-4088-96ed-4523f5ad087e load=0.00 0.00 0.05 icd=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json
+# cmd: ./gemm-bench --dtype f16 --reps 6 --rounds 5 --side rb=sh/matmul_rb.comp:64:64:0 --side v3=sh/matmul_coopmat64.comp:128:64:0:-DWG_M=4 --side d22=sh/matmul_coopmat_direct.comp:64:64:0 --side d11=sh/matmul_coopmat_direct.comp:32:32:0:-DWG_M=1,-DWG_N=1 --side d42=sh/matmul_coopmat_direct.comp:128:64:0:-DWG_M=4 --side d24s=sh/matmul_coopmat_direct.comp:32:64:0:-DSG_M=2,-DSG_N=4 --side d44s=sh/matmul_coopmat_direct.comp:64:64:0:-DWG_M=4,-DWG_N=2,-DSG_M=2,-DSG_N=4
+probing Apple M1 (G13G B1) api=1.4
+sh/matmul_rb.comp
+sh/matmul_coopmat64.comp
+sh/matmul_coopmat_direct.comp
+sh/matmul_coopmat_direct.comp
+sh/matmul_coopmat_direct.comp
+sh/matmul_coopmat_direct.comp
+sh/matmul_coopmat_direct.comp
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[1,1,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[0,0,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[0,0,0,0],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[1,1,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[0,0,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[0,0,0,0],"scope":3}
+{"k":"dev","name":"Apple M1 (G13G B1)","subgroupSize":32,"coopmat":true}
+{"k":"problem","dtype":"f16","m":4096,"n":4096,"kdim":4096,"a_t":0,"b_t":0,"samples":4096}
+{"k":"accuracy","side":"rb","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"v3","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"d22","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"d11","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"d42","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"d24s","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"d44s","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"time","side":"rb","median_us":229234.7,"min_us":229209.6,"max_us":229337.2,"tflops":0.600,"tflops_best":0.600}
+{"k":"time","side":"v3","median_us":138526.2,"min_us":138499.1,"max_us":138536.2,"tflops":0.992,"tflops_best":0.992}
+{"k":"time","side":"d22","median_us":111084.6,"min_us":111081.8,"max_us":111104.6,"tflops":1.237,"tflops_best":1.237}
+{"k":"time","side":"d11","median_us":112304.3,"min_us":112294.7,"max_us":112320.3,"tflops":1.224,"tflops_best":1.224}
+{"k":"time","side":"d42","median_us":111118.4,"min_us":111102.5,"max_us":111131.0,"tflops":1.237,"tflops_best":1.237}
+{"k":"time","side":"d24s","median_us":134799.4,"min_us":134793.1,"max_us":134813.3,"tflops":1.020,"tflops_best":1.020}
+{"k":"time","side":"d44s","median_us":134690.7,"min_us":134681.4,"max_us":134705.7,"tflops":1.020,"tflops_best":1.020}
+# end 2026-10-06T21:10:03Z rc=0

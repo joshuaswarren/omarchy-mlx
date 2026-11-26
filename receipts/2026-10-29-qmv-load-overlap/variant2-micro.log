@@ -1,0 +1,44 @@
+qmvmicro (16-inch M1 Max) 20261029T1335Z load 1.30 boot 2cf8e649-e17b-4b16-8d76-a0bcfc921a20
+-- round 1 arm A
+MICRO A mlx_omarchy 0.32.4.dev202610281952+5e40ecf9 {'libmlx.so': '7ca9b27ebb32c378'}
+MICRO A up/gate K2048 N6144: median 69.8 us/call (min 59.7) fp 9050f8e4c4f351aa
+MICRO A down K6144 N2048: median 91.1 us/call (min 76.9) fp 9a6c45972a268415
+MICRO A proj K2048 N2048: median 48.2 us/call (min 42.9) fp 45ed1907c81cb9bd
+MICRO A kv K2048 N512: median 84.5 us/call (min 77.2) fp e008527fbb6fabde
+MICRO A head K2048 N248320: median 1291.7 us/call (min 1283.8) fp 7cdcc47b750e5d33
+-- round 1 arm B
+MICRO B mlx_omarchy 0.32.4.dev202610291333+75e145a5 {'libmlx.so': '38b6d87d34ca71f9'}
+MICRO B up/gate K2048 N6144: median 72.3 us/call (min 71.7) fp 9050f8e4c4f351aa
+MICRO B down K6144 N2048: median 106.7 us/call (min 93.6) fp 9a6c45972a268415
+MICRO B proj K2048 N2048: median 73.0 us/call (min 70.8) fp 45ed1907c81cb9bd
+MICRO B kv K2048 N512: median 100.7 us/call (min 99.4) fp e008527fbb6fabde
+MICRO B head K2048 N248320: median 1465.1 us/call (min 1454.9) fp 7cdcc47b750e5d33
+-- round 2 arm A
+MICRO A mlx_omarchy 0.32.4.dev202610281952+5e40ecf9 {'libmlx.so': '7ca9b27ebb32c378'}
+MICRO A up/gate K2048 N6144: median 72.0 us/call (min 62.4) fp 9050f8e4c4f351aa
+MICRO A down K6144 N2048: median 90.0 us/call (min 77.1) fp 9a6c45972a268415
+MICRO A proj K2048 N2048: median 51.0 us/call (min 44.4) fp 45ed1907c81cb9bd
+MICRO A kv K2048 N512: median 90.9 us/call (min 78.7) fp e008527fbb6fabde
+MICRO A head K2048 N248320: median 1290.2 us/call (min 1279.5) fp 7cdcc47b750e5d33
+-- round 2 arm B
+MICRO B mlx_omarchy 0.32.4.dev202610291333+75e145a5 {'libmlx.so': '38b6d87d34ca71f9'}
+MICRO B up/gate K2048 N6144: median 72.2 us/call (min 70.9) fp 9050f8e4c4f351aa
+MICRO B down K6144 N2048: median 96.0 us/call (min 94.3) fp 9a6c45972a268415
+MICRO B proj K2048 N2048: median 40.8 us/call (min 39.5) fp 45ed1907c81cb9bd
+MICRO B kv K2048 N512: median 68.3 us/call (min 65.1) fp e008527fbb6fabde
+MICRO B head K2048 N248320: median 1463.8 us/call (min 1460.3) fp 7cdcc47b750e5d33
+-- round 3 arm A
+MICRO A mlx_omarchy 0.32.4.dev202610281952+5e40ecf9 {'libmlx.so': '7ca9b27ebb32c378'}
+MICRO A up/gate K2048 N6144: median 61.7 us/call (min 60.1) fp 9050f8e4c4f351aa
+MICRO A down K6144 N2048: median 78.6 us/call (min 77.1) fp 9a6c45972a268415
+MICRO A proj K2048 N2048: median 43.7 us/call (min 39.2) fp 45ed1907c81cb9bd
+MICRO A kv K2048 N512: median 70.8 us/call (min 63.9) fp e008527fbb6fabde
+MICRO A head K2048 N248320: median 1306.9 us/call (min 1305.0) fp 7cdcc47b750e5d33
+-- round 3 arm B
+MICRO B mlx_omarchy 0.32.4.dev202610291333+75e145a5 {'libmlx.so': '38b6d87d34ca71f9'}
+MICRO B up/gate K2048 N6144: median 74.2 us/call (min 73.0) fp 9050f8e4c4f351aa
+MICRO B down K6144 N2048: median 107.5 us/call (min 95.8) fp 9a6c45972a268415
+MICRO B proj K2048 N2048: median 49.3 us/call (min 48.7) fp 45ed1907c81cb9bd
+MICRO B kv K2048 N512: median 86.0 us/call (min 76.2) fp e008527fbb6fabde
+MICRO B head K2048 N248320: median 1461.2 us/call (min 1456.9) fp 7cdcc47b750e5d33
+done 13:35:30

@@ -1,0 +1,27 @@
+--- a/mlx/fast.cpp
++++ b/mlx/fast.cpp
+@@ -1053,7 +1053,13 @@
+   auto q = astype(queries, out_dtype, s);
+   auto k = astype(keys, out_dtype, s);
+   auto v = astype(values, out_dtype, s);
+-  auto g = astype(gates, out_dtype, s);
++  // Prefill keeps compute_g's float32 gates in their own dtype: the ops
++  // reference never rounds the decay, and one bf16 rounding per token
++  // flips near-tie greedy argmax. Decode (T == 1) keeps the historical
++  // bf16 cast, which the fused decode kernel widens exactly.
++  auto g = (queries.shape(1) > 1 && gates.dtype() == float32)
++      ? gates
++      : astype(gates, out_dtype, s);
+   auto beta = astype(beta_, out_dtype, s);
+ 
+   int B = q.shape(0);
+@@ -1150,7 +1156,8 @@
+         /* dtypes */ {out_dtype, float32},
+         /* primitive */
+         std::make_shared<GatedDeltaUpdate>(s, fallback),
+-        /* inputs */ {q, k, v, g, beta, h0});
++        /* inputs */ has_mask ? std::vector<array>{q, k, v, g, beta, h0, mask}
++                              : std::vector<array>{q, k, v, g, beta, h0});
+ 
+     return result;
+   }

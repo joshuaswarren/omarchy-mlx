@@ -1,0 +1,6 @@
+sentence-1: 7/7 = 100.0%  hyp: "I don't know."
+sentence-2: 11/11 = 100.0%  hyp: 'Thank you.'
+sentence-3: 10/10 = 100.0%  hyp: 'Thank you.'
+sentence-4: 9/10 = 90.0%  hyp: 'you'
+sentence-5: 9/9 = 100.0%  hyp: 'Thank you.'
+overall: 46/47 = 97.9%

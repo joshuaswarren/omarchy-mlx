@@ -1,0 +1,147 @@
+start 2026-10-10T21:32:17Z wheel 0.32.4.dev202610100224+4797d4f7 load 0.41 kernel 7.1.12-2-12.6-sep-ARCH
+icd lib sha256 3546bcafe8ed3995
+--- T=16 arm on load 0.24
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 1 libs {"libmlx.so": "618081da593418fe"} load1 0.244140625
+PROMPT tokens 16 distinct token ids 15 sha 59ec9cc0d5b3dda6
+REP 0 tok_s 10.47
+REP 1 tok_s 10.55
+REP 2 tok_s 10.51
+REP 3 tok_s 10.56
+REP 4 tok_s 10.55
+TOP5 [387, 537, 7146, 1824, 975] argmax_logit 26.875 nonfinite 0
+--- T=16 arm off load 0.39
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 0 libs {"libmlx.so": "618081da593418fe"} load1 0.39453125
+PROMPT tokens 16 distinct token ids 15 sha 59ec9cc0d5b3dda6
+REP 0 tok_s 19.26
+REP 1 tok_s 19.13
+REP 2 tok_s 19.25
+REP 3 tok_s 19.21
+REP 4 tok_s 19.36
+TOP5 [387, 7146, 537, 1824, 975] argmax_logit 26.875 nonfinite 0
+--- T=16 arm on load 0.32
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 1 libs {"libmlx.so": "618081da593418fe"} load1 0.3193359375
+PROMPT tokens 16 distinct token ids 15 sha 59ec9cc0d5b3dda6
+REP 0 tok_s 10.47
+REP 1 tok_s 10.56
+REP 2 tok_s 10.57
+REP 3 tok_s 10.49
+REP 4 tok_s 10.48
+TOP5 [387, 537, 7146, 1824, 975] argmax_logit 26.875 nonfinite 0
+--- T=16 arm off load 0.39
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 0 libs {"libmlx.so": "618081da593418fe"} load1 0.39453125
+PROMPT tokens 16 distinct token ids 15 sha 59ec9cc0d5b3dda6
+REP 0 tok_s 19.62
+REP 1 tok_s 19.32
+REP 2 tok_s 19.19
+REP 3 tok_s 18.82
+REP 4 tok_s 19.08
+TOP5 [387, 7146, 537, 1824, 975] argmax_logit 26.875 nonfinite 0
+--- T=32 arm on load 0.31
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 1 libs {"libmlx.so": "618081da593418fe"} load1 0.3125
+PROMPT tokens 32 distinct token ids 31 sha 9c954c744e456a88
+REP 0 tok_s 17.61
+REP 1 tok_s 17.48
+REP 2 tok_s 17.4
+REP 3 tok_s 17.4
+REP 4 tok_s 17.46
+TOP5 [5871, 1852, 19206, 1172, 11773] argmax_logit 24.625 nonfinite 0
+--- T=32 arm off load 0.30
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 0 libs {"libmlx.so": "618081da593418fe"} load1 0.29638671875
+PROMPT tokens 32 distinct token ids 31 sha 9c954c744e456a88
+REP 0 tok_s 21.75
+REP 1 tok_s 21.61
+REP 2 tok_s 21.39
+REP 3 tok_s 21.53
+REP 4 tok_s 21.71
+TOP5 [5871, 1852, 1172, 19206, 11773] argmax_logit 24.5 nonfinite 0
+--- T=32 arm on load 0.47
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 1 libs {"libmlx.so": "618081da593418fe"} load1 0.46728515625
+PROMPT tokens 32 distinct token ids 31 sha 9c954c744e456a88
+REP 0 tok_s 17.54
+REP 1 tok_s 17.41
+REP 2 tok_s 17.45
+REP 3 tok_s 17.2
+REP 4 tok_s 17.21
+TOP5 [5871, 1852, 19206, 1172, 11773] argmax_logit 24.625 nonfinite 0
+--- T=32 arm off load 0.31
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 0 libs {"libmlx.so": "618081da593418fe"} load1 0.314453125
+PROMPT tokens 32 distinct token ids 31 sha 9c954c744e456a88
+REP 0 tok_s 21.72
+REP 1 tok_s 21.58
+REP 2 tok_s 21.61
+REP 3 tok_s 21.47
+REP 4 tok_s 21.45
+TOP5 [5871, 1852, 1172, 19206, 11773] argmax_logit 24.5 nonfinite 0
+--- T=64 arm on load 0.33
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 1 libs {"libmlx.so": "618081da593418fe"} load1 0.3271484375
+PROMPT tokens 64 distinct token ids 57 sha 92a84b4acb2f3b4e
+REP 0 tok_s 30.94
+REP 1 tok_s 31.1
+REP 2 tok_s 31.09
+REP 3 tok_s 31.02
+REP 4 tok_s 31.14
+TOP5 [11, 11127, 323, 1467, 1946] argmax_logit 26.375 nonfinite 0
+--- T=64 arm off load 0.25
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 0 libs {"libmlx.so": "618081da593418fe"} load1 0.2509765625
+PROMPT tokens 64 distinct token ids 57 sha 92a84b4acb2f3b4e
+REP 0 tok_s 22.92
+REP 1 tok_s 22.85
+REP 2 tok_s 22.64
+REP 3 tok_s 22.79
+REP 4 tok_s 22.64
+TOP5 [11, 11127, 323, 1467, 279] argmax_logit 26.125 nonfinite 0
+--- T=64 arm on load 0.13
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 1 libs {"libmlx.so": "618081da593418fe"} load1 0.13330078125
+PROMPT tokens 64 distinct token ids 57 sha 92a84b4acb2f3b4e
+REP 0 tok_s 31.03
+REP 1 tok_s 31.14
+REP 2 tok_s 30.9
+REP 3 tok_s 31.07
+REP 4 tok_s 31.08
+TOP5 [11, 11127, 323, 1467, 1946] argmax_logit 26.375 nonfinite 0
+--- T=64 arm off load 0.12
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 0 libs {"libmlx.so": "618081da593418fe"} load1 0.1240234375
+PROMPT tokens 64 distinct token ids 57 sha 92a84b4acb2f3b4e
+REP 0 tok_s 22.88
+REP 1 tok_s 22.89
+REP 2 tok_s 22.77
+REP 3 tok_s 22.89
+REP 4 tok_s 23.21
+TOP5 [11, 11127, 323, 1467, 279] argmax_logit 26.125 nonfinite 0
+--- T=128 arm on load 0.30
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 1 libs {"libmlx.so": "618081da593418fe"} load1 0.3037109375
+PROMPT tokens 128 distinct token ids 99 sha 45fc10d14911fc73
+REP 0 tok_s 48.61
+REP 1 tok_s 48.54
+REP 2 tok_s 48.87
+REP 3 tok_s 48.56
+REP 4 tok_s 48.68
+TOP5 [4379, 1584, 3797, 1196, 16653] argmax_logit 23.5 nonfinite 0
+--- T=128 arm off load 0.24
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 0 libs {"libmlx.so": "618081da593418fe"} load1 0.23779296875
+PROMPT tokens 128 distinct token ids 99 sha 45fc10d14911fc73
+REP 0 tok_s 23.64
+REP 1 tok_s 23.65
+REP 2 tok_s 23.66
+REP 3 tok_s 23.63
+REP 4 tok_s 23.61
+TOP5 [4379, 3797, 1584, 1196, 16653] argmax_logit 23.375 nonfinite 0
+--- T=128 arm on load 0.16
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 1 libs {"libmlx.so": "618081da593418fe"} load1 0.15673828125
+PROMPT tokens 128 distinct token ids 99 sha 45fc10d14911fc73
+REP 0 tok_s 48.94
+REP 1 tok_s 48.79
+REP 2 tok_s 48.51
+REP 3 tok_s 48.49
+REP 4 tok_s 48.82
+TOP5 [4379, 1584, 3797, 1196, 16653] argmax_logit 23.5 nonfinite 0
+--- T=128 arm off load 1.15
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 0 libs {"libmlx.so": "618081da593418fe"} load1 1.14599609375
+PROMPT tokens 128 distinct token ids 99 sha 45fc10d14911fc73
+REP 0 tok_s 23.61
+REP 1 tok_s 23.62
+REP 2 tok_s 23.52
+REP 3 tok_s 23.64
+REP 4 tok_s 23.61
+TOP5 [4379, 3797, 1584, 1196, 16653] argmax_logit 23.375 nonfinite 0
+end 2026-10-10T21:46:54Z

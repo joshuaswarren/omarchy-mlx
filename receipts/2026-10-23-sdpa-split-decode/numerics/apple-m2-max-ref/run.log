@@ -1,0 +1,15 @@
+SNUM start 2026-10-23T14:41:34Z mode short boot=1ccc1761 kernel=7.1.12-2-20261013.18-sep-ARCH load1=1.87 settle=20
+SNUM tree libmlx 8533393455ca0f8c tfref-tail 2b30fdc3b67610cd tfcmp 9a38455f19f9eb86 driver vulkan-f144c7949b
+SNUM text 3972dc9744f6499f segments --nseg 4 --maxtok 160
+SNUM arm ref rc=0 TFREF done device gpu dtype float32 mlx 0.32.4.dev202610231240+6943e37 files 4
+SNUM arm base rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610231240+6943e37 files 4
+SNUM arm split rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610231240+6943e37 files 4
+TFCMP segments [0, 1, 2, 3] steps per segment {0: 159, 1: 159, 2: 159, 3: 159} total 636
+TFCMP reference mean NLL 1.56809
+arm | top1 agree | flips | mean NLL | NLL vs ref % | mean|dlp| next | mean|dlp| ref top20 | max flip ref gap
+base | 631/636 = 99.21% | 5 | 1.57184 | +0.2396 | 0.03823 | 0.10293 | 0.2052
+  base flip ref top1-top2 gaps: [0.0018, 0.0354, 0.0656, 0.1181, 0.2052]
+split | 629/636 = 98.90% | 7 | 1.57197 | +0.2474 | 0.03607 | 0.10422 | 0.5235
+  split flip ref top1-top2 gaps: [0.0354, 0.1416, 0.1773, 0.188, 0.2052, 0.4188, 0.5235]
+TFCMP base vs split: top1 equal 628/636, mean|dlp| next 0.04572, max 1.12477, bit-equal steps 79/636
+SNUM end 2026-10-23T14:42:42Z

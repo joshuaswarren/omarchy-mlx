@@ -1,0 +1,247 @@
+{
+  "artifactFormat": "anec",
+  "dispatchPlan": [
+    0,
+    1
+  ],
+  "intermediates": [
+    "sum"
+  ],
+  "logicalResults": [
+    {
+      "conversion": "identity",
+      "dtype": "float16",
+      "name": "y",
+      "physical": {
+        "elementCount": 64,
+        "elementOffset": 0,
+        "tensor": "y"
+      },
+      "shape": [
+        1,
+        64,
+        1,
+        1
+      ]
+    }
+  ],
+  "physicalOutputs": [
+    {
+      "dtype": "float16",
+      "logicalBytes": 128,
+      "shape": [
+        1,
+        64,
+        1,
+        1
+      ],
+      "tensor": "y"
+    }
+  ],
+  "programs": [
+    {
+      "bytes": 20992,
+      "constantBytes": 16384,
+      "constantInputs": {
+      },
+      "constantOffset": 512,
+      "encoder": "h13-oracle-parity",
+      "file": "program-0.anec",
+      "inputs": [
+        {
+          "allocationBytes": 16384,
+          "dtype": "float16",
+          "index": 5,
+          "logicalBytes": 128,
+          "name": "a",
+          "nchw": [
+            1,
+            64,
+            1,
+            1,
+            64,
+            64
+          ],
+          "shape": [
+            1,
+            64,
+            1,
+            1
+          ]
+        },
+        {
+          "allocationBytes": 16384,
+          "dtype": "float16",
+          "index": 6,
+          "logicalBytes": 128,
+          "name": "b",
+          "nchw": [
+            1,
+            64,
+            1,
+            1,
+            64,
+            64
+          ],
+          "shape": [
+            1,
+            64,
+            1,
+            1
+          ]
+        }
+      ],
+      "operation": "add",
+      "outputs": [
+        {
+          "allocationBytes": 16384,
+          "dtype": "float16",
+          "index": 4,
+          "logicalBytes": 128,
+          "name": "sum",
+          "nchw": [
+            1,
+            64,
+            1,
+            1,
+            64,
+            64
+          ],
+          "role": "intermediate",
+          "shape": [
+            1,
+            64,
+            1,
+            1
+          ]
+        }
+      ],
+      "scratchBytes": 0,
+      "taskDescriptors": 1
+    },
+    {
+      "bytes": 20992,
+      "constantBytes": 16384,
+      "constantInputs": {
+      },
+      "constantOffset": 512,
+      "encoder": "h13-oracle-parity",
+      "file": "program-1.anec",
+      "inputs": [
+        {
+          "allocationBytes": 16384,
+          "dtype": "float16",
+          "index": 5,
+          "logicalBytes": 128,
+          "name": "sum",
+          "nchw": [
+            1,
+            64,
+            1,
+            1,
+            64,
+            64
+          ],
+          "role": "intermediate",
+          "shape": [
+            1,
+            64,
+            1,
+            1
+          ]
+        },
+        {
+          "allocationBytes": 16384,
+          "dtype": "float16",
+          "index": 6,
+          "logicalBytes": 128,
+          "name": "b",
+          "nchw": [
+            1,
+            64,
+            1,
+            1,
+            64,
+            64
+          ],
+          "shape": [
+            1,
+            64,
+            1,
+            1
+          ]
+        }
+      ],
+      "operation": "mul",
+      "outputs": [
+        {
+          "allocationBytes": 16384,
+          "dtype": "float16",
+          "index": 4,
+          "logicalBytes": 128,
+          "name": "y",
+          "nchw": [
+            1,
+            64,
+            1,
+            1,
+            64,
+            64
+          ],
+          "shape": [
+            1,
+            64,
+            1,
+            1
+          ]
+        }
+      ],
+      "scratchBytes": 0,
+      "taskDescriptors": 1
+    }
+  ],
+  "schema": "mil-hwxc.h13-anec-package.v2",
+  "target": "H13",
+  "tensors": {
+    "a": {
+      "logicalBytes": 128,
+      "role": "input",
+      "shape": [
+        1,
+        64,
+        1,
+        1
+      ]
+    },
+    "b": {
+      "logicalBytes": 128,
+      "role": "input",
+      "shape": [
+        1,
+        64,
+        1,
+        1
+      ]
+    },
+    "sum": {
+      "logicalBytes": 128,
+      "role": "intermediate",
+      "shape": [
+        1,
+        64,
+        1,
+        1
+      ]
+    },
+    "y": {
+      "logicalBytes": 128,
+      "role": "output",
+      "shape": [
+        1,
+        64,
+        1,
+        1
+      ]
+    }
+  }
+}

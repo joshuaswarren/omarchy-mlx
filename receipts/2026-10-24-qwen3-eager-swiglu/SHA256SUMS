@@ -1,0 +1,14 @@
+6b32274ff9353c07cb970501eaf50158c7bf27b913e1966d6276f7f612ad7ccd  ./README.md
+a9b5c5bbdd1dbd7c73134aa90ee58d8bc0e0cda0d16cbbfc8fef5ae1fd6969cc  ./prereg.txt
+ede4550a46c603e02a4bcd1dd8aa7a09508430648223e17a5901446851e72379  ./run-logs/bits-apple-m1-max.log
+b3ba60327f0a924f8bbbc853c0eaaa28a35346eacd174149729436946a7ad38b  ./run-logs/bits-apple-m2-max.log
+41893a8496cfed5b3c1cc242fcc5ce898443c3eceb728afaf5e7d200a494372d  ./run-logs/decode-apple-m1-max-477-sample.out
+19fcf108c5e6cfb5bc092c9b7d82201e7a260aefed57596605c24acf90bdd78e  ./run-logs/decode-apple-m1-max-477.log
+16427ed80f5901004ac56075cdcb3eae1fd008de94325980f4b508e261eca6fc  ./run-logs/decode-apple-m2-max-477-sample.out
+fcbdead29f8858f83f498ed86c351a22551e80e417c13bbf952c9e4c361cf4e1  ./run-logs/decode-apple-m2-max-477.log
+dc14c0da561675664d923ae3fc6a65b9d177082d6b5a2beb92f9105cbdedaad2  ./tables/bits-apple-m1-max.tsv
+dc14c0da561675664d923ae3fc6a65b9d177082d6b5a2beb92f9105cbdedaad2  ./tables/bits-apple-m2-max.tsv
+7e9e855769d462a04c71b2d17adf6586e2f38711a5dd688f2fcfffd44457c322  ./tables/decode-apple-m1-max-477.tsv
+b48fbfdf1e19ab7a896bbbddb747d2bf8deb5ab909aac0c0d7816bba2b8a235f  ./tables/decode-apple-m2-max-477.tsv
+4fb7c252de66ce679a4ad796631ba571e60d569153d2da6986e0d4a67578a8a1  ./tables/dispatch-apple-m1-max.tsv
+4fb7c252de66ce679a4ad796631ba571e60d569153d2da6986e0d4a67578a8a1  ./tables/dispatch-apple-m2-max.tsv

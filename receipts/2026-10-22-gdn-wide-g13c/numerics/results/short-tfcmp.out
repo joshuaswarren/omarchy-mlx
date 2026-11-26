@@ -1,0 +1,12 @@
+TFCMP segments [0, 1, 2, 3] steps per segment {0: 159, 1: 159, 2: 159, 3: 159} total 636
+TFCMP reference mean NLL 1.81889
+arm | top1 agree | flips | mean NLL | NLL vs ref % | mean|dlp| next | mean|dlp| ref top20 | max flip ref gap
+tile1 | 624/636 = 98.11% | 12 | 1.81984 | +0.0525 | 0.02945 | 0.06585 | 0.1150
+  tile1 flip ref top1-top2 gaps: [0.0, 0.0043, 0.0214, 0.0292, 0.0329, 0.0362, 0.0463, 0.0474, 0.0623, 0.0668, 0.0876, 0.115]
+wide | 625/636 = 98.27% | 11 | 1.81897 | +0.0042 | 0.02622 | 0.06388 | 0.1734
+  wide flip ref top1-top2 gaps: [0.0, 0.0214, 0.0362, 0.0438, 0.0474, 0.0657, 0.0668, 0.073, 0.0876, 0.1146, 0.1734]
+plain | 625/636 = 98.27% | 11 | 1.81897 | +0.0042 | 0.02622 | 0.06388 | 0.1734
+  plain flip ref top1-top2 gaps: [0.0, 0.0214, 0.0362, 0.0438, 0.0474, 0.0657, 0.0668, 0.073, 0.0876, 0.1146, 0.1734]
+TFCMP tile1 vs wide: top1 equal 625/636, mean|dlp| next 0.03160, max 0.26236, bit-equal steps 23/636
+TFCMP tile1 vs plain: top1 equal 625/636, mean|dlp| next 0.03160, max 0.26236, bit-equal steps 23/636
+TFCMP wide vs plain: top1 equal 636/636, mean|dlp| next 0.00000, max 0.00000, bit-equal steps 636/636

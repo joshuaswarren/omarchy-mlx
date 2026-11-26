@@ -1,0 +1,11 @@
+round	arm	decode_tok_s	prefill_tok_s	ttft_ms	tokens_sha
+1	base	65.80	758.9	584.1	8e68ea1ec2d62fcc
+1	eager	67.60	773.4	573.2	8e68ea1ec2d62fcc
+2	base	66.50	770.7	575.2	8e68ea1ec2d62fcc
+2	eager	67.70	775.2	571.9	8e68ea1ec2d62fcc
+3	base	66.50	769.7	576.0	8e68ea1ec2d62fcc
+3	eager	67.40	776.0	571.3	8e68ea1ec2d62fcc
+4	base	66.60	770.9	575.0	8e68ea1ec2d62fcc
+4	eager	67.50	774.1	572.7	8e68ea1ec2d62fcc
+5	base	66.30	769.7	575.9	8e68ea1ec2d62fcc
+5	eager	67.60	772.4	574.0	8e68ea1ec2d62fcc

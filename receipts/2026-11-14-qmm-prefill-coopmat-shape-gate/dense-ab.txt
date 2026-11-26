@@ -1,0 +1,14 @@
+# dense matmul A/B (patched build coopmat/qmm-prefill-shape-gate @ 32cc191b), J616s M4 Pro/G16S, mesa #299 b70f6dc overlay
+# best-of-8 ms + TFLOP/s, coopmat OFF vs ON (ASAHI_AGX3B_COOPERATIVE_MATRIX 0 vs 1)
+coopmat=OFF n=1024 dt=f32 best=5.634 ms 0.381 TFLOP/s dev=gpu
+coopmat=OFF n=2048 dt=f32 best=43.870 ms 0.392 TFLOP/s dev=gpu
+coopmat=OFF n=4096 dt=f32 best=361.388 ms 0.380 TFLOP/s dev=gpu
+coopmat=OFF n=1024 dt=f16 best=1.173 ms 1.831 TFLOP/s dev=gpu
+coopmat=OFF n=2048 dt=f16 best=8.538 ms 2.012 TFLOP/s dev=gpu
+coopmat=OFF n=4096 dt=f16 best=69.155 ms 1.987 TFLOP/s dev=gpu
+coopmat=ON n=1024 dt=f32 best=0.469 ms 4.576 TFLOP/s dev=gpu
+coopmat=ON n=2048 dt=f32 best=2.771 ms 6.199 TFLOP/s dev=gpu
+coopmat=ON n=4096 dt=f32 best=20.776 ms 6.615 TFLOP/s dev=gpu
+coopmat=ON n=1024 dt=f16 best=0.435 ms 4.938 TFLOP/s dev=gpu
+coopmat=ON n=2048 dt=f16 best=2.593 ms 6.625 TFLOP/s dev=gpu
+coopmat=ON n=4096 dt=f16 best=19.459 ms 7.063 TFLOP/s dev=gpu

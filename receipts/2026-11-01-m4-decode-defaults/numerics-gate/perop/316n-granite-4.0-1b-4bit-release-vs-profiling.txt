@@ -1,0 +1,3 @@
+316n-granite-4.0-1b-4bit-main.npz vs 316n-granite-4.0-1b-4bit-dmain.npz: 324/324 outputs bit-identical
+316n-granite-4.0-1b-4bit-p1n.npz vs 316n-granite-4.0-1b-4bit-dp1n.npz: 324/324 outputs bit-identical
+release and profiling outputs identical

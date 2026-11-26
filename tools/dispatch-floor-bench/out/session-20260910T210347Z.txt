@@ -1,0 +1,3 @@
+host=m1-test-host-linux commit=b6d662a stamp=20260910T210347Z
+VK_DRIVER_FILES=<default> HK_PERFTEST=<unset>
+	deviceName        = Apple M1 (G13G B1)

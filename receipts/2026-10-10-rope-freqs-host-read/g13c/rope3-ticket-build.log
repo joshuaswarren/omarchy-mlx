@@ -1,0 +1,14 @@
+start 14:15:52 mode build sha e34d1da94230c85a6a0207476877f1460793e204 load 0.20
+flag marker count in prepared primitives.cpp: 2
+[1236/1242] Building CXX object CMakeFiles/mlx.dir/mlx/backend/gpu/slicing.cpp.o
+[1237/1242] Building CXX object CMakeFiles/mlx.dir/mlx/backend/omarchy/custom_kernel.cpp.o
+[1238/1242] Building CXX object CMakeFiles/mlx.dir/mlx/backend/omarchy/primitives.cpp.o
+[1239/1242] Linking CXX static library libmlx.a
+[1240/1242] Building CXX object tests/omarchy/CMakeFiles/omarchy_fast_ops_tests.dir/test_fast_ops.cpp.o
+[1241/1242] Linking CXX executable tests/omarchy/omarchy_fast_ops_tests
+TEST BINARY 5c4ae47c1c9d047c
+new doctest rc=0
+[doctest] test cases: 1 | 1 passed | 0 failed | 47 skipped
+[doctest] assertions: 3 | 3 passed | 0 failed |
+[doctest] Status: SUCCESS!
+end 14:16:48

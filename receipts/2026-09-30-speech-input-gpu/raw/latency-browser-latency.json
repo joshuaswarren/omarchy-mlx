@@ -1,0 +1,555 @@
+{
+ "summary": {
+  "n": 30,
+  "missing": 0,
+  "p50_ms": 861.8,
+  "p95_ms": 1397.8,
+  "max_ms": 1410.1
+ },
+ "turns": [
+  {
+   "i": 0,
+   "warmup": true,
+   "stop_to_transcript_ms": 888.3,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 5313.5999999996275,
+    "done": 6201.9000000003725
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 1,
+   "warmup": true,
+   "stop_to_transcript_ms": 1174.4,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 12032.900000000373,
+    "done": 13207.300000000745
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 2,
+   "warmup": false,
+   "stop_to_transcript_ms": 880.9,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 18891.900000000373,
+    "done": 19772.800000000745
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 3,
+   "warmup": false,
+   "stop_to_transcript_ms": 660.8,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 25437.5,
+    "done": 26098.300000000745
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 4,
+   "warmup": false,
+   "stop_to_transcript_ms": 1016.6,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 31803,
+    "done": 32819.59999999963
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 5,
+   "warmup": false,
+   "stop_to_transcript_ms": 1255.1,
+   "words": 19,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 38544.90000000037,
+    "done": 39800
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 6,
+   "warmup": false,
+   "stop_to_transcript_ms": 577.5,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 45658.09999999963,
+    "done": 46235.59999999963
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 7,
+   "warmup": false,
+   "stop_to_transcript_ms": 1036.5,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 51810.800000000745,
+    "done": 52847.300000000745
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 8,
+   "warmup": false,
+   "stop_to_transcript_ms": 974.8,
+   "words": 12,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 58544.90000000037,
+    "done": 59519.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 9,
+   "warmup": false,
+   "stop_to_transcript_ms": 1136.2,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 65303.90000000037,
+    "done": 66440.09999999963
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 10,
+   "warmup": false,
+   "stop_to_transcript_ms": 1397.8,
+   "words": 12,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 72048.90000000037,
+    "done": 73446.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 11,
+   "warmup": false,
+   "stop_to_transcript_ms": 789.5,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 79031.20000000112,
+    "done": 79820.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 12,
+   "warmup": false,
+   "stop_to_transcript_ms": 961,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 85411,
+    "done": 86372
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 13,
+   "warmup": false,
+   "stop_to_transcript_ms": 861.8,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 92060,
+    "done": 92921.80000000075
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 14,
+   "warmup": false,
+   "stop_to_transcript_ms": 1410.1,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 98542.30000000075,
+    "done": 99952.40000000037
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 15,
+   "warmup": false,
+   "stop_to_transcript_ms": 1341.7,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 105565.59999999963,
+    "done": 106907.30000000075
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 16,
+   "warmup": false,
+   "stop_to_transcript_ms": 943.7,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 112658,
+    "done": 113601.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 17,
+   "warmup": false,
+   "stop_to_transcript_ms": 689.8,
+   "words": 12,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 119563,
+    "done": 120252.80000000075
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 18,
+   "warmup": false,
+   "stop_to_transcript_ms": 1015.6,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 126041.09999999963,
+    "done": 127056.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 19,
+   "warmup": false,
+   "stop_to_transcript_ms": 854.1,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 132657.59999999963,
+    "done": 133511.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 20,
+   "warmup": false,
+   "stop_to_transcript_ms": 727.4,
+   "words": 12,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 139364.90000000037,
+    "done": 140092.30000000075
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 21,
+   "warmup": false,
+   "stop_to_transcript_ms": 1206.3,
+   "words": 12,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 145940.5,
+    "done": 147146.80000000075
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 22,
+   "warmup": false,
+   "stop_to_transcript_ms": 1254.1,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 153073.80000000075,
+    "done": 154327.90000000037
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 23,
+   "warmup": false,
+   "stop_to_transcript_ms": 625.4,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 159980.30000000075,
+    "done": 160605.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 24,
+   "warmup": false,
+   "stop_to_transcript_ms": 1196.8,
+   "words": 14,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 166229.90000000037,
+    "done": 167426.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 25,
+   "warmup": false,
+   "stop_to_transcript_ms": 592,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 173029.70000000112,
+    "done": 173621.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 26,
+   "warmup": false,
+   "stop_to_transcript_ms": 502.8,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 179213.90000000037,
+    "done": 179716.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 27,
+   "warmup": false,
+   "stop_to_transcript_ms": 443.2,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 185296,
+    "done": 185739.20000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 28,
+   "warmup": false,
+   "stop_to_transcript_ms": 454.8,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 191330.09999999963,
+    "done": 191784.90000000037
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 29,
+   "warmup": false,
+   "stop_to_transcript_ms": 444.3,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 197362.40000000037,
+    "done": 197806.70000000112
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 30,
+   "warmup": false,
+   "stop_to_transcript_ms": 441.6,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 203395.90000000037,
+    "done": 203837.5
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  },
+  {
+   "i": 31,
+   "warmup": false,
+   "stop_to_transcript_ms": 442.5,
+   "words": 15,
+   "live": "Edit the transcript, then press Send.",
+   "afterStart": "Listening…",
+   "afterStop": "Microphone",
+   "raw": {
+    "stop": 209429.30000000075,
+    "done": 209871.80000000075
+   },
+   "requests": 1,
+   "upload": {
+    "base64Encoded": true
+   }
+  }
+ ]
+}

@@ -1,0 +1,458 @@
+{
+  "label": "everyday9b-card-defect",
+  "pair_id": "everyday",
+  "prompt": "Show a chart of population for: Paris 2.1M, Tokyo 13.9M, Lagos 21.0M.",
+  "wall_s": 25.09,
+  "final_message": {
+    "role": "assistant",
+    "content": "Here is a bar chart comparing the populations of Paris, Tokyo, and Lagos based on the figures you provided.\n\n",
+    "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+    "status": "stopped",
+    "components": []
+  },
+  "record": {
+    "id": "1928d9711dbb45fe990d48f47975825a",
+    "save": false,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Show a chart of population for: Paris 2.1M, Tokyo 13.9M, Lagos 21.0M.",
+        "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+        "status": "complete"
+      },
+      {
+        "role": "assistant",
+        "content": "Here is a bar chart comparing the populations of Paris, Tokyo, and Lagos based on the figures you provided.\n\n",
+        "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+        "status": "stopped",
+        "components": []
+      }
+    ],
+    "active_turn": null,
+    "sequence": 26,
+    "created_at": 1790875753.4101884,
+    "title": "Show a chart of population for: Paris 2.1M, Tokyo 13.9M, Lagos 21.0M.",
+    "context": {
+      "selected_turn_ids": null,
+      "pinned_constraints": ""
+    },
+    "updated_at": 1790875777.6070437
+  },
+  "events": [
+    {
+      "seq": 1,
+      "type": "status",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "state": "working"
+      }
+    },
+    {
+      "seq": 2,
+      "type": "status",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "state": "generating",
+        "context_tokens": 258,
+        "context_limit": 262144,
+        "output_tokens": 256
+      }
+    },
+    {
+      "seq": 3,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": "Here"
+      }
+    },
+    {
+      "seq": 4,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " is"
+      }
+    },
+    {
+      "seq": 5,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " a"
+      }
+    },
+    {
+      "seq": 6,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " bar"
+      }
+    },
+    {
+      "seq": 7,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " chart"
+      }
+    },
+    {
+      "seq": 8,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " comparing"
+      }
+    },
+    {
+      "seq": 9,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " the"
+      }
+    },
+    {
+      "seq": 10,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " populations"
+      }
+    },
+    {
+      "seq": 11,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " of"
+      }
+    },
+    {
+      "seq": 12,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " Paris"
+      }
+    },
+    {
+      "seq": 13,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": ","
+      }
+    },
+    {
+      "seq": 14,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " Tokyo"
+      }
+    },
+    {
+      "seq": 15,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": ","
+      }
+    },
+    {
+      "seq": 16,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " and"
+      }
+    },
+    {
+      "seq": 17,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " Lagos"
+      }
+    },
+    {
+      "seq": 18,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " based"
+      }
+    },
+    {
+      "seq": 19,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " on"
+      }
+    },
+    {
+      "seq": 20,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " the"
+      }
+    },
+    {
+      "seq": 21,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " figures"
+      }
+    },
+    {
+      "seq": 22,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " you"
+      }
+    },
+    {
+      "seq": 23,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " provided"
+      }
+    },
+    {
+      "seq": 24,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": "."
+      }
+    },
+    {
+      "seq": 25,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": "\n\n"
+      }
+    },
+    {
+      "seq": 1,
+      "type": "status",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "state": "working"
+      }
+    },
+    {
+      "seq": 2,
+      "type": "status",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "state": "generating",
+        "context_tokens": 258,
+        "context_limit": 262144,
+        "output_tokens": 256
+      }
+    },
+    {
+      "seq": 3,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": "Here"
+      }
+    },
+    {
+      "seq": 4,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " is"
+      }
+    },
+    {
+      "seq": 5,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " a"
+      }
+    },
+    {
+      "seq": 6,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " bar"
+      }
+    },
+    {
+      "seq": 7,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " chart"
+      }
+    },
+    {
+      "seq": 8,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " comparing"
+      }
+    },
+    {
+      "seq": 9,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " the"
+      }
+    },
+    {
+      "seq": 10,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " populations"
+      }
+    },
+    {
+      "seq": 11,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " of"
+      }
+    },
+    {
+      "seq": 12,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " Paris"
+      }
+    },
+    {
+      "seq": 13,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": ","
+      }
+    },
+    {
+      "seq": 14,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " Tokyo"
+      }
+    },
+    {
+      "seq": 15,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": ","
+      }
+    },
+    {
+      "seq": 16,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " and"
+      }
+    },
+    {
+      "seq": 17,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " Lagos"
+      }
+    },
+    {
+      "seq": 18,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " based"
+      }
+    },
+    {
+      "seq": 19,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " on"
+      }
+    },
+    {
+      "seq": 20,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " the"
+      }
+    },
+    {
+      "seq": 21,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " figures"
+      }
+    },
+    {
+      "seq": 22,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " you"
+      }
+    },
+    {
+      "seq": 23,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": " provided"
+      }
+    },
+    {
+      "seq": 24,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": "."
+      }
+    },
+    {
+      "seq": 25,
+      "type": "text",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "text": "\n\n"
+      }
+    },
+    {
+      "seq": 26,
+      "type": "done",
+      "turn_id": "c12ea175ea0448deb7d9e474e020bffc",
+      "data": {
+        "stopped": true
+      }
+    }
+  ],
+  "event_count": 51
+}

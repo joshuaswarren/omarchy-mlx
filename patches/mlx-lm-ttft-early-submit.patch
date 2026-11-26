@@ -1,0 +1,39 @@
+--- a/mlx_lm/generate.py
++++ b/mlx_lm/generate.py
+@@ -5,6 +5,7 @@
+ import copy
+ import functools
+ import json
++import os
+ import sys
+ import time
+ from collections import deque
+@@ -497,6 +498,19 @@
+             sampled = sampler(logprobs)
+             return sampled, logprobs.squeeze(0)
+ 
++    # Early first submit (mlx-omarchy): prompt graphs and the first decode
++    # step commit their first batch after 128 nodes so the GPU starts while the
++    # host is still recording (host record is fully exposed until the first
++    # token). Cleared right after the first token so pipelined decode keeps one
++    # submit per token. Scheduling only; backends that ignore the variable are
++    # unaffected. MLX_OMARCHY_NO_TTFT_EARLY_SUBMIT=1 disables.
++    _omarchy_early = (
++        "MLX_OMARCHY_BATCH_FIRST" not in os.environ
++        and "MLX_OMARCHY_NO_TTFT_EARLY_SUBMIT" not in os.environ
++    )
++    if _omarchy_early:
++        os.environ["MLX_OMARCHY_BATCH_FIRST"] = "128"
++
+     with mx.stream(generation_stream):
+         total_prompt_tokens = (
+             len(input_embeddings) if input_embeddings is not None else len(prompt)
+@@ -542,6 +556,8 @@
+                 mx.async_eval(next_y, next_logprobs)
+         if n == 0:
+             mx.eval(y)
++            if _omarchy_early:
++                os.environ.pop("MLX_OMARCHY_BATCH_FIRST", None)
+             prompt_progress_callback(total_prompt_tokens, total_prompt_tokens)
+         if n == max_tokens:
+             break

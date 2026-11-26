@@ -1,0 +1,87 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Weight-gradient (dw) reduce kernel for RMSNorm/LayerNorm backward,
+// stage 2 of 2: column sum of the per-row partials written by
+// shaders/fast_norm_vjp_dw.comp.
+//
+//   dw[column] = sum_rows(partial[row * columns + column])
+//
+// One workgroup covers one 256-column tile; each thread sums one column
+// serially over the rows. There are no barriers: every thread writes only
+// its own column. The input is always float32 (the partial buffer), the
+// output carries the gradient dtype via STORAGE_TYPE/STORE_VALUE.
+
+#version 460
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VALUE(f) bf16_store(f)
+#else
+#define STORAGE_TYPE float
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#endif
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Partial {
+  float values[];
+} partial_data;
+layout(set = 0, binding = 1, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  // Batch routing fields must stay declared even when unused: the encoder
+  // pushes sizeof(ComputeParams), so the block has to match its full size.
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+void main() {
+  // output_size is the column count, reduce_size the row count.
+  uint column = gl_WorkGroupID.x * 256u + gl_LocalInvocationID.x;
+  if (column >= params.output_size) {
+    return;
+  }
+  float accumulator = 0.0;
+  for (uint row = 0u; row < params.reduce_size; ++row) {
+    accumulator +=
+        partial_data.values[params.lhs_offset + row * params.output_size +
+                            column];
+  }
+  output_data.values[params.output_offset + column] = STORE_VALUE(accumulator);
+}

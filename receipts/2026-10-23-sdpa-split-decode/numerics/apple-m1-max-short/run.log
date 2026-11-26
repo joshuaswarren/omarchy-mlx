@@ -1,0 +1,12 @@
+SNUM start 2026-10-23T13:10:08Z mode short boot=45a04bcb kernel=7.1.12-2-20261013.18-egpu-ARCH load1=2.26 settle=na
+SNUM tree libmlx 8533393455ca0f8c tfref-tail 2b30fdc3b67610cd tfcmp 9a38455f19f9eb86 driver vulkan-f144c7949b
+SNUM text 3972dc9744f6499f segments --nseg 4 --maxtok 160
+SNUM arm base rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610231240+6943e37 files 4
+SNUM arm split rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610231240+6943e37 files 4
+SNUM arm base2 rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610231240+6943e37 files 4
+TFCMP segments [0, 1, 2, 3] steps per segment {0: 159, 1: 159, 2: 159, 3: 159} total 636
+TFCMP reference mean NLL 1.57184
+base2 | 636/636 = 100.00% | 0 | 1.57184 | +0.0000 | 0.00000 | 0.00000 | 0.0000
+split | 628/636 = 98.74% | 8 | 1.57197 | +0.0077 | 0.04572 | 0.12053 | 0.7500
+TFCMP base2 vs split: top1 equal 628/636, mean|dlp| next 0.04572, max 1.12477, bit-equal steps 82/636
+SNUM end 2026-10-23T13:10:55Z

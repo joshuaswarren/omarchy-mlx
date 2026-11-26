@@ -1,0 +1,21 @@
+{
+ "gdn.input_norm": 0.31,
+ "gdn.mixer": 29.0,
+ "gdn.post_norm": 0.29,
+ "gdn.mlp": 33.04,
+ "gdn.layer_total": 67.92,
+ "attn.input_norm": 0.29,
+ "attn.mixer": 24.26,
+ "attn.post_norm": 0.3,
+ "attn.mlp": 33.4,
+ "attn.layer_total": 57.91,
+ "lm_head_full_T": 423.38,
+ "final_norm": 0.38,
+ "model_layers_sum_ms": 1570.0,
+ "implied_tok_per_s": 1304.4,
+ "decode_chain_gdn18_ms": 18.443,
+ "decode_chain_attn6_ms": 5.397,
+ "decode_chain_all24_ms": 26.177,
+ "decode_lm_head_1tok_ms": 1.318,
+ "T": 2048
+}

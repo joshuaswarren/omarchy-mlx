@@ -1,0 +1,56 @@
+bgdecode 16-inch-M1-Max 20261029T1948Z load 0.08 kernel 7.1.12-2-20261029.2-lab-ARCH
+-- B=2 pair 1 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [29.792, 29.688, 29.632, 29.891, 29.672], "median_ms_per_step": 29.688, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 pair 1 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [29.68, 29.56, 29.786, 30.064, 29.789], "median_ms_per_step": 29.786, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 pair 2 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [29.807, 29.944, 29.812, 29.685, 29.744], "median_ms_per_step": 29.807, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 pair 2 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [29.745, 29.938, 29.821, 30.026, 29.499], "median_ms_per_step": 29.821, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 pair 3 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [29.872, 29.878, 30.108, 29.908, 29.819], "median_ms_per_step": 29.878, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 pair 3 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [30.085, 30.063, 30.21, 30.568, 30.55], "median_ms_per_step": 30.21, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=3 pair 1 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [31.409, 31.373, 31.374, 31.415, 31.462], "median_ms_per_step": 31.409, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 pair 1 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [30.334, 30.106, 30.038, 29.881, 30.131], "median_ms_per_step": 30.106, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 pair 2 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [30.207, 29.967, 30.096, 30.357, 30.286], "median_ms_per_step": 30.207, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 pair 2 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [31.422, 31.431, 31.344, 31.468, 31.443], "median_ms_per_step": 31.431, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 pair 3 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [31.534, 31.465, 31.519, 31.494, 31.468], "median_ms_per_step": 31.494, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 pair 3 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [30.435, 30.244, 30.242, 30.375, 29.98], "median_ms_per_step": 30.244, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=4 pair 1 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [36.819, 36.712, 37.008, 37.05, 36.919], "median_ms_per_step": 36.919, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 pair 1 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [33.793, 34.353, 34.09, 34.302, 33.996], "median_ms_per_step": 34.09, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 pair 2 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [33.913, 34.088, 34.028, 34.004, 34.12], "median_ms_per_step": 34.028, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 pair 2 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [36.802, 36.608, 36.904, 36.976, 36.942], "median_ms_per_step": 36.904, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 pair 3 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [37.033, 36.889, 36.851, 36.778, 36.699], "median_ms_per_step": 36.851, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 pair 3 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [34.098, 34.154, 34.029, 34.043, 34.075], "median_ms_per_step": 34.075, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+done 19:53:49

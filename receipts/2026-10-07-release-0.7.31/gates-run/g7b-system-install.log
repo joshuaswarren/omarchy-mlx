@@ -1,0 +1,115 @@
+BEGIN 2026-10-07T15:04:37Z tag=v0.7.31 boot_id=ca23d8a8-61b8-414c-9486-88dad66d5c5f uname=7.1.12-2-12.1-sep-ARCH host_marker=unset
+INSTALL_TREE $HOME/v0.7.30-gates/v0.7.31-worktree HEAD=9b5c938fe236e767df9545de301cfc74fdbc3395
+VTAR $HOME/v0731-assets/omarchy-mlx-vendor-wheels-v0.7.31-cp314-aarch64.tar strip_rc=0 lock=present
+[1;32m==>[0m Verifying vendored wheels against /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt
+verified 36 vendored wheel(s) against /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt
+[1;32m==>[0m Building /tmp/v0.7.31-sysinst/usr/lib/omarchy-mlx/venv offline from vendored wheels
+verified 36 vendored wheel(s) against /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt
+==> creating /tmp/v0.7.31-sysinst/usr/lib/omarchy-mlx/venv with python3.14
+Looking in links: /tmp/v0.7.31-vendor-sysinst
+Processing /tmp/v0.7.31-vendor-sysinst/annotated_doc-0.0.5-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 1))
+Processing /tmp/v0.7.31-vendor-sysinst/anyio-4.15.1-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 2))
+Processing /tmp/v0.7.31-vendor-sysinst/certifi-2026.7.22-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 3))
+Processing /tmp/v0.7.31-vendor-sysinst/cffi-2.1.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 4))
+Processing /tmp/v0.7.31-vendor-sysinst/click-8.5.0-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 5))
+Processing /tmp/v0.7.31-vendor-sysinst/filelock-4.0.12-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 6))
+Processing /tmp/v0.7.31-vendor-sysinst/fsspec-2026.9.0-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 7))
+Processing /tmp/v0.7.31-vendor-sysinst/h11-0.16.0-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 8))
+Processing /tmp/v0.7.31-vendor-sysinst/hf_xet-1.7.0-cp38-abi3-manylinux_2_28_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 9))
+Processing /tmp/v0.7.31-vendor-sysinst/httpcore-1.0.9-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 10))
+Processing /tmp/v0.7.31-vendor-sysinst/httpx-0.28.1-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 11))
+Processing /tmp/v0.7.31-vendor-sysinst/huggingface_hub-1.33.0-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 12))
+Processing /tmp/v0.7.31-vendor-sysinst/idna-3.20-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 13))
+Processing /tmp/v0.7.31-vendor-sysinst/jinja2-3.1.6-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 14))
+Processing /tmp/v0.7.31-vendor-sysinst/markdown_it_py-4.2.0-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 15))
+Processing /tmp/v0.7.31-vendor-sysinst/markupsafe-3.0.4-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 16))
+Processing /tmp/v0.7.31-vendor-sysinst/mdurl-0.1.2-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 17))
+Processing /tmp/v0.7.31-vendor-sysinst/mlx_lm-0.31.3-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 18))
+Processing /tmp/v0.7.31-vendor-sysinst/mlx_omarchy-0.32.4.dev202610071347+9b5c938-cp314-cp314-linux_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 19))
+Processing /tmp/v0.7.31-vendor-sysinst/numpy-2.5.3-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 20))
+Processing /tmp/v0.7.31-vendor-sysinst/packaging-26.3-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 21))
+Processing /tmp/v0.7.31-vendor-sysinst/protobuf-7.36.2-cp310-abi3-manylinux2014_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 22))
+Processing /tmp/v0.7.31-vendor-sysinst/pycparser-3.0-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 23))
+Processing /tmp/v0.7.31-vendor-sysinst/pygments-2.21.0-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 24))
+Processing /tmp/v0.7.31-vendor-sysinst/pyyaml-6.0.3-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 25))
+Processing /tmp/v0.7.31-vendor-sysinst/regex-2026.9.29-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 26))
+Processing /tmp/v0.7.31-vendor-sysinst/rich-15.0.0-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 27))
+Processing /tmp/v0.7.31-vendor-sysinst/safetensors-0.8.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 28))
+Processing /tmp/v0.7.31-vendor-sysinst/sentencepiece-0.2.2-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 29))
+Processing /tmp/v0.7.31-vendor-sysinst/shellingham-1.5.4-py2.py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 30))
+Processing /tmp/v0.7.31-vendor-sysinst/soundfile-0.14.0-py2.py3-none-manylinux_2_28_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 31))
+Processing /tmp/v0.7.31-vendor-sysinst/tokenizers-0.23.2-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 32))
+Processing /tmp/v0.7.31-vendor-sysinst/tqdm-4.70.1-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 33))
+Processing /tmp/v0.7.31-vendor-sysinst/transformers-5.16.1-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 34))
+Processing /tmp/v0.7.31-vendor-sysinst/typer-0.27.3-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 35))
+Processing /tmp/v0.7.31-vendor-sysinst/typing_extensions-4.16.0-py3-none-any.whl (from -r /tmp/v0.7.31-vendor-sysinst/requirements-lock.txt (line 36))
+Installing collected packages: typing-extensions, tqdm, shellingham, sentencepiece, safetensors, regex, pyyaml, pygments, pycparser, protobuf, packaging, numpy, mlx-omarchy, mdurl, markupsafe, idna, hf-xet, h11, fsspec, filelock, click, certifi, annotated-doc, markdown-it-py, jinja2, httpcore, cffi, anyio, soundfile, rich, httpx, typer, huggingface-hub, tokenizers, transformers, mlx-lm
+
+Successfully installed annotated-doc-0.0.5 anyio-4.15.1 certifi-2026.7.22 cffi-2.1.1 click-8.5.0 filelock-4.0.12 fsspec-2026.9.0 h11-0.16.0 hf-xet-1.7.0 httpcore-1.0.9 httpx-0.28.1 huggingface-hub-1.33.0 idna-3.20 jinja2-3.1.6 markdown-it-py-4.2.0 markupsafe-3.0.4 mdurl-0.1.2 mlx-lm-0.31.3 mlx-omarchy-0.32.4.dev202610071347+9b5c938 numpy-2.5.3 packaging-26.3 protobuf-7.36.2 pycparser-3.0 pygments-2.21.0 pyyaml-6.0.3 regex-2026.9.29 rich-15.0.0 safetensors-0.8.0 sentencepiece-0.2.2 shellingham-1.5.4 soundfile-0.14.0 tokenizers-0.23.2 tqdm-4.70.1 transformers-5.16.1 typer-0.27.3 typing-extensions-4.16.0
+==> venv ready at /tmp/v0.7.31-sysinst/usr/lib/omarchy-mlx/venv
+[1;32m==>[0m Verifying staged runtime assets against the wheel pin
+OK: /tmp/v0.7.31-sysinst/usr/lib/omarchy-mlx/venv/lib/python3.14/site-packages/mlx/share/mlx-omarchy/parakeet-1: pinned runtime assets verified
+[1;32m==>[0m Applying mlx-lm serve patches (conv-ring off unless MLX_OMARCHY_CONV_RING=1)
+mlx-lm patch series: patches
+patching file mlx_lm/server.py
+Hunk #1 succeeded at 147 (offset -3 lines).
+applied: mlx-lm-tool-call-arguments.patch
+patching file mlx_lm/tool_parsers/qwen3_coder.py
+Hunk #1 succeeded at 44 (offset -1 lines).
+applied: mlx-lm-qwen3-coder-untyped-args.patch
+patching file mlx_lm/server.py
+Hunk #1 succeeded at 1191 (offset 2 lines).
+Hunk #2 succeeded at 1233 (offset 2 lines).
+applied: mlx-lm-max-tokens-min-one.patch
+patching file mlx_lm/models/gated_delta.py
+applied: mlx-lm-gated-delta-fast-route.patch
+patching file mlx_lm/models/gated_delta.py
+Hunk #1 succeeded at 278 (offset -2 lines).
+applied: mlx-lm-gated-delta-fast-route-repeat.patch
+patching file mlx_lm/models/gated_delta.py
+Hunk #1 succeeded at 290 (offset 9 lines).
+applied: mlx-lm-gated-delta-raw.patch
+patched: /tmp/v0.7.31-sysinst/usr/lib/omarchy-mlx/venv/lib/python3.14/site-packages/mlx_lm/models/cache.py (mlx-lm 0.31.3)
+kv-maskless/kv-host-offset: 0.32 series only; skipped on patches
+patching file mlx_lm/generate.py
+applied: mlx-lm-greedy-prune.patch
+batch-greedy-head: 0.32 series only (no GenerationBatch); skipped on patches
+patching file mlx_lm/models/qwen3_5.py
+patching file mlx_lm/models/qwen3_next.py
+applied: mlx-lm-qwen35-qk-scaled.patch
+patching file mlx_lm/models/qwen3_5.py
+applied: mlx-lm-qwen35-gdn-conv.patch
+patching file mlx_lm/models/qwen3_5.py
+Hunk #1 succeeded at 167 (offset -4 lines).
+applied: mlx-lm-conv-silu.patch
+patching file mlx_lm/models/qwen3_next.py
+applied: mlx-lm-qwen35-gated-norm.patch
+patching file mlx_lm/generate.py
+applied: mlx-lm-ttft-early-submit.patch
+conv-ring: OFF (set MLX_OMARCHY_CONV_RING=1 to enable)
+patching file mlx_lm/models/qwen3_5.py
+Hunk #2 succeeded at 313 (offset -3 lines).
+applied: mlx-lm-last-logits.patch
+patched: /tmp/v0.7.31-sysinst/usr/lib/omarchy-mlx/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py
+patched: /tmp/v0.7.31-sysinst/usr/lib/omarchy-mlx/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py
+patched: /tmp/v0.7.31-sysinst/usr/lib/omarchy-mlx/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3.py
+patched: /tmp/v0.7.31-sysinst/usr/lib/omarchy-mlx/venv/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py
+[1;32m==>[0m Installing launchers into /tmp/v0.7.31-sysinst/usr/bin
+[1;32m==>[0m Import smoke
+[1;32m==>[0m System tree staged under /tmp/v0.7.31-sysinst
+  venv:      /tmp/v0.7.31-sysinst/usr/lib/omarchy-mlx/venv
+  launchers: /tmp/v0.7.31-sysinst/usr/bin/{mlx-omarchy,mlx-omarchy-demo,mlx-omarchy-chat,mlx-omarchy-serve,mlx-omarchy-info,mlx-omarchy-parakeet,mlx-omarchy-retire-legacy,omarchy-mlx-serve}
+  unit:      /tmp/v0.7.31-sysinst/usr/lib/systemd/user/mlx-omarchy-chat.service (staged only; never enabled at build time)
+  desktop:   /tmp/v0.7.31-sysinst/usr/share/applications/mlx-omarchy-chat.desktop
+  packaging: the recipe declares pacman depends=(python=3.14 openblas lapack blas)
+SYSINSTALL_EXIT 0
+== staged tree readback ==
+STAGED_OK usr/bin/mlx-omarchy
+STAGED_OK usr/bin/mlx-omarchy-chat
+STAGED_OK usr/bin/mlx-omarchy-parakeet
+STAGED_OK usr/lib/systemd/user/mlx-omarchy-chat.service
+STAGED_OK usr/share/applications/mlx-omarchy-chat.desktop
+STAGED_OK usr/share/omarchy-mlx/paths.sh
+STAGED_OK site-packages/mlx_omarchy_paths.py
+LAUNCHER_PATH_LEAK no
+GATE7B_EXIT 0

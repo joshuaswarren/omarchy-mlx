@@ -1,0 +1,25 @@
+{
+  "uname": "7.1.13-3-1-ARCH",
+  "boot_id": "7fb3f857-25be-4765-a15f-a0ba9a38c81a",
+  "loadavg_start": "0.55 0.22 0.08 12/370 1326",
+  "mlx": "0.32.3.dev202609291615+06711ad",
+  "microbench_full_argsort_top50_ms": 3.388,
+  "microbench_gumbel_top50_ms": 0.989,
+  "microbench_fast_topk_partition_ms": 1.853,
+  "chi2_df4_crit_p0.001": 18.47,
+  "chi2_upstream": 3386.6,
+  "chi2_fast_topk": 3332.01,
+  "top5_zero_count_upstream": [
+    0,
+    0,
+    0
+  ],
+  "top5_zero_count_fast": [
+    0,
+    0,
+    0
+  ],
+  "E2E_fast_topk_rtf_median": 0.2275,
+  "E2E_fast_topk_rtf_min": 0.215,
+  "E2E_fast_topk_first_p95": 1.413
+}

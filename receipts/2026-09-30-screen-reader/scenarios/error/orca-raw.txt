@@ -1,0 +1,1183 @@
+                  SPEECH GENERATOR: Results: 
+                  'Retry' 
+                  '{'established': False}' 
+                  'push button' 
+                  '{'established': False}'
+21:10:40.678165 - WEB: Speech generation for document object [push button | Retry] complete.
+21:10:40.678213 - WEB SAY ALL: [push button | Retry] 'Retry' (0-1, current: 0)
+21:10:40.678407 - EVENT SYNTHESIZER: scrolled [push button | Retry] (0,1) to SCROLL_ANYWHERE: True
+21:10:40.678452 - EVENT SYNTHESIZER: Before scroll: 389,256. After scroll: 389,256.
+21:10:40.678456 - SPEECH OUTPUT: 'Retry'
+21:10:40.678520 - WEB SAY ALL: [push button | Retry] 'push button' (0-1, current: 0)
+21:10:40.678741 - EVENT SYNTHESIZER: scrolled [push button | Retry] (0,1) to SCROLL_ANYWHERE: True
+21:10:40.678788 - EVENT SYNTHESIZER: Before scroll: 389,256. After scroll: 389,256.
+21:10:40.678792 - SPEECH OUTPUT: 'push button'
+21:10:40.679646 - INFO: Hyperlink object at index 3 for [document web | MLX Chat] is [section | ]
+21:10:40.680204 - INFO: Next caret in order for [push button | Retry], 0: None, -1 (0.0014s)
+21:10:40.680212 - WEB: textLines complete. Verifying SayAll status
+21:10:40.680215 - DEFAULT: Not in SayAll
+21:10:40.680263 - EVENT MANAGER: locusOfFocus: [document web | MLX Chat] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:40.680268 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:40.680270 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:40.680272 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:40.680274 - EVENT MANAGER: _inFocusMode: False
+21:10:40.680276 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:40.680278 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0747
+^^^^^ PROCESS OBJECT EVENT object:state-changed:busy ^^^^^
+
+21:10:40.680402 - EVENT MANAGER: Dequeued document:load-complete [document web | MLX Chat] (0,0,MLX Chat) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT document:load-complete vvvvv
+21:10:40.680412 - OBJECT EVENT: document:load-complete (0, 0, MLX Chat)
+                                app.name='Chromium' name='MLX Chat' role='document web'
+                                description=''
+                                states='enabled focusable focused sensitive showing visible'
+                                relations='embedded by'
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, explicit-name:true, name-from:related-element, tag:#document'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3]
+
+21:10:40.680929 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:40.681281 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:40.681293 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:40.681457 - WEB: Updating loading state and resetting live regions
+21:10:40.681665 - EVENT MANAGER: locusOfFocus: [document web | MLX Chat] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:40.681670 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:40.681672 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:40.681674 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:40.681676 - EVENT MANAGER: _inFocusMode: False
+21:10:40.681677 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:40.681679 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0013
+^^^^^ PROCESS OBJECT EVENT document:load-complete ^^^^^
+
+
+21:10:43.594016 - EVENT MANAGER: object:property-change:accessible-name for [page tab | MLX Chat - Memory usage - 48.1 MB] in [application | Chromium] (0, 0, MLX Chat - Memory usage - 48.1 MB)
+21:10:43.594149 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:43.594484 - EVENT MANAGER: Queueing object:property-change:accessible-name [page tab | MLX Chat - Memory usage - 48.1 MB] (0,0,MLX Chat - Memory usage - 48.1 MB) from [application | Chromium]
+21:10:43.595411 - EVENT MANAGER: Dequeued object:property-change:accessible-name [page tab | MLX Chat - Memory usage - 48.1 MB] (0,0,MLX Chat - Memory usage - 48.1 MB) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:property-change:accessible-name vvvvv
+21:10:43.595474 - OBJECT EVENT: object:property-change:accessible-name (0, 0, MLX Chat - Memory usage - 48.1 MB)
+                                app.name='Chromium' name='MLX Chat - Memory usage - 48.1 MB' role='page tab'
+                                description=''
+                                states='enabled selectable selected sensitive'
+                                relations=''
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='id:view_20, class:Tab, explicit-name:true, name-from:attribute, hidden:true, posinset:1, setsize:1'
+                                path=[-1, 0, 0, 0, 5, 6, 1, 0, 0]
+
+21:10:43.597132 - EVENT MANAGER: Getting script for [application | Chromium] (check: False)
+21:10:43.597403 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:43.597448 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:43.597847 - EVENT MANAGER: locusOfFocus: [document web | MLX Chat] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:43.597874 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:43.597883 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:43.597891 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:43.597900 - EVENT MANAGER: _inFocusMode: False
+21:10:43.597907 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:43.597916 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0025
+^^^^^ PROCESS OBJECT EVENT object:property-change:accessible-name ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_PRESSED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=422750029
+                 time=1790716246.724189
+                 keyType=action
+                 clickCount=1
+                 shouldEcho=True
+
+
+vvvvv PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) vvvvv
+21:10:46.724419 - HOST_APP: [application | Chromium]
+21:10:46.724546 - WINDOW:   [frame | MLX Chat - Chromium]
+21:10:46.724617 - LOCATION: [document web | MLX Chat]
+21:10:46.724625 - CONSUME:  False (No handler)
+21:10:46.724642 - DEFAULT: Interrupting presentation
+21:10:46.724650 - WEB: Flushing live region messages
+21:10:46.724696 - DEFAULT: Presenting keyboard event
+21:10:46.724720 - SPEECH GENERATOR: None voice requested with language='None', dialect='None'
+21:10:46.724744 - SPEECH OUTPUT: 'tab ' {'established': False}
+21:10:46.724833 - INPUT EVENT: _lastCommandWasCaretNav: False
+21:10:46.724838 - INPUT EVENT: _lastCommandWasStructNav: False
+21:10:46.724841 - INPUT EVENT: _lastCommandWasMouseButton: False
+21:10:46.724844 - INPUT EVENT: _inFocusMode: False
+21:10:46.724848 - INPUT EVENT: _focusModeIsSticky: False
+21:10:46.724852 - INPUT EVENT: _browseModeIsSticky: False
+21:10:46.724857 - TOTAL PROCESSING TIME: 0.0006
+^^^^^ PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_RELEASED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=422750038
+                 time=1790716246.730916
+                 keyType=action
+                 clickCount=1
+                 shouldEcho=False
+
+
+vvvvv PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) vvvvv
+21:10:46.731798 - HOST_APP: [application | Chromium]
+21:10:46.731888 - WINDOW:   [frame | MLX Chat - Chromium]
+21:10:46.731936 - LOCATION: [document web | MLX Chat]
+21:10:46.732014 - CONSUME:  False (Is release for last non-modifier keyevent)
+21:10:46.732033 - INPUT EVENT: _lastCommandWasCaretNav: False
+21:10:46.732036 - INPUT EVENT: _lastCommandWasStructNav: False
+21:10:46.732038 - INPUT EVENT: _lastCommandWasMouseButton: False
+21:10:46.732041 - INPUT EVENT: _inFocusMode: False
+21:10:46.732043 - INPUT EVENT: _focusModeIsSticky: False
+21:10:46.732045 - INPUT EVENT: _browseModeIsSticky: False
+21:10:46.732049 - TOTAL PROCESSING TIME: 0.0011
+^^^^^ PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) ^^^^^
+
+
+21:10:46.736524 - EVENT MANAGER: object:state-changed:focused for [document web | MLX Chat] in [application | Chromium] (0, 0, 0)
+21:10:46.736584 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:46.736716 - EVENT MANAGER: Queueing object:state-changed:focused [document web | MLX Chat] (0,0,0) from [application | Chromium]
+
+21:10:46.737404 - EVENT MANAGER: object:state-changed:focused for [link | Skip to message box] in [application | Chromium] (1, 0, 0)
+21:10:46.737427 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:46.737534 - EVENT MANAGER: Queueing object:state-changed:focused [link | Skip to message box] (1,0,0) from [application | Chromium]
+21:10:46.737700 - EVENT MANAGER: Dequeued object:state-changed:focused [document web | MLX Chat] (0,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+21:10:46.737717 - OBJECT EVENT: object:state-changed:focused (0, 0, 0)
+                                app.name='Chromium' name='MLX Chat' role='document web'
+                                description=''
+                                states='enabled focusable sensitive showing visible'
+                                relations='embedded by'
+                                actions='dodefault showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, explicit-name:true, name-from:related-element, tag:#document'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3]
+
+21:10:46.738444 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:46.738881 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:46.738902 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:46.739078 - WEB: Ignoring because event source lost focus
+21:10:46.739136 - EVENT MANAGER: locusOfFocus: [document web | MLX Chat] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:46.739144 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:46.739147 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:46.739149 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:46.739151 - EVENT MANAGER: _inFocusMode: False
+21:10:46.739153 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:46.739155 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0015
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+21:10:46.739276 - EVENT MANAGER: Dequeued object:state-changed:focused [link | Skip to message box] (1,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+21:10:46.739288 - OBJECT EVENT: object:state-changed:focused (1, 0, 0)
+                                app.name='Chromium' name='Skip to message box' role='link'
+                                description=''
+                                states='enabled focusable focused sensitive showing visible'
+                                relations=''
+                                actions='jump showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, class:skip-link, name-from:contents, tag:a, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 0]
+
+21:10:46.739878 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:46.740258 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:46.740283 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:46.740517 - WEB: Not event from context replicant. locusOfFocus [document web | MLX Chat] is not dead.
+21:10:46.740525 - WEB: Getting caret context for None
+21:10:46.740747 - WEB: Caret context is [document web | MLX Chat], 0 (focus: [document web | MLX Chat])
+21:10:46.740798 - WEB: Deferring to other scripts for handling non-document source
+21:10:46.740803 - CHROMIUM: Passing along event to default script
+21:10:46.742268 - INFO: Looking at [frame | MLX Chat - Chromium] from [application | Chromium] /usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --enable-remote-extensions --load-extension --no-sandbox --enable-accessibility --force-renderer-accessibility --disable-gpu --remote-debugging-port=9222 --user-data-dir=<home>/sr/.cache/chromium --window-size=1440,900 --window-position=0,0 --no-first-run --no-default-browser-check --enable-features=AccessibilityAriaVirtualContent --force-device-scale-factor=1 --disable-extensions --disable-default-apps --disable-component-update --noerrdialogs --disable-infobars --kiosk http://127.0.0.1:8765/index.html 
+21:10:46.742446 - INFO: [frame | MLX Chat - Chromium] can be active window
+21:10:46.742573 - INFO: [link | Skip to message box] does not implement the selection interface
+21:10:46.742589 - ORCA: Active script is: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:46.742800 - ORCA: Changing locusOfFocus from [document web | MLX Chat] to [link | Skip to message box]. Notify: True
+21:10:46.743492 - WEB: updating braille for unhandled navigation type [link | Skip to message box]
+21:10:46.743556 - WEB: Generating braille for document object [link | Skip to message box]
+21:10:46.743695 - BRAILLE GENERATOR: Starting focused generation for [link | Skip to message box] (ROLE_LINK)
+                  GENERATION TIME: 0.0008  ---->  name=[Skip to message box]
+21:10:46.744505 - BRAILLE: Not contracting 'Skip to message box' because contracted braille is not enabled.
+                  GENERATION TIME: 0.0003  ---->  roleName=[]
+21:10:46.744791 - BRAILLE: Not contracting 'Skip to message box' because contracted braille is not enabled.
+                  COMPLETION TIME: 0.0012
+                  BRAILLE GENERATOR: Results: 
+                  'Link: 'Skip to message box', 0'
+21:10:46.744842 - BRAILLE: Refresh. Pan: True target: 0
+21:10:46.744900 - BRAILLE: Last text obj: [document web | MLX Chat] (Caret: 0, Line: 0, Cell: 1)
+21:10:46.744906 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+21:10:46.744915 - BRAILLE: Line 0: 'Skip to message box' focusOffset: 0 [[0, 19]]
+21:10:46.744918 - BRAILLE: Cursor offset in line string is: 0
+21:10:46.744921 - BRAILLE: Not adjusting offset 0. Cursor offset fits on display.
+21:10:46.744925 - BRAILLE: Current range: (0, 32). Target cell: 0.
+21:10:46.744927 - BRAILLE LINE:  'Skip to message box'
+21:10:46.744980 -      VISIBLE:  'Skip to message box', cursor=1
+21:10:46.744994 - BRAILLE: Enabling braille. BrlAPI running: False
+21:10:46.744997 - BRAILLE: Need to initialize first.
+21:10:46.745002 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff78cfcb80>
+21:10:46.745011 - BRAILLE: WINDOWPATH=None
+21:10:46.745015 - BRAILLE: XDG_VTNR=None
+21:10:46.745017 - BRAILLE: Attempting connection with BrlAPI.
+21:10:46.745776 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+21:10:46.746230 - ORCA: Region of interest: [link | Skip to message box] (0, 0)
+21:10:46.746517 - WEB: New focus [link | Skip to message box] is not a special case. Generating speech.
+21:10:46.746619 - WEB: Generating speech for document object [link | Skip to message box]
+21:10:46.746769 - INFO: Getting text attributes for [link | Skip to message box] (chars: 0-19)
+21:10:46.746907 - INFO: Attributes at 0: ['bg-color:122,162,247', 'size:12pt', 'language:en', 'direction:lr', 'fg-color:16,19,25', 'family-name:Liberation Mono'] (0-19)
+21:10:46.746918 - INFO: 1 attribute ranges found in 0.0001s
+21:10:46.747022 - SPEECH GENERATOR: Starting unfocused generation for [link | Skip to message box] (ROLE_LINK)
+                  GENERATION TIME: 0.0003  ---->  oldAncestors=[]
+21:10:46.747502 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0002  ---->  newAncestors=[]
+                  GENERATION TIME: 0.0002  ---->  name=[]
+                  GENERATION TIME: 0.0002  ---->  displayedText=[Skip to message box]
+21:10:46.748100 - DEFAULT: Not in SayAll
+21:10:46.748309 - SPEECH GENERATOR: system voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0003  ---->  roleName=[link]
+                  GENERATION TIME: 0.0001  ---->  pause=[PAUSE]
+                  GENERATION TIME: 0.0001  ---->  expandableState=[]
+                  GENERATION TIME: 0.0001  ---->  availability=[]
+                  GENERATION TIME: 0.0001  ---->  mnemonic=[]
+                  GENERATION TIME: 0.0001  ---->  newNodeLevel=[]
+                  GENERATION TIME: 0.0001  ---->  unselectedCell=[]
+                  GENERATION TIME: 0.0001  ---->  clickable=[]
+                  GENERATION TIME: 0.0001  ---->  hasLongDesc=[]
+                  GENERATION TIME: 0.0001  ---->  hasDetails=[]
+                  GENERATION TIME: 0.0001  ---->  detailsFor=[]
+                  GENERATION TIME: 0.0001  ---->  tutorial=[]
+                  GENERATION TIME: 0.0004  ---->  description=[]
+                  GENERATION TIME: 0.0001  ---->  hasPopup=[]
+                  COMPLETION TIME: 0.0029
+                  SPEECH GENERATOR: Results: 
+                  'Skip to message box' 
+                  'link' 
+                  '{'established': False}' 
+                  'PAUSE' 
+                  'PAUSE' 
+                  'PAUSE'
+21:10:46.749917 - WEB: Speech generation for document object [link | Skip to message box] complete.
+21:10:46.749930 - SPEECH: Last spoke 6.1416 seconds ago
+21:10:46.749948 - SPEECH OUTPUT: 'Skip to message box link.'{'established': False}
+21:10:46.750483 - INFO: New selection for [link | Skip to message box] is '' (0, 0)
+21:10:46.750534 - DEFAULT: Not in SayAll
+21:10:46.750634 - WEB: Not using focus mode for [link | Skip to message box] due to lack of cause
+21:10:46.750699 - EVENT MANAGER: locusOfFocus: [link | Skip to message box] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:46.750706 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:46.750708 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:46.750710 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:46.750712 - EVENT MANAGER: _inFocusMode: False
+21:10:46.750714 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:46.750716 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0114
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_PRESSED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=422750367
+                 time=1790716247.053838
+                 keyType=action
+                 clickCount=2
+                 shouldEcho=True
+
+
+vvvvv PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) vvvvv
+21:10:47.054200 - HOST_APP: [application | Chromium]
+21:10:47.054403 - WINDOW:   [frame | MLX Chat - Chromium]
+21:10:47.054519 - LOCATION: [link | Skip to message box]
+21:10:47.054533 - CONSUME:  False (No handler)
+21:10:47.054556 - DEFAULT: Interrupting presentation
+21:10:47.054568 - WEB: Flushing live region messages
+21:10:47.054604 - DEFAULT: Presenting keyboard event
+21:10:47.054642 - SPEECH GENERATOR: None voice requested with language='None', dialect='None'
+21:10:47.054697 - SPEECH OUTPUT: 'tab ' {'established': False}
+21:10:47.054816 - INPUT EVENT: _lastCommandWasCaretNav: False
+21:10:47.054827 - INPUT EVENT: _lastCommandWasStructNav: False
+21:10:47.054833 - INPUT EVENT: _lastCommandWasMouseButton: False
+21:10:47.054839 - INPUT EVENT: _inFocusMode: False
+21:10:47.054845 - INPUT EVENT: _focusModeIsSticky: False
+21:10:47.054851 - INPUT EVENT: _browseModeIsSticky: False
+21:10:47.054860 - TOTAL PROCESSING TIME: 0.0010
+^^^^^ PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_RELEASED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=422750373
+                 time=1790716247.060001
+                 keyType=action
+                 clickCount=2
+                 shouldEcho=False
+
+
+vvvvv PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) vvvvv
+21:10:47.060222 - HOST_APP: [application | Chromium]
+21:10:47.060423 - WINDOW:   [frame | MLX Chat - Chromium]
+21:10:47.060538 - LOCATION: [link | Skip to message box]
+21:10:47.060553 - CONSUME:  False (Is release for last non-modifier keyevent)
+21:10:47.060587 - INPUT EVENT: _lastCommandWasCaretNav: False
+21:10:47.060595 - INPUT EVENT: _lastCommandWasStructNav: False
+21:10:47.060602 - INPUT EVENT: _lastCommandWasMouseButton: False
+21:10:47.060610 - INPUT EVENT: _inFocusMode: False
+21:10:47.060616 - INPUT EVENT: _focusModeIsSticky: False
+21:10:47.060622 - INPUT EVENT: _browseModeIsSticky: False
+21:10:47.060631 - TOTAL PROCESSING TIME: 0.0006
+^^^^^ PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) ^^^^^
+
+
+21:10:47.063336 - EVENT MANAGER: object:state-changed:focused for [link | Skip to message box] in [application | Chromium] (0, 0, 0)
+21:10:47.063404 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:47.063564 - EVENT MANAGER: Queueing object:state-changed:focused [link | Skip to message box] (0,0,0) from [application | Chromium]
+
+21:10:47.064271 - EVENT MANAGER: object:state-changed:focused for [push button | Start a new conversation] in [application | Chromium] (1, 0, 0)
+21:10:47.064330 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:47.064509 - EVENT MANAGER: Queueing object:state-changed:focused [push button | Start a new conversation] (1,0,0) from [application | Chromium]
+21:10:47.064904 - EVENT MANAGER: Dequeued object:state-changed:focused [link | Skip to message box] (0,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+21:10:47.064927 - OBJECT EVENT: object:state-changed:focused (0, 0, 0)
+                                app.name='Chromium' name='Skip to message box' role='link'
+                                description=''
+                                states='enabled focusable sensitive showing visible'
+                                relations=''
+                                actions='jump showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:left, class:skip-link, name-from:contents, tag:a, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 0]
+
+21:10:47.066128 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:47.066718 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.066740 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:47.066796 - WEB: Ignoring because event source lost focus
+21:10:47.066880 - EVENT MANAGER: locusOfFocus: [link | Skip to message box] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.066954 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:47.066959 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:47.066962 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:47.066965 - EVENT MANAGER: _inFocusMode: False
+21:10:47.066969 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:47.066972 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0021
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+21:10:47.067197 - EVENT MANAGER: Dequeued object:state-changed:focused [push button | Start a new conversation] (1,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+21:10:47.067217 - OBJECT EVENT: object:state-changed:focused (1, 0, 0)
+                                app.name='Chromium' name='Start a new conversation' role='push button'
+                                description=''
+                                states='enabled focusable focused sensitive showing visible'
+                                relations=''
+                                actions='press showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:new-chat-btn, class:btn, explicit-name:true, name-from:attribute, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 1]
+
+21:10:47.068238 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:47.068701 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.068718 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:47.069127 - WEB: Not event from context replicant. locusOfFocus [link | Skip to message box] is not dead.
+21:10:47.069151 - WEB: Getting caret context for None
+21:10:47.069506 - WEB: Caret context is [link | Skip to message box], 0 (focus: [link | Skip to message box])
+21:10:47.069584 - WEB: Deferring to other scripts for handling non-document source
+21:10:47.069591 - CHROMIUM: Passing along event to default script
+21:10:47.071312 - INFO: Looking at [frame | MLX Chat - Chromium] from [application | Chromium] /usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --enable-remote-extensions --load-extension --no-sandbox --enable-accessibility --force-renderer-accessibility --disable-gpu --remote-debugging-port=9222 --user-data-dir=<home>/sr/.cache/chromium --window-size=1440,900 --window-position=0,0 --no-first-run --no-default-browser-check --enable-features=AccessibilityAriaVirtualContent --force-device-scale-factor=1 --disable-extensions --disable-default-apps --disable-component-update --noerrdialogs --disable-infobars --kiosk http://127.0.0.1:8765/index.html 
+21:10:47.071463 - INFO: [frame | MLX Chat - Chromium] can be active window
+21:10:47.071547 - ORCA: Active script is: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.071795 - ORCA: Changing locusOfFocus from [link | Skip to message box] to [push button | Start a new conversation]. Notify: True
+21:10:47.072583 - WEB: updating braille for unhandled navigation type [push button | Start a new conversation]
+21:10:47.072677 - WEB: Generating braille for document object [push button | Start a new conversation]
+21:10:47.072924 - BRAILLE GENERATOR: Starting focused generation for [push button | Start a new conversation] (<enum ATSPI_ROLE_PUSH_BUTTON of type Atspi.Role>)
+                  GENERATION TIME: 0.0005  ---->  labelAndName=[Start a new conversation]
+                  GENERATION TIME: 0.0001  ---->  expandableState=[]
+                  GENERATION TIME: 0.0004  ---->  roleName=[push button]
+21:10:47.074120 - BRAILLE: Not contracting 'Start a new conversation push button' because contracted braille is not enabled.
+                  COMPLETION TIME: 0.0013
+                  BRAILLE GENERATOR: Results: 
+                  'Component: 'Start a new conversation push button', 0'
+21:10:47.074185 - BRAILLE: Refresh. Pan: True target: 0
+21:10:47.074191 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+21:10:47.074196 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+21:10:47.074207 - BRAILLE: Line 0: 'Start a new conversation push button' focusOffset: 0 [[0, 30], [30, 36]]
+21:10:47.074210 - BRAILLE: Cursor offset in line string is: 0
+21:10:47.074220 - BRAILLE: Adjusting offset to 0 (unhandled condition)
+21:10:47.074225 - BRAILLE: Current range: (0, 32). Target cell: 0.
+21:10:47.074229 - BRAILLE LINE:  'Start a new conversation push button'
+21:10:47.074287 -      VISIBLE:  'Start a new conversation push bu', cursor=1
+21:10:47.074307 - BRAILLE: Enabling braille. BrlAPI running: False
+21:10:47.074310 - BRAILLE: Need to initialize first.
+21:10:47.074317 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff78cfcb80>
+21:10:47.074326 - BRAILLE: WINDOWPATH=None
+21:10:47.074331 - BRAILLE: XDG_VTNR=None
+21:10:47.074333 - BRAILLE: Attempting connection with BrlAPI.
+21:10:47.074477 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+21:10:47.074837 - ORCA: Region of interest: [push button | Start a new conversation] (0, 0)
+21:10:47.075033 - WEB: New focus [push button | Start a new conversation] is not a special case. Generating speech.
+21:10:47.075155 - WEB: Generating speech for document object [push button | Start a new conversation]
+21:10:47.075426 - INFO: Getting text attributes for [push button | Start a new conversation] (chars: 0-8)
+21:10:47.075549 - INFO: Attributes at 0: ['bg-color:122,162,247', 'size:10.5pt', 'language:en', 'direction:lr', 'fg-color:16,19,25', 'family-name:Liberation Mono'] (0-8)
+21:10:47.075560 - INFO: 1 attribute ranges found in 0.0001s
+21:10:47.075693 - SPEECH GENERATOR: Starting unfocused generation for [push button | Start a new conversation] (<enum ATSPI_ROLE_PUSH_BUTTON of type Atspi.Role>)
+21:10:47.076011 - DEFAULT: Not in SayAll
+21:10:47.076258 - INFO: Looking for common ancestor of [push button | Start a new conversation] and [link | Skip to message box]
+21:10:47.076450 - INFO: Common ancestor of [push button | Start a new conversation] and [link | Skip to message box] is [document web | MLX Chat]
+21:10:47.076459 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0009  ---->  oldAncestors=[]
+21:10:47.076758 - DEFAULT: Not in SayAll
+21:10:47.076985 - INFO: Looking for common ancestor of [link | Skip to message box] and [push button | Start a new conversation]
+21:10:47.077172 - INFO: Common ancestor of [link | Skip to message box] and [push button | Start a new conversation] is [document web | MLX Chat]
+21:10:47.077180 - DEFAULT: Not in SayAll
+21:10:47.077502 - SPEECH GENERATOR: Starting ancestor generation for [landmark | ] (ROLE_LANDMARK)
+                  GENERATION TIME: 0.0001  ---->  leaving=[]
+21:10:47.077738 - DEFAULT: Not in SayAll
+21:10:47.077816 - SPEECH GENERATOR: system voice requested with language='None', dialect='None'
+                  GENERATION TIME: 0.0002  ---->  roleName=[banner]
+                  GENERATION TIME: 0.0003  ---->  labelAndName=[]
+                  COMPLETION TIME: 0.0007
+                  SPEECH GENERATOR: Results: 
+                  'banner' 
+                  '{'established': False}'
+                  GENERATION TIME: 0.0016  ---->  newAncestors=[banner]
+21:10:47.078473 - SPEECH GENERATOR: default voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0003  ---->  labelAndName=[Start a new conversation]
+                  GENERATION TIME: 0.0001  ---->  expandableState=[]
+21:10:47.078815 - DEFAULT: Not in SayAll
+21:10:47.079017 - SPEECH GENERATOR: system voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0004  ---->  roleName=[push button]
+                  GENERATION TIME: 0.0001  ---->  availability=[]
+                  GENERATION TIME: 0.0001  ---->  mnemonic=[]
+                  GENERATION TIME: 0.0003  ---->  accelerator=[]
+                  GENERATION TIME: 0.0002  ---->  newNodeLevel=[]
+                  GENERATION TIME: 0.0001  ---->  unselectedCell=[]
+                  GENERATION TIME: 0.0001  ---->  clickable=[]
+                  GENERATION TIME: 0.0001  ---->  pause=[PAUSE]
+                  GENERATION TIME: 0.0001  ---->  hasLongDesc=[]
+                  GENERATION TIME: 0.0001  ---->  hasDetails=[]
+                  GENERATION TIME: 0.0001  ---->  detailsFor=[]
+                  GENERATION TIME: 0.0001  ---->  tutorial=[]
+                  GENERATION TIME: 0.0004  ---->  description=[]
+                  GENERATION TIME: 0.0001  ---->  hasPopup=[]
+                  COMPLETION TIME: 0.0056
+                  SPEECH GENERATOR: Results: 
+                  'banner' 
+                  '{'established': False}' 
+                  'Start a new conversation' 
+                  '{'established': False}' 
+                  'push button' 
+                  '{'established': False}' 
+                  'PAUSE' 
+                  'PAUSE'
+21:10:47.081357 - WEB: Speech generation for document object [push button | Start a new conversation] complete.
+21:10:47.081374 - SPEECH: Last spoke 0.3314 seconds ago
+21:10:47.081382 - SPEECH: Last spoke 0.0000 seconds ago
+21:10:47.081396 - SPEECH OUTPUT: 'banner'{'established': False}
+21:10:47.081457 - SPEECH OUTPUT: 'Start a new conversation push button.'{'established': False}
+21:10:47.081973 - DEFAULT: Not in SayAll
+21:10:47.082122 - WEB: Not using focus mode for [push button | Start a new conversation] due to lack of cause
+21:10:47.082200 - EVENT MANAGER: locusOfFocus: [push button | Start a new conversation] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.082209 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:47.082213 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:47.082216 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:47.082218 - EVENT MANAGER: _inFocusMode: False
+21:10:47.082221 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:47.082224 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0150
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_PRESSED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=422750702
+                 time=1790716247.388389
+                 keyType=action
+                 clickCount=3
+                 shouldEcho=True
+
+
+vvvvv PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) vvvvv
+21:10:47.388638 - HOST_APP: [application | Chromium]
+21:10:47.388849 - WINDOW:   [frame | MLX Chat - Chromium]
+21:10:47.388967 - LOCATION: [push button | Start a new conversation]
+21:10:47.388981 - CONSUME:  False (No handler)
+21:10:47.389004 - DEFAULT: Interrupting presentation
+21:10:47.389016 - WEB: Flushing live region messages
+21:10:47.389053 - DEFAULT: Presenting keyboard event
+21:10:47.389089 - SPEECH GENERATOR: None voice requested with language='None', dialect='None'
+21:10:47.389128 - SPEECH OUTPUT: 'tab ' {'established': False}
+21:10:47.389243 - INPUT EVENT: _lastCommandWasCaretNav: False
+21:10:47.389254 - INPUT EVENT: _lastCommandWasStructNav: False
+21:10:47.389260 - INPUT EVENT: _lastCommandWasMouseButton: False
+21:10:47.389266 - INPUT EVENT: _inFocusMode: False
+21:10:47.389273 - INPUT EVENT: _focusModeIsSticky: False
+21:10:47.389279 - INPUT EVENT: _browseModeIsSticky: False
+21:10:47.389288 - TOTAL PROCESSING TIME: 0.0009
+^^^^^ PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_RELEASED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=422750710
+                 time=1790716247.396079
+                 keyType=action
+                 clickCount=3
+                 shouldEcho=False
+
+
+vvvvv PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) vvvvv
+21:10:47.396259 - HOST_APP: [application | Chromium]
+21:10:47.396385 - WINDOW:   [frame | MLX Chat - Chromium]
+21:10:47.396465 - LOCATION: [push button | Start a new conversation]
+21:10:47.396473 - CONSUME:  False (Is release for last non-modifier keyevent)
+21:10:47.396495 - INPUT EVENT: _lastCommandWasCaretNav: False
+21:10:47.396500 - INPUT EVENT: _lastCommandWasStructNav: False
+21:10:47.396504 - INPUT EVENT: _lastCommandWasMouseButton: False
+21:10:47.396508 - INPUT EVENT: _inFocusMode: False
+21:10:47.396512 - INPUT EVENT: _focusModeIsSticky: False
+21:10:47.396515 - INPUT EVENT: _browseModeIsSticky: False
+21:10:47.396520 - TOTAL PROCESSING TIME: 0.0004
+^^^^^ PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) ^^^^^
+
+
+21:10:47.397724 - EVENT MANAGER: object:state-changed:focused for [push button | Start a new conversation] in [application | Chromium] (0, 0, 0)
+21:10:47.397778 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:47.397954 - EVENT MANAGER: Queueing object:state-changed:focused [push button | Start a new conversation] (0,0,0) from [application | Chromium]
+
+21:10:47.398423 - EVENT MANAGER: object:state-changed:focused for [push button | Open conversation history] in [application | Chromium] (1, 0, 0)
+21:10:47.398449 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:47.398634 - EVENT MANAGER: Queueing object:state-changed:focused [push button | Open conversation history] (1,0,0) from [application | Chromium]
+21:10:47.398989 - EVENT MANAGER: Dequeued object:state-changed:focused [push button | Start a new conversation] (0,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+21:10:47.399012 - OBJECT EVENT: object:state-changed:focused (0, 0, 0)
+                                app.name='Chromium' name='Start a new conversation' role='push button'
+                                description=''
+                                states='enabled focusable sensitive showing visible'
+                                relations=''
+                                actions='press showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:new-chat-btn, class:btn, explicit-name:true, name-from:attribute, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 1]
+
+21:10:47.400196 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:47.400794 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.400814 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:47.400858 - WEB: Ignoring because event source lost focus
+21:10:47.400948 - EVENT MANAGER: locusOfFocus: [push button | Start a new conversation] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.400958 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:47.400962 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:47.400965 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:47.400969 - EVENT MANAGER: _inFocusMode: False
+21:10:47.400973 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:47.400976 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0020
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+21:10:47.401230 - EVENT MANAGER: Dequeued object:state-changed:focused [push button | Open conversation history] (1,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+21:10:47.401328 - OBJECT EVENT: object:state-changed:focused (1, 0, 0)
+                                app.name='Chromium' name='Open conversation history' role='push button'
+                                description=''
+                                states='enabled focusable focused sensitive showing visible has popup'
+                                relations=''
+                                actions='press showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:history-btn, class:btn btn--ghost, haspopup:dialog, explicit-name:true, name-from:attribute, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 2]
+
+21:10:47.402475 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:47.403029 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.403052 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:47.403420 - WEB: Not event from context replicant. locusOfFocus [push button | Start a new conversation] is not dead.
+21:10:47.403432 - WEB: Getting caret context for None
+21:10:47.403822 - WEB: Caret context is [push button | Start a new conversation], 0 (focus: [push button | Start a new conversation])
+21:10:47.403912 - WEB: Deferring to other scripts for handling non-document source
+21:10:47.403920 - CHROMIUM: Passing along event to default script
+21:10:47.405733 - INFO: Looking at [frame | MLX Chat - Chromium] from [application | Chromium] /usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --enable-remote-extensions --load-extension --no-sandbox --enable-accessibility --force-renderer-accessibility --disable-gpu --remote-debugging-port=9222 --user-data-dir=<home>/sr/.cache/chromium --window-size=1440,900 --window-position=0,0 --no-first-run --no-default-browser-check --enable-features=AccessibilityAriaVirtualContent --force-device-scale-factor=1 --disable-extensions --disable-default-apps --disable-component-update --noerrdialogs --disable-infobars --kiosk http://127.0.0.1:8765/index.html 
+21:10:47.405987 - INFO: [frame | MLX Chat - Chromium] can be active window
+21:10:47.406096 - ORCA: Active script is: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.406398 - ORCA: Changing locusOfFocus from [push button | Start a new conversation] to [push button | Open conversation history]. Notify: True
+21:10:47.407444 - WEB: updating braille for unhandled navigation type [push button | Open conversation history]
+21:10:47.407555 - WEB: Generating braille for document object [push button | Open conversation history]
+21:10:47.407880 - BRAILLE GENERATOR: Starting focused generation for [push button | Open conversation history] (<enum ATSPI_ROLE_PUSH_BUTTON of type Atspi.Role>)
+                  GENERATION TIME: 0.0007  ---->  labelAndName=[Open conversation history]
+                  GENERATION TIME: 0.0002  ---->  expandableState=[]
+                  GENERATION TIME: 0.0006  ---->  roleName=[push button]
+21:10:47.409489 - BRAILLE: Not contracting 'Open conversation history push button' because contracted braille is not enabled.
+                  COMPLETION TIME: 0.0017
+                  BRAILLE GENERATOR: Results: 
+                  'Component: 'Open conversation history push button', 0'
+21:10:47.409562 - BRAILLE: Refresh. Pan: True target: 0
+21:10:47.409570 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+21:10:47.409576 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+21:10:47.409589 - BRAILLE: Line 0: 'Open conversation history push button' focusOffset: 0 [[0, 31], [31, 37]]
+21:10:47.409594 - BRAILLE: Cursor offset in line string is: 0
+21:10:47.409605 - BRAILLE: Adjusting offset to 0 (unhandled condition)
+21:10:47.409610 - BRAILLE: Current range: (0, 32). Target cell: 0.
+21:10:47.409615 - BRAILLE LINE:  'Open conversation history push button'
+21:10:47.409693 -      VISIBLE:  'Open conversation history push b', cursor=1
+21:10:47.409720 - BRAILLE: Enabling braille. BrlAPI running: False
+21:10:47.409724 - BRAILLE: Need to initialize first.
+21:10:47.409730 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff78cfcb80>
+21:10:47.409742 - BRAILLE: WINDOWPATH=None
+21:10:47.409747 - BRAILLE: XDG_VTNR=None
+21:10:47.409751 - BRAILLE: Attempting connection with BrlAPI.
+21:10:47.409907 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+21:10:47.410325 - ORCA: Region of interest: [push button | Open conversation history] (0, 0)
+21:10:47.410572 - WEB: New focus [push button | Open conversation history] is not a special case. Generating speech.
+21:10:47.410771 - WEB: Generating speech for document object [push button | Open conversation history]
+21:10:47.411144 - INFO: Getting text attributes for [push button | Open conversation history] (chars: 0-7)
+21:10:47.411309 - INFO: Attributes at 0: ['bg-color:24,28,35', 'size:10.5pt', 'language:en', 'direction:lr', 'fg-color:232,236,242', 'family-name:Liberation Mono'] (0-7)
+21:10:47.411325 - INFO: 1 attribute ranges found in 0.0002s
+21:10:47.411517 - SPEECH GENERATOR: Starting unfocused generation for [push button | Open conversation history] (<enum ATSPI_ROLE_PUSH_BUTTON of type Atspi.Role>)
+21:10:47.412077 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0008  ---->  oldAncestors=[]
+21:10:47.412607 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0005  ---->  newAncestors=[]
+21:10:47.413259 - SPEECH GENERATOR: default voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0005  ---->  labelAndName=[Open conversation history]
+                  GENERATION TIME: 0.0002  ---->  expandableState=[]
+21:10:47.413677 - DEFAULT: Not in SayAll
+21:10:47.413990 - SPEECH GENERATOR: system voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0006  ---->  roleName=[push button]
+                  GENERATION TIME: 0.0002  ---->  availability=[]
+                  GENERATION TIME: 0.0002  ---->  mnemonic=[]
+                  GENERATION TIME: 0.0004  ---->  accelerator=[]
+                  GENERATION TIME: 0.0002  ---->  newNodeLevel=[]
+                  GENERATION TIME: 0.0002  ---->  unselectedCell=[]
+                  GENERATION TIME: 0.0002  ---->  clickable=[]
+                  GENERATION TIME: 0.0002  ---->  pause=[PAUSE]
+                  GENERATION TIME: 0.0002  ---->  hasLongDesc=[]
+                  GENERATION TIME: 0.0002  ---->  hasDetails=[]
+                  GENERATION TIME: 0.0002  ---->  detailsFor=[]
+                  GENERATION TIME: 0.0002  ---->  tutorial=[]
+                  GENERATION TIME: 0.0006  ---->  description=[]
+21:10:47.416909 - SPEECH GENERATOR: system voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0002  ---->  hasPopup=[opens dialog]
+                  COMPLETION TIME: 0.0056
+                  SPEECH GENERATOR: Results: 
+                  'Open conversation history' 
+                  '{'established': False}' 
+                  'push button' 
+                  '{'established': False}' 
+                  'PAUSE' 
+                  'PAUSE' 
+                  'opens dialog' 
+                  '{'established': False}'
+21:10:47.417094 - WEB: Speech generation for document object [push button | Open conversation history] complete.
+21:10:47.417181 - SPEECH: Last spoke 0.3358 seconds ago
+21:10:47.417208 - SPEECH OUTPUT: 'Open conversation history push button.'{'established': False}
+21:10:47.417277 - SPEECH OUTPUT: 'opens dialog'{'established': False}
+21:10:47.417944 - DEFAULT: Not in SayAll
+21:10:47.418133 - WEB: [push button | Open conversation history] is focus mode widget because it's a button with popup
+21:10:47.418218 - WEB: Using focus mode because [push button | Open conversation history] is a focus mode widget
+21:10:47.418304 - WEB: Getting caret context for [document web | MLX Chat]
+21:10:47.418534 - SETTINGS MANAGER: Setting runtime settings.
+21:10:47.418544 - SETTINGS MANAGER: Runtime settings set.
+21:10:47.418550 - SETTINGS MANAGER: Setting runtime settings.
+21:10:47.418554 - SETTINGS MANAGER: Runtime settings set.
+21:10:47.418560 - SPEECH: Last spoke 0.0014 seconds ago
+21:10:47.418567 - SPEECH OUTPUT: 'Focus mode'{'established': False}
+21:10:47.418598 - SETTINGS MANAGER: Setting runtime settings.
+21:10:47.418603 - SETTINGS MANAGER: Runtime settings set.
+21:10:47.418607 - SETTINGS MANAGER: Setting runtime settings.
+21:10:47.418610 - SETTINGS MANAGER: Runtime settings set.
+21:10:47.418644 - BRAILLE: Not contracting 'Focus mode' because contracted braille is not enabled.
+21:10:47.418688 - BRAILLE: Refresh. Pan: True target: 0
+21:10:47.418694 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+21:10:47.418699 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+21:10:47.418710 - BRAILLE: Line 0: 'Focus mode' focusOffset: 0 [[0, 10]]
+21:10:47.418714 - BRAILLE: Cursor offset in line string is: -1
+21:10:47.418719 - BRAILLE: Current range: (0, 32). Target cell: 0.
+21:10:47.418725 - BRAILLE LINE:  'Focus mode'
+21:10:47.418753 -      VISIBLE:  'Focus mode', cursor=0
+21:10:47.418773 - BRAILLE: Enabling braille. BrlAPI running: False
+21:10:47.418777 - BRAILLE: Need to initialize first.
+21:10:47.418783 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff78cfcb80>
+21:10:47.418795 - BRAILLE: WINDOWPATH=None
+21:10:47.418801 - BRAILLE: XDG_VTNR=None
+21:10:47.418804 - BRAILLE: Attempting connection with BrlAPI.
+21:10:47.418953 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+21:10:47.419169 - INFO: removing key grabs
+21:10:47.419344 - EVENT MANAGER: locusOfFocus: [push button | Open conversation history] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.419355 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:47.419359 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:47.419363 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:47.419366 - EVENT MANAGER: _inFocusMode: True
+21:10:47.419370 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:47.419374 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0181
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_PRESSED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=422751039
+                 time=1790716247.726606
+                 keyType=action
+                 clickCount=1
+                 shouldEcho=True
+
+
+vvvvv PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) vvvvv
+21:10:47.727047 - HOST_APP: [application | Chromium]
+21:10:47.727270 - WINDOW:   [frame | MLX Chat - Chromium]
+21:10:47.727414 - LOCATION: [push button | Open conversation history]
+21:10:47.727430 - CONSUME:  False (No handler)
+21:10:47.727452 - DEFAULT: Interrupting presentation
+21:10:47.727492 - BRAILLE: Refresh. Pan: False target: 0
+21:10:47.727507 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+21:10:47.727517 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+21:10:47.727573 - BRAILLE: Line 0: 'Open conversation history push button' focusOffset: 0 [[0, 31], [31, 37]]
+21:10:47.727583 - BRAILLE: Cursor offset in line string is: 0
+21:10:47.727593 - BRAILLE: Current range: (0, 32). Target cell: 0.
+21:10:47.727602 - BRAILLE LINE:  'Open conversation history push button'
+21:10:47.727749 -      VISIBLE:  'Open conversation history push b', cursor=1
+21:10:47.727796 - BRAILLE: Enabling braille. BrlAPI running: False
+21:10:47.727805 - BRAILLE: Need to initialize first.
+21:10:47.727816 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff78cfcb80>
+21:10:47.727841 - BRAILLE: WINDOWPATH=None
+21:10:47.727851 - BRAILLE: XDG_VTNR=None
+21:10:47.727859 - BRAILLE: Attempting connection with BrlAPI.
+21:10:47.728149 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+21:10:47.728650 - WEB: Flushing live region messages
+21:10:47.728754 - DEFAULT: Presenting keyboard event
+21:10:47.728789 - SPEECH GENERATOR: None voice requested with language='None', dialect='None'
+21:10:47.728823 - SPEECH OUTPUT: 'tab ' {'established': False}
+21:10:47.728896 - INPUT EVENT: _lastCommandWasCaretNav: False
+21:10:47.728906 - INPUT EVENT: _lastCommandWasStructNav: False
+21:10:47.728912 - INPUT EVENT: _lastCommandWasMouseButton: False
+21:10:47.728918 - INPUT EVENT: _inFocusMode: True
+21:10:47.728924 - INPUT EVENT: _focusModeIsSticky: False
+21:10:47.728931 - INPUT EVENT: _browseModeIsSticky: False
+21:10:47.728941 - TOTAL PROCESSING TIME: 0.0023
+^^^^^ PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_RELEASED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=422751048
+                 time=1790716247.735054
+                 keyType=action
+                 clickCount=1
+                 shouldEcho=False
+
+
+vvvvv PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) vvvvv
+21:10:47.735290 - HOST_APP: [application | Chromium]
+21:10:47.735445 - WINDOW:   [frame | MLX Chat - Chromium]
+21:10:47.735543 - LOCATION: [push button | Open conversation history]
+21:10:47.735555 - CONSUME:  False (Is release for last non-modifier keyevent)
+21:10:47.735586 - INPUT EVENT: _lastCommandWasCaretNav: False
+21:10:47.735593 - INPUT EVENT: _lastCommandWasStructNav: False
+21:10:47.735599 - INPUT EVENT: _lastCommandWasMouseButton: False
+21:10:47.735604 - INPUT EVENT: _inFocusMode: True
+21:10:47.735609 - INPUT EVENT: _focusModeIsSticky: False
+21:10:47.735615 - INPUT EVENT: _browseModeIsSticky: False
+21:10:47.735623 - TOTAL PROCESSING TIME: 0.0005
+^^^^^ PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) ^^^^^
+
+
+21:10:47.737884 - EVENT MANAGER: object:state-changed:focused for [push button | Open conversation history] in [application | Chromium] (0, 0, 0)
+21:10:47.737983 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:47.738291 - EVENT MANAGER: Queueing object:state-changed:focused [push button | Open conversation history] (0,0,0) from [application | Chromium]
+
+21:10:47.742634 - EVENT MANAGER: object:state-changed:focused for [push button | Prepare another computer or install an offline bundle] in [application | Chromium] (1, 0, 0)
+21:10:47.742724 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:47.743236 - EVENT MANAGER: Queueing object:state-changed:focused [push button | Prepare another computer or install an offline bundle] (1,0,0) from [application | Chromium]
+21:10:47.743903 - EVENT MANAGER: Dequeued object:state-changed:focused [push button | Open conversation history] (0,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+21:10:47.743939 - OBJECT EVENT: object:state-changed:focused (0, 0, 0)
+                                app.name='Chromium' name='Open conversation history' role='push button'
+                                description=''
+                                states='enabled focusable sensitive showing visible has popup'
+                                relations=''
+                                actions='press showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:history-btn, class:btn btn--ghost, haspopup:dialog, explicit-name:true, name-from:attribute, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 2]
+
+21:10:47.745694 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:47.746514 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.746568 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:47.746621 - WEB: Ignoring because event source lost focus
+21:10:47.746899 - EVENT MANAGER: locusOfFocus: [push button | Open conversation history] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.746919 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:47.746925 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:47.746928 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:47.746932 - EVENT MANAGER: _inFocusMode: True
+21:10:47.746935 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:47.746938 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0030
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+21:10:47.747190 - EVENT MANAGER: Dequeued object:state-changed:focused [push button | Prepare another computer or install an offline bundle] (1,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+21:10:47.747212 - OBJECT EVENT: object:state-changed:focused (1, 0, 0)
+                                app.name='Chromium' name='Prepare another computer or install an offline bundle' role='push button'
+                                description=''
+                                states='enabled focusable focused sensitive showing visible has popup'
+                                relations=''
+                                actions='press showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:transfer-btn, class:btn btn--ghost, haspopup:dialog, explicit-name:true, name-from:attribute, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 3]
+
+21:10:47.748382 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:47.749015 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.749050 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:47.749513 - WEB: Not event from context replicant. locusOfFocus [push button | Open conversation history] is not dead.
+21:10:47.749529 - WEB: Getting caret context for None
+21:10:47.749909 - WEB: Caret context is [push button | Open conversation history], 0 (focus: [push button | Open conversation history])
+21:10:47.749993 - WEB: Deferring to other scripts for handling non-document source
+21:10:47.750001 - CHROMIUM: Passing along event to default script
+21:10:47.751823 - INFO: Looking at [frame | MLX Chat - Chromium] from [application | Chromium] /usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --enable-remote-extensions --load-extension --no-sandbox --enable-accessibility --force-renderer-accessibility --disable-gpu --remote-debugging-port=9222 --user-data-dir=<home>/sr/.cache/chromium --window-size=1440,900 --window-position=0,0 --no-first-run --no-default-browser-check --enable-features=AccessibilityAriaVirtualContent --force-device-scale-factor=1 --disable-extensions --disable-default-apps --disable-component-update --noerrdialogs --disable-infobars --kiosk http://127.0.0.1:8765/index.html 
+21:10:47.751996 - INFO: [frame | MLX Chat - Chromium] can be active window
+21:10:47.752094 - ORCA: Active script is: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.752358 - ORCA: Changing locusOfFocus from [push button | Open conversation history] to [push button | Prepare another computer or install an offline bundle]. Notify: True
+21:10:47.753310 - WEB: updating braille for unhandled navigation type [push button | Prepare another computer or install an offline bundle]
+21:10:47.753410 - WEB: Generating braille for document object [push button | Prepare another computer or install an offline bundle]
+21:10:47.753701 - BRAILLE GENERATOR: Starting focused generation for [push button | Prepare another computer or install an offline bundle] (<enum ATSPI_ROLE_PUSH_BUTTON of type Atspi.Role>)
+                  GENERATION TIME: 0.0006  ---->  labelAndName=[Prepare another computer or install an offline bundle]
+                  GENERATION TIME: 0.0002  ---->  expandableState=[]
+                  GENERATION TIME: 0.0005  ---->  roleName=[push button]
+21:10:47.755023 - BRAILLE: Not contracting 'Prepare another computer or install an offline bundle push button' because contracted braille is not enabled.
+                  COMPLETION TIME: 0.0014
+                  BRAILLE GENERATOR: Results: 
+                  'Component: 'Prepare another computer or install an offline bundle push button', 0'
+21:10:47.755090 - BRAILLE: Refresh. Pan: True target: 0
+21:10:47.755098 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+21:10:47.755102 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+21:10:47.755117 - BRAILLE: Line 0: 'Prepare another computer or install an offline bundle push button' focusOffset: 0 [[0, 28], [28, 59], [59, 65]]
+21:10:47.755122 - BRAILLE: Cursor offset in line string is: 0
+21:10:47.755133 - BRAILLE: Adjusting offset to 0 (unhandled condition)
+21:10:47.755141 - BRAILLE: Current range: (0, 32). Target cell: 0.
+21:10:47.755145 - BRAILLE LINE:  'Prepare another computer or install an offline bundle push button'
+21:10:47.755214 -      VISIBLE:  'Prepare another computer or inst', cursor=1
+21:10:47.755237 - BRAILLE: Enabling braille. BrlAPI running: False
+21:10:47.755240 - BRAILLE: Need to initialize first.
+21:10:47.755246 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff78cfcb80>
+21:10:47.755256 - BRAILLE: WINDOWPATH=None
+21:10:47.755262 - BRAILLE: XDG_VTNR=None
+21:10:47.755265 - BRAILLE: Attempting connection with BrlAPI.
+21:10:47.755391 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+21:10:47.755761 - ORCA: Region of interest: [push button | Prepare another computer or install an offline bundle] (0, 0)
+21:10:47.755975 - WEB: New focus [push button | Prepare another computer or install an offline bundle] is not a special case. Generating speech.
+21:10:47.756116 - WEB: Generating speech for document object [push button | Prepare another computer or install an offline bundle]
+21:10:47.756518 - INFO: Getting text attributes for [push button | Prepare another computer or install an offline bundle] (chars: 0-8)
+21:10:47.756680 - INFO: Attributes at 0: ['bg-color:24,28,35', 'size:10.5pt', 'language:en', 'direction:lr', 'fg-color:232,236,242', 'family-name:Liberation Mono'] (0-8)
+21:10:47.756693 - INFO: 1 attribute ranges found in 0.0002s
+21:10:47.756856 - SPEECH GENERATOR: Starting unfocused generation for [push button | Prepare another computer or install an offline bundle] (<enum ATSPI_ROLE_PUSH_BUTTON of type Atspi.Role>)
+21:10:47.757243 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0005  ---->  oldAncestors=[]
+21:10:47.757645 - DEFAULT: Not in SayAll
+                  GENERATION TIME: 0.0004  ---->  newAncestors=[]
+21:10:47.758169 - SPEECH GENERATOR: default voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0004  ---->  labelAndName=[Prepare another computer or install an offline bundle]
+                  GENERATION TIME: 0.0002  ---->  expandableState=[]
+21:10:47.758506 - DEFAULT: Not in SayAll
+21:10:47.758768 - SPEECH GENERATOR: system voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0005  ---->  roleName=[push button]
+                  GENERATION TIME: 0.0002  ---->  availability=[]
+                  GENERATION TIME: 0.0001  ---->  mnemonic=[]
+                  GENERATION TIME: 0.0003  ---->  accelerator=[]
+                  GENERATION TIME: 0.0002  ---->  newNodeLevel=[]
+                  GENERATION TIME: 0.0002  ---->  unselectedCell=[]
+                  GENERATION TIME: 0.0001  ---->  clickable=[]
+                  GENERATION TIME: 0.0001  ---->  pause=[PAUSE]
+                  GENERATION TIME: 0.0001  ---->  hasLongDesc=[]
+                  GENERATION TIME: 0.0001  ---->  hasDetails=[]
+                  GENERATION TIME: 0.0001  ---->  detailsFor=[]
+                  GENERATION TIME: 0.0001  ---->  tutorial=[]
+                  GENERATION TIME: 0.0005  ---->  description=[]
+21:10:47.761269 - SPEECH GENERATOR: system voice requested with language='en', dialect=''
+                  GENERATION TIME: 0.0002  ---->  hasPopup=[opens dialog]
+                  COMPLETION TIME: 0.0046
+                  SPEECH GENERATOR: Results: 
+                  'Prepare another computer or install an offline bundle' 
+                  '{'established': False}' 
+                  'push button' 
+                  '{'established': False}' 
+                  'PAUSE' 
+                  'PAUSE' 
+                  'opens dialog' 
+                  '{'established': False}'
+21:10:47.761426 - WEB: Speech generation for document object [push button | Prepare another computer or install an offline bundle] complete.
+21:10:47.761439 - SPEECH: Last spoke 0.3429 seconds ago
+21:10:47.761460 - SPEECH OUTPUT: 'Prepare another computer or install an offline bundle push button.'{'established': False}
+21:10:47.761516 - SPEECH OUTPUT: 'opens dialog'{'established': False}
+21:10:47.762178 - DEFAULT: Not in SayAll
+21:10:47.762353 - WEB: [push button | Prepare another computer or install an offline bundle] is focus mode widget because it's a button with popup
+21:10:47.762429 - WEB: Using focus mode because [push button | Prepare another computer or install an offline bundle] is a focus mode widget
+21:10:47.762523 - EVENT MANAGER: locusOfFocus: [push button | Prepare another computer or install an offline bundle] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:47.762533 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:47.762536 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:47.762540 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:47.762543 - EVENT MANAGER: _inFocusMode: True
+21:10:47.762546 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:47.762549 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0154
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_PRESSED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=422751382
+                 time=1790716248.069387
+                 keyType=action
+                 clickCount=2
+                 shouldEcho=True
+
+
+vvvvv PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) vvvvv
+21:10:48.069861 - HOST_APP: [application | Chromium]
+21:10:48.070058 - WINDOW:   [frame | MLX Chat - Chromium]
+21:10:48.070184 - LOCATION: [push button | Prepare another computer or install an offline bundle]
+21:10:48.070199 - CONSUME:  False (No handler)
+21:10:48.070224 - DEFAULT: Interrupting presentation
+21:10:48.070262 - WEB: Flushing live region messages
+21:10:48.070320 - DEFAULT: Presenting keyboard event
+21:10:48.070362 - SPEECH GENERATOR: None voice requested with language='None', dialect='None'
+21:10:48.070414 - SPEECH OUTPUT: 'tab ' {'established': False}
+21:10:48.070550 - INPUT EVENT: _lastCommandWasCaretNav: False
+21:10:48.070565 - INPUT EVENT: _lastCommandWasStructNav: False
+21:10:48.070571 - INPUT EVENT: _lastCommandWasMouseButton: False
+21:10:48.070577 - INPUT EVENT: _inFocusMode: True
+21:10:48.070583 - INPUT EVENT: _focusModeIsSticky: False
+21:10:48.070589 - INPUT EVENT: _browseModeIsSticky: False
+21:10:48.070598 - TOTAL PROCESSING TIME: 0.0012
+^^^^^ PROCESS ATSPI_KEY_PRESSED_EVENT: 'Tab' (23) ^^^^^
+
+
+KEYBOARD_EVENT:  type=ATSPI_KEY_RELEASED_EVENT
+                 id=65289
+                 hw_code=23
+                 modifiers=0
+                 event_string=(Tab)
+                 keyval_name=(Tab)
+                 timestamp=422751391
+                 time=1790716248.077551
+                 keyType=action
+                 clickCount=2
+                 shouldEcho=False
+
+
+vvvvv PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) vvvvv
+21:10:48.077753 - HOST_APP: [application | Chromium]
+21:10:48.077874 - WINDOW:   [frame | MLX Chat - Chromium]
+21:10:48.077944 - LOCATION: [push button | Prepare another computer or install an offline bundle]
+21:10:48.077951 - CONSUME:  False (Is release for last non-modifier keyevent)
+21:10:48.077971 - INPUT EVENT: _lastCommandWasCaretNav: False
+21:10:48.077975 - INPUT EVENT: _lastCommandWasStructNav: False
+21:10:48.077979 - INPUT EVENT: _lastCommandWasMouseButton: False
+21:10:48.077983 - INPUT EVENT: _inFocusMode: True
+21:10:48.077986 - INPUT EVENT: _focusModeIsSticky: False
+21:10:48.077989 - INPUT EVENT: _browseModeIsSticky: False
+21:10:48.077994 - TOTAL PROCESSING TIME: 0.0004
+^^^^^ PROCESS ATSPI_KEY_RELEASED_EVENT: 'Tab' (23) ^^^^^
+
+
+21:10:48.079048 - EVENT MANAGER: object:state-changed:focused for [push button | Prepare another computer or install an offline bundle] in [application | Chromium] (0, 0, 0)
+21:10:48.079097 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:48.079266 - EVENT MANAGER: Queueing object:state-changed:focused [push button | Prepare another computer or install an offline bundle] (0,0,0) from [application | Chromium]
+
+21:10:48.079755 - EVENT MANAGER: object:state-changed:focused for [push button | Open model and memory details] in [application | Chromium] (1, 0, 0)
+21:10:48.079783 - EVENT MANAGER: Not ignoring due to lack of cause
+21:10:48.079947 - EVENT MANAGER: Queueing object:state-changed:focused [push button | Open model and memory details] (1,0,0) from [application | Chromium]
+21:10:48.080228 - EVENT MANAGER: Dequeued object:state-changed:focused [push button | Prepare another computer or install an offline bundle] (0,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+21:10:48.080248 - OBJECT EVENT: object:state-changed:focused (0, 0, 0)
+                                app.name='Chromium' name='Prepare another computer or install an offline bundle' role='push button'
+                                description=''
+                                states='enabled focusable sensitive showing visible has popup'
+                                relations=''
+                                actions='press showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:transfer-btn, class:btn btn--ghost, haspopup:dialog, explicit-name:true, name-from:attribute, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 3]
+
+21:10:48.081371 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:48.081986 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:48.082021 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:48.082070 - WEB: Ignoring because event source lost focus
+21:10:48.082222 - EVENT MANAGER: locusOfFocus: [push button | Prepare another computer or install an offline bundle] activeScript: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:48.082236 - EVENT MANAGER: _lastCommandWasCaretNav: False
+21:10:48.082240 - EVENT MANAGER: _lastCommandWasStructNav: False
+21:10:48.082243 - EVENT MANAGER: _lastCommandWasMouseButton: False
+21:10:48.082246 - EVENT MANAGER: _inFocusMode: True
+21:10:48.082249 - EVENT MANAGER: _focusModeIsSticky: False
+21:10:48.082253 - EVENT MANAGER: _browseModeIsSticky: False
+TOTAL PROCESSING TIME: 0.0020
+^^^^^ PROCESS OBJECT EVENT object:state-changed:focused ^^^^^
+
+21:10:48.082447 - EVENT MANAGER: Dequeued object:state-changed:focused [push button | Open model and memory details] (1,0,0) from [application | Chromium]
+
+vvvvv PROCESS OBJECT EVENT object:state-changed:focused vvvvv
+21:10:48.082464 - OBJECT EVENT: object:state-changed:focused (1, 0, 0)
+                                app.name='Chromium' name='Open model and memory details' role='push button'
+                                description=''
+                                states='enabled focusable focused sensitive showing visible has popup'
+                                relations=''
+                                actions='press showcontextmenu'
+                                interfaces='Accessible Action Collection Component Document Hypertext Hyperlink Text'
+                                attributes='text-align:center, id:details-btn, class:btn btn--ghost, haspopup:dialog, explicit-name:true, name-from:attribute, tag:button, display:block'
+                                path=[-1, 0, 0, 0, 5, 2, 1, 3, 1, 4]
+
+21:10:48.083464 - EVENT MANAGER: Getting script for [application | Chromium] (check: True)
+21:10:48.084061 - EVENT MANAGER: Script is <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:48.084092 - EVENT MANAGER: Change active script: False (The script for this event is already active.)
+21:10:48.084532 - WEB: Not event from context replicant. locusOfFocus [push button | Prepare another computer or install an offline bundle] is not dead.
+21:10:48.084547 - WEB: Getting caret context for None
+21:10:48.084909 - WEB: Caret context is [push button | Prepare another computer or install an offline bundle], 0 (focus: [push button | Prepare another computer or install an offline bundle])
+21:10:48.084978 - WEB: Deferring to other scripts for handling non-document source
+21:10:48.084985 - CHROMIUM: Passing along event to default script
+21:10:48.086671 - INFO: Looking at [frame | MLX Chat - Chromium] from [application | Chromium] /usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --enable-remote-extensions --load-extension --no-sandbox --enable-accessibility --force-renderer-accessibility --disable-gpu --remote-debugging-port=9222 --user-data-dir=<home>/sr/.cache/chromium --window-size=1440,900 --window-position=0,0 --no-first-run --no-default-browser-check --enable-features=AccessibilityAriaVirtualContent --force-device-scale-factor=1 --disable-extensions --disable-default-apps --disable-component-update --noerrdialogs --disable-infobars --kiosk http://127.0.0.1:8765/index.html 
+21:10:48.086896 - INFO: [frame | MLX Chat - Chromium] can be active window
+21:10:48.087000 - ORCA: Active script is: <orca.scripts.toolkits.Chromium.script.Script object at 0xffff782180d0>
+21:10:48.087267 - ORCA: Changing locusOfFocus from [push button | Prepare another computer or install an offline bundle] to [push button | Open model and memory details]. Notify: True
+21:10:48.088228 - WEB: updating braille for unhandled navigation type [push button | Open model and memory details]
+21:10:48.088329 - WEB: Generating braille for document object [push button | Open model and memory details]
+21:10:48.088596 - BRAILLE GENERATOR: Starting focused generation for [push button | Open model and memory details] (<enum ATSPI_ROLE_PUSH_BUTTON of type Atspi.Role>)
+                  GENERATION TIME: 0.0007  ---->  labelAndName=[Open model and memory details]
+                  GENERATION TIME: 0.0002  ---->  expandableState=[]
+                  GENERATION TIME: 0.0006  ---->  roleName=[push button]
+21:10:48.090167 - BRAILLE: Not contracting 'Open model and memory details push button' because contracted braille is not enabled.
+                  COMPLETION TIME: 0.0017
+                  BRAILLE GENERATOR: Results: 
+                  'Component: 'Open model and memory details push button', 0'
+21:10:48.090232 - BRAILLE: Refresh. Pan: True target: 0
+21:10:48.090240 - BRAILLE: Last text obj: None (Caret: 0, Line: 0, Cell: 0)
+21:10:48.090244 - BRAILLE: Current text obj: None (Caret: 0, Line: 0). On same line: False
+21:10:48.090257 - BRAILLE: Line 0: 'Open model and memory details push button' focusOffset: 0 [[0, 30], [30, 41]]
+21:10:48.090261 - BRAILLE: Cursor offset in line string is: 0
+21:10:48.090271 - BRAILLE: Adjusting offset to 0 (unhandled condition)
+21:10:48.090276 - BRAILLE: Current range: (0, 32). Target cell: 0.
+21:10:48.090280 - BRAILLE LINE:  'Open model and memory details push button'
+21:10:48.090347 -      VISIBLE:  'Open model and memory details pu', cursor=1
+21:10:48.090369 - BRAILLE: Enabling braille. BrlAPI running: False
+21:10:48.090373 - BRAILLE: Need to initialize first.
+21:10:48.090378 - BRAILLE: Initializing. Callback: <function _processBrailleEvent at 0xffff78cfcb80>
+21:10:48.090388 - BRAILLE: WINDOWPATH=None
+21:10:48.090393 - BRAILLE: XDG_VTNR=None
+21:10:48.090397 - BRAILLE: Attempting connection with BrlAPI.
+21:10:48.090538 - BRAILLE: Initialization failed.
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/orca/braille.py", line 1879, in init
+    _brlAPI = brlapi.Connection()
+              ^^^^^^^^^^^^^^^^^^^
+  File "brlapi.pyx", line 456, in brlapi.Connection.__init__
+brlapi.ConnectionError: couldn't connect to b':0' with key b'keyfile:/etc/brlapi.key+polkit': connect: No such file or directory
+(brlerrno 11, libcerrno 2, gaierrno 0)
+Is BRLTTY really running?
+
+21:10:48.090927 - ORCA: Region of interest: [push button | Open model and memory details] (0, 0)
+21:10:48.091170 - WEB: New focus [push button | Open model and memory details] is not a special case. Generating speech.
+21:10:48.091323 - WEB: Generating speech for document object [push button | Open model and memory details]
+21:10:48.091673 - INFO: Getting text attributes for [push button | Open model and memory details] (chars: 0-7)
+21:10:48.091826 - INFO: Attributes at 0: ['bg-color:24,28,35', 'size:10.5pt', 'language:en', 'direction:lr', 'fg-color:232,236,242', 'family-name:Liberation Mono'] (0-7)
+21:10:48.091839 - INFO: 1 attribute ranges found in 0.0002s
+21:10:48.092002 - SPEECH GENERATOR: Starting unfocused generation for [push button | Open model and memory details] (<enum ATSPI_ROLE_PUSH_BUTTON of type Atspi.Role>)
+21:10:48.092406 - DEFAULT: Not in SayAll

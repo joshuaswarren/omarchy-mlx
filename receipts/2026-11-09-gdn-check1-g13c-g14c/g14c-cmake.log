@@ -1,0 +1,34 @@
+-- The C compiler identification is GNU 16.1.1
+-- The CXX compiler identification is GNU 16.1.1
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Building MLX for aarch64 processor on Linux
+-- Found Vulkan: /usr/lib/libvulkan.so (found version "1.4.357") found components: glslc glslangValidator
+-- Vulkan found: include /usr/include, libs /usr/lib/libvulkan.so
+-- Downloading json
+-- Using the multi-header code from $WORKTREE/build369/_deps/json-src/include/
+-- Downloading gguflib
+-- omarchy: bf16 direct GEMM shaders enabled (GL_EXT_bfloat16)
+-- {fmt} version: 12.1.0
+-- Build type: Release
+CMake Warning (deprecated) at $WORKTREE/build369/_deps/doctest-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
+
+-- Configuring done (5.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: $WORKTREE/build369

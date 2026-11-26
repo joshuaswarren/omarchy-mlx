@@ -1,0 +1,65 @@
+
+===== device + coopmat advertisement (overlay /var/tmp/mlxcoopfix/honeykrisp_icd.aarch64.json) =====
+	deviceName        = Apple M4 Pro (G16S B1)
+	VK_KHR_cooperative_matrix                   : extension revision 2
+
+===== host selector unit test (no GPU, no overlay) =====
+[coopmat_select] exit=0
+[doctest] test cases:  6 |  6 passed | 0 failed | 0 skipped
+[doctest] assertions: 27 | 27 passed | 0 failed |
+[doctest] Status: SUCCESS!
+
+===== matmul_family  coopmat=on (flag=1) =====
+[matmul_family/on] exit=1
+[doctest] test cases:       46 |       45 passed |   1 failed | 0 skipped
+[doctest] assertions: 83473134 | 83472653 passed | 481 failed |
+[doctest] Status: FAILURE!
+
+===== runtime  coopmat=on =====
+[runtime/on] exit=1
+[doctest] test cases:    60 |    59 passed | 1 failed | 0 skipped
+[doctest] assertions: 27078 | 27077 passed | 1 failed |
+[doctest] Status: FAILURE!
+
+===== copy_offset  coopmat=on =====
+[copy_offset/on] exit=0
+[doctest] test cases:     29 |     29 passed | 0 failed | 0 skipped
+[doctest] assertions: 131707 | 131707 passed | 0 failed |
+[doctest] Status: SUCCESS!
+
+===== matmul_family  coopmat=off (flag=0) =====
+[matmul_family/off] exit=1
+[doctest] test cases:       46 |       45 passed |   1 failed | 0 skipped
+[doctest] assertions: 21889929 | 21889448 passed | 481 failed |
+[doctest] Status: FAILURE!
+
+===== runtime  coopmat=off =====
+[runtime/off] exit=1
+[doctest] test cases:    60 |    59 passed | 1 failed | 0 skipped
+[doctest] assertions: 27078 | 27077 passed | 1 failed |
+[doctest] Status: FAILURE!
+
+===== copy_offset  coopmat=off =====
+[copy_offset/off] exit=0
+[doctest] test cases:     29 |     29 passed | 0 failed | 0 skipped
+[doctest] assertions: 131707 | 131707 passed | 0 failed |
+[doctest] Status: SUCCESS!
+
+===== capability-simulation profiles (selector gating, GPU-agnostic) =====
+[capsim/m1-honeykrisp-fork] exit=0
+[doctest] test cases:   10 |   10 passed | 0 failed | 0 skipped
+[doctest] assertions: 6613 | 6613 passed | 0 failed |
+[doctest] Status: SUCCESS!
+[capsim/m1-stock-no-coopmat] exit=0
+[doctest] test cases:   10 |   10 passed | 0 failed | 0 skipped
+[doctest] assertions: 6609 | 6609 passed | 0 failed |
+[doctest] Status: SUCCESS!
+[capsim/no-cooperative-matrix] exit=0
+[doctest] test cases:   10 |   10 passed | 0 failed | 0 skipped
+[doctest] assertions: 6596 | 6596 passed | 0 failed |
+[doctest] Status: SUCCESS!
+
+===== SUMMARY =====
+matmul_family coopmat ON: [doctest] test cases:       46 |       45 passed |   1 failed | 0 skipped
+suite binaries with a nonzero exit: 4
+RESULT: 4 SUITE(S) FAILED

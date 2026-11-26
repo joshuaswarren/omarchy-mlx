@@ -1,0 +1,8 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[provenance] gdn_pf_gqa_default mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+[gdn_pf_gqa_default] device "Apple M2 Max (G14C B1)" measured 1 legacy 0: default 1 dispatches kernel 637, tiled 1, untiled 3
+===============================================================================
+[doctest] test cases:  1 |  1 passed | 0 failed | 4 skipped
+[doctest] assertions: 20 | 20 passed | 0 failed |
+[doctest] Status: SUCCESS!

@@ -1,0 +1,42 @@
+# scenario: tts-playout (read aloud, playback runs to natural end)
+# total utterances: 39
+
+[06:37:25.054223] tab 
+[06:37:25.084794] Classify or score toggle button not pressed.
+[06:37:25.242380] tab 
+[06:37:25.271503] Microphone push button.
+[06:37:25.271563] Press and hold, or click to latch, to record.
+[06:37:25.445629] tab 
+[06:37:25.476563] Conversation mode check box not checked.
+[06:37:25.629244] tab 
+[06:37:25.648614] History & constraints push button.
+[06:37:25.828881] tab 
+[06:37:25.849151] Output allowance in tokens combo box.
+[06:37:25.849222] Answer length: automatic.
+[06:37:25.849250] opens menu
+[06:37:26.017729] tab 
+[06:37:26.047437] Send push button.
+[06:37:26.219088] tab 
+[06:37:26.251552] Skip to message box link.
+[06:37:26.252805] Browse mode
+[06:37:26.410185] tab 
+[06:37:26.441729] banner
+[06:37:26.441794] Start a new conversation push button.
+[06:37:26.597574] tab 
+[06:37:26.627949] Open conversation history push button.
+[06:37:26.628021] opens dialog
+[06:37:26.629206] Focus mode
+[06:37:26.800404] tab 
+[06:37:26.826876] Prepare another computer or install an offline bundle push button.
+[06:37:26.826930] opens dialog
+[06:37:26.995073] tab 
+[06:37:27.018161] Open model and memory details push button.
+[06:37:27.018227] opens dialog
+[06:37:27.191280] tab 
+[06:37:27.225454] leaving banner.
+[06:37:27.225520] main content
+[06:37:27.225544] Read aloud push button.
+[06:37:27.226483] Browse mode
+[06:37:27.396569] return 
+[06:37:27.524932] Reading reply aloud.
+[06:37:33.642962] Finished speaking.

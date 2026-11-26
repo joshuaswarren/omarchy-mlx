@@ -1,0 +1,28 @@
+start 2026-10-07T00:47:12Z boot f8262481 7.1.12-2-11.38-sep-ARCH load 0.62
+so base 7b1a4b8476844217 cand2 f9a1f2ecaf293722
+shaderdb base CS shader: 375 instrs, 297 alu, 297 fscib, 134 ic, 2828 code size, 111 gprs, 90 uniforms, 0 scratch, 896 threads, 2 loops, 0:0 spills:fills, 60 preamble inst
+prov base   "mx_version": "0.32.4.dev202610062245+41ca6e47",   "version_match": true 
+shaderdb cand2 CS shader: 353 instrs, 276 alu, 276 fscib, 166 ic, 2700 code size, 95 gprs, 88 uniforms, 0 scratch, 1024 threads, 2 loops, 0:0 spills:fills, 60 preamble inst
+prov cand2   "mx_version": "0.32.4.dev202610062245+41ca6e47",   "version_match": true 
+r1 base gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.695
+r1 base gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":1.468
+r1 base gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":1.066
+r1 cand2 gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.892
+r1 cand2 gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":1.483
+r1 cand2 gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":1.114
+r2 base gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.669
+r2 base gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":1.458
+r2 base gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":1.043
+r2 cand2 gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.857
+r2 cand2 gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":1.474
+r2 cand2 gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":1.095
+r3 base gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.671
+r3 base gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":1.473
+r3 base gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":1.048
+r3 cand2 gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":1.863
+r3 cand2 gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":1.469
+r3 cand2 gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":1.126
+mlxcheck2 base "tflops_4096": {"float16": 1.686, "bfloat16": 0.667, "float32": 1.124}
+mlxcheck2 cand2 "tflops_4096": {"float16": 1.941, "bfloat16": 0.666, "float32": 1.24}
+mlxcheck2 hash diffs: [] of 21
+end 2026-10-07T00:49:04Z

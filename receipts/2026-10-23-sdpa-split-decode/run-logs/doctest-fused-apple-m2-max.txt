@@ -1,0 +1,31 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+tests/omarchy/test_sdpa_decode_fused.cpp:403:
+TEST CASE:  fused bf16 decode is bit-identical to the f32 composition
+
+tests/omarchy/test_sdpa_decode_fused.cpp:414: MESSAGE: keys 1 dispatches 10
+  logged: keys := 1
+
+tests/omarchy/test_sdpa_decode_fused.cpp:414: MESSAGE: keys 5 dispatches 10
+  logged: keys := 5
+
+tests/omarchy/test_sdpa_decode_fused.cpp:414: MESSAGE: keys 16 dispatches 10
+  logged: keys := 16
+
+tests/omarchy/test_sdpa_decode_fused.cpp:414: MESSAGE: keys 17 dispatches 10
+  logged: keys := 17
+
+tests/omarchy/test_sdpa_decode_fused.cpp:414: MESSAGE: keys 64 dispatches 10
+  logged: keys := 64
+
+tests/omarchy/test_sdpa_decode_fused.cpp:414: MESSAGE: keys 263 dispatches 1
+  logged: keys := 263
+
+tests/omarchy/test_sdpa_decode_fused.cpp:414: MESSAGE: keys 320 dispatches 1
+  logged: keys := 320
+
+===============================================================================
+[doctest] test cases:      7 |      7 passed | 0 failed | 0 skipped
+[doctest] assertions: 100490 | 100490 passed | 0 failed |
+[doctest] Status: SUCCESS!

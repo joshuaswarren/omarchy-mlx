@@ -1,0 +1,61 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+===============================================================================
+~/gpu/upr/wt-p5/.work/mlx/tests/omarchy/test_fast_ops.cpp:3243:
+TEST CASE:  rope freqs host read treats a NaN frequency like the nested gate
+
+~/gpu/upr/wt-p5/.work/mlx/tests/omarchy/test_fast_ops.cpp:3279: MESSAGE: offset 3: host ran, 64 floats, nested ran, 64 floats
+  logged: offset_value := 3
+
+~/gpu/upr/wt-p5/.work/mlx/tests/omarchy/test_fast_ops.cpp:3279: MESSAGE: offset 3000000: host ran, 64 floats, nested ran, 64 floats
+  logged: offset_value := 3000000
+
+===============================================================================
+~/gpu/upr/wt-p5/.work/mlx/tests/omarchy/test_fast_ops.cpp:3748:
+TEST CASE:  sdpa vjp dk dv match finite differences at rep=1 (path per gate)
+
+~/gpu/upr/wt-p5/.work/mlx/tests/omarchy/test_fast_ops.cpp:81: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+  values: CHECK( 0.0528708 <= 0.02 )
+  logged: fused sdpa vjp dv[104] shape 5x7 element 0: got 0.0599183 want 0.112789
+
+~/gpu/upr/wt-p5/.work/mlx/tests/omarchy/test_fast_ops.cpp:81: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+  values: CHECK( 0.0496869 <= 0.02 )
+  logged: fused sdpa vjp dk[28] shape 4x4 element 0: got -0.0463143 want -0.0960012
+
+~/gpu/upr/wt-p5/.work/mlx/tests/omarchy/test_fast_ops.cpp:81: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+  values: CHECK( 0.18067 <= 0.02 )
+  logged: fused sdpa vjp dv[28] shape 4x4 element 0: got 0.168407 want 0.349077
+
+~/gpu/upr/wt-p5/.work/mlx/tests/omarchy/test_fast_ops.cpp:81: ERROR: CHECK( diff <= tolerance ) is NOT correct!
+  values: CHECK( 0.0525666 <= 0.02 )
+  logged: fused sdpa vjp dv[104] shape 5x7 element 0: got 0.0600586 want 0.112625
+
+Allowed to fail so marking it as not failed
+[gdn_vjp] B=1 Hk=16 Hv=16 T=1
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.000000 0.000000 0.000000 0.000000 0.000000
+    fused vs float32 cpu reference:                    0.001648 0.001668 0.001589 0.000000 0.002080
+    composed(gpu bf16) vs float32 cpu reference:       0.001648 0.001668 0.001589 0.000000 0.002080
+[gdn_vjp] B=1 Hk=16 Hv=16 T=33
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.026782 0.003483 0.000000 0.029721 0.000865
+    fused vs float32 cpu reference:                    0.026845 0.002796 0.001691 0.029681 0.001958
+    composed(gpu bf16) vs float32 cpu reference:       0.001672 0.002243 0.001691 0.001543 0.001744
+[gdn_vjp] B=1 Hk=8 Hv=16 T=1
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.003039 0.002578 0.000000 0.000000 0.000000
+    fused vs float32 cpu reference:                    0.001811 0.001723 0.001979 0.000000 0.001512
+    composed(gpu bf16) vs float32 cpu reference:       0.002365 0.002249 0.001979 0.000000 0.001512
+[gdn_vjp] B=1 Hk=4 Hv=8 T=33
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.028861 0.004428 0.000000 0.021509 0.004535
+    fused vs float32 cpu reference:                    0.028738 0.003354 0.001834 0.021577 0.004810
+    composed(gpu bf16) vs float32 cpu reference:       0.002507 0.002860 0.001834 0.001492 0.001528
+[gdn_vjp] B=1 Hk=4 Hv=16 T=17
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.002535 0.002953 0.000000 0.000000 0.000000
+    fused vs float32 cpu reference:                    0.001624 0.001639 0.001647 0.001568 0.001507
+    composed(gpu bf16) vs float32 cpu reference:       0.002223 0.002632 0.001647 0.001568 0.001507
+[gdn_vjp] B=1 Hk=4 Hv=16 T=17 host-repeated
+    rel L2 q/k/v/g/beta, fused vs composed(gpu bf16):   0.000011 0.002593 0.000000 0.000000 0.000009
+    fused vs float32 cpu reference:                    0.001656 0.001629 0.001647 0.001568 0.001507
+    composed(gpu bf16) vs float32 cpu reference:       0.001656 0.002198 0.001647 0.001568 0.001507
+===============================================================================
+[doctest] test cases:      51 |      51 passed | 0 failed | 0 skipped
+[doctest] assertions: 1383999 | 1383995 passed | 4 failed |
+[doctest] Status: SUCCESS!

@@ -1,0 +1,91 @@
+# mlx-omarchy original, not an upstream backport: nothing to drop at an mlx-lm pin.
+# mlx-lm is MIT licensed; this patch changes no upstream license or notice.
+--- a/mlx_lm/server.py
++++ b/mlx_lm/server.py
+@@ -4,6 +4,7 @@
+ import gc
+ import json
+ import logging
++import os
+ import pickle
+ import platform
+ import socket
+@@ -48,6 +49,15 @@
+     sharded_load,
+ )
+ 
++# mlx-omarchy: the decode loops below read the sampled token's logprob off
++# the device for every token (a gather graph plus a blocking read) even when
++# no consumer wants it: Response.logprob is read only when the request sets
++# logprobs, Response.top_tokens only when top_logprobs > 0. When neither is
++# requested the read is skipped and the Response carries logprob=None and
++# top_tokens=None; generated tokens are unchanged. MLX_OMARCHY_SERVER_LOGPROB_READ=1
++# restores the unconditional upstream read (read once at import).
++_LOGPROB_READ_FORCED = os.environ.get("MLX_OMARCHY_SERVER_LOGPROB_READ") == "1"
++
+ 
+ def get_system_fingerprint():
+     gpu_arch = mx.device_info()["architecture"]
+@@ -230,9 +240,9 @@
+ class Response:
+     text: str
+     token: int
+-    logprob: float
++    logprob: Optional[float]
+     finish_reason: Optional[str]
+-    top_tokens: Tuple[Dict[str, Any]]
++    top_tokens: Optional[Tuple[Dict[str, Any]]]
+ 
+ 
+ class TimeBudget:
+@@ -754,6 +764,13 @@
+                         "detokenizer": current_tokenizer.detokenizer,
+                         "segment_types": segment_types[::-1],
+                         "top_logprobs": args.top_logprobs,
++                        # mlx-omarchy: computed once per request so the decode
++                        # loop needs no new lookups per token.
++                        "need_logprobs": (
++                            _LOGPROB_READ_FORCED
++                            or args.logprobs
++                            or args.top_logprobs > 0
++                        ),
+                     }
+                     # just making sure we don't leave a reference around
+                     del cache
+@@ -863,7 +880,13 @@
+                             Response(
+                                 text,
+                                 r.token,
+-                                r.logprobs[r.token].item(),
++                                # mlx-omarchy: skip the gather-plus-device-read
++                                # when no consumer asked for it (see
++                                # _LOGPROB_READ_FORCED); the flag is precomputed
++                                # in batch_results[uid].
++                                r.logprobs[r.token].item()
++                                if result["need_logprobs"]
++                                else None,
+                                 r.finish_reason,
+                                 _format_top_logprobs(
+                                     r.logprobs,
+@@ -939,6 +962,12 @@
+             # Make the sampler and logit processor
+             sampler = _make_sampler(args, tokenizer)
+             logits_processors = _make_logits_processors(args)
++            # mlx-omarchy: one decision per request; the per-token read below
++            # is a gather graph plus a blocking device read (see
++            # _LOGPROB_READ_FORCED).
++            need_logprobs = (
++                _LOGPROB_READ_FORCED or args.logprobs or args.top_logprobs > 0
++            )
+ 
+             # Load the KV cache
+             self._log_cache_stats()
+@@ -982,7 +1011,7 @@
+                     Response(
+                         gen.text,
+                         gen.token,
+-                        gen.logprobs[gen.token].item(),
++                        gen.logprobs[gen.token].item() if need_logprobs else None,
+                         finish_reason,
+                         _format_top_logprobs(
+                             gen.logprobs, args.top_logprobs, tokenizer

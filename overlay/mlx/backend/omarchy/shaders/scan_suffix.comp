@@ -1,0 +1,72 @@
+#version 460
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VALUE(f) bf16_store(f)
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#endif
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  STORAGE_TYPE values[];
+} input_data;
+layout(set = 0, binding = 2, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+} params;
+
+// One invocation scans one row in a single serial pass. The running
+// accumulator stays float32 for every dtype, the same rule the Softmax
+// and reduce kernels follow.
+void main() {
+  uint row = gl_GlobalInvocationID.x;
+  if (row >= params.output_size) {
+    return;
+  }
+  uint start = params.lhs_offset + row * params.reduce_size;
+  uint out_start = params.output_offset + row * params.reduce_size;
+  float accumulator = 0.0;
+  for (uint index = 0; index < params.reduce_size; ++index) {
+    float value = LOAD_VALUE(input_data.values[start + index]);
+    if (params.operation == 0u) {
+      // Inclusive: the running sum covers the current element.
+      accumulator += value;
+      output_data.values[out_start + index] = STORE_VALUE(accumulator);
+    } else {
+      // Exclusive: the running sum covers only earlier elements.
+      output_data.values[out_start + index] = STORE_VALUE(accumulator);
+      accumulator += value;
+    }
+  }
+}

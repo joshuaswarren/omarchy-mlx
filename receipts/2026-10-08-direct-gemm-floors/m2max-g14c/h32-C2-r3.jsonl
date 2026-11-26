@@ -1,0 +1,5 @@
+{"k": "host", "arm": "C2", "mlx": "0.32.4.dev202610071119+27aa6738", "device": "Apple M2 Max (G14C B1)"}
+{"k": "cell", "arm": "C2", "m": 512, "median_us": 2552.6, "tflops": 6.73, "sha": "b6f3228410394dcf"}
+{"k": "cell", "arm": "C2", "m": 1024, "median_us": 4776.1, "tflops": 7.194, "sha": "e53035bd72c3bb56"}
+{"k": "cell", "arm": "C2", "m": 2048, "median_us": 8998.5, "tflops": 7.637, "sha": "341cc82d1c759b95"}
+{"k": "cell", "arm": "C2", "m": 4096, "median_us": 17392.2, "tflops": 7.902, "sha": "1de08da94ef2bd02"}

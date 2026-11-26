@@ -1,0 +1,5 @@
+2026-11-03T14:23:36Z
+7.1.13-1-20-ARCH
+nproc 10
+repo=mlx-community/granite-4.0-1b-4bit
+model mlx-community/granite-4.0-1b-4bit rev=29f108a4e2ff (same as ../host.txt)

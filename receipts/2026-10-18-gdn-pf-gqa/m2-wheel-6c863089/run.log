@@ -1,0 +1,56 @@
+GDNPF start 2026-10-18T07:03:33Z kernel=7.1.12-2-20261013.18-sep-ARCH boot=<id> governor=performance load1=0.31
+GDNPF env variables GDN/MLX/HK/AGX present: 0
+GDNPF wheel mlx_omarchy-0.32.4.dev202610180652+6c863089-cp314-cp314-linux_aarch64.whl sha256 37533af3d7474a6e6eb9ecb2a5172123075821dadd8636d0ff65f355e2e566b3
+GDNPF libmlx 88c62f2ed14fe7b2
+GDNPF scripts bench_decode 8220064c5ea3aaaf logits 4ac2745a45594687
+GDNPF patches tree a003c55941c6c106 files 76
+GDNPF model snapshot 8b2b98c00a6b4d291155e4890773ca8f769aee53
+GDNPF venv mlx-lm 0.31.3;mlx-omarchy 0.32.4.dev202610180652+6c863089;
+GDNPF time P1 round 1 A rc=0 decode 40.49 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 1 B rc=0 decode 43.20 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 1 C rc=0 decode 43.78 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 1 A rc=0 decode 40.48 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 1 B rc=0 decode 43.27 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 1 C rc=0 decode 43.92 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 2 B rc=0 decode 43.24 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 2 C rc=0 decode 43.87 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 2 A rc=0 decode 40.54 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 2 B rc=0 decode 43.25 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 2 C rc=0 decode 43.86 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 2 A rc=0 decode 40.50 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 3 C rc=0 decode 44.04 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 3 A rc=0 decode 40.60 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 3 B rc=0 decode 43.45 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 3 C rc=0 decode 43.99 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 3 A rc=0 decode 40.63 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 3 B rc=0 decode 43.35 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 4 A rc=0 decode 40.57 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 4 B rc=0 decode 43.33 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 4 C rc=0 decode 43.82 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 4 A rc=0 decode 40.49 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 4 B rc=0 decode 43.19 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 4 C rc=0 decode 43.84 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 5 B rc=0 decode 43.29 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 5 C rc=0 decode 43.90 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P1 round 5 A rc=0 decode 40.65 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:0a1a64828ea650e8 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 5 B rc=0 decode 43.36 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 5 C rc=0 decode 43.96 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF time P2 round 5 A rc=0 decode 40.52 tok/s over 63 tokens (64 requested, EOS suppres generated_ids sha256:fd33be8b314efb95 n=64 first=8160,579,26 verified=match
+GDNPF numerics P1 A rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF numerics P1 B rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF numerics P1 C rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF numerics P1 C2 rc=0 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF numerics P2 A rc=0 logits-run ids_sha256_16 0ef184dc7060ef1a n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF numerics P2 B rc=0 logits-run ids_sha256_16 0ef184dc7060ef1a n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF numerics P2 C rc=0 logits-run ids_sha256_16 0ef184dc7060ef1a n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF numerics P2 C2 rc=0 logits-run ids_sha256_16 0ef184dc7060ef1a n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+GDNPF census A tokens=6 dispatches=3411 kernels=33 logits-run ids_sha256_16 139a0af7ed4e5481 n=6 prompt_tokens=20 vocab=248320 full_steps=6 verified=match
+GDNPF census A tokens=10 dispatches=4635 kernels=33 logits-run ids_sha256_16 df4f0808b6b5fd64 n=10 prompt_tokens=20 vocab=248320 full_steps=10 verified=match
+GDNPF census A tokens=128 dispatches=40743 kernels=33 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=3 verified=match
+GDNPF census B tokens=6 dispatches=3747 kernels=33 logits-run ids_sha256_16 139a0af7ed4e5481 n=6 prompt_tokens=20 vocab=248320 full_steps=6 verified=match
+GDNPF census B tokens=10 dispatches=5163 kernels=33 logits-run ids_sha256_16 df4f0808b6b5fd64 n=10 prompt_tokens=20 vocab=248320 full_steps=10 verified=match
+GDNPF census B tokens=128 dispatches=46935 kernels=33 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=3 verified=match
+GDNPF census C tokens=6 dispatches=3411 kernels=33 logits-run ids_sha256_16 139a0af7ed4e5481 n=6 prompt_tokens=20 vocab=248320 full_steps=6 verified=match
+GDNPF census C tokens=10 dispatches=4635 kernels=33 logits-run ids_sha256_16 df4f0808b6b5fd64 n=10 prompt_tokens=20 vocab=248320 full_steps=10 verified=match
+GDNPF census C tokens=128 dispatches=40743 kernels=33 logits-run ids_sha256_16 089d7c229a1f72f6 n=128 prompt_tokens=20 vocab=248320 full_steps=3 verified=match
+GDNPF end 2026-10-18T07:07:41Z

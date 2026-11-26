@@ -1,0 +1,56 @@
+AB start 2026-10-21T16:27:10Z part=num boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH governor=performance load1=2.11
+AB model $HOME/.local/share/coreglass/models/qwen3_5-4bit base [MLX_OMARCHY_GDN_PF_WIDE=0] x [MLX_AB_UNUSED=1]; env GDN/MLX/HK/AGX present: 0
+AB wheel mlx_omarchy-0.32.4.dev202610211622+356c2df-cp314-cp314-linux_aarch64.whl sha256 0f5294f585d878bdf15e2ac2fb35411688b509e55e0dd510704fd563e09e87f5 libmlx 1edd35f48ad2baea driver c499962c742f399a
+AB scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a
+AB numerics P1 D rc=0 logits-run ids_sha256_16 efdd5f38ebf8bd79 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P1 X rc=0 logits-run ids_sha256_16 efdd5f38ebf8bd79 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P1 D2 rc=0 logits-run ids_sha256_16 efdd5f38ebf8bd79 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P2 D rc=0 logits-run ids_sha256_16 605f37d9d7150429 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P2 X rc=0 logits-run ids_sha256_16 605f37d9d7150429 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB census D tokens=6 dispatches=2553 kernels=33
+AB census D tokens=10 dispatches=3481 kernels=33
+AB census X tokens=6 dispatches=2553 kernels=33
+AB census X tokens=10 dispatches=3481 kernels=33
+AB compare P1 D vs X
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 32
+  max_abs_dlogprob_full: 0.0
+  n_elements_differ_full: 0
+  max_kl_x_to_y: 0.0
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 1.875
+  steps_with_gap_below_2x_maxdiff: 0
+AB compare P1 D vs D2
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 32
+  max_abs_dlogprob_full: 0.0
+  n_elements_differ_full: 0
+  max_kl_x_to_y: 0.0
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 1.875
+  steps_with_gap_below_2x_maxdiff: 0
+AB compare P2 D vs X
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 32
+  max_abs_dlogprob_full: 0.0
+  n_elements_differ_full: 0
+  max_kl_x_to_y: 0.0
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 1.375
+  steps_with_gap_below_2x_maxdiff: 0
+AB end 2026-10-21T16:27:40Z

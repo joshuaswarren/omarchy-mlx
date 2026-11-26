@@ -1,0 +1,2 @@
+TFSEG segment 0: wide 0.01979 tile1 0.02128 diff -0.00149
+TFSEG paired wide-tile1 over segments -0.00149; enumerated resamples (n=1) 2.5th -0.00149 97.5th -0.00149

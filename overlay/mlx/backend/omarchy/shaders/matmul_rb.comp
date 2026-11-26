@@ -1,0 +1,179 @@
+#version 460
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Register-blocked f16 matmul: the matmul.comp contract (same operand
+// addressing, batch unravel, gaps, transpose flags, alpha, and the
+// same per-output arithmetic - one float accumulator that visits k in
+// ascending order with zero padding to a multiple of 16, then alpha *
+// acc rounded once to f16) on a 64 x 64 output tile per 256-thread
+// workgroup, each thread owning a 4 x 4 block. matmul.comp does one
+// output per thread and ran the prefill attention matmuls at
+// 0.14-0.20 TFLOP/s on the M1 (2026-09-09 profile); here every pair
+// of 4-wide shared reads feeds sixteen multiply-adds. Dispatch gate
+// (dispatch_matmul): f16, matrix_m >= 32, no bias C.
+//
+// Causal attention shortcuts, with aux_size = key length minus query
+// length and the row as the query position: flags bit 3 skips output
+// tiles whose every column lies past every row's last valid key (the
+// scores matmul; the causal softmax never reads them), flags bit 4
+// stops the k loop after the last k tile any row of the output tile
+// can reach (the probs matmul; the probabilities past it are exact
+// zeros, whose products cannot change an accumulator).
+
+const uint TILE = 64u;
+const uint TILE_K = 16u;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputA {
+  float16_t values[];
+} input_a;
+layout(set = 0, binding = 1, std430) readonly buffer InputB {
+  float16_t values[];
+} input_b;
+layout(set = 0, binding = 2, std430) readonly buffer InputC {
+  float16_t values[];
+} input_c;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  float16_t values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+  uint lhs_gap;
+  uint rhs_gap;
+} params;
+
+// A staged k-major: tile_a[kk][r4] holds rows 4 r4 .. 4 r4 + 3 at k
+// step kk; tile_b[kk][c4] holds columns 4 c4 .. 4 c4 + 3.
+shared vec4 tile_a[TILE_K][TILE / 4u];
+shared vec4 tile_b[TILE_K][TILE / 4u];
+
+void main() {
+  uint tx = gl_LocalInvocationID.x;
+  uint ty = gl_LocalInvocationID.y;
+  uint lid = ty * 16u + tx;
+  uint batch_index = gl_WorkGroupID.z;
+  uint remaining = batch_index;
+  uint a_batch = 0u;
+  uint b_batch = 0u;
+  for (uint axis = params.dims; axis > 0u; --axis) {
+    uint coord = remaining % params.shape[axis - 1u];
+    remaining /= params.shape[axis - 1u];
+    a_batch += coord * params.in_strides[axis - 1u];
+    b_batch += coord * params.out_strides[axis - 1u];
+  }
+  uint out_matrix = params.matrix_m * params.matrix_n;
+  uint tile_rows = (params.matrix_m + TILE - 1u) / TILE;
+  uint tile_columns = (params.matrix_n + TILE - 1u) / TILE;
+  uint k_tiles = (params.matrix_k + TILE_K - 1u) / TILE_K;
+  bool a_t = (params.flags & 4u) != 0u;
+  bool b_t = (params.flags & 1u) != 0u;
+  bool causal_columns = (params.flags & 8u) != 0u;
+  bool causal_k = (params.flags & 16u) != 0u;
+  uint a_base = params.lhs_offset + a_batch;
+  uint b_base = params.rhs_offset + b_batch;
+
+  for (uint tile_row = gl_WorkGroupID.y; tile_row < tile_rows;
+       tile_row += gl_NumWorkGroups.y) {
+    uint row0 = tile_row * TILE;
+    // Last key any row of this tile may attend to.
+    uint last_valid = params.aux_size + row0 + TILE - 1u;
+    uint tile_k_tiles = causal_k
+        ? min(k_tiles, (last_valid + TILE_K) / TILE_K)
+        : k_tiles;
+    for (uint tile_column = gl_WorkGroupID.x; tile_column < tile_columns;
+         tile_column += gl_NumWorkGroups.x) {
+      uint col0 = tile_column * TILE;
+      if (causal_columns && col0 > last_valid) {
+        continue;
+      }
+      float acc[4][4];
+      for (uint i = 0u; i < 4u; ++i) {
+        for (uint j = 0u; j < 4u; ++j) {
+          acc[i][j] = 0.0;
+        }
+      }
+
+      for (uint tile = 0u; tile < tile_k_tiles; ++tile) {
+        uint k0 = tile * TILE_K;
+        // 1024 A elements and 1024 B elements per step, four each per
+        // thread; the fast index runs along the stored contiguous axis
+        // so consecutive threads read consecutive addresses.
+        for (uint i = 0u; i < 4u; ++i) {
+          uint e = lid + 256u * i;
+          uint r = a_t ? e % TILE : e / TILE_K;
+          uint kk = a_t ? e / TILE : e % TILE_K;
+          uint row = row0 + r;
+          uint k = k0 + kk;
+          float v = 0.0;
+          if (row < params.matrix_m && k < params.matrix_k) {
+            v = float(input_a.values[
+                a_base + (a_t ? k * params.lhs_gap + row
+                              : row * params.lhs_gap + k)]);
+          }
+          tile_a[kk][r / 4u][r % 4u] = v;
+          uint c = b_t ? e / TILE_K : e % TILE;
+          uint kb = b_t ? e % TILE_K : e / TILE;
+          uint column = col0 + c;
+          uint k_b = k0 + kb;
+          float w = 0.0;
+          if (column < params.matrix_n && k_b < params.matrix_k) {
+            w = float(input_b.values[
+                b_base + (b_t ? column * params.rhs_gap + k_b
+                              : k_b * params.rhs_gap + column)]);
+          }
+          tile_b[kb][c / 4u][c % 4u] = w;
+        }
+        barrier();
+        for (uint kk = 0u; kk < TILE_K; ++kk) {
+          vec4 a = tile_a[kk][ty];
+          vec4 b = tile_b[kk][tx];
+          for (uint i = 0u; i < 4u; ++i) {
+            for (uint j = 0u; j < 4u; ++j) {
+              acc[i][j] += a[i] * b[j];
+            }
+          }
+        }
+        barrier();
+      }
+
+      for (uint i = 0u; i < 4u; ++i) {
+        uint row = row0 + ty * 4u + i;
+        if (row >= params.matrix_m) {
+          break;
+        }
+        for (uint j = 0u; j < 4u; ++j) {
+          uint column = col0 + tx * 4u + j;
+          if (column < params.matrix_n) {
+            uint output_index = batch_index * out_matrix +
+                row * params.matrix_n + column;
+            output_data.values[params.output_offset + output_index] =
+                float16_t(params.alpha * acc[i][j]);
+          }
+        }
+      }
+    }
+  }
+}

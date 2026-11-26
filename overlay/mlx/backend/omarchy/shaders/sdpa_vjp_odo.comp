@@ -1,0 +1,108 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// SDPA VJP row dot (upstream #4563 sdpa_vjp_odo twin): delta[row] =
+// sum_dv o[row, dv] * cot_o[row, dv] in float32. One workgroup per row,
+// shared-memory tree reduction - no subgroup ops, so the reduction shape
+// is device-independent. o/cot_o ride the attention storage dtype (exact
+// widening, including bf16 bit patterns).
+
+#version 460
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#ifdef IN_BF16
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
+
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#ifdef IN_F16
+layout(set = 0, binding = 0, std430) readonly buffer OBuf { float16_t v[]; } o_buf;
+layout(set = 0, binding = 1, std430) readonly buffer CoBuf { float16_t v[]; } co_buf;
+#elif defined(IN_BF16)
+layout(set = 0, binding = 0, std430) readonly buffer OBuf { uint16_t v[]; } o_buf;
+layout(set = 0, binding = 1, std430) readonly buffer CoBuf { uint16_t v[]; } co_buf;
+#else
+layout(set = 0, binding = 0, std430) readonly buffer OBuf { float v[]; } o_buf;
+layout(set = 0, binding = 1, std430) readonly buffer CoBuf { float v[]; } co_buf;
+#endif
+layout(set = 0, binding = 2, std430) writeonly buffer OdoBuf { float v[]; } odo_buf;
+
+layout(push_constant) uniform Params {
+  uint count;        // rows = B*H*qL
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;   // o
+  uint rhs_offset;   // cot_o
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;     // Dv
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta_f;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+shared float partial[256];
+
+#ifdef IN_BF16
+float load_o(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+#endif
+
+float load_value(uint index) {
+#ifdef IN_F16
+  return float(o_buf.v[index]);
+#elif defined(IN_BF16)
+  return load_o(o_buf.v[index]);
+#else
+  return o_buf.v[index];
+#endif
+}
+
+float load_cot(uint index) {
+#ifdef IN_F16
+  return float(co_buf.v[index]);
+#elif defined(IN_BF16)
+  return load_o(co_buf.v[index]);
+#else
+  return co_buf.v[index];
+#endif
+}
+
+void main() {
+  uint row = gl_WorkGroupID.x;
+  uint lane = gl_LocalInvocationID.x;
+  if (row >= params.count) {
+    return;
+  }
+  uint base = params.lhs_offset + row * params.matrix_n;
+  uint cobase = params.rhs_offset + row * params.matrix_n;
+  float acc = 0.0f;
+  for (uint d = lane; d < params.matrix_n; d += 256u) {
+    acc += load_value(base + d) * load_cot(cobase + d);
+  }
+  partial[lane] = acc;
+  barrier();
+  for (uint stride = 128u; stride >= 1u; stride >>= 1u) {
+    if (lane < stride) {
+      partial[lane] += partial[lane + stride];
+    }
+    barrier();
+  }
+  if (lane == 0u) {
+    odo_buf.v[params.output_offset + row] = partial[0];
+  }
+}

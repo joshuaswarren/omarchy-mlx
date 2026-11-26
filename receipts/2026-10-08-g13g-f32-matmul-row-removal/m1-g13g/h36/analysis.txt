@@ -1,0 +1,14 @@
+f32  nn m= 4096 n= 4096 k= 2560 gain%   -7.6   -7.9   -8.3  M spread  0.4%  hash_eq True  M 1.65 TFLOP/s  row REGRESSION
+f32  nn m= 4096 n= 4096 k=11008 gain%  +30.9  +31.0  +33.1  M spread  0.7%  hash_eq True  M 0.96 TFLOP/s  row
+f32  nn m= 4096 n= 9728 k= 2560 gain%  -13.8  -13.6  -13.6  M spread  0.1%  hash_eq True  M 1.66 TFLOP/s  row REGRESSION
+f32  nn m= 4096 n= 9728 k=11008 gain%  -39.7   +1.0   +2.0  M spread 80.1%  hash_eq True  M 0.90 TFLOP/s  row VOID
+f32  nn m= 8192 n= 4096 k= 2560 gain%   -8.3   -7.7   -6.7  M spread  1.1%  hash_eq True  M 1.66 TFLOP/s  row REGRESSION
+f32  nn m= 8192 n= 4096 k=11008 gain%  +32.5  +34.3  +31.1  M spread  1.2%  hash_eq True  M 0.94 TFLOP/s  row
+f32  nn m= 8192 n= 9728 k= 2560 gain%  -13.0  -12.9  -13.1  M spread  0.4%  hash_eq True  M 1.67 TFLOP/s  row REGRESSION
+f32  nn m= 8192 n= 9728 k=11008 gain%  -41.9  -42.5  -41.4  M spread  0.9%  hash_eq True  M 0.90 TFLOP/s  row REGRESSION
+base arm M: row cells 8, control cells 0
+hash mismatches: none
+REGRESSION cells: [(('f32', 'nn', 4096, 4096, 2560), [-7.6, -7.9, -8.3]), (('f32', 'nn', 4096, 9728, 2560), [-13.8, -13.6, -13.6]), (('f32', 'nn', 8192, 4096, 2560), [-8.3, -7.7, -6.7]), (('f32', 'nn', 8192, 9728, 2560), [-13.0, -12.9, -13.1]), (('f32', 'nn', 8192, 9728, 11008), [-41.9, -42.5, -41.4])]
+no-benefit row cells: none
+control cells outside 3 %: none
+void cells: [('f32', 'nn', 4096, 9728, 11008)]

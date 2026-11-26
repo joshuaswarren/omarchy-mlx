@@ -1,0 +1,23 @@
+UBSCREEN start 2026-10-25T10:43:27Z kernel 7.1.12-2-12.6-sep-ARCH
+UBSCREEN llama-bench 5ec986362d0a11c8 model llama-2-7b.Q4_0.gguf icd 2e1318a23f7c lib 0838d4d73a9a0746
+UBSCREEN round 1 arm ub512 rc 0 pp2048 288.03 load1=0.16
+UBSCREEN round 1 arm ub1024 rc 0 pp2048 306.76 load1=0.16
+UBSCREEN round 1 arm ub2048 rc 0 pp2048 313.01 load1=0.11
+UBSCREEN round 1 arm faoff rc 0 pp2048 274.91 load1=0.07
+UBSCREEN round 2 arm ub1024 rc 0 pp2048 304.37 load1=0.05
+UBSCREEN round 2 arm ub2048 rc 0 pp2048 309.38 load1=0.39
+UBSCREEN round 2 arm faoff rc 0 pp2048 273.11 load1=0.44
+UBSCREEN round 2 arm ub512 rc 0 pp2048 288.82 load1=0.35
+UBSCREEN round 3 arm ub2048 rc 0 pp2048 312.41 load1=0.25
+UBSCREEN round 3 arm faoff rc 0 pp2048 272.47 load1=0.22
+UBSCREEN round 3 arm ub512 rc 0 pp2048 288.68 load1=0.14
+UBSCREEN round 3 arm ub1024 rc 0 pp2048 306.82 load1=0.18
+UBSCREEN round 4 arm faoff rc 0 pp2048 275.73 load1=0.12
+UBSCREEN round 4 arm ub512 rc 0 pp2048 291.32 load1=0.08
+UBSCREEN round 4 arm ub1024 rc 0 pp2048 306.68 load1=0.11
+UBSCREEN round 4 arm ub2048 rc 0 pp2048 312.28 load1=0.08
+UBSCREEN round 5 arm ub512 rc 0 pp2048 285.34 load1=0.05
+UBSCREEN round 5 arm ub1024 rc 0 pp2048 306.8 load1=0.04
+UBSCREEN round 5 arm ub2048 rc 0 pp2048 312.42 load1=0.11
+UBSCREEN round 5 arm faoff rc 0 pp2048 273.82 load1=0.13
+UBSCREEN end 2026-10-25T10:50:59Z

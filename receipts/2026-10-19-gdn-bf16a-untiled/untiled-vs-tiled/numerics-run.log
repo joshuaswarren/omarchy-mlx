@@ -1,0 +1,56 @@
+T35 start 2026-10-19T21:24:17Z part=num kernel=7.1.12-2-12.6-sep-ARCH boot=<id> governor=performance load1=1.19
+T35 env GDN/MLX/HK/AGX present: 0
+T35 wheel mlx_omarchy-0.32.4.dev202610181348+49e6b3c1-cp314-cp314-linux_aarch64.whl sha256 7654db6b519b221ab5b221e96e1bda3b28c6317b0969b78de2abf3d101f8fe59 libmlx 960f0f358a2aba25 driver 40282811c6e14ef9
+T35 scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a
+T35 numerics P1 D rc=0 logits-run ids_sha256_16 669423a578bb9e76 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+T35 numerics P1 U rc=0 logits-run ids_sha256_16 5c550a6ff859286f n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+T35 numerics P1 D2 rc=0 logits-run ids_sha256_16 669423a578bb9e76 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+T35 numerics P2 D rc=0 logits-run ids_sha256_16 682cab5313ecd62d n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+T35 numerics P2 U rc=0 logits-run ids_sha256_16 682cab5313ecd62d n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+T35 census D tokens=6 dispatches=11992 kernels=46
+T35 census D tokens=10 dispatches=17272 kernels=46
+T35 census U tokens=6 dispatches=11992 kernels=46
+T35 census U tokens=10 dispatches=17272 kernels=46
+T35 compare P1 D vs U
+  n: 128
+  ids_equal: False
+  first_divergence: 30
+  full_steps_compared: 30
+  max_abs_dlogprob_full: 6.0
+  n_elements_differ_full: 4696222
+  max_kl_x_to_y: 0.0048675774611629296
+  top1_equal_steps: 30/30
+  top5_set_equal_steps: 26/30
+  max_abs_dlogprob_top20_all_steps: 2.5
+  min_top1_top2_gap_x: 2.625
+  median_top1_top2_gap_x: 11.34375
+  steps_with_gap_below_2x_maxdiff: 3
+T35 compare P1 D vs D2
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 32
+  max_abs_dlogprob_full: 0.0
+  n_elements_differ_full: 0
+  max_kl_x_to_y: 0.0
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.125
+  median_top1_top2_gap_x: 8.25
+  steps_with_gap_below_2x_maxdiff: 0
+T35 compare P2 D vs U
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 32
+  max_abs_dlogprob_full: 4.75
+  n_elements_differ_full: 6311439
+  max_kl_x_to_y: 0.02282549963853352
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 99/128
+  max_abs_dlogprob_top20_all_steps: 3.25
+  min_top1_top2_gap_x: 0.25
+  median_top1_top2_gap_x: 6.1875
+  steps_with_gap_below_2x_maxdiff: 66
+T35 end 2026-10-19T21:25:41Z

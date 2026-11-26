@@ -1,0 +1,40 @@
+#version 460
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+// Reduce-floats-over-32-lane-subgroup benchmark kernel.
+// Reads one float per lane from input[workgroup_id * 32 + lane],
+// produces subgroupAdd(accumulator), writes one float per workgroup.
+// 32 lanes is one hardware subgroup; the kernel is invalid at any other
+// subgroup size and the host program must dispatch only when the queried
+// device subgroupSize == 32. The dispatch x-dim is N_GROUPS independent
+// workgroups, so the GPU can run many in parallel; the wall-time is
+// dominated by the parallel work, and subgroupAdd's per-subgroup cost is
+// the same regardless of how many subgroups are live.
+
+layout(local_size_x = 32) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  float values[];
+} input_data;
+
+layout(set = 0, binding = 1, std430) writeonly buffer Output {
+  float values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint n_groups;
+} params;
+
+void main() {
+  uint gid = gl_WorkGroupID.x;
+  uint lane = gl_LocalInvocationID.x;
+  if (gid >= params.n_groups) {
+    return;
+  }
+  float v = input_data.values[gid * 32u + lane];
+  float total = subgroupAdd(v);
+  if (subgroupElect()) {
+    output_data.values[gid] = total;
+  }
+}

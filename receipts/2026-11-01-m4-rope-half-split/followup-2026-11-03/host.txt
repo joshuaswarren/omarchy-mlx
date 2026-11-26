@@ -1,0 +1,20 @@
+machine Apple Mac mini (M4, 2024) (apple,j773g apple,t8132), same host as ../host.txt
+kernel 7.1.13-1-20-ARCH #25 SMP PREEMPT_DYNAMIC Mon, 02 Nov 2026 00:30:37 +0000
+gpu_kernel_driver asahi_m4 302600000.gpu: G16: GPU ID=0x0a021100 revision=0x11
+mesa_lib libvulkan_asahi.so sha256=5de742c14194ce78 (the same library as ../host.txt)
+glslc 2026.4
+env AGX_APPLE9_MAX_SHARED=32768 MLX_OMARCHY_BATCH_WORK=120000
+
+wheels (stamp = commit), each built from a fresh worktree with scripts/prepare-mlx.sh and new CMake trees:
+  p2j  mlx-omarchy 0.32.4.dev202611030108+2e5d7ea  (2e5d7ea4; its tree equals main 999afe65)
+  p3m  mlx-omarchy 0.32.4.dev202611030130+3c2160b  (3c2160b1, the merged #319 head)
+  p5   mlx-omarchy 0.32.4.dev202611030216+1b1b71b  (1b1b71b1, the half-split default keyed on G16G)
+  mlx-lm 0.31.3 in every venv
+
+run 1, 2026-11-03T01:30Z-01:48Z: merged-head-3c2160b1/
+  boot cmdline included nr_cpus=1 (nproc 1), for unrelated kernel work; this run reports no timing
+  asahi fault/error/timeout lines this boot: 0
+
+run 2, 2026-11-03T02:12Z-02:20Z: timing-3c2160b1/ and g16g-default-1b1b71b1/
+  normal boot, nproc 10 (no nr_cpus)
+  asahi fault/error/timeout lines this boot: 0

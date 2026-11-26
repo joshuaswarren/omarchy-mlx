@@ -1,0 +1,52 @@
+[
+ {
+  "build_commit": "65840ed",
+  "build_number": 1,
+  "gpu_info": "Apple M1 Max (G13C C0)",
+  "backends": "Vulkan",
+  "model_type": "qwen35 9B Q4_K - Medium",
+  "model_size": 5669554176,
+  "model_n_params": 8953803264,
+  "n_batch": 2048,
+  "n_ubatch": 512,
+  "n_threads": 10,
+  "n_gpu_layers": -1,
+  "flash_attn": -1,
+  "n_prompt": 512,
+  "n_gen": 0,
+  "avg_ts": 171.084648,
+  "stddev_ts": 0.103038,
+  "samples_ts": [
+   171.172,
+   171.046,
+   171.077,
+   171.191,
+   170.937
+  ]
+ },
+ {
+  "build_commit": "65840ed",
+  "build_number": 1,
+  "gpu_info": "Apple M1 Max (G13C C0)",
+  "backends": "Vulkan",
+  "model_type": "qwen35 9B Q4_K - Medium",
+  "model_size": 5669554176,
+  "model_n_params": 8953803264,
+  "n_batch": 2048,
+  "n_ubatch": 512,
+  "n_threads": 10,
+  "n_gpu_layers": -1,
+  "flash_attn": -1,
+  "n_prompt": 0,
+  "n_gen": 128,
+  "avg_ts": 19.791246,
+  "stddev_ts": 0.412327,
+  "samples_ts": [
+   20.0282,
+   19.0607,
+   19.9153,
+   20.0332,
+   19.9188
+  ]
+ }
+]

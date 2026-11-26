@@ -1,0 +1,69 @@
+#version 450
+// vkbw: one pass over a storage buffer. Build with -DW=<bytes per load> for W = 2, 4, 8 or 16.
+//
+// Element e of the buffer is visited exactly once. Thread t, iteration k reads linear id g = t + k * grid and maps it to
+//   row = g & (rows - 1), col = g >> log2_rows, e = row * stride + col      (rows * stride = element count)
+// so neighbouring lanes read elements `stride` apart: stride 1 is the coalesced case, larger strides touch a new cache
+// line per lane. Every element is summed into a per-dispatch checksum (the host checks it) and, in copy mode, written to dst.
+#extension GL_EXT_control_flow_attributes : enable
+#if W == 2
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define ELEM uint16_t
+#define SUM(v) uint(v)
+#elif W == 4
+#define ELEM uint
+#define SUM(v) (v)
+#elif W == 8
+#define ELEM uvec2
+#define SUM(v) ((v).x + (v).y)
+#elif W == 16
+#define ELEM uvec4
+#define SUM(v) ((v).x + (v).y + (v).z + (v).w)
+#else
+#error "W must be 2, 4, 8 or 16"
+#endif
+
+layout(local_size_x_id = 0) in;
+layout(constant_id = 1) const uint MODE = 0;  // 0 = read, 1 = copy
+
+layout(std430, set = 0, binding = 0) readonly buffer Src { ELEM src[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Dst { ELEM dst[]; };
+layout(std430, set = 0, binding = 2) buffer Res { uint res[]; };
+
+layout(push_constant) uniform PC {
+  uint log2_rows;  // log2 of the number of rows
+  uint stride;     // elements between neighbouring lanes
+  uint iters;      // loads per thread, a multiple of 4
+  uint grid;       // total threads
+  uint slot;       // checksum slot of this dispatch
+} pc;
+
+shared uint partial[1024];
+
+void main() {
+  const uint t = gl_GlobalInvocationID.x;
+  const uint rows_mask = (1u << pc.log2_rows) - 1u;
+  uint acc = 0u;
+  for (uint k = 0u; k < pc.iters; k += 4u) {
+    uint e[4];
+    ELEM v[4];
+    [[unroll]] for (uint u = 0u; u < 4u; ++u) {
+      const uint g = t + (k + u) * pc.grid;
+      e[u] = (g & rows_mask) * pc.stride + (g >> pc.log2_rows);
+      v[u] = src[e[u]];
+    }
+    [[unroll]] for (uint u = 0u; u < 4u; ++u) {
+      acc += SUM(v[u]);
+      if (MODE == 1u) dst[e[u]] = v[u];
+    }
+  }
+  const uint l = gl_LocalInvocationID.x;
+  partial[l] = acc;
+  barrier();
+  for (uint s = gl_WorkGroupSize.x >> 1; s > 0u; s >>= 1) {
+    if (l < s) partial[l] += partial[l + s];
+    barrier();
+  }
+  if (l == 0u) atomicAdd(res[pc.slot], partial[0]);
+}

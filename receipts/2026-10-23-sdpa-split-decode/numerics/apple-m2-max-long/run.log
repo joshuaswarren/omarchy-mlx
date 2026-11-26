@@ -1,0 +1,9 @@
+SNUM start 2026-10-23T14:43:40Z mode long boot=1ccc1761 kernel=7.1.12-2-20261013.18-sep-ARCH load1=1.24 settle=20
+SNUM tree libmlx 8533393455ca0f8c tfref-tail 2b30fdc3b67610cd tfcmp 9a38455f19f9eb86 driver vulkan-f144c7949b
+SNUM text 36995dc88829fa09 segments --nseg 1 --maxtok 7600 --stride 0
+SNUM arm base rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610231240+6943e37 files 1
+SNUM arm split rc=0 TFREF done device gpu dtype native mlx 0.32.4.dev202610231240+6943e37 files 1
+TFCMP segments [0] steps per segment {0: 7599} total 7599
+TFCMP reference mean NLL 1.39821
+split | 7502/7599 = 98.72% | 97 | 1.40089 | +0.1914 | 0.04137 | 0.10723 | 0.6250
+SNUM end 2026-10-23T14:54:21Z

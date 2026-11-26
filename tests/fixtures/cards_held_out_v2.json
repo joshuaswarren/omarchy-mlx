@@ -1,0 +1,267 @@
+{
+  "version": "2026-09-30.1",
+  "status": "frozen-held-out-v2",
+  "rule": "FROZEN before scoring; do not edit items after a model has seen them. Different wording from cards_dev.json and cards_held_out.json (v1, 2026-09-29.1). 18 card-worthy across all kinds (3 checklist, 3 comparison, 3 timeline, 3 facts, 3 mixed), 9 plain, 9 near-miss (3 list-in-prose, 2 short-list, 2 code-only, 2 explanation-with-bullets).  Thresholds unchanged: >= 15 of 18 card-worthy produce a valid card, 0 spurious on plain/near-miss, every card validates.",
+  "sha256": "93f606a995e97f9c41398f315d6a91d725330db5c6f1e2361947dcd1b97f9f5c",
+  "card_kinds": [
+    "checklist",
+    "comparison",
+    "timeline",
+    "facts",
+    "mixed"
+  ],
+  "prompts": [
+    {
+      "id": "v2-01",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "text": "Give me a step-by-step checklist for onboarding a new backend engineer in their first week.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-02",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "text": "List every action item for moving out of a rental: 30 days out, 7 days out, moving day, post-move.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-03",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "text": "Pre-flight checklist for deploying a service: build, tests, migrations, rollback, comms.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-04",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "text": "Side by side: Docker and Podman on five criteria: daemon, rootless, registry, Compose, system integration.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-05",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "text": "Compare Postgres and MySQL across concurrency, setup, replication, query planner maturity, ecosystem.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-06",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "text": "Tabular comparison of three logging stacks on cost, retention, query speed, ease of alerting.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-07",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "text": "Show a 4-week product launch timeline: pre-launch, launch week, post-launch, retro.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-08",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "text": "Lay out the quarterly OKR cycle: weeks 1-4 planning, weeks 5-10 execution, weeks 11-12 review, weeks 13 closing.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-09",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "text": "Schedule the migration in phases: discovery, pilot, rollout, cleanup.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-10",
+      "category": "card-worthy",
+      "kind": "facts",
+      "text": "Three facts about my home server: AMD Ryzen, 64 GB RAM, runs Proxmox.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-11",
+      "category": "card-worthy",
+      "kind": "facts",
+      "text": "Two key points from the user study report: top complaint is login latency, second is missing dark mode.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-12",
+      "category": "card-worthy",
+      "kind": "facts",
+      "text": "Three facts about my dog: labrador, 4 years old, weighs 28 kg.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-13",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "text": "Three action items for tomorrow, then the agenda for the standup.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-14",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "text": "Compare iOS and Android on two criteria, then a 4-week rollout timeline.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-15",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "text": "Three facts about the new feature, then a checklist to roll it out.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-16",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "text": "To-do list for setting up a Python project from scratch: venv, pyproject, tests, CI, README.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-17",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "text": "Versus: AWS Lambda and ECS Fargate on cold-start, cost per request, scaling limits, vendor lock-in.",
+      "expect": "card"
+    },
+    {
+      "id": "v2-18",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "text": "Phase plan for the next quarter: build (weeks 1-6), pilot (7-9), GA (10-12), retro (13).",
+      "expect": "card"
+    },
+    {
+      "id": "v2-19",
+      "category": "plain",
+      "kind": "none",
+      "text": "What is the difference between TCP and UDP at the protocol level?",
+      "expect": "none"
+    },
+    {
+      "id": "v2-20",
+      "category": "plain",
+      "kind": "none",
+      "text": "Why is the ocean blue?",
+      "expect": "none"
+    },
+    {
+      "id": "v2-21",
+      "category": "plain",
+      "kind": "none",
+      "text": "Explain how a database index speeds up queries.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-22",
+      "category": "plain",
+      "kind": "none",
+      "text": "How do virtual machines differ from containers?",
+      "expect": "none"
+    },
+    {
+      "id": "v2-23",
+      "category": "plain",
+      "kind": "none",
+      "text": "What's the difference between authentication and authorization?",
+      "expect": "none"
+    },
+    {
+      "id": "v2-24",
+      "category": "plain",
+      "kind": "none",
+      "text": "Describe what happens when you type a URL into a browser.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-25",
+      "category": "plain",
+      "kind": "none",
+      "text": "Why is HTTPS more secure than HTTP?",
+      "expect": "none"
+    },
+    {
+      "id": "v2-26",
+      "category": "plain",
+      "kind": "none",
+      "text": "How does garbage collection work in Java?",
+      "expect": "none"
+    },
+    {
+      "id": "v2-27",
+      "category": "plain",
+      "kind": "none",
+      "text": "Explain the difference between compiled and interpreted languages.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-28",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "text": "Three tips for staying focused while coding, in a sentence.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-29",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "text": "Two reasons why I should learn Rust, in a paragraph.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-30",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "text": "Three common mistakes when debugging, in one paragraph.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-31",
+      "category": "near-miss",
+      "kind": "short-list",
+      "text": "Name two HTTP methods that are safe and idempotent.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-32",
+      "category": "near-miss",
+      "kind": "short-list",
+      "text": "Three CSS selectors that match by class.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-33",
+      "category": "near-miss",
+      "kind": "code-only",
+      "text": "Show me a Python one-liner that lists all .py files under a directory.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-34",
+      "category": "near-miss",
+      "kind": "code-only",
+      "text": "Print 'hello world' in Go.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-35",
+      "category": "near-miss",
+      "kind": "explanation-with-bullets",
+      "text": "Explain TLS handshake, with the steps as bullets.",
+      "expect": "none"
+    },
+    {
+      "id": "v2-36",
+      "category": "near-miss",
+      "kind": "explanation-with-bullets",
+      "text": "Briefly explain Raft consensus, then list three things it solves.",
+      "expect": "none"
+    }
+  ]
+}

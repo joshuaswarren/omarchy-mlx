@@ -1,0 +1,24 @@
+mlx-lm patch series: patches/mlx-lm-0.32
+already applied: mlx-lm-tool-call-arguments.patch
+already applied: mlx-lm-qwen3-coder-untyped-args.patch
+already applied: mlx-lm-max-tokens-min-one.patch
+already applied: mlx-lm-gated-delta-fast-route.patch (hunks rewritten by later patches in this series)
+already applied: mlx-lm-gated-delta-fast-route-repeat.patch (hunks rewritten by later patches in this series)
+already applied: mlx-lm-gated-delta-raw.patch
+already patched: /tmp/g17-0732/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/cache.py
+already patched: /tmp/g17-0732/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/cache.py
+already patched: /tmp/g17-0732/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/cache.py
+already applied: mlx-lm-greedy-prune.patch (hunks rewritten by later patches in this series)
+already patched: /tmp/g17-0732/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/generate.py
+already applied: mlx-lm-qwen35-qk-scaled.patch
+already applied: mlx-lm-qwen35-gdn-conv.patch (hunks rewritten by later patches in this series)
+already applied: mlx-lm-conv-silu.patch (hunks rewritten by later patches in this series)
+already applied: mlx-lm-qwen35-gated-norm.patch
+already applied: mlx-lm-ttft-early-submit.patch
+conv-ring: OFF (set MLX_OMARCHY_CONV_RING=1 to enable)
+already applied: mlx-lm-last-logits.patch
+already applied: mlx-lm-last-logits-qwen3.patch
+already patched: /tmp/g17-0732/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/qwen3_next.py
+already patched: /tmp/g17-0732/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/qwen3_5.py
+already patched: /tmp/g17-0732/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/qwen3.py
+already patched: /tmp/g17-0732/tree-0.32.0/lib/python3.11/site-packages/mlx_lm/models/gated_delta.py

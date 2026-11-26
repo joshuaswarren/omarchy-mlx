@@ -1,0 +1,22 @@
+IDLE-GUARD-JOB-START 20261103T105601Z lane=w72 class=validation release v0.7.37 gate batch k2 g6-codec g8-kokoro pin=06d1038d draft-assets longcap=30 host-13in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.64 SETTLE-SKIPPED
+GPU-TIMEOUTS before=37 boot=6cb62736-5e56-47f4-b8a5-244b1eab9252
+=== g6-codec  10:56:02 free   22G ===
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+TAG_TESTS_EXIT 0
+GATE6_EXIT 0
+GATE6_DONE
+g6-codec_RC=0 10:56:18
+=== g8-kokoro  10:56:18 free   23G ===
+BEGIN 2026-11-03T10:56:18Z tag=v0.7.37 boot_id=6cb62736-5e56-47f4-b8a5-244b1eab9252 uname=7.1.12-2-20261013.18-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+G8_KOKORO_EXIT 0
+g8-kokoro_RC=0 10:56:29
+BATCH_OK g6-codec g8-kokoro
+GPU-TIMEOUTS after=37 delta=0
+6f8cc7abf1a162a0d7ad16a4c229b164229d8)
+G8_KOKORO_EXIT 0
+g8-kokoro_RC=0 10:56:29
+BATCH_OK g6-codec g8-kokoro

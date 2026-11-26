@@ -1,0 +1,9 @@
+host=m1-test-host-linux commit=4b76094 stamp=20260910T203252Z
+-- shader provenance --
+537bf42d5a1bfef2357f251608d59321d4f9f42b29210fb708415b6645dfbb79  tools/q4-bw-bench/shaders/peak_copy.comp
+2462b035645b8aa05e6ad28fa74709e09eac3c3e80d7629ec74a28837b89055b  tools/q4-bw-bench/shaders/peak_read.comp
+7e57b15d4c5ddb5cbf5650c734d6b59c47de952eacab33202f39fc5a722fffd7  tools/q4-bw-bench/shaders/qmm_vec_base.comp
+223f9c5532a303189ffd481de909ebe1c8bb39cca40bb1e42e4f6f4f5acd86c7  tools/q4-bw-bench/shaders/qmm_vec_cand.comp
+4ac01c513c0f3df7150a81a187b26f216831aa25a400068bfa0850f0245bd094  tools/q4-bw-bench/shaders/qmm_vec_cand_loadfirst.comp
+223f9c5532a303189ffd481de909ebe1c8bb39cca40bb1e42e4f6f4f5acd86c7  tools/q4-bw-bench/shaders/qmm_vec_cand_unroll.comp
+RUN_M1_DONE

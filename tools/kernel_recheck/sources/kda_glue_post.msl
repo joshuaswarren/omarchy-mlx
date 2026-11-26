@@ -1,0 +1,18 @@
+
+    uint h = threadgroup_position_in_grid.x;
+    uint d = thread_position_in_threadgroup.x;
+    uint c = h * 128u + d;
+    constant float* cs = cons;           // [eps]
+
+    float x = (float)inp[c];
+    threadgroup float tgs[4];
+    uint sg = d >> 5;
+    float p = simd_sum(x * x);
+    if ((d & 31u) == 0u) { tgs[sg] = p; }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float m = (tgs[0] + tgs[1] + tgs[2] + tgs[3]) / 128.0f + cs[0];
+    // 가중치형 rms_norm은 2회 반올림(정규화→bf16, ×w→bf16 — 실측 0-불일치)
+    bfloat16_t nx0 = (bfloat16_t)(x * rsqrt(m));
+    bfloat16_t nx = (bfloat16_t)((float)nx0 * (float)w[d]);
+    bfloat16_t sg_ = mlx_sigmoid(hp[36864u + c]);
+    y[c] = (bfloat16_t)((float)nx * (float)sg_);

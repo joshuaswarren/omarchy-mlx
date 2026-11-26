@@ -1,0 +1,98 @@
+{
+  "name": "Muse-Spark-Open-816B-A42B mixed-bit MLX (2-bit experts), text-only",
+  "source": {
+    "repo": "amd/Muse-Spark-Open-816B-A42B-Quark-PTPC-FP8",
+    "revision": "52cace63f43ed9fc6acef6dcd391adb02f4bfbe1",
+    "format": "AMD Quark PTPC FP8: routed expert and attention weights FP8 E4M3 with a float32 per-output-channel scale; pre/post_expert_proj, router, embed, lm_head and norms in bf16/f32",
+    "upstream": "meta-models/Muse-Spark-Open-816B-A42B (Meta Muse Spark Open, Muse Model License)",
+    "license_files_carried_unchanged": [
+      "LICENSE.md",
+      "USE_POLICY.md"
+    ],
+    "license_md_sha256": "458a5c57d8e622e395eb0e59799ba5bba1ea7524ffd120ee6e3018688d7d6ace"
+  },
+  "scope": "text model only; vision tower, audio tower, vision adapter and projection are NOT included",
+  "quantization_format": "MLX affine (mx.quantize): per group a bf16 scale and bf16 bias, values packed into uint32; group 128 for routed experts, 64 for everything else",
+  "tensor_groups": [
+    {
+      "group": "routed experts",
+      "names": "model.layers.N.mlp.switch_mlp.{gate,up,down}_proj (stacked 256 experts, each 4096x4096)",
+      "bits": 2,
+      "group_size": 128,
+      "bits_per_weight_incl_scale_bias": 2.25,
+      "source_dtype": "F8_E4M3 + F32 per-channel scale"
+    },
+    {
+      "group": "attention",
+      "names": "model.layers.N.self_attn.{q,k,v,o,gate}_proj",
+      "bits": 4,
+      "group_size": 64,
+      "bits_per_weight_incl_scale_bias": 4.5,
+      "source_dtype": "F8_E4M3 + F32 per-channel scale"
+    },
+    {
+      "group": "latent expert projections",
+      "names": "model.layers.N.mlp.{pre,post}_expert_proj",
+      "bits": 4,
+      "group_size": 64,
+      "source_dtype": "BF16"
+    },
+    {
+      "group": "embedding",
+      "names": "model.embed_tokens",
+      "bits": 4,
+      "group_size": 64,
+      "source_dtype": "BF16"
+    },
+    {
+      "group": "output head",
+      "names": "lm_head",
+      "bits": 6,
+      "group_size": 64,
+      "source_dtype": "BF16"
+    },
+    {
+      "group": "router",
+      "names": "model.layers.N.mlp.gate.{weight,e_score_correction_bias}",
+      "bits": null,
+      "note": "unquantized, cast to float32 (as in the published mlx-community layout)"
+    },
+    {
+      "group": "norms and residual gates",
+      "bits": null,
+      "note": "unchanged bf16"
+    }
+  ],
+  "tensor_naming": "identical to the published mlx-community/Muse-Spark-Open-816B-A42B-3bit text layout (checked tensor by tensor by finalize.py against that repo's safetensors headers)",
+  "dequantization_method": "mx.from_fp8 (OCP E4M3, validated against an independent 256-entry table) times the f32 per-output-channel scale, then mx.quantize (bf16 input)",
+  "tools": {
+    "converter": "requant_stream.py",
+    "converter_sha256": "9a2fa17a762c8806da6297376088a7dcefce794e15a3ce73d537dc13cb77f3b8",
+    "method": "each tensor is fetched by HTTP Range straight from the AMD FP8 repo (no temp shards, no BF16/FP8 on disk), dequantized with mx.from_fp8 x per-output-row f32 scale, then mx.quantize on the CPU stream; one part per layer plus shared",
+    "finalizer": "finalize2.py (checks every tensor name/dtype/shape/bits against the published 3-bit layout, writes index+config, renames parts)",
+    "manifest": "mac-manifest.py (whole-file and per-tensor sha256)",
+    "mlx": {
+      "Studio macOS (layers 0-13 and shared checked)": "0.32.3",
+      "M2 aarch64 Linux CPU (layers 14-36, 37-61 except as noted)": "0.32.4"
+    },
+    "python": {
+      "Studio": "3.13.16",
+      "CT shared part": "3.11.2"
+    }
+  },
+  "measured_so_far": {
+    "weight_reconstruction_check": "layer 1, expert 5 (gate/up/down) and layer 1 attention q/k/o/gate: FP8 dequant by this code vs the published mlx-community 3-bit weights: relative RMS 0.19-0.21 (a transposed mapping gives 1.42)",
+    "quantization_error_vs_fp8_source_relative_rms_layer1_expert5": {
+      "2bit_g64": "0.39-0.40",
+      "2bit_g128": "0.42-0.44",
+      "4bit_g64": "0.09-0.10"
+    }
+  },
+  "equivalence": "layer 3 converted twice on the Studio (same file sha256 a91f4878c9a8f816ff3da23c...) and once on the M2 (different file bytes: mlx stores tensors in hash-map order, header 4,671 vs 4,681 B): all 39 per-tensor sha256 equal. Check per tensor, not per file.",
+  "result": {
+    "parts": 63,
+    "tensors": 2425,
+    "total_bytes": 237429698758,
+    "files": "model-00001-of-00063 = shared (embed 4-bit, lm_head 6-bit, final norm); model-(L+2)-of-00063 = layer L"
+  }
+}

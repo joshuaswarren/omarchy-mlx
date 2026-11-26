@@ -1,0 +1,2468 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+
+#include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/cpu_pd_hold.h"
+#include "mlx/backend/omarchy/cpu_uclamp.h"
+#include "mlx/backend/omarchy/trace.h"
+
+#include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/honeykrisp_identity.h"
+
+#include <dlfcn.h>
+
+#include <filesystem>
+
+#include <algorithm>
+#include <cctype>
+#include <charconv>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <atomic>
+#include <fstream>
+#include <iterator>
+#include <optional>
+#include <string_view>
+#include <unistd.h>
+#include <sys/syscall.h>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
+#include <vector>
+
+#include "mlx/backend/omarchy/vulkan.h"
+
+#include "mlx/backend/omarchy/capability_sim.h"
+#include "mlx/backend/omarchy/allocator.h"
+
+// bf16 cooperative matrices need the Vulkan header to know
+// VK_KHR_shader_bfloat16 and this build to carry the bf16 direct shaders
+// (CMakeLists.txt GL_EXT_bfloat16 probe); otherwise the capability stays
+// off and the extension is never enabled.
+#if defined(VK_KHR_shader_bfloat16) && defined(MLX_OMARCHY_BF16_DIRECT)
+#define OMARCHY_BF16_CMAT 1
+#endif
+
+namespace mlx::core::omarchy {
+
+namespace {
+constexpr uint32_t kVulkan13 = VK_API_VERSION_1_3;
+
+// MLX_OMARCHY_QUEUE_PRIORITY (device.h, issue #19): "low" (default) or
+// "medium" selects a global queue priority below the desktop's default;
+// "off"/"default"/"0" keeps the unchained queue. Anything else keeps the
+// default. Returns nullopt when no priority should be requested.
+std::optional<VkQueueGlobalPriorityEXT> requested_global_priority() {
+  const char* e = std::getenv("MLX_OMARCHY_QUEUE_PRIORITY");
+  if (e == nullptr) {
+    return VK_QUEUE_GLOBAL_PRIORITY_LOW_EXT;
+  }
+  std::string_view v(e);
+  if (v == "off" || v == "default" || v == "0") {
+    return std::nullopt;
+  }
+  if (v == "medium") {
+    return VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_EXT;
+  }
+  if (v == "low") {
+    return VK_QUEUE_GLOBAL_PRIORITY_LOW_EXT;
+  }
+  return std::nullopt;
+}
+
+
+// MLX_OMARCHY_NO_BUFFER_CACHE (diagnostic, docs/install-omarchy.md).
+// Declared here because Runtime::init_impl sets it; the exported
+// accessor lives at omarchy scope below.
+std::atomic<bool> g_no_buffer_cache{false};
+
+int32_t to_lower_ascii(char c) {
+  return static_cast<int32_t>(std::tolower(static_cast<unsigned char>(c)));
+}
+
+bool contains_case_insensitive(const char* haystack, const char* needle) {
+  const size_t nlen = std::strlen(needle);
+  const size_t hlen = std::strlen(haystack);
+  if (nlen == 0 || nlen > hlen) {
+    return false;
+  }
+  for (size_t i = 0; i + nlen <= hlen; ++i) {
+    size_t j = 0;
+    while (j < nlen &&
+           to_lower_ascii(haystack[i + j]) == to_lower_ascii(needle[j])) {
+      ++j;
+    }
+    if (j == nlen) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
+int env_index(const char* name) {
+  const char* v = std::getenv(name);
+  if (!v) {
+    return -1;
+  }
+  char* end = nullptr;
+  long parsed = std::strtol(v, &end, 10);
+  if (end == v || parsed < 0 || parsed > 1024) {
+    return -1;
+  }
+  return static_cast<int>(parsed);
+}
+
+// --- Honeykrisp heap default (HK_SYSMEM) ----------------------------------
+//
+// Honeykrisp sizes its GPU-memory heap at 50% of MemTotal (mesa DRIR
+// default heap_memory_percent = 0.5, hk_drirc_gen.py) and the budget
+// post-check in hk_device_memory.c fails every allocation past it. On
+// large hosts that strands half the RAM: a 62 GiB machine could commit only
+// ~30 GiB and Qwen3-32B-8bit (34.8 GB of weights) could not load, while
+// HK_SYSMEM=44 GiB (absolute bytes, hk_physical_device.c) reaches
+// 44 GiB. The backend therefore raises the heap for its own process, via
+// the same absolute-bytes override, only when nobody else chose a heap.
+
+// MemTotal from /proc/meminfo in bytes; 0 when unreadable.
+uint64_t mem_total_bytes() {
+  std::FILE* file = std::fopen("/proc/meminfo", "r");
+  if (file == nullptr) {
+    return 0;
+  }
+  unsigned long kb = 0;
+  const int matched = std::fscanf(file, " MemTotal: %lu kB", &kb);
+  std::fclose(file);
+  return matched == 1 ? kb * 1024ull : 0;
+}
+
+bool file_contains(const std::string& path, std::string_view needle) {
+  std::error_code error;
+  if (error || !std::filesystem::is_regular_file(path, error) || error) {
+    return false;
+  }
+  std::ifstream in(path);
+  const std::string text((std::istreambuf_iterator<char>(in)),
+                         std::istreambuf_iterator<char>());
+  return text.find(needle) != std::string::npos;
+}
+
+// True when a drirc configuration file names heap_memory_percent: the
+// user (or the distribution) has expressed a heap policy that mesa will
+// honor, and the default below must not override it. Scans the files
+// mesa's xmlconfig.c reads: $DRIRC_CONFIGDIR directories (or
+// DATADIR/drirc.d plus /etc/drirc when unset), then $HOME/.drirc and
+// $XDG_CONFIG_HOME/drirc. Plain substring match on the option name: a
+// hit we cannot attribute (a comment, another driver's section) keeps
+// mesa's default, which fails toward today's behavior.
+bool drirc_names_heap_memory_percent() {
+  constexpr std::string_view kOption = "heap_memory_percent";
+  std::vector<std::string> files;
+  const char* config_dirs = std::getenv("DRIRC_CONFIGDIR");
+  if (config_dirs != nullptr && config_dirs[0] != '\0') {
+    const char* p = config_dirs;
+    while (*p != '\0') {
+      const char* sep = std::strchr(p, ':');
+      const size_t len = sep != nullptr ? static_cast<size_t>(sep - p)
+                                        : std::strlen(p);
+      if (len > 0) {
+        const std::string dir(p, len);
+        std::error_code error;
+        for (std::filesystem::directory_iterator it(dir, error), end;
+             !error && it != end; it.increment(error)) {
+          files.push_back(it->path().string());
+        }
+      }
+      p += len + (sep != nullptr ? 1 : 0);
+    }
+  } else {
+    for (const char* directory :
+         {"/usr/share/drirc.d", "/usr/local/share/drirc.d"}) {
+      std::error_code error;
+      for (std::filesystem::directory_iterator it(directory, error), end;
+           !error && it != end; it.increment(error)) {
+        files.push_back(it->path().string());
+      }
+    }
+    files.emplace_back("/etc/drirc");
+  }
+  if (const char* home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    files.emplace_back(std::string(home) + "/.drirc");
+  }
+  if (const char* xdg = std::getenv("XDG_CONFIG_HOME");
+      xdg != nullptr && xdg[0] != '\0') {
+    files.emplace_back(std::string(xdg) + "/drirc");
+  }
+  for (const std::string& file : files) {
+    if (file_contains(file, kOption)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void apply_default_hk_sysmem() {
+  if (std::getenv("HK_SYSMEM") != nullptr) {
+    return; // explicit HK_SYSMEM wins
+  }
+  if (drirc_names_heap_memory_percent()) {
+    return; // drirc-configured heap_memory_percent wins
+  }
+  const uint64_t total = mem_total_bytes();
+  const std::optional<uint64_t> heap = cap_hk_sysmem_to_kernel_limit(
+      default_hk_sysmem_bytes(total), total, kernel_client_limit_bytes());
+  if (!heap) {
+    return; // mesa's 50% default already covers the formula and the kernel
+  }
+  char value[32];
+  std::snprintf(
+      value, sizeof(value), "%llu", static_cast<unsigned long long>(*heap));
+  // Never overwrites (checked above). A failed setenv degrades to mesa's
+  // 50% default heap for this process; that is not fatal.
+  ::setenv("HK_SYSMEM", value, 0);
+}
+
+// A heap above the kernel client limit can only come from an explicit
+// HK_SYSMEM or drirc heap_memory_percent: both win over the default cap.
+// Say so once, so the allocation failure that follows has a stated cause.
+void note_heap_above_kernel_limit(size_t heap_bytes) {
+  static std::once_flag once;
+  std::call_once(once, [&] {
+    const std::string message =
+        kernel_limit_heap_warning(heap_bytes, kernel_client_limit_bytes());
+    if (!message.empty()) {
+      std::fprintf(stderr, "[omarchy] warning: %s\n", message.c_str());
+    }
+  });
+}
+
+// ICD JSON files in the system search directories, in search order.
+std::vector<std::string> system_icd_candidates() {
+  std::vector<std::string> candidates;
+  for (const char* directory : {
+           "/etc/vulkan/icd.d",
+           "/usr/local/share/vulkan/icd.d",
+           "/usr/share/vulkan/icd.d"}) {
+    std::error_code error;
+    for (std::filesystem::directory_iterator it(directory, error), end;
+         !error && it != end; it.increment(error)) {
+      if (it->path().extension() == ".json") {
+        candidates.push_back(it->path().string());
+      }
+    }
+  }
+  return candidates;
+}
+
+HoneykrispIcdSelection configure_honeykrisp_icd() {
+  // Runs before Vulkan loads: raise the Honeykrisp heap for this MLX
+  // process (HK_SYSMEM) unless an explicit HK_SYSMEM or a drirc
+  // heap_memory_percent already chose one. Other Vulkan applications
+  // never run this code and keep mesa's 50% heap.
+  apply_default_hk_sysmem();
+  const std::vector<std::string> candidates = system_icd_candidates();
+  const char* driver_files = std::getenv("VK_DRIVER_FILES");
+  const char* icd_filenames = std::getenv("VK_ICD_FILENAMES");
+  HoneykrispIcdSelection selection;
+  if (driver_files != nullptr && driver_files[0] != '\0') {
+    selection = resolve_honeykrisp_icd_detail(candidates, driver_files, {});
+    selection.user_override = true;
+  } else if (icd_filenames != nullptr && icd_filenames[0] != '\0') {
+    selection = resolve_honeykrisp_icd_detail(candidates, icd_filenames, {});
+    selection.user_override = true;
+  } else {
+    // No user override: the packaged recipe ICD wins over a stock system
+    // asahi ICD, and the loader variables follow the selection.
+    selection = resolve_honeykrisp_icd_detail(
+        candidates, nullptr, packaged_honeykrisp_icd_path(omarchy_system_prefix()));
+    if (::setenv("VK_DRIVER_FILES", selection.path.c_str(), 1) != 0 ||
+        ::setenv("VK_ICD_FILENAMES", selection.path.c_str(), 1) != 0) {
+      throw std::runtime_error("cannot set Honeykrisp Vulkan ICD environment");
+    }
+  }
+  return selection;
+}
+
+// Expected SHA policy: an explicit env value always wins; otherwise the
+// packaged mesa-git-sha file applies only when the packaged ICD is the
+// one selected. Empty expectation records identity without enforcing.
+void resolve_expected_sha_policy(
+    const HoneykrispIcdSelection& selection,
+    std::string& expected_sha,
+    std::string& expected_sha_source) {
+  const char* env_sha = std::getenv("MLX_OMARCHY_EXPECTED_HK_SHA");
+  if (env_sha != nullptr && env_sha[0] != '\0') {
+    expected_sha = env_sha;
+    expected_sha_source = "env";
+    return;
+  }
+  expected_sha.clear();
+  expected_sha_source.clear();
+  if (selection.packaged) {
+    expected_sha = packaged_mesa_git_sha(omarchy_system_prefix());
+    if (!expected_sha.empty()) {
+      expected_sha_source = "packaged file";
+    }
+  }
+}
+
+
+struct PhysicalDeviceInfo {
+  VkPhysicalDevice handle{VK_NULL_HANDLE};
+  DeviceSupport support;
+  // Dispatch/provenance view; a named simulation profile when
+  // MLX_OMARCHY_CAPS_SIM is active, otherwise identical to hardware.
+  CapabilityReport caps;
+  // Hardware truth from discovery, never overridden by simulation.
+  CapabilityReport hardware;
+  VkPhysicalDeviceType type{VK_PHYSICAL_DEVICE_TYPE_OTHER};
+};
+
+// Process-wide Vulkan state. The VkInstance lives as long as the process;
+// VkDevices are created lazily per used index.
+std::atomic<bool> g_runtime_destroyed{false};
+
+struct Runtime {
+  std::mutex mutex;
+  VkInstance instance{VK_NULL_HANDLE};
+  std::vector<PhysicalDeviceInfo> supported;
+  std::vector<std::unique_ptr<Device>> devices;
+  std::string error{"backend not initialized"};
+  bool ready{false};
+  bool probed{false};
+  bool allow_non_apple{false};
+  // Set when init_impl ended because the selected ICD enumerated no supported
+  // device (not on a refusal such as a SHA mismatch): the only failure that
+  // falls back to the system ICD.
+  bool no_supported_device{false};
+  // Second attempt: icd_selection already names the system ICD.
+  bool icd_retry{false};
+  int preferred_device_index{-1};
+  HoneykrispIcdSelection icd_selection;
+  std::string icd_path;
+  std::string expected_sha;
+  std::string expected_sha_source;
+
+  // Discover devices once per process. Never throws; failures are recorded
+  // in |error| so callers can surface exact reasons.
+  bool init() {
+    // The first backend call: raise the clamp before any worker thread
+    // is created from this one.
+    raise_cpu_clamp_this_thread();
+    std::lock_guard<std::mutex> lk(mutex);
+    if (probed) {
+      return ready;
+    }
+    probed = true;
+    // The packaged recipe ICD targets M1/M2; a newer chip it cannot serve may
+    // still work on the system driver (init_with_icd_fallback).
+    const auto result = init_with_icd_fallback(
+        icd_selection,
+        no_supported_device,
+        icd_retry,
+        error,
+        system_icd_candidates(),
+        [&] { return try_init(); },
+        [](const std::string& path) {
+          return ::setenv("VK_DRIVER_FILES", path.c_str(), 1) == 0 &&
+              ::setenv("VK_ICD_FILENAMES", path.c_str(), 1) == 0;
+        });
+    const std::string failed_icd = icd_fallback_from(result);
+    if (!failed_icd.empty()) {
+      for (auto& device : supported) {
+        device.caps.icd_fallback_from = failed_icd;
+        device.hardware.icd_fallback_from = failed_icd;
+      }
+      std::fprintf(
+          stderr,
+          "[omarchy] the packaged Honeykrisp ICD (%s) found no supported"
+          " device; using the system ICD %s.\n",
+          result.packaged_path.c_str(),
+          result.fallback_path.c_str());
+    }
+    return result.ok;
+  }
+
+  bool try_init() {
+    no_supported_device = false;
+    try {
+      return init_impl();
+    } catch (const std::exception& ex) {
+      error = ex.what();
+      if (instance != VK_NULL_HANDLE) {
+        if (auto& it = vk::instance_table(); it.DestroyInstance) {
+          it.DestroyInstance(instance, nullptr);
+        }
+        instance = VK_NULL_HANDLE;
+      }
+      return false;
+    }
+  }
+
+  bool init_impl();
+
+  ~Runtime() {
+    g_runtime_destroyed.store(true, std::memory_order_release);
+    devices.clear();
+    if (instance != VK_NULL_HANDLE) {
+      if (auto& it = vk::instance_table(); it.DestroyInstance) {
+        it.DestroyInstance(instance, nullptr);
+      }
+    }
+  }
+};
+
+Runtime& runtime() {
+  static Runtime rt;
+  return rt;
+}
+
+
+CapabilityReport collect_capabilities(
+    vk::InstanceTable& it,
+    VkPhysicalDevice pd,
+    const DeviceSupport& support,
+    const VkPhysicalDeviceDriverProperties& driver,
+    const VkPhysicalDeviceProperties2& props2,
+    const VkPhysicalDeviceMemoryProperties2& mem2,
+    const VkPhysicalDeviceFeatures2& feats2,
+    const VkPhysicalDeviceVulkan12Features& f12,
+    const VkPhysicalDeviceVulkan13Features& f13,
+    const VkPhysicalDeviceShaderAtomicFloatFeaturesEXT& fa,
+    const VkPhysicalDeviceCooperativeMatrixFeaturesKHR& cm,
+    const VkPhysicalDevice16BitStorageFeatures& f16,
+    const VkPhysicalDeviceMaintenance3Properties& m3,
+    const VkPhysicalDeviceMaintenance4Properties& m4,
+    const VkPhysicalDeviceSubgroupProperties& subgroup) {
+  CapabilityReport caps;
+  caps.subgroup_size = subgroup.subgroupSize;
+  caps.subgroup_operations = subgroup.supportedOperations;
+  const auto& props = props2.properties;
+  const auto& limits = props.limits;
+  caps.device_name = props.deviceName;
+  caps.vendor_id = props.vendorID;
+  caps.device_id = props.deviceID;
+  caps.driver_version = props.driverVersion;
+  caps.api_version = props.apiVersion;
+  caps.driver_id = support.driver_id;
+  caps.driver_name = driver.driverName[0] == '\0'
+      ? "driver id " + std::to_string(support.driver_id)
+      : driver.driverName;
+  caps.driver_info = driver.driverInfo;
+  caps.driver_sha = mesa_git_sha(caps.driver_info);
+  std::memcpy(
+      caps.pipeline_cache_uuid.data(), props.pipelineCacheUUID, VK_UUID_SIZE);
+
+  caps.unified_memory = false;
+  size_t device_local = 0;
+  size_t host_visible_heap = 0;
+  for (uint32_t i = 0; i < mem2.memoryProperties.memoryHeapCount; ++i) {
+    const auto& heap = mem2.memoryProperties.memoryHeaps[i];
+    if (heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+      device_local = std::max(device_local, static_cast<size_t>(heap.size));
+    }
+  }
+  for (uint32_t i = 0; i < mem2.memoryProperties.memoryTypeCount; ++i) {
+    const auto& type = mem2.memoryProperties.memoryTypes[i];
+    bool host_visible_coherent =
+        (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+        (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (host_visible_coherent) {
+      caps.host_visible_coherent = true;
+      if (mem2.memoryProperties.memoryHeaps[type.heapIndex].flags &
+          VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+        caps.unified_memory = true;
+        break;
+      }
+    }
+  }
+  // total_memory must be the memory the allocator can actually use: every
+  // buffer is allocated from a HOST_VISIBLE type, so the usable size is the
+  // largest heap backing any HOST_VISIBLE type. The largest DEVICE_LOCAL
+  // heap is the wrong measure on Apple-UMA drivers (Honeykrisp on T8103
+  // reports a ~16 MB device-local heap alongside the multi-GB unified
+  // heap), which collapsed memory_limit_ and the batch byte budget
+  // (receipt 2026-09-23-m1host-decode-gap-batchbudget, addendum 2).
+  for (uint32_t i = 0; i < mem2.memoryProperties.memoryTypeCount; ++i) {
+    const auto& type = mem2.memoryProperties.memoryTypes[i];
+    if (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+      host_visible_heap =
+          std::max(host_visible_heap, static_cast<size_t>(
+              mem2.memoryProperties.memoryHeaps[type.heapIndex].size));
+    }
+  }
+  caps.total_memory = host_visible_heap > 0 ? host_visible_heap : device_local;
+
+  caps.timeline_semaphore = f12.timelineSemaphore == VK_TRUE;
+  caps.shader_float16 = f12.shaderFloat16 == VK_TRUE;
+  caps.shader_int16 = feats2.features.shaderInt16 == VK_TRUE;
+  caps.shader_int64 = feats2.features.shaderInt64 == VK_TRUE;
+  caps.storage_buffer_16bit_access = f16.storageBuffer16BitAccess == VK_TRUE;
+
+  caps.max_allocation_size = m3.maxMemoryAllocationSize;
+  caps.max_buffer_size = m4.maxBufferSize;
+  caps.max_storage_buffer_range = limits.maxStorageBufferRange;
+  caps.min_storage_buffer_offset_alignment =
+      limits.minStorageBufferOffsetAlignment;
+  caps.max_per_stage_descriptor_storage_buffers =
+      limits.maxPerStageDescriptorStorageBuffers;
+  caps.max_descriptor_set_storage_buffers =
+      limits.maxDescriptorSetStorageBuffers;
+  caps.max_compute_work_group_invocations =
+      limits.maxComputeWorkGroupInvocations;
+  caps.max_compute_shared_memory_size = limits.maxComputeSharedMemorySize;
+  for (int i = 0; i < 3; ++i) {
+    caps.max_compute_work_group_size[i] = limits.maxComputeWorkGroupSize[i];
+  }
+  caps.timestamp_period = limits.timestampPeriod;
+
+  uint32_t family_count = 0;
+  it.GetPhysicalDeviceQueueFamilyProperties(pd, &family_count, nullptr);
+  std::vector<VkQueueFamilyProperties> families(family_count);
+  it.GetPhysicalDeviceQueueFamilyProperties(pd, &family_count, families.data());
+  for (uint32_t f = 0; f < family_count; ++f) {
+    if (families[f].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+      caps.queue_family_index = f;
+      caps.queue_count = families[f].queueCount;
+      caps.queue_timestamp_valid_bits = families[f].timestampValidBits;
+      caps.queue_timestamp_valid_bits = families[f].timestampValidBits;
+      break;
+    }
+  }
+  // Extension-gated features: the extension name must be listed AND the
+  // feature bit must be on. llvmpipe advertises VK_EXT_shader_atomic_float
+  // and clears the float32 buffer-add bit only when it truly lacks it;
+  // Honeykrisp lists VK_KHR_cooperative_matrix only on the
+  // honeykrisp-coopmat branch behind AGX_SIMDMAT, and stock Mesa 26.1.7
+  // does not list it at all.
+  caps.shader_atomic_float_add = false;
+  caps.cooperative_matrix_f32_8 = false;
+  caps.cooperative_matrix_f16_8 = false;
+  caps.cooperative_matrix_bf16_8 = false;
+  bool has_coopmat_ext = false;
+#ifdef OMARCHY_BF16_CMAT
+  bool has_bf16_ext = false;
+#endif
+  uint32_t ext_count = 0;
+  if (it.EnumerateDeviceExtensionProperties &&
+      it.EnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, nullptr) ==
+          VK_SUCCESS &&
+      ext_count > 0) {
+    std::vector<VkExtensionProperties> exts(ext_count);
+    if (it.EnumerateDeviceExtensionProperties(
+            pd, nullptr, &ext_count, exts.data()) == VK_SUCCESS) {
+      for (const auto& e : exts) {
+        if (std::strcmp(e.extensionName, "VK_EXT_shader_atomic_float") == 0) {
+          caps.shader_atomic_float_add =
+              fa.shaderBufferFloat32AtomicAdd == VK_TRUE;
+        } else if (
+            std::strcmp(
+                e.extensionName, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME) ==
+            0) {
+          has_coopmat_ext = cm.cooperativeMatrix == VK_TRUE;
+        } else if (
+            std::strcmp(e.extensionName, "VK_EXT_global_priority") == 0) {
+          caps.queue_global_priority = true;
+#ifdef OMARCHY_BF16_CMAT
+        } else if (
+            std::strcmp(e.extensionName, VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME) ==
+            0) {
+          has_bf16_ext = true;
+#endif
+        }
+      }
+    }
+  }
+  // bf16 cooperative matrices need VK_KHR_shader_bfloat16 with both the
+  // type and the cooperative-matrix feature. Its feature struct is queried
+  // only when the driver lists the extension.
+#ifdef OMARCHY_BF16_CMAT
+  bool bf16_cmat_features = false;
+  if (has_bf16_ext && has_coopmat_ext) {
+    VkPhysicalDeviceShaderBfloat16FeaturesKHR bf{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR};
+    VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    query.pNext = &bf;
+    it.GetPhysicalDeviceFeatures2(pd, &query);
+    bf16_cmat_features = bf.shaderBFloat16Type == VK_TRUE &&
+        bf.shaderBFloat16CooperativeMatrix == VK_TRUE;
+  }
+#endif
+  // Three same-operand 8x8x8 shapes drive the convenience booleans (fp32,
+  // fp16 and bf16 A/B, all with an fp32 accumulator, subgroup scope,
+  // non-saturating). Every advertised shape is also recorded verbatim into
+  // caps.cooperative_matrix_shapes so kernel selection can match a mixed
+  // shape (AType != BType) a boolean cannot express.
+  // Map the component/scope enums the backend's kernels can emit; any other
+  // advertised type or scope records as Other, so an exact-shape query for a
+  // float qmm route can never alias onto it.
+  auto to_coopmat_type = [](VkComponentTypeKHR t) {
+    switch (t) {
+      case VK_COMPONENT_TYPE_FLOAT16_KHR:
+        return CoopmatType::Float16;
+#ifdef VK_KHR_shader_bfloat16
+      case VK_COMPONENT_TYPE_BFLOAT16_KHR:
+        return CoopmatType::BFloat16;
+#endif
+      case VK_COMPONENT_TYPE_FLOAT32_KHR:
+        return CoopmatType::Float32;
+      default:
+        return CoopmatType::Other;
+    }
+  };
+  auto to_coopmat_scope = [](VkScopeKHR s) {
+    return s == VK_SCOPE_SUBGROUP_KHR ? CoopmatScope::Subgroup
+                                      : CoopmatScope::Other;
+  };
+  if (has_coopmat_ext && it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR) {
+    uint32_t n = 0;
+    if (it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR(pd, &n, nullptr) ==
+            VK_SUCCESS &&
+        n > 0) {
+      std::vector<VkCooperativeMatrixPropertiesKHR> shapes(
+          n, {VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR});
+      if (it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR(
+              pd, &n, shapes.data()) == VK_SUCCESS) {
+        caps.cooperative_matrix_shapes.reserve(shapes.size());
+        for (const auto& p : shapes) {
+          caps.cooperative_matrix_shapes.push_back(CoopmatShape{
+              p.MSize, p.NSize, p.KSize, to_coopmat_type(p.AType),
+              to_coopmat_type(p.BType), to_coopmat_type(p.CType),
+              to_coopmat_type(p.ResultType), to_coopmat_scope(p.scope),
+              p.saturatingAccumulation != VK_FALSE});
+          if (p.MSize != 8 || p.NSize != 8 || p.KSize != 8 ||
+              p.CType != VK_COMPONENT_TYPE_FLOAT32_KHR ||
+              p.ResultType != VK_COMPONENT_TYPE_FLOAT32_KHR ||
+              p.saturatingAccumulation != VK_FALSE ||
+              p.scope != VK_SCOPE_SUBGROUP_KHR || p.AType != p.BType) {
+            continue;
+          }
+          if (p.AType == VK_COMPONENT_TYPE_FLOAT32_KHR) {
+            caps.cooperative_matrix_f32_8 = true;
+          } else if (p.AType == VK_COMPONENT_TYPE_FLOAT16_KHR) {
+            caps.cooperative_matrix_f16_8 = true;
+#ifdef OMARCHY_BF16_CMAT
+          } else if (p.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR) {
+            caps.cooperative_matrix_bf16_8 = bf16_cmat_features;
+#endif
+          }
+        }
+      }
+    }
+  }
+  // Device creation chains the bf16 features behind the cooperative-matrix
+  // features, which it enables only with the fp32 shape.
+  caps.cooperative_matrix_bf16_8 =
+      caps.cooperative_matrix_bf16_8 && caps.cooperative_matrix_f32_8;
+  return caps;
+}
+
+bool Runtime::init_impl() {
+  // Capability simulation resolves once per process. An unknown
+  // MLX_OMARCHY_CAPS_SIM name throws here and lands in |error|: the
+  // backend refuses to start rather than silently running real caps.
+  // The notices below print on the first attempt only: an ICD retry runs this
+  // function a second time.
+  const bool first_attempt = !icd_retry;
+  const std::string sim_profile = capsim::requested_profile();
+  const capsim::SimulationProfile* sim =
+      sim_profile.empty() ? nullptr : capsim::find(sim_profile);
+  if (sim && first_attempt) {
+    std::fprintf(
+        stderr,
+        "[omarchy] CAPABILITY SIMULATION ACTIVE: profile '%s'"
+        " (stands in for driver_variant %s)\n",
+        sim->name,
+        sim->represents_driver_variant);
+    std::fprintf(
+        stderr,
+        "[omarchy] simulated runs are not hardware results: no"
+        " benchmark or generated-id-digest evidence may be recorded"
+        " from this process.\n");
+  }
+  allow_non_apple = env_flag("MLX_OMARCHY_ALLOW_NON_APPLE");
+  preferred_device_index = env_index("MLX_OMARCHY_DEVICE_INDEX");
+  // MLX_OMARCHY_NO_BUFFER_CACHE (diagnostic, docs/install-omarchy.md):
+  // read once at init, not per allocation - the allocator polls the
+  // flag on every malloc and free.
+  g_no_buffer_cache.store(
+      env_flag("MLX_OMARCHY_NO_BUFFER_CACHE"), std::memory_order_relaxed);
+  if (first_attempt && g_no_buffer_cache.load(std::memory_order_relaxed)) {
+    std::fprintf(
+        stderr,
+        "[omarchy] MLX_OMARCHY_NO_BUFFER_CACHE active (diagnostics only,"
+        " not product configuration; docs/install-omarchy.md): the"
+        " buffer cache is off for the whole process.\n");
+  }
+
+  try {
+    if (!icd_retry) {
+      icd_selection = configure_honeykrisp_icd();
+    }
+    icd_path = icd_selection.path;
+    resolve_expected_sha_policy(icd_selection, expected_sha, expected_sha_source);
+  } catch (const std::runtime_error&) {
+    // Development override: no Honeykrisp ICD, so the loader's own driver
+    // list stands and classify_physical_device admits non-Apple GPUs.
+    if (!allow_non_apple) {
+      throw;
+    }
+  }
+  // Honeykrisp's bounded syncobj poll (HK_SUBMIT_POLL_US) is NOT turned on here. It made the host issue zero-timeout syncobj waits for most of every
+  // wait (about 21000 expired waits per decoded token on a 13-inch M1): 5 s more process CPU and about 1 W more system power over a 400-token decode,
+  // for no change in tok/s, and no gain in Parakeet tdt_decode either (receipts/2026-11-03-hk-submit-poll). The variable stays available: a value set in
+  // the environment reaches the driver untouched.
+
+  if (!vk::load_loader()) {
+    error =
+        "[omarchy] Vulkan loader not found (libvulkan.so.1)."
+        " Install vulkan-icd-loader or the distribution equivalent.";
+    return false;
+  }
+  auto& it = vk::instance_table();
+  it.CreateInstance = reinterpret_cast<PFN_vkCreateInstance>(
+      vk::GetInstanceProcAddr(nullptr, "vkCreateInstance"));
+  it.EnumerateInstanceVersion =
+      reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+          vk::GetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
+  if (!it.CreateInstance) {
+    error = "[omarchy] Vulkan loader has no vkCreateInstance.";
+    return false;
+  }
+  if (!it.EnumerateInstanceVersion) {
+    error = "[omarchy] Vulkan loader predates Vulkan 1.1.";
+    return false;
+  }
+
+  VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+  app.pApplicationName = "mlx-omarchy";
+  app.pEngineName = "mlx-omarchy";
+  app.apiVersion = kVulkan13;
+  VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+  ici.pApplicationInfo = &app;
+  const VkResult created = it.CreateInstance(&ici, nullptr, &instance);
+  if (instance_failure_is_no_driver(static_cast<int>(created))) {
+    // No ICD loaded at all (for example the packaged driver library is
+    // missing): the same "no supported device" outcome as an empty
+    // enumeration, so a packaged ICD falls back to the system one.
+    instance = VK_NULL_HANDLE;
+    no_supported_device = true;
+    error =
+        "[omarchy] the Vulkan loader found no usable driver"
+        " (vkCreateInstance returned VK_ERROR_INCOMPATIBLE_DRIVER)."
+        " Is the Mesa Honeykrisp driver installed?";
+    return false;
+  }
+  if (created != VK_SUCCESS) {
+    throw std::runtime_error(
+        std::string("[omarchy] it.CreateInstance(&ici, nullptr, &instance) failed with ") +
+        vk::result_string(created));
+  }
+
+  it.EnumeratePhysicalDevices =
+      reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+          vk::GetInstanceProcAddr(instance, "vkEnumeratePhysicalDevices"));
+  it.GetPhysicalDeviceProperties2 =
+      reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+          vk::GetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2"));
+  it.EnumerateDeviceExtensionProperties =
+      reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
+          vk::GetInstanceProcAddr(
+              instance, "vkEnumerateDeviceExtensionProperties"));
+  it.GetPhysicalDeviceFeatures2 =
+      reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+          vk::GetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2"));
+  it.GetPhysicalDeviceMemoryProperties2 =
+      reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
+          vk::GetInstanceProcAddr(
+              instance, "vkGetPhysicalDeviceMemoryProperties2"));
+  it.GetPhysicalDeviceQueueFamilyProperties =
+      reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
+          vk::GetInstanceProcAddr(
+              instance, "vkGetPhysicalDeviceQueueFamilyProperties"));
+  it.GetPhysicalDeviceQueueFamilyProperties2 =
+      reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties2>(
+          vk::GetInstanceProcAddr(
+              instance, "vkGetPhysicalDeviceQueueFamilyProperties2"));
+  it.CreateDevice = reinterpret_cast<PFN_vkCreateDevice>(
+      vk::GetInstanceProcAddr(instance, "vkCreateDevice"));
+  it.GetPhysicalDeviceCooperativeMatrixPropertiesKHR =
+      reinterpret_cast<PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR>(
+          vk::GetInstanceProcAddr(
+              instance, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR"));
+  it.DestroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(
+      vk::GetInstanceProcAddr(instance, "vkDestroyInstance"));
+  if (!it.EnumeratePhysicalDevices || !it.GetPhysicalDeviceProperties2 ||
+      !it.GetPhysicalDeviceFeatures2 ||
+      !it.GetPhysicalDeviceMemoryProperties2 ||
+      !it.GetPhysicalDeviceQueueFamilyProperties || !it.CreateDevice ||
+      !it.DestroyInstance || !it.EnumerateDeviceExtensionProperties) {
+    error = "[omarchy] Vulkan instance does not expose required 1.3 functions.";
+    return false;
+  }
+
+  uint32_t count = 0;
+  if (it.EnumeratePhysicalDevices(instance, &count, nullptr) != VK_SUCCESS ||
+      count == 0) {
+    error =
+        "[omarchy] no Vulkan physical devices found."
+        " Is the Mesa Honeykrisp driver installed?";
+    no_supported_device = true;
+    it.DestroyInstance(instance, nullptr);
+    instance = VK_NULL_HANDLE;
+    return false;
+  }
+  std::vector<VkPhysicalDevice> pds(count);
+  VKX_CHECK(it.EnumeratePhysicalDevices(instance, &count, pds.data()));
+
+  std::string first_refusal;
+
+  for (VkPhysicalDevice pd : pds) {
+    VkPhysicalDeviceDriverProperties driver{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    VkPhysicalDeviceMaintenance3Properties m3{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES};
+    VkPhysicalDeviceMaintenance4Properties m4{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES};
+    driver.pNext = &m3;
+    m3.pNext = &m4;
+    VkPhysicalDeviceSubgroupProperties subgroup{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
+    VkPhysicalDeviceProperties2 props2{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    VkPhysicalDeviceVulkan13Properties p13{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
+    props2.pNext = &driver;
+    driver.pNext = &subgroup;
+    subgroup.pNext = &p13;
+    it.GetPhysicalDeviceProperties2(pd, &props2);
+
+    DeviceSupport support = classify_physical_device(
+        props2.properties,
+        static_cast<int32_t>(driver.driverID),
+        allow_non_apple);
+
+    VkPhysicalDeviceMemoryProperties2 mem2{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+    it.GetPhysicalDeviceMemoryProperties2(pd, &mem2);
+
+    VkPhysicalDevice16BitStorageFeatures f16{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
+    VkPhysicalDeviceVulkan12Features f12{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    VkPhysicalDeviceVulkan13Features f13{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    VkPhysicalDeviceShaderAtomicFloatFeaturesEXT fa{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR cm{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+    VkPhysicalDeviceFeatures2 feats2{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    f16.pNext = &f12;
+    f12.pNext = &f13;
+    f13.pNext = &fa;
+    fa.pNext = &cm;
+    feats2.pNext = &f16;
+    it.GetPhysicalDeviceFeatures2(pd, &feats2);
+
+    if (support.supported && f12.timelineSemaphore != VK_TRUE) {
+      support.supported = false;
+      support.reason = "[omarchy] device '" +
+          std::string(props2.properties.deviceName) +
+          "' does not expose timeline semaphores;"
+          " the backend requires Vulkan 1.2+ synchronization.";
+    }
+
+    if (!support.supported) {
+      if (first_refusal.empty()) {
+        first_refusal = support.reason;
+      }
+      continue;
+    }
+
+    PhysicalDeviceInfo info;
+    info.handle = pd;
+    info.type = props2.properties.deviceType;
+    info.support = std::move(support);
+    info.caps = collect_capabilities(
+        it,
+        pd,
+        info.support,
+        driver,
+        props2,
+        mem2,
+        feats2,
+        f12,
+        f13,
+        fa,
+        cm,
+        f16,
+        m3,
+        m4,
+        subgroup);
+    info.caps.required_subgroup_size = required_subgroup_size(
+        f13.subgroupSizeControl == VK_TRUE,
+        p13.requiredSubgroupSizeStages,
+        p13.minSubgroupSize,
+        p13.maxSubgroupSize,
+        info.caps.subgroup_size);
+    info.caps.icd_path = icd_path;
+    info.caps.icd_source = icd_selection.packaged
+        ? "packaged"
+        : (icd_selection.user_override ? "override" : "search");
+    info.caps.expected_sha = expected_sha;
+    info.caps.expected_sha_source = expected_sha_source;
+    if (info.support.driver_id == kMesaHoneykrispDriverId) {
+      require_expected_honeykrisp_sha(expected_sha, info.caps.driver_sha);
+    }
+    note_heap_above_kernel_limit(info.caps.total_memory);
+    note_stock_driver_identity(
+        info.caps.icd_source,
+        info.caps.driver_info,
+        info.caps.driver_sha,
+        expected_sha);
+    {
+      // Directory of the loaded libmlx (<site-packages>/mlx/lib): where the
+      // venv's mlx_lm sits two levels up. Empty when it cannot be found.
+      Dl_info lib_info;
+      std::string lib_dir;
+      if (dladdr(reinterpret_cast<void*>(&note_stock_driver_identity), &lib_info) &&
+          lib_info.dli_fname != nullptr) {
+        lib_dir = std::filesystem::path(lib_info.dli_fname).parent_path().string();
+      }
+      note_mlx_lm_patches(lib_dir);
+    }
+    info.hardware = info.caps;
+    if (sim) {
+      info.caps = capsim::apply(info.caps, *sim);
+      std::fprintf(
+          stderr,
+          "[omarchy] simulated device %u: '%s' (%s) as"
+          " subgroup_size=%u subgroup_ops_mask=0x%x"
+          " cooperative_matrix_fp32_8x8x8=%d"
+          " shared_memory_limit_bytes=%zu"
+          " workgroup_invocations=%u workgroup_size_x=%u"
+          " atomic_float_add=%d\n",
+          static_cast<unsigned>(supported.size()),
+          info.caps.device_name.c_str(),
+          info.caps.driver_name.c_str(),
+          info.caps.subgroup_size,
+          info.caps.subgroup_operations,
+          info.caps.cooperative_matrix_f32_8 ? 1 : 0,
+          info.caps.max_compute_shared_memory_size,
+          info.caps.max_compute_work_group_invocations,
+          info.caps.max_compute_work_group_size[0],
+          info.caps.shader_atomic_float_add ? 1 : 0);
+    }
+    if (info.caps.queue_count == 0) {
+      if (first_refusal.empty()) {
+        first_refusal = "[omarchy] device '" + info.caps.device_name +
+            "' exposes no compute queue family.";
+      }
+      continue;
+    }
+    supported.push_back(std::move(info));
+  }
+
+  if (supported.empty()) {
+    error = first_refusal.empty()
+        ? "[omarchy] no qualifying Vulkan 1.3 device found."
+        : first_refusal;
+    no_supported_device = true;
+    it.DestroyInstance(instance, nullptr);
+    instance = VK_NULL_HANDLE;
+    return false;
+  }
+
+  std::vector<VkPhysicalDeviceType> types;
+  for (const auto& d : supported) {
+    types.push_back(d.type);
+  }
+  std::vector<PhysicalDeviceInfo> ordered;
+  for (size_t i : device_order(types)) {
+    ordered.push_back(std::move(supported[i]));
+  }
+  supported = std::move(ordered);
+  error.clear();
+  // One lazily-filled slot per supported device; device() indexes this
+  // vector directly, so it must match |supported| before ready flips.
+  devices.resize(supported.size());
+  ready = true;
+  return true;
+}
+
+} // namespace
+
+bool runtime_alive() {
+  return !g_runtime_destroyed.load(std::memory_order_acquire);
+}
+
+// Compiled-tape debug switch plumbing (device.h). At omarchy scope, not
+// in the anonymous namespace above: the encoder and allocator call these
+// through the header declarations.
+bool env_flag(const char* name) {
+  const char* v = std::getenv(name);
+  if (!v) {
+    return false;
+  }
+  std::string s = v;
+  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return s == "1" || s == "on" || s == "true" || s == "yes";
+}
+
+// Heap formula (device.h). max(50%, MemTotal - 16 GiB), 1 MiB-rounded
+// like mesa's os_gpu_heap_size_calculate, clamped to 62 GiB: the
+// per-process user VA window is ~64 GiB (agx_device.c), HeapBudget's
+// probe committed 63 GiB and the 64th allocation failed with "Failed to
+// allocate BO VMA", so a bigger heap cannot map. 62 GiB keeps 2 GiB of
+// the window for mappings outside the heap and lets gpt-oss-120b (58.05
+// GiB of weights) load and decode on a 96 GB host. MemTotal <= 32 GiB
+// never beats the 50% default, so those hosts (16 GB M1 included) return
+// nullopt and keep mesa's byte-for-byte heap.
+std::optional<uint64_t> default_hk_sysmem_bytes(uint64_t mem_total_bytes) {
+  constexpr uint64_t kGiB = 1ull << 30;
+  constexpr uint64_t kSystemReserve = 16 * kGiB;
+  constexpr uint64_t kVaWindowClamp = 62 * kGiB;
+  if (mem_total_bytes < kSystemReserve) {
+    return std::nullopt;
+  }
+  const uint64_t half = mem_total_bytes / 2;
+  const uint64_t raised = mem_total_bytes - kSystemReserve;
+  if (raised <= half) {
+    return std::nullopt;
+  }
+  return std::min(raised, kVaWindowClamp) & ~((1ull << 20) - 1);
+}
+
+// The gpu_memory file is one `<key> <decimal>` pair per line. Only the exact
+// key client_limit counts: the device-wide `limit` line is a different cap.
+std::optional<uint64_t> parse_kernel_client_limit(std::string_view text) {
+  constexpr std::string_view kKey = "client_limit ";
+  size_t pos = 0;
+  while (pos < text.size()) {
+    size_t end = text.find('\n', pos);
+    if (end == std::string_view::npos) {
+      end = text.size();
+    }
+    const std::string_view line = text.substr(pos, end - pos);
+    pos = end + 1;
+    if (line.substr(0, kKey.size()) != kKey) {
+      continue;
+    }
+    const std::string_view digits = line.substr(kKey.size());
+    uint64_t value = 0;
+    const char* last = digits.data() + digits.size();
+    const auto [stop, error] = std::from_chars(digits.data(), last, value);
+    if (error != std::errc{} || stop != last || value == 0) {
+      return std::nullopt; // malformed, or 0: the kernel sets no client limit
+    }
+    return value;
+  }
+  return std::nullopt;
+}
+
+// The kernel refuses a GPU buffer once a client holds its per-client limit
+// of memory (the lab kernel's client_mem_limit_pct, 50% of RAM by default),
+// so a heap above it promises memory that vkAllocateMemory cannot deliver.
+// The result is MiB aligned like mesa's heap sizes. When nobody chose a heap,
+// mesa takes MemTotal/2 rounded down to 1 MiB: a limit at or above that
+// leaves the stock heap alone, which keeps 16 GB-class hosts byte-for-byte
+// unchanged.
+std::optional<uint64_t> cap_hk_sysmem_to_kernel_limit(
+    std::optional<uint64_t> heap,
+    uint64_t mem_total_bytes,
+    std::optional<uint64_t> kernel_client_limit) {
+  constexpr uint64_t kMiBMask = ~((1ull << 20) - 1);
+  if (!kernel_client_limit) {
+    return heap;
+  }
+  const uint64_t cap = *kernel_client_limit & kMiBMask;
+  const uint64_t want = heap ? *heap : (mem_total_bytes / 2) & kMiBMask;
+  if (cap == 0 || want == 0 || cap >= want) {
+    return heap;
+  }
+  return cap;
+}
+
+// Kernels without the gpu_memory file (other drivers, other GPUs) report no
+// limit, so nothing changes there. The file sits next to agx_stats on the
+// GPU's platform device, which the render node's device link points to.
+std::optional<uint64_t> kernel_client_limit_bytes() {
+  std::vector<std::string> nodes;
+  std::error_code error;
+  for (std::filesystem::directory_iterator it("/sys/class/drm", error), end;
+       !error && it != end; it.increment(error)) {
+    if (it->path().filename().string().rfind("renderD", 0) == 0) {
+      nodes.push_back(it->path().string());
+    }
+  }
+  std::sort(nodes.begin(), nodes.end());
+  for (const std::string& node : nodes) {
+    std::ifstream in(node + "/device/gpu_memory");
+    if (!in) {
+      continue;
+    }
+    const std::string text((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+    if (const auto limit = parse_kernel_client_limit(text)) {
+      return limit;
+    }
+  }
+  return std::nullopt;
+}
+
+std::string kernel_limit_heap_warning(
+    uint64_t heap_bytes,
+    std::optional<uint64_t> kernel_client_limit) {
+  if (!kernel_client_limit || heap_bytes == 0 ||
+      heap_bytes <= *kernel_client_limit) {
+    return {};
+  }
+  return "the GPU heap is " + std::to_string(heap_bytes) +
+      " bytes, above the " + std::to_string(*kernel_client_limit) +
+      " bytes the kernel lets one process hold (client_limit in gpu_memory)."
+      " An allocation past that limit fails with"
+      " VK_ERROR_OUT_OF_DEVICE_MEMORY. Lower HK_SYSMEM or"
+      " heap_memory_percent to the limit, or raise the kernel limit.";
+}
+
+// Scoped compiled-tape diagnostic state (device.h). Plain atomics: the
+// encoder and the allocator poll these per dispatch or per allocation,
+// so the unset path must stay cheaper than an environment lookup.
+// g_no_buffer_cache is declared in the anonymous namespace above because
+// Runtime::init_impl sets it before this point of the file.
+namespace {
+std::atomic<bool> g_tape_full_barriers{false};
+std::atomic<bool> g_tape_no_reuse{false};
+} // namespace
+
+bool buffer_cache_disabled() {
+  return g_no_buffer_cache.load(std::memory_order_relaxed);
+}
+
+TapeDebugScope::TapeDebugScope(bool full_barriers, bool no_reuse)
+    : full_barriers_(full_barriers), no_reuse_(no_reuse) {
+  g_tape_full_barriers.store(full_barriers, std::memory_order_relaxed);
+  g_tape_no_reuse.store(no_reuse, std::memory_order_relaxed);
+}
+
+TapeDebugScope::~TapeDebugScope() {
+  g_tape_full_barriers.store(false, std::memory_order_relaxed);
+  g_tape_no_reuse.store(false, std::memory_order_relaxed);
+}
+
+bool tape_full_barriers() {
+  return g_tape_full_barriers.load(std::memory_order_relaxed);
+}
+
+bool tape_no_reuse() {
+  return g_tape_no_reuse.load(std::memory_order_relaxed);
+}
+
+DeviceSupport classify_physical_device(
+    const VkPhysicalDeviceProperties& props,
+    int32_t driver_id,
+    bool allow_non_apple) {
+  DeviceSupport s;
+  s.device_name = props.deviceName;
+  s.vendor_id = props.vendorID;
+  s.device_id = props.deviceID;
+  s.api_version = props.apiVersion;
+  s.driver_id = driver_id;
+
+  if (props.apiVersion < kVulkan13) {
+    s.reason = "[omarchy] device '" + std::string(props.deviceName) +
+        "' reports Vulkan " +
+        std::to_string(VK_API_VERSION_MAJOR(props.apiVersion)) + "." +
+        std::to_string(VK_API_VERSION_MINOR(props.apiVersion)) +
+        "; the backend requires Vulkan 1.3.";
+    return s;
+  }
+
+  // Driver identity is authoritative: the M1 target reports vendor 0x10005
+  // and deviceName "Apple M1" under Mesa Honeykrisp, so the driver id is
+  // the signal that accepts it. Driver-id constants are C enum values, not
+  // macros; never guard them with #ifdef. Apple vendor 0x106b stays as an
+  // alternate signal for Apple GPUs on other driver builds. Aurora's packaged
+  // Mesa names the device "Apple M<n> ... (G<..>)" under Mesa's vendor id and
+  // may report a driver id this list does not carry, so the chip name is a
+  // third signal. It needs the prefix "Apple M" plus a digit, not a substring:
+  // a non-Apple device ("Apple Metal ...") is still refused.
+  bool apple = props.vendorID == kAppleVendorId;
+  bool honeykrisp_name =
+      contains_case_insensitive(props.deviceName, "honeykrisp");
+  bool honeykrisp_driver = driver_id == kMesaHoneykrispDriverId ||
+      driver_id == kAuroraBorealisDriverId;
+  bool apple_chip_name = std::strncmp(props.deviceName, "Apple M", 7) == 0 &&
+      std::isdigit(static_cast<unsigned char>(props.deviceName[7]));
+
+  if (apple || honeykrisp_name || honeykrisp_driver || apple_chip_name) {
+    s.supported = true;
+    return s;
+  }
+
+  if (allow_non_apple) {
+    s.supported = true;
+    s.non_apple_dev = true;
+    return s;
+  }
+
+  s.reason = "[omarchy] device '" + std::string(props.deviceName) +
+      "' is not an Apple GPU running Omarchy Honeykrisp."
+      " Set MLX_OMARCHY_ALLOW_NON_APPLE=1 to use it for development only.";
+  return s;
+}
+
+uint32_t required_subgroup_size(
+    bool size_control,
+    VkShaderStageFlags required_stages,
+    uint32_t min_size,
+    uint32_t max_size,
+    uint32_t subgroup_size) {
+  if (!size_control || !(required_stages & VK_SHADER_STAGE_COMPUTE_BIT) ||
+      min_size == max_size || subgroup_size < min_size ||
+      subgroup_size > max_size) {
+    return 0;
+  }
+  return subgroup_size;
+}
+
+std::vector<size_t> device_order(
+    const std::vector<VkPhysicalDeviceType>& types) {
+  std::vector<size_t> order(types.size());
+  for (size_t i = 0; i < order.size(); ++i) {
+    order[i] = i;
+  }
+  std::stable_partition(order.begin(), order.end(), [&](size_t i) {
+    return types[i] == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+  });
+  return order;
+}
+
+// --- Process-wide API -----------------------------------------------------
+
+bool init() {
+  return runtime().init();
+}
+
+bool is_available() {
+  return runtime().init();
+}
+
+const std::string& init_error() {
+  runtime().init();
+  return runtime().error;
+}
+
+int device_count() {
+  if (!runtime().init()) {
+    return 0;
+  }
+  return static_cast<int>(runtime().supported.size());
+}
+
+Device& device(uint32_t index) {
+  auto& rt = runtime();
+  if (!rt.init()) {
+    throw std::runtime_error(rt.error);
+  }
+  uint32_t effective = index;
+  if (effective == 0 && rt.preferred_device_index >= 0) {
+    effective = static_cast<uint32_t>(rt.preferred_device_index);
+  }
+  if (effective >= rt.supported.size()) {
+    throw std::invalid_argument(
+        "[omarchy] device index " + std::to_string(effective) +
+        " is out of range; " + std::to_string(rt.supported.size()) +
+        " supported device(s) found.");
+  }
+  std::lock_guard<std::mutex> lk(rt.mutex);
+  auto& slot = rt.devices[effective];
+  if (!slot) {
+    slot = std::make_unique<Device>(effective);
+  }
+  return *slot;
+}
+
+const CapabilityReport& capability_report(uint32_t index) {
+  auto& rt = runtime();
+  if (!rt.init()) {
+    throw std::runtime_error(rt.error);
+  }
+  if (index >= rt.supported.size()) {
+    throw std::invalid_argument(
+        "[omarchy] device index " + std::to_string(index) +
+        " is out of range.");
+  }
+  return rt.supported[index].caps;
+}
+
+// Hardware-truth report for a supported index regardless of any active
+// capability simulation. mlx-omarchy-info --hardware and the
+// simulation tests read this.
+const CapabilityReport& hardware_capability_report(uint32_t index) {
+  auto& rt = runtime();
+  if (!rt.init()) {
+    throw std::runtime_error(rt.error);
+  }
+  if (index >= rt.supported.size()) {
+    throw std::invalid_argument(
+        "[omarchy] device index " + std::to_string(index) +
+        " is out of range.");
+  }
+  return rt.supported[index].hardware;
+}
+
+// --- Device ---------------------------------------------------------------
+
+Device::Device(uint32_t physical_device_index) {
+  auto& rt = runtime();
+  auto& info = rt.supported.at(physical_device_index);
+  // Dispatch and provenance see the (possibly simulated) report; the
+  // VkDevice is created from hardware truth, so a simulated capability
+  // can never enable an extension or feature the driver does not
+  // actually have.
+  caps_ = info.caps;
+  hardware_caps_ = info.hardware;
+  const CapabilityReport& hw = hardware_caps_;
+  VkPhysicalDevice pd = info.handle;
+  auto& it = vk::instance_table();
+
+  VkPhysicalDeviceShaderAtomicFloatFeaturesEXT enabled_fa{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
+  enabled_fa.shaderBufferFloat32AtomicAdd =
+      hw.shader_atomic_float_add ? VK_TRUE : VK_FALSE;
+  VkPhysicalDeviceCooperativeMatrixFeaturesKHR enabled_cm{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+  enabled_cm.cooperativeMatrix =
+      hw.cooperative_matrix_f32_8 ? VK_TRUE : VK_FALSE;
+  VkPhysicalDevice16BitStorageFeatures enabled16{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
+  enabled16.storageBuffer16BitAccess =
+      hw.storage_buffer_16bit_access ? VK_TRUE : VK_FALSE;
+  VkPhysicalDeviceVulkan12Features enabled12{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+  enabled12.timelineSemaphore = VK_TRUE;
+  enabled12.shaderFloat16 = hw.shader_float16 ? VK_TRUE : VK_FALSE;
+  VkPhysicalDeviceVulkan13Features enabled13{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+  enabled13.subgroupSizeControl =
+      hw.required_subgroup_size != 0 ? VK_TRUE : VK_FALSE;
+  VkPhysicalDeviceFeatures2 enabled2{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+  enabled2.features.shaderInt16 = hw.shader_int16 ? VK_TRUE : VK_FALSE;
+  enabled2.features.shaderInt64 = hw.shader_int64 ? VK_TRUE : VK_FALSE;
+  enabled16.pNext = &enabled12;
+  enabled12.pNext = &enabled13;
+  enabled13.pNext = &enabled_fa;
+  if (hw.cooperative_matrix_f32_8) {
+    enabled_fa.pNext = &enabled_cm;
+  }
+#ifdef OMARCHY_BF16_CMAT
+  VkPhysicalDeviceShaderBfloat16FeaturesKHR enabled_bf16{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR};
+  if (hw.cooperative_matrix_bf16_8) {
+    enabled_bf16.shaderBFloat16Type = VK_TRUE;
+    enabled_bf16.shaderBFloat16CooperativeMatrix = VK_TRUE;
+    enabled_cm.pNext = &enabled_bf16;
+  }
+#endif
+  enabled2.pNext = &enabled16;
+
+  // M1 receipt: Mesa Honeykrisp exposes one compute queue (family 0,
+  // queueCount 1). Request exactly that; never invent additional queues.
+  float priority = 1.0f;
+  VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+  qci.queueFamilyIndex = caps_.queue_family_index;
+  qci.queueCount = 1;
+  qci.pQueuePriorities = &priority;
+
+  // Lower queue priority (issue #19): a submission runs to completion
+  // before the compositor gets the queue, so MLX also loses arbitration
+  // against the desktop for every submission it queues. Where the driver
+  // exposes VK_EXT_global_priority AND the compute queue family lists the
+  // requested priority, request LOW so desktop work wins; MLX GPU time
+  // is bounded by the submission work budget either way.
+  // MLX_OMARCHY_QUEUE_PRIORITY = "off"|"default" restores the unchained
+  // queue; "medium" requests MEDIUM. Any unmet condition (extension
+  // absent, priority not reported for this family, loader lacks the 1.1
+  // family query) silently keeps the default priority: the request must
+  // never fail device creation.
+  VkDeviceQueueGlobalPriorityCreateInfoKHR global_priority{
+      VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR};
+  if (auto wanted = requested_global_priority()) {
+    global_priority.globalPriority = *wanted;
+    if (hw.queue_global_priority &&
+        it.GetPhysicalDeviceQueueFamilyProperties2) {
+      // The second argument is the property-array COUNT, not a family
+      // index: query the count, then every family, and read ours. Passing
+      // the family index (0 on Honeykrisp) as the count returned no
+      // properties, so LOW was never requested (2026-10-13, J613: the
+      // kernel created MLX's queue at normal priority).
+      uint32_t count = 0;
+      it.GetPhysicalDeviceQueueFamilyProperties2(pd, &count, nullptr);
+      if (caps_.queue_family_index < count) {
+        std::vector<VkQueueFamilyGlobalPriorityPropertiesKHR> priorities(
+            count,
+            VkQueueFamilyGlobalPriorityPropertiesKHR{
+                VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR});
+        std::vector<VkQueueFamilyProperties2> families(
+            count,
+            VkQueueFamilyProperties2{VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
+        for (uint32_t i = 0; i < count; ++i) {
+          families[i].pNext = &priorities[i];
+        }
+        it.GetPhysicalDeviceQueueFamilyProperties2(pd, &count, families.data());
+        const auto& family = priorities[caps_.queue_family_index];
+        const uint32_t listed =
+            caps_.queue_family_index < count ? family.priorityCount : 0;
+        for (uint32_t i = 0; i < listed; ++i) {
+          if (family.priorities[i] == *wanted) {
+            qci.pNext = &global_priority;
+            break;
+          }
+        }
+      }
+    }
+  }
+  std::vector<const char*> priority_exts;
+  if (qci.pNext != nullptr) {
+    priority_exts.push_back("VK_EXT_global_priority");
+  }
+
+  VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+  dci.pNext = &enabled2;
+  dci.queueCreateInfoCount = 1;
+  dci.pQueueCreateInfos = &qci;
+  // Extensions enabled only from hardware truth: a simulated
+  // cooperative-matrix or float-atomic claim can never enable an
+  // extension the driver does not actually provide.
+  auto feature_exts = [&hw] {
+    std::vector<const char*> exts;
+    if (hw.shader_atomic_float_add) {
+      exts.push_back("VK_EXT_shader_atomic_float");
+    }
+    if (hw.cooperative_matrix_f32_8) {
+      exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+    }
+#ifdef OMARCHY_BF16_CMAT
+    if (hw.cooperative_matrix_bf16_8) {
+      exts.push_back(VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME);
+    }
+#endif
+    return exts;
+  };
+  std::vector<const char*> device_exts = feature_exts();
+  device_exts.insert(
+      device_exts.end(), priority_exts.begin(), priority_exts.end());
+  if (!device_exts.empty()) {
+    dci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
+    dci.ppEnabledExtensionNames = device_exts.data();
+  }
+  VkResult create_res = it.CreateDevice(pd, &dci, nullptr, &device_);
+  // Some drivers advertise the extension but refuse the specific value
+  // (e.g. VK_ERROR_NOT_PERMITTED for HIGH/REALTIME on a non-privileged
+  // caller, or the driver only supports a subset of priority values).
+  // Retain the silent fallback contract by dropping the priority chain
+  // and the extension and retrying exactly once. An extension the device
+  // lists is the contract for the family to list its priorities; an
+  // unsupported priority value is a separate, transient refusal.
+  if (create_res != VK_SUCCESS && qci.pNext != nullptr) {
+    qci.pNext = nullptr;
+    device_exts = feature_exts();
+    if (!device_exts.empty()) {
+      dci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
+      dci.ppEnabledExtensionNames = device_exts.data();
+    } else {
+      dci.enabledExtensionCount = 0;
+      dci.ppEnabledExtensionNames = nullptr;
+    }
+    std::fprintf(
+        stderr,
+        "[omarchy] driver refused requested queue priority; falling back "
+        "to default (set MLX_OMARCHY_QUEUE_PRIORITY=off to silence)\n");
+    create_res = it.CreateDevice(pd, &dci, nullptr, &device_);
+  }
+  VKX_CHECK(create_res);
+
+  auto& dt = vk::device_table();
+  dt.GetDeviceProcAddr = reinterpret_cast<PFN_vkGetDeviceProcAddr>(
+      vk::GetInstanceProcAddr(rt.instance, "vkGetDeviceProcAddr"));
+  if (!dt.GetDeviceProcAddr) {
+    throw std::runtime_error(
+        "[omarchy] Vulkan device is missing vkGetDeviceProcAddr.");
+  }
+
+  VkPhysicalDeviceMemoryProperties2 mem2{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+  it.GetPhysicalDeviceMemoryProperties2(pd, &mem2);
+  mem_props_ = mem2.memoryProperties;
+
+#define VKX_LOAD_DEVICE_FN(member, symbol)                                    \
+  dt.member =                                                                 \
+      reinterpret_cast<PFN_##symbol>(dt.GetDeviceProcAddr(device_, #symbol)); \
+  if (dt.member == nullptr) {                                                 \
+    throw std::runtime_error(                                                 \
+        std::string("[omarchy] Vulkan device is missing ") + #symbol);        \
+  }
+
+  VKX_LOAD_DEVICE_FN(DestroyDevice, vkDestroyDevice)
+  VKX_LOAD_DEVICE_FN(GetDeviceQueue, vkGetDeviceQueue)
+  VKX_LOAD_DEVICE_FN(DeviceWaitIdle, vkDeviceWaitIdle)
+  VKX_LOAD_DEVICE_FN(AllocateMemory, vkAllocateMemory)
+  VKX_LOAD_DEVICE_FN(FreeMemory, vkFreeMemory)
+  VKX_LOAD_DEVICE_FN(MapMemory, vkMapMemory)
+  VKX_LOAD_DEVICE_FN(UnmapMemory, vkUnmapMemory)
+  VKX_LOAD_DEVICE_FN(CreateBuffer, vkCreateBuffer)
+  VKX_LOAD_DEVICE_FN(DestroyBuffer, vkDestroyBuffer)
+  VKX_LOAD_DEVICE_FN(GetBufferMemoryRequirements, vkGetBufferMemoryRequirements)
+  VKX_LOAD_DEVICE_FN(BindBufferMemory, vkBindBufferMemory)
+  VKX_LOAD_DEVICE_FN(CreateCommandPool, vkCreateCommandPool)
+  VKX_LOAD_DEVICE_FN(DestroyCommandPool, vkDestroyCommandPool)
+  VKX_LOAD_DEVICE_FN(AllocateCommandBuffers, vkAllocateCommandBuffers)
+  VKX_LOAD_DEVICE_FN(FreeCommandBuffers, vkFreeCommandBuffers)
+  VKX_LOAD_DEVICE_FN(ResetCommandPool, vkResetCommandPool)
+  VKX_LOAD_DEVICE_FN(BeginCommandBuffer, vkBeginCommandBuffer)
+  VKX_LOAD_DEVICE_FN(EndCommandBuffer, vkEndCommandBuffer)
+  VKX_LOAD_DEVICE_FN(ResetCommandBuffer, vkResetCommandBuffer)
+  VKX_LOAD_DEVICE_FN(CmdCopyBuffer, vkCmdCopyBuffer)
+  VKX_LOAD_DEVICE_FN(CmdFillBuffer, vkCmdFillBuffer)
+  VKX_LOAD_DEVICE_FN(CreateShaderModule, vkCreateShaderModule)
+  VKX_LOAD_DEVICE_FN(DestroyShaderModule, vkDestroyShaderModule)
+  VKX_LOAD_DEVICE_FN(CreateDescriptorSetLayout, vkCreateDescriptorSetLayout)
+  VKX_LOAD_DEVICE_FN(DestroyDescriptorSetLayout, vkDestroyDescriptorSetLayout)
+  VKX_LOAD_DEVICE_FN(CreateDescriptorPool, vkCreateDescriptorPool)
+  VKX_LOAD_DEVICE_FN(DestroyDescriptorPool, vkDestroyDescriptorPool)
+  VKX_LOAD_DEVICE_FN(AllocateDescriptorSets, vkAllocateDescriptorSets)
+  VKX_LOAD_DEVICE_FN(UpdateDescriptorSets, vkUpdateDescriptorSets)
+  VKX_LOAD_DEVICE_FN(CreatePipelineLayout, vkCreatePipelineLayout)
+  VKX_LOAD_DEVICE_FN(DestroyPipelineLayout, vkDestroyPipelineLayout)
+  VKX_LOAD_DEVICE_FN(CreateComputePipelines, vkCreateComputePipelines)
+  VKX_LOAD_DEVICE_FN(DestroyPipeline, vkDestroyPipeline)
+  VKX_LOAD_DEVICE_FN(CmdBindPipeline, vkCmdBindPipeline)
+  VKX_LOAD_DEVICE_FN(CmdBindDescriptorSets, vkCmdBindDescriptorSets)
+  VKX_LOAD_DEVICE_FN(CmdPushConstants, vkCmdPushConstants)
+  VKX_LOAD_DEVICE_FN(CmdDispatch, vkCmdDispatch)
+  VKX_LOAD_DEVICE_FN(CmdPipelineBarrier, vkCmdPipelineBarrier)
+  VKX_LOAD_DEVICE_FN(CreateEvent, vkCreateEvent)
+  VKX_LOAD_DEVICE_FN(GetEventStatus, vkGetEventStatus)
+  VKX_LOAD_DEVICE_FN(ResetEvent, vkResetEvent)
+  VKX_LOAD_DEVICE_FN(CmdSetEvent, vkCmdSetEvent)
+  VKX_LOAD_DEVICE_FN(CreateQueryPool, vkCreateQueryPool)
+  VKX_LOAD_DEVICE_FN(GetQueryPoolResults, vkGetQueryPoolResults)
+  VKX_LOAD_DEVICE_FN(CmdResetQueryPool, vkCmdResetQueryPool)
+  VKX_LOAD_DEVICE_FN(CmdWriteTimestamp, vkCmdWriteTimestamp)
+  VKX_LOAD_DEVICE_FN(QueueSubmit, vkQueueSubmit)
+  VKX_LOAD_DEVICE_FN(QueueWaitIdle, vkQueueWaitIdle)
+  VKX_LOAD_DEVICE_FN(CreateFence, vkCreateFence)
+  VKX_LOAD_DEVICE_FN(DestroyFence, vkDestroyFence)
+  VKX_LOAD_DEVICE_FN(ResetFences, vkResetFences)
+  VKX_LOAD_DEVICE_FN(WaitForFences, vkWaitForFences)
+  VKX_LOAD_DEVICE_FN(CreateSemaphore, vkCreateSemaphore)
+  VKX_LOAD_DEVICE_FN(DestroySemaphore, vkDestroySemaphore)
+  VKX_LOAD_DEVICE_FN(GetSemaphoreCounterValue, vkGetSemaphoreCounterValue)
+  VKX_LOAD_DEVICE_FN(GetFenceStatus, vkGetFenceStatus)
+  VKX_LOAD_DEVICE_FN(WaitSemaphores, vkWaitSemaphores)
+  VKX_LOAD_DEVICE_FN(FlushMappedMemoryRanges, vkFlushMappedMemoryRanges)
+  VKX_LOAD_DEVICE_FN(
+      InvalidateMappedMemoryRanges, vkInvalidateMappedMemoryRanges)
+
+#undef VKX_LOAD_DEVICE_FN
+
+  dt.GetDeviceQueue(device_, caps_.queue_family_index, 0, &queue_);
+  // The live binding budget: what the backend wants, clamped by what this
+  // physical device actually reports. The spec floor (4) always passes
+  // through; larger kernels check compute().binding_limit() at eval time.
+  uint32_t binding_limit = std::min(
+      kComputeBindingBudget,
+      std::min(
+          caps_.max_per_stage_descriptor_storage_buffers,
+          caps_.max_descriptor_set_storage_buffers));
+  compute_ = std::make_unique<ComputeRuntime>(
+      device_, binding_limit, hardware_caps_.required_subgroup_size);
+  completions_ = std::make_unique<CompletionDispatcher>(device_, this);
+}
+
+Device::~Device() {
+  cpu_pd_hold_device_destroyed(*this);
+  if (device_ != VK_NULL_HANDLE) {
+    auto& dt = vk::device_table();
+    // Order is load-bearing: the queue finishes every submission first
+    // (DeviceWaitIdle), then the dispatcher is shut down and drained while
+    // the VkDevice and its semaphores are still valid, and only then is
+    // the VkDevice destroyed.
+    if (dt.DeviceWaitIdle) {
+      dt.DeviceWaitIdle(device_);
+    }
+    if (completions_) {
+      completions_->shutdown();
+    }
+    compute_.reset();
+    if (dt.DestroyDevice) {
+      dt.DestroyDevice(device_, nullptr);
+    }
+  }
+}
+
+uint64_t Device::signal_timeline(VkSemaphore semaphore, uint64_t value) {
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  uint64_t completion_value = completions().reserve();
+  // Host-signal both timelines. This used to be an empty signal-only
+  // QueueSubmit (no command buffer, no waits); Honeykrisp swallows that
+  // shape - the semaphores are never signaled and the reserved
+  // completion value never publishes, so the next host wait deadlocks
+  // at target=1 with the counter stuck at 0 (cos/sin, GDN chunked
+  // async_eval, Ministral/Bonsai-8B first submissions). vkSignalSemaphore
+  // from the host needs no queue involvement and cannot be dropped.
+  static PFN_vkSignalSemaphore signal_fn = nullptr;
+  if (!signal_fn) {
+    signal_fn = reinterpret_cast<PFN_vkSignalSemaphore>(
+        vk::device_table().GetDeviceProcAddr(
+            handle(), "vkSignalSemaphore"));
+  }
+  VkSemaphoreSignalInfo ev{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+  ev.semaphore = semaphore;
+  ev.value = value;
+  VKX_CHECK(signal_fn(handle(), &ev));
+  VkSemaphoreSignalInfo cc{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+  cc.semaphore = completions().semaphore();
+  cc.value = completion_value;
+  VKX_CHECK(signal_fn(handle(), &cc));
+  completions().enqueue(completion_value, {}, {});
+  return completion_value;
+}
+
+Device::RecoveryResult Device::recover_stalled_submissions(
+    uint64_t target_value,
+    uint32_t round) {
+  // Budget: two recovery rounds per stalled wait (|round| is owned by the
+  // waiting loop, so a later wait starts fresh). Recovery is for the
+  // swallow class, not for a genuinely wedged GPU - a real hang must
+  // still surface as the typed watchdog error, not as an unbounded
+  // retry loop.
+  if (round >= 2) {
+    return RecoveryResult::kExhausted;
+  }
+
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  auto& completions = this->completions();
+  // Judge and take against ALL reserved values, not just the waited one:
+  // a previous recovery round re-retains resubmitted batches at fresh
+  // values above the original target, and they must not be stranded.
+  const uint64_t reserved_through = completions.last_reserved();
+  bool executing = completions.has_active_submission(reserved_through);
+  if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
+    fprintf(stderr,
+            "[rtmod] RECOVER-ENTER tid=%lu target=%llu through=%llu active=%d\n",
+            (unsigned long)syscall(SYS_gettid),
+            (unsigned long long)target_value,
+            (unsigned long long)reserved_through,
+            executing ? 1 : 0);
+  }
+
+  // Execution evidence: the batch's started event (CmdSetEvent at
+  // TOP_OF_PIPE) fired, so the kernels ran and only the completion
+  // signal was lost. Mesa will not publish ANY queue-based signal once
+  // it has wedged a submission's timeline points (measured: fresh-value
+  // resubmission executed, timeline stayed at 0) - but vkSignalSemaphore
+  // from the host cannot be dropped (the in-tree empty-shape fix relies
+  // on exactly that). The wait has seen a full no-progress interval by
+  // definition of this call, so short kernels have long finished;
+  // host-publish the completion at a freshly reserved value.
+  if (executing) {
+    // The retained batches' user (event) semaphores are equally
+    // stranded: their ride-along signals were swallowed with the
+    // submission. Host-signal each at a bumped fresh value (timeline
+    // waits are >=), then publish the completion timeline.
+    auto stranded = completions.take_resubmit_batches(reserved_through);
+    for (auto& batch : stranded) {
+      for (size_t i = 0; i + 1 < batch.signal_values.size(); ++i) {
+        uint64_t current = 0;
+        if (vk::device_table().GetSemaphoreCounterValue(
+                device_, batch.signal_sems[i], &current) != VK_SUCCESS) {
+          current = 0;
+        }
+        batch.signal_values[i] =
+            std::max(batch.signal_values[i], current) + 1;
+      }
+    }
+    uint64_t fresh = completions.reserve();
+    static PFN_vkSignalSemaphore signal_fn = nullptr;
+    if (!signal_fn) {
+      signal_fn = reinterpret_cast<PFN_vkSignalSemaphore>(
+          vk::device_table().GetDeviceProcAddr(
+              handle(), "vkSignalSemaphore"));
+    }
+    VkSemaphoreSignalInfo cc{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+    cc.semaphore = completions.semaphore();
+    cc.value = fresh;
+    VKX_CHECK(signal_fn(handle(), &cc));
+    for (auto& batch : stranded) {
+      for (size_t i = 0; i + 1 < batch.signal_values.size(); ++i) {
+        VkSemaphoreSignalInfo us{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+        us.semaphore = batch.signal_sems[i];
+        us.value = batch.signal_values[i];
+        VKX_CHECK(signal_fn(handle(), &us));
+      }
+    }
+    fprintf(
+        stderr,
+        "[rtmod] SUBMIT-RECOVER tid=%lu host-signaled completion cv=%llu after "
+        "executed-but-unsignaled batch (round %u)\n",
+        (unsigned long)syscall(SYS_gettid),
+        (unsigned long long)fresh,
+        round + 1);
+    // Every reserved value needs a pending completion entry: join paths
+    // wait drained_value_ >= counter, and the fresh value's drain is what
+    // lets drained_value_ catch up past the original completion.
+    completions.enqueue(fresh, {}, {});
+    return RecoveryResult::kRecovered;
+  }
+
+  // No execution evidence: the batch never began. Resubmit it with
+  // fresh signal values - the dropped submission still holds its
+  // original timeline points inside Mesa, and re-signaling the same
+  // value creates a duplicate point Mesa does not publish. Timeline
+  // waits are >=, so strictly higher values satisfy every existing
+  // waiter.
+  std::vector<CompletionDispatcher::ResubmitBatch> batches =
+      completions.take_resubmit_batches(reserved_through);
+  if (batches.empty()) {
+    if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
+      fprintf(stderr, "[rtmod] RECOVER-FALSE tid=%lu empty-batches\n", (unsigned long)syscall(SYS_gettid));
+    }
+    // Another waiter's recovery already took the batches (or the
+    // producing stream has not submitted yet): not ours to recover, and
+    // not a hang verdict. The caller keeps waiting.
+    return RecoveryResult::kNotRecoverable;
+  }
+
+  auto& dt = vk::device_table();
+  // First, an empty queue-touch submit: if the loss was a missed
+  // doorbell rather than a dropped batch, this alone flushes the queue
+  // and the original submission completes. No semaphores, no command
+  // buffer - nothing to signal, so ordering cannot be violated.
+  VkSubmitInfo kick{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  dt.QueueSubmit(queue_, 1, &kick, VK_NULL_HANDLE);
+
+  size_t count = batches.size();
+  for (auto& batch : batches) {
+    for (size_t i = 0; i + 1 < batch.signal_values.size(); ++i) {
+      uint64_t current = 0;
+      if (vk::device_table().GetSemaphoreCounterValue(
+              device_, batch.signal_sems[i], &current) != VK_SUCCESS) {
+        current = 0;
+      }
+      batch.signal_values[i] =
+          std::max(batch.signal_values[i], current) + 1;
+    }
+    uint64_t fresh_completion = completions.reserve();
+    batch.value = fresh_completion;
+    batch.signal_values.back() = fresh_completion;
+
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    VkTimelineSemaphoreSubmitInfo timeline{
+        VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+    std::vector<VkPipelineStageFlags> wait_stages(
+        batch.wait_sems.size(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    timeline.waitSemaphoreValueCount =
+        static_cast<uint32_t>(batch.wait_values.size());
+    timeline.pWaitSemaphoreValues = batch.wait_values.data();
+    timeline.signalSemaphoreValueCount =
+        static_cast<uint32_t>(batch.signal_values.size());
+    timeline.pSignalSemaphoreValues = batch.signal_values.data();
+    si.pNext = &timeline;
+    si.waitSemaphoreCount = static_cast<uint32_t>(batch.wait_sems.size());
+    si.pWaitSemaphores = batch.wait_sems.data();
+    si.pWaitDstStageMask = wait_stages.data();
+    si.commandBufferCount = batch.cmd != VK_NULL_HANDLE ? 1u : 0u;
+    si.pCommandBuffers = batch.cmd != VK_NULL_HANDLE ? &batch.cmd : nullptr;
+    si.signalSemaphoreCount =
+        static_cast<uint32_t>(batch.signal_sems.size());
+    si.pSignalSemaphores = batch.signal_sems.data();
+    VKX_CHECK(dt.QueueSubmit(queue_, 1, &si, VK_NULL_HANDLE));
+    // The batch is pending again at its fresh value; retain it for a
+    // further round.
+    completions.retain_for_resubmit(fresh_completion, std::move(batch));
+    // Every reserved value needs a pending completion entry: join paths
+    // wait drained_value_ >= counter, and the fresh value's drain is what
+    // lets drained_value_ catch up past the original completion. Empty
+    // payload - the original completion still owns handlers/temporaries.
+    completions.enqueue(fresh_completion, {}, {});
+  }
+  fprintf(
+      stderr,
+      "[rtmod] SUBMIT-RECOVER tid=%lu resubmitted %zu stalled batch(es) through "
+      "cv>=%llu (round %u, fresh signals)\n",
+      (unsigned long)syscall(SYS_gettid),
+      count,
+      (unsigned long long)target_value,
+      round + 1);
+  return RecoveryResult::kRecovered;
+}
+
+void Device::join_completed_handlers() {
+  if (!completions_) {
+    return;
+  }
+  uint64_t current = 0;
+  if (vk::device_table().GetSemaphoreCounterValue(
+          device_, completions_->semaphore(), &current) != VK_SUCCESS ||
+      current == 0) {
+    return;
+  }
+  completions_->wait(current);
+}
+
+// --- CompletionDispatcher -------------------------------------------------
+
+namespace {
+
+// Bounded dispatcher wait granularity (plan R16): a wedged queue delays
+// shutdown and handler dispatch by at most one interval, never forever.
+constexpr uint64_t kCompletionPollNs = 100ull * 1000 * 1000;
+
+// No-progress watchdog poll cadence. Must be a small fraction of the
+// no-progress interval so a stalled counter is detected quickly. 100 ms
+// matches kCompletionPollNs (the dispatcher background loop) and gives
+// 100 samples per no-progress interval at the 10 s default.
+constexpr uint64_t kHangWatchPollNs = kCompletionPollNs;
+
+// Parsed env override. Returns the default when the env var is unset or
+// invalid; positive non-zero values only. Negative or zero values would
+// cause the watchdog to fire instantly, so reject them.
+uint64_t env_ns_override(const char* name, uint64_t fallback) {
+  const char* v = std::getenv(name);
+  if (!v || *v == '\0') {
+    return fallback;
+  }
+  char* end = nullptr;
+  long long parsed = std::strtoll(v, &end, 10);
+  if (end == v || parsed <= 0) {
+    return fallback;
+  }
+  return static_cast<uint64_t>(parsed);
+}
+
+} // namespace
+
+uint64_t submit_hang_no_progress_ns() {
+  static const uint64_t v =
+      env_ns_override("MLX_OMARCHY_HANG_NO_PROGRESS_NS",
+                      kSubmitHangNoProgressNsDefault);
+  return v;
+}
+
+uint64_t submit_max_wall_ns() {
+  static const uint64_t v =
+      env_ns_override("MLX_OMARCHY_MAX_WALL_NS", kSubmitMaxWallNsDefault);
+  return v;
+}
+
+// Started-but-not-retired diagnostic interval (seconds). A submission whose
+// started event is set but whose timeline value does not publish keeps the
+// no-progress watchdog refreshed forever (device.cpp has_active_submission),
+// so without this bound a wedged submit parks a waiter silently until the
+// 30-minute wall deadline - the 2026-10-08 sushi first-forward signature
+// (30-minute tickets expired in the same second the typed error would fire).
+// 0 disables the warning; default 300 s.
+uint64_t submit_stuck_s() {
+  static const uint64_t v = []() {
+    const char* e = std::getenv("MLX_OMARCHY_SUBMIT_STUCK_S");
+    if (e == nullptr || *e == '\0') {
+      return static_cast<uint64_t>(300);
+    }
+    char* p = const_cast<char*>(e);
+    unsigned long long parsed = strtoull(p, &p, 10);
+    return static_cast<uint64_t>(parsed);
+  }();
+  return v;
+}
+void wait_for_timeline_progress(
+    VkDevice device,
+    VkSemaphore semaphore,
+    uint64_t target_value,
+    CompletionDispatcher* progress,
+    std::function<uint64_t()> progress_generation,
+    Device* recovery) {
+  using clock = std::chrono::steady_clock;
+  const uint64_t hang_ns = submit_hang_no_progress_ns();
+  const uint64_t max_wall_ns = submit_max_wall_ns();
+  const auto start = clock::now();
+  const auto wall_deadline = start + std::chrono::nanoseconds(max_wall_ns);
+  uint64_t last_observed = 0;
+  auto last_advance = start;
+  uint32_t recovery_round = 0;
+  // Stuck-submit diagnostic: the counter froze while a waiter held the
+  // timeline. Fires the named warning line every stuck interval - the
+  // no-progress watchdog cannot do this because an executing submission
+  // (started event set, never retired) legitimately refreshes last_advance.
+  std::chrono::steady_clock::time_point stuck_since = start;
+  const uint64_t stuck_ns = submit_stuck_s() * 1000000000ull;
+  // Refused recoveries (empty retained-batch set) are bounded by the same
+  // budget as resubmission rounds: a stall whose target is already
+  // reserved but whose signalling batch does not exist will never be
+  // satisfied, and waiting for "the owner" only defers the typed error
+  // to the wall deadline (minutes) with the wrong message. Real
+  // foreign/stale waiters never get here - their target exceeds
+  // last_reserved and the branch above refuses them without counting.
+  uint32_t refused_rounds = 0;
+  bool foreign_traced = false;
+
+  VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+  info.semaphoreCount = 1;
+  info.pSemaphores = &semaphore;
+  info.pValues = &target_value;
+
+  for (;;) {
+    VkResult res = vk::device_table().WaitSemaphores(
+        device, &info, kHangWatchPollNs);
+    if (res == VK_SUCCESS) {
+      return;
+    }
+    if (res != VK_TIMEOUT) {
+      throw std::runtime_error(
+          std::string("[omarchy] Vulkan timeline wait failed (") +
+          vk::result_string(res) +
+          "). The device may be lost; no CPU fallback is available.");
+    }
+
+    uint64_t current = 0;
+    if (vk::device_table().GetSemaphoreCounterValue(
+            device, semaphore, &current) == VK_SUCCESS &&
+        current > last_observed) {
+      last_observed = current;
+      last_advance = clock::now();
+      stuck_since = clock::now();
+    }
+
+    const auto now = clock::now();
+    // Stuck-submit diagnostic (MLX_OMARCHY_SUBMIT_STUCK_S): the timeline
+    // has not moved for the stuck interval while this waiter holds it.
+    // Every earlier hang class is loud (watchdog STALL lines, recovery
+    // ladder, typed errors); this is the one silent shape - a submission
+    // whose started event set but whose value never published (Honeykrisp
+    // swallow of the signal, or a kernel that never retires) - and the
+    // 30-minute wall deadline made it invisible inside 30-minute tickets
+    // (2026-10-08 sushi first-forward). Name the wait, the reservation
+    // horizon, and the last kernel the GPU was given; re-warn every
+    // interval while the freeze lasts.
+    if (stuck_ns != 0 && now - stuck_since >= std::chrono::nanoseconds(stuck_ns)) {
+      const uint64_t reserved_now =
+          progress ? progress->last_reserved() : 0;
+      fprintf(
+          stderr,
+          "[omarchy] submit stuck: waiting for timeline value=%llu, counter"
+          " frozen at %llu, reserved through %llu, no progress for %llu s,"
+          " last dispatched kernel=%lld (pid %ld). The submission started"
+          " but has not retired; a longer freeze means a wedged GPU job.\n",
+          (unsigned long long)target_value,
+          (unsigned long long)last_observed,
+          (unsigned long long)reserved_now,
+          (unsigned long long)((now - stuck_since) / std::chrono::seconds(1)),
+          (long long)trace::counters().last_dispatched_kernel.load(
+              std::memory_order_relaxed),
+          (long)syscall(SYS_gettid));
+      fflush(stderr);
+      trace::counters().submit_stuck_warnings++;
+      stuck_since = now;
+    }
+    if (now >= wall_deadline) {
+      throw std::runtime_error(
+          std::string(
+              "[omarchy] Vulkan submission did not complete within ") +
+          std::to_string(max_wall_ns / 1000000ull) +
+          " ms (Timeout). The device may be hung; no CPU fallback is"
+          " available.");
+    }
+
+    const uint64_t progress_through =
+        progress_generation ? progress_generation() : 0;
+    const bool executing = progress && progress_through != 0 &&
+        progress->has_active_submission(progress_through);
+    if (executing) {
+      last_advance = now;
+    } else if ((now - last_advance) > std::chrono::nanoseconds(hang_ns)) {
+      // Foreign/stale waiter: the waited value was never reserved by any
+      // submission (target > last_reserved), so the batch that would
+      // signal it has not even been handed to the driver yet - typically
+      // a scheduler-thread Event::wait parking ahead of the owning
+      // stream's submit. Nothing is recoverable here (no retained batch
+      // can exist above last_reserved), and throwing kills the process
+      // ahead of the owning wait's own recovery ladder (observed in the
+      // build13 decision trace). Refuse recovery and keep waiting: the
+      // owning wait runs the ladder for a real stall once it reserves,
+      // and the wall deadline below still bounds a producer that never
+      // submits.
+      if (progress && target_value > progress->last_reserved()) {
+        if (!foreign_traced &&
+            std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
+          foreign_traced = true;
+          fprintf(stderr,
+                  "[rtmod] STALL-FOREIGN tid=%lu target=%llu through=%llu (owner"
+                  " has not submitted; continuing wait)\n",
+                  (unsigned long)syscall(SYS_gettid),
+                  (unsigned long long)target_value,
+                  (unsigned long long)progress->last_reserved());
+        }
+        last_advance = clock::now();
+        continue;
+      }
+      // No progress for a full no-progress interval. Before declaring the
+      // device hung, give the recovery ladder a chance: Honeykrisp
+      // provably swallows submissions (the empty signal-only shape was
+      // deterministic and is fixed; burst observations add real command
+      // buffers whose started event never fires). A successful resubmit
+      // restarts the no-progress clock; a refused or exhausted recovery
+      // throws exactly as before.
+      if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
+        fprintf(stderr,
+                "[rtmod] STALL tid=%lu target=%llu observed=%llu round=%u "
+                "recovery=%d\n",
+                (unsigned long)syscall(SYS_gettid),
+                (unsigned long long)target_value,
+                (unsigned long long)last_observed,
+                recovery_round,
+                recovery != nullptr ? 1 : 0);
+      }
+      if (recovery) {
+        switch (recovery->recover_stalled_submissions(
+            target_value, recovery_round)) {
+          case Device::RecoveryResult::kRecovered:
+            recovery_round++;
+            last_advance = clock::now();
+            continue;
+          case Device::RecoveryResult::kNotRecoverable:
+            // Someone else may own the recovery (or own the submission
+            // that has not happened yet). Throwing on the FIRST refusal
+            // killed healthy processes ahead of the real recovery
+            // (build13 decision trace), so refuse once per round - but
+            // only for a bounded number of rounds. An unbounded wait is
+            // wrong for a stall the retained set can never satisfy: the
+            // bounded typed watchdog error is the contract.
+            if (++refused_rounds >= 2) {
+              break;
+            }
+            last_advance = clock::now();
+            continue;
+          case Device::RecoveryResult::kExhausted:
+            break;
+        }
+      }
+      throw std::runtime_error(
+          std::string(
+              "[omarchy] Vulkan timeline counter failed to advance for ") +
+          std::to_string(hang_ns / 1000000ull) + " ms (last observed=" +
+          std::to_string(last_observed) + ", target=" +
+          std::to_string(target_value) +
+          "). The device may be hung; no CPU fallback is available.");
+    }
+  }
+}
+CompletionDispatcher::CompletionDispatcher(VkDevice device, Device* owner)
+    : device_(device), owner_(owner) {
+  VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+  type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+  type.initialValue = 0;
+  VkSemaphoreCreateInfo ci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+  ci.pNext = &type;
+  VKX_CHECK(
+      vk::device_table().CreateSemaphore(device_, &ci, nullptr, &semaphore_));
+  thread_ = std::thread([this] { run(); });
+}
+
+CompletionDispatcher::~CompletionDispatcher() {
+  shutdown();
+}
+
+void CompletionDispatcher::wait(uint64_t value) {
+  // No-progress watchdog: blocks until the timeline counter reaches
+  // |value| OR throws a typed Omarchy error if the counter fails to
+  // advance for the no-progress interval. vkWaitSemaphores has a
+  // wall-clock cap that misclassifies long legitimate work as a hang;
+  // observing the counter's motion avoids that failure mode without
+  // giving up on real hang detection.
+  wait_for_timeline_progress(
+      device_, semaphore_, value, this, [value] { return value; }, owner_);
+  // Inline fast path: drain and run every ready completion whose value
+  // is <= |value| on this thread, serialized end-to-end through
+  // drain_mutex_ with the background thread so handlers cannot interleave
+  // across separate completion values. With this serialization in place,
+  // drained_value_ already covers |value| when drain_through returns and
+  // the cv_.wait_until below acts as a defensive join only.
+  drain_through(value);
+  // Defensive join: the timeline counter reached |value| but a handler
+  // from a prior completion could still be running on the dispatcher
+  // thread. The watchdog already validated counter motion; this join
+  // is bounded by kSubmitHangNoProgressNs because any handler still
+  // outstanding belongs to a completion whose counter value advanced,
+  // and the dispatcher drains through that completion every poll
+  // cycle. A short cv_ wait here would be unsafe without a bound, so
+  // use the same no-progress interval as the watchdog ceiling.
+  const auto join_deadline = std::chrono::steady_clock::now() +
+      std::chrono::nanoseconds(submit_hang_no_progress_ns());
+  std::unique_lock<std::mutex> lk(mutex_);
+  cv_.wait_until(
+      lk, join_deadline,
+      [this, value] { return stop_ || drained_value_ >= value; });
+  if (drained_value_ < value) {
+    throw std::runtime_error(
+        std::string(
+            "[omarchy] Vulkan dispatcher drain did not catch up within ") +
+        std::to_string(submit_hang_no_progress_ns() / 1000000ull) +
+        " ms after the timeline counter reached " +
+        std::to_string(value) +
+        " (Timeout). The device may be hung; no CPU fallback is"
+        " available.");
+  }
+}
+
+bool CompletionDispatcher::wait_settled(
+    uint64_t value,
+    std::chrono::steady_clock::duration budget) {
+  const auto deadline = std::chrono::steady_clock::now() + budget;
+  for (;;) {
+    bool settled = false;
+    {
+      std::lock_guard<std::mutex> lk(mutex_);
+      if (stop_) {
+        return false;
+      }
+      settled = drained_value_ >= value &&
+          (drained_value_ > value ||
+           (pending_.empty() &&
+            std::chrono::steady_clock::now() - last_drain_at_ >=
+                std::chrono::nanoseconds(kCompletionPollNs)));
+    }
+    if (settled) {
+      return true;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return false;
+    }
+    std::this_thread::sleep_for(
+        std::chrono::nanoseconds(kCompletionPollNs));
+  }
+}
+
+void CompletionDispatcher::shutdown() {
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    stop_ = true;
+  }
+  cv_.notify_all();
+  if (thread_.joinable()) {
+    thread_.join();
+  }
+  // Static-destruction order can run this drain after the GPU allocator
+  // registry is gone. Handlers still run (the scheduler is leaked by
+  // design), but remaining buffer temporaries are intentionally leaked:
+  // freeing arrays here would call into already-destroyed statics.
+  static auto* leaked_temporaries = new std::vector<std::shared_ptr<void>>();
+  while (!pending_.empty()) {
+    auto completion = std::move(pending_.front());
+    pending_.pop_front();
+    for (auto& handler : completion.handlers) {
+      handler();
+    }
+    leaked_temporaries->insert(
+        leaked_temporaries->end(),
+        std::make_move_iterator(completion.temporaries.begin()),
+        std::make_move_iterator(completion.temporaries.end()));
+  }
+  leaked_temporaries->insert(
+      leaked_temporaries->end(),
+      std::make_move_iterator(retired_temporaries_.begin()),
+      std::make_move_iterator(retired_temporaries_.end()));
+  retired_temporaries_.clear();
+  if (semaphore_ != VK_NULL_HANDLE) {
+    vk::device_table().DestroySemaphore(device_, semaphore_, nullptr);
+    semaphore_ = VK_NULL_HANDLE;
+  }
+}
+
+uint64_t CompletionDispatcher::reserve() {
+  // Called with the queue mutex held: the value order matches queue
+  // execution order, as required for timeline signals.
+  std::lock_guard<std::mutex> lk(mutex_);
+  return ++next_value_;
+}
+
+uint64_t CompletionDispatcher::last_reserved() {
+  std::lock_guard<std::mutex> lk(mutex_);
+  return next_value_;
+}
+
+void CompletionDispatcher::enqueue(
+    uint64_t value,
+    std::vector<std::shared_ptr<void>> temporaries,
+    std::vector<std::function<void()>> handlers,
+    VkEvent started) {
+  std::lock_guard<std::mutex> lk(mutex_);
+  pending_.push_back(Completion{
+      value, std::move(temporaries), std::move(handlers), started});
+  cv_.notify_all();
+}
+
+void CompletionDispatcher::reset_progress_event(VkEvent event) {
+  std::lock_guard<std::mutex> lk(mutex_);
+  VKX_CHECK(vk::device_table().ResetEvent(device_, event));
+}
+
+bool CompletionDispatcher::has_active_submission(uint64_t through_value) {
+  uint64_t reached = 0;
+  VKX_CHECK(vk::device_table().GetSemaphoreCounterValue(
+      device_, semaphore_, &reached));
+  std::lock_guard<std::mutex> lk(mutex_);
+  for (const auto& completion : pending_) {
+    if (completion.value > through_value) {
+      break;
+    }
+    if (completion.value <= reached) {
+      continue;
+    }
+    if (completion.started != VK_NULL_HANDLE &&
+        vk::device_table().GetEventStatus(device_, completion.started) ==
+            VK_EVENT_SET) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void CompletionDispatcher::retain_for_resubmit(
+    uint64_t value,
+    ResubmitBatch batch) {
+  std::lock_guard<std::mutex> lk(mutex_);
+  resubmitable_[value] = std::move(batch);
+}
+
+std::vector<CompletionDispatcher::ResubmitBatch>
+CompletionDispatcher::take_resubmit_batches(uint64_t through_value) {
+  std::lock_guard<std::mutex> lk(mutex_);
+  std::vector<ResubmitBatch> out;
+  for (auto& [value, batch] : resubmitable_) {
+    if (value > through_value) {
+      break;
+    }
+    out.push_back(std::move(batch));
+  }
+  resubmitable_.erase(resubmitable_.begin(), resubmitable_.upper_bound(through_value));
+  return out;
+}
+
+void CompletionDispatcher::drain_through(uint64_t max_value) {
+  std::lock_guard<std::mutex> drain_lk(drain_mutex_);
+  std::vector<Completion> ready;
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    // reserve() and enqueue() preserve increasing value order.
+    while (!pending_.empty() && pending_.front().value <= max_value) {
+      ready.push_back(std::move(pending_.front()));
+      pending_.pop_front();
+    }
+    // Their retained submit records completed - recovery must never
+    // resubmit them again.
+    resubmitable_.erase(
+        resubmitable_.begin(), resubmitable_.upper_bound(max_value));
+  }
+  if (ready.empty()) {
+    return;
+  }
+  // Completion boundary: make noncoherent host-visible writes from the
+  // GPU visible before handlers and later host reads observe results.
+  omarchy::allocator().invalidate_noncoherent(device_);
+  uint64_t ready_value = ready.back().value;
+  for (auto& completion : ready) {
+    for (auto& handler : completion.handlers) {
+      handler();
+    }
+  }
+  // Completion boundary: buffers freed while their submission was in
+  // flight wait in the quarantine; this pass recycles the ones from
+  // generation ready_value - 1 (observing generation N proves cleanup
+  // for N-1 ran) whose execution fence has already signalled. A fence
+  // that signals later is picked up by the dispatcher's idle tick, which
+  // keeps running release passes while fences are outstanding or blocks
+  // are parked.
+  omarchy::allocator().release_quarantine(ready_value - 1);
+  // Semaphore-keepalive payloads retire one completion generation late:
+  // Mesa signals a submission's semaphores (including the completion
+  // timeline read above) BEFORE its submit-final cleanup releases that
+  // submission's timeline points, so observing this timeline does not
+  // prove the driver finished the submission. Submits execute serially
+  // in value order, so once completion V+1 is observable, cleanup for V
+  // has run. Buffer payloads use the allocator quarantine instead.
+  std::vector<std::shared_ptr<void>> retired;
+  for (auto& completion : ready) {
+    retired.insert(
+        retired.end(),
+        std::make_move_iterator(completion.temporaries.begin()),
+        std::make_move_iterator(completion.temporaries.end()));
+  }
+  ready.clear();
+  std::vector<std::shared_ptr<void>> release = std::move(retired_temporaries_);
+  retired_temporaries_ = std::move(retired);
+  std::lock_guard<std::mutex> lk(mutex_);
+  drained_value_ = std::max(drained_value_, ready_value);
+  last_drain_at_ = std::chrono::steady_clock::now();
+  cv_.notify_all();
+  // |release| frees when this function returns: by then drained_value_
+  // names a later generation, so the previous one is provably finished.
+}
+
+uint64_t CompletionDispatcher::drained_value() {
+  std::lock_guard<std::mutex> lk(mutex_);
+  return drained_value_;
+}
+
+VkFence CompletionDispatcher::acquire_execution_fence() {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  if (!execution_fence_pool_.empty()) {
+    VkFence fence = execution_fence_pool_.back();
+    execution_fence_pool_.pop_back();
+    VKX_CHECK(vk::device_table().ResetFences(device_, 1, &fence));
+    return fence;
+  }
+  VkFence fence = VK_NULL_HANDLE;
+  VkFenceCreateInfo ci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VKX_CHECK(vk::device_table().CreateFence(device_, &ci, nullptr, &fence));
+  return fence;
+}
+
+void CompletionDispatcher::attach_execution_fence(uint64_t value, VkFence fence) {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  execution_fences_.push_back({value, fence});
+}
+
+void CompletionDispatcher::detach_execution_fence(
+    uint64_t value,
+    VkFence fence) {
+  if (fence == VK_NULL_HANDLE) {
+    return;
+  }
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  for (auto it = execution_fences_.begin(); it != execution_fences_.end();
+       ++it) {
+    if (it->fence == fence) {
+      execution_fences_.erase(it);
+      break;
+    }
+  }
+  execution_fence_pool_.push_back(fence);
+}
+
+bool CompletionDispatcher::tick_execution_fences() {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  bool due = !execution_fences_.empty();
+  uint64_t retired_through = 0;
+  while (!execution_fences_.empty() &&
+         vk::device_table().GetFenceStatus(
+             device_, execution_fences_.front().fence) == VK_SUCCESS) {
+    retired_through = execution_fences_.front().value;
+    execution_fence_pool_.push_back(execution_fences_.front().fence);
+    execution_fences_.pop_front();
+  }
+  if (retired_through != 0) {
+    execution_done_through_ =
+        std::max(execution_done_through_, retired_through);
+    due = true;
+  }
+  return due;
+}
+
+bool CompletionDispatcher::execution_complete(uint64_t value) {
+  std::lock_guard<std::mutex> lk(execution_mutex_);
+  if (value <= execution_done_through_) {
+    return true;
+  }
+  while (!execution_fences_.empty() &&
+         execution_fences_.front().value <= value) {
+    auto& front = execution_fences_.front();
+    if (vk::device_table().GetFenceStatus(device_, front.fence) ==
+        VK_SUCCESS) {
+      execution_fence_pool_.push_back(front.fence);
+      execution_fences_.pop_front();
+      continue;
+    }
+    return false;
+  }
+  execution_done_through_ = std::max(execution_done_through_, value);
+  return true;
+}
+
+void CompletionDispatcher::run() {
+  // Polling, not vkWaitSemaphores: a host wait issued from this thread
+  // while the queue executes the signal stalls some drivers (observed on
+  // Mesa 22 lavapipe). GetSemaphoreCounterValue is a plain host query.
+  // Explicit wait() drains inline. This thread releases payloads for
+  // asynchronous commits that have no later wait.
+  for (;;) {
+    {
+      std::unique_lock<std::mutex> lk(mutex_);
+      if (pending_.empty()) {
+        if (stop_) {
+          return;
+        }
+        // A quarantined buffer recycles one generation after its own
+        // completion once its execution fence signals - which on
+        // Honeykrisp can be after the last completion drained (the fence
+        // lags the timeline observation). Keep ticking release passes so
+        // mid-generation frees never wait for the next submission. The
+        // newest drained generation itself recycles only once the drain
+        // has settled for one poll interval: while submissions drain
+        // steadily (decode) the tick stays strictly behind the newest
+        // generation - matching free()'s direct path and the drain
+        // passes - and once the queue goes quiet the final generation
+        // still recycles inside the release contract. All state is read
+        // under |mutex_|; the probes and the pass run unlocked (they
+        // take allocator/execution locks, and free() on another thread
+        // may hold an allocator lock while reading dispatcher state).
+        cv_.wait_for(lk, std::chrono::nanoseconds(kCompletionPollNs), [this] {
+          return stop_ || !pending_.empty();
+        });
+        if (stop_ || !pending_.empty()) {
+          continue;
+        }
+        bool settled =
+            std::chrono::steady_clock::now() - last_drain_at_ >=
+            std::chrono::nanoseconds(kCompletionPollNs);
+        uint64_t through =
+            settled ? drained_value_
+                    : (drained_value_ > 0 ? drained_value_ - 1 : 0);
+        lk.unlock();
+        if (tick_execution_fences() ||
+            omarchy::allocator().has_quarantined()) {
+          omarchy::allocator().release_quarantine(through);
+        }
+        continue;
+      }
+    }
+    uint64_t current = 0;
+    if (vk::device_table().GetSemaphoreCounterValue(
+            device_, semaphore_, &current) != VK_SUCCESS) {
+      if (stop_) {
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::nanoseconds(kCompletionPollNs));
+      continue;
+    }
+    drain_through(current);
+
+    // Do not busy-spin while the oldest pending submission is still on the
+    // GPU. A caller-side drain or shutdown wakes this wait immediately.
+    std::unique_lock<std::mutex> lk(mutex_);
+    if (stop_) {
+      return;
+    }
+    cv_.wait_for(lk, std::chrono::nanoseconds(kCompletionPollNs), [this] {
+      return stop_ || pending_.empty();
+    });
+  }
+}
+
+} // namespace mlx::core::omarchy

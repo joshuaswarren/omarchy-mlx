@@ -1,0 +1,149 @@
+[
+ {
+  "id": 0,
+  "utt_id": "121-127105-0035",
+  "subset": "test-clean",
+  "rate": 16000,
+  "reference": "SHE PROMISED TO DO THIS AND SHE MENTIONED TO ME THAT WHEN FOR A MOMENT DISBURDENED DELIGHTED HE HELD HER HAND THANKING HER FOR THE SACRIFICE SHE ALREADY FELT REWARDED"
+ },
+ {
+  "id": 1,
+  "utt_id": "1089-134691-0015",
+  "subset": "test-clean",
+  "rate": 16000,
+  "reference": "WORDS WAS IT THEIR COLOURS"
+ },
+ {
+  "id": 2,
+  "utt_id": "1089-134686-0015",
+  "subset": "test-clean",
+  "rate": 16000,
+  "reference": "BUT THE DUSK DEEPENING IN THE SCHOOLROOM COVERED OVER HIS THOUGHTS THE BELL RANG"
+ },
+ {
+  "id": 3,
+  "utt_id": "1089-134691-0004",
+  "subset": "test-clean",
+  "rate": 16000,
+  "reference": "PRIDE AFTER SATISFACTION UPLIFTED HIM LIKE LONG SLOW WAVES"
+ },
+ {
+  "id": 4,
+  "utt_id": "1688-142285-0011",
+  "subset": "test-other",
+  "rate": 16000,
+  "reference": "ALL HIS FORMER FRIENDS SHRUNK FROM THE DISCLOSURES THAT HAD TO BE MADE OF HIS DISHONEST GAMBLING WILD HOPELESS STRUGGLES MADE WITH OTHER PEOPLE'S MONEY TO REGAIN HIS OWN MODERATE PORTION OF WEALTH"
+ },
+ {
+  "id": 5,
+  "utt_id": "1688-142285-0074",
+  "subset": "test-other",
+  "rate": 16000,
+  "reference": "I'LL GO TO BED IT'S BEST PLACE BUT CATCHING AT MARGARET'S GOWN YO'LL COME AGAIN I KNOW YO WILL BUT JUST SAY IT"
+ },
+ {
+  "id": 6,
+  "utt_id": "1688-142285-0041",
+  "subset": "test-other",
+  "rate": 16000,
+  "reference": "MARGARET TURNED ROUND TO WALK ALONGSIDE OF THE GIRL IN HER FEEBLE PROGRESS HOMEWARD"
+ },
+ {
+  "id": 7,
+  "utt_id": "midlands_mif_02484_01043227171",
+  "subset": "accented",
+  "rate": 48000,
+  "reference": "There is according to legend a boiling pot of gold at one end"
+ },
+ {
+  "id": 8,
+  "utt_id": "midlands_mif_02484_00333680768",
+  "subset": "accented",
+  "rate": 48000,
+  "reference": "This theory has implications for spatial illusions such as the visual angle illusion"
+ },
+ {
+  "id": 9,
+  "utt_id": "midlands_mif_03397_00847406953",
+  "subset": "accented",
+  "rate": 48000,
+  "reference": "Just say good morning and the assistant will tell you about the weather your commute important things you need to do today and much more"
+ },
+ {
+  "id": 10,
+  "utt_id": "1188-133604-0030",
+  "subset": "short",
+  "rate": 16000,
+  "reference": "HE KNOWS THEM BOTH"
+ },
+ {
+  "id": 11,
+  "utt_id": "1580-141083-0051",
+  "subset": "short",
+  "rate": 16000,
+  "reference": "ONLY FOR A MINUTE OR SO"
+ },
+ {
+  "id": 12,
+  "utt_id": "final_5142-33396-0006",
+  "subset": "final-chunk",
+  "rate": 16000,
+  "reference": "I MADE HER FOR ONLY TWENTY OARS BECAUSE I THOUGHT FEW MEN WOULD FOLLOW ME FOR I WAS YOUNG FIFTEEN YEARS OLD"
+ },
+ {
+  "id": 13,
+  "utt_id": "final_61-70970-0013",
+  "subset": "final-chunk",
+  "rate": 16000,
+  "reference": "THERE WAS NO CHANCE TO ALTER HIS SLEEPING ROOM TO ONE NEARER TO GAMEWELL'S CHAMBER"
+ },
+ {
+  "id": 14,
+  "utt_id": "silence_000",
+  "subset": "silence",
+  "rate": 16000,
+  "reference": ""
+ },
+ {
+  "id": 15,
+  "utt_id": "silence_001",
+  "subset": "silence",
+  "rate": 16000,
+  "reference": ""
+ },
+ {
+  "id": 16,
+  "utt_id": "noise_000",
+  "subset": "noise",
+  "rate": 16000,
+  "reference": ""
+ },
+ {
+  "id": 17,
+  "utt_id": "noise_001",
+  "subset": "noise",
+  "rate": 16000,
+  "reference": ""
+ },
+ {
+  "id": 18,
+  "utt_id": "mixed_0dB_1188-133604-0001",
+  "subset": "mixed_0dB",
+  "rate": 16000,
+  "reference": "THEY UNITE EVERY QUALITY AND SOMETIMES YOU WILL FIND ME REFERRING TO THEM AS COLORISTS SOMETIMES AS CHIAROSCURISTS"
+ },
+ {
+  "id": 19,
+  "utt_id": "mixed_0dB_1089-134686-0030",
+  "subset": "mixed_0dB",
+  "rate": 16000,
+  "reference": "BEWARE OF MAKING THAT MISTAKE"
+ },
+ {
+  "id": 20,
+  "utt_id": "121-127105-0035@48k",
+  "subset": "resample-48k",
+  "rate": 48000,
+  "reference": "SHE PROMISED TO DO THIS AND SHE MENTIONED TO ME THAT WHEN FOR A MOMENT DISBURDENED DELIGHTED HE HELD HER HAND THANKING HER FOR THE SACRIFICE SHE ALREADY FELT REWARDED"
+ }
+]

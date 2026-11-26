@@ -1,0 +1,120 @@
+--- a/mlx_lm/generate.py
++++ b/mlx_lm/generate.py
+@@ -304,6 +304,76 @@
+             prompt_cache[e] = c.to_quantized(group_size=kv_group_size, bits=kv_bits)
+ 
+ 
++def _greedy_head(model):
++    """mlx-omarchy: return ``hidden -> (token, lazy logprobs)`` when the
++    model's head is a tied 4-bit/group-64 affine embedding the backend's
++    ``mx.fast.greedy_quantized_argmax`` serves, else None. The token equals
++    ``argmax(logits - logsumexp(logits))``; logprobs stay lazy and run the
++    full projection only if a consumer evaluates them.
++    MLX_OMARCHY_NO_GREEDY_PRUNE=1 keeps the upstream step."""
++    import os
++
++    from .models import qwen3_5
++
++    if os.environ.get("MLX_OMARCHY_NO_GREEDY_PRUNE") == "1" or not hasattr(
++        mx.fast, "greedy_quantized_argmax"
++    ):
++        return None
++    text = getattr(model, "language_model", model)
++    if not isinstance(text, qwen3_5.TextModel) or not text.args.tie_word_embeddings:
++        return None
++    emb = text.model.embed_tokens
++    if not (
++        isinstance(emb, nn.QuantizedEmbedding)
++        and emb.bits == 4
++        and emb.group_size == 64
++        and getattr(emb, "mode", "affine") == "affine"
++        and "biases" in emb
++        and emb.weight.shape[1] == 256
++    ):
++        return None
++    high = getattr(emb, "_greedy_high_bits", None)
++    if high is None:
++        # The kernel's rounding proof assumes finite scales/biases below
++        # 2^20 (receipts/2026-09-23-vocab-prune.md).
++        limit = mx.array(2.0**20, emb.scales.dtype)
++        if not (mx.abs(emb.scales) < limit).all().item() or not (
++            mx.abs(emb.biases) < limit
++        ).all().item():
++            return None
++        # q >> 1 of every code, code e of a 64-code group at bit 3e of
++        # its six words (shaders/qmm_vec.comp QMM_VEC_GREEDY).
++        nib = mx.arange(0, 32, 4, dtype=mx.uint32)
++        sh = [mx.arange(o, o + 30, 3, dtype=mx.uint32) for o in (0, 1, 2)]
++        parts = []
++        for r in range(0, emb.weight.shape[0], 4096):
++            c = emb.weight[r : r + 4096]
++            a = (((c[..., None] >> nib) & 15) >> 1).reshape(c.shape[0], -1, 32)
++            w0 = (a[..., 0:10] << sh[0]).sum(-1) + ((a[..., 10] & 3) << 30)
++            w1 = (
++                (a[..., 10] >> 2)
++                + (a[..., 11:21] << sh[1]).sum(-1)
++                + ((a[..., 21] & 1) << 31)
++            )
++            w2 = (a[..., 21] >> 1) + (a[..., 22:32] << sh[2]).sum(-1)
++            p = mx.stack([w0, w1, w2], -1).reshape(c.shape[0], -1)
++            parts.append(p.astype(mx.uint32))
++            mx.eval(parts[-1])
++        high = mx.concatenate(parts)
++        mx.eval(high)
++        object.__setattr__(emb, "_greedy_high_bits", high)
++
++    def head(hidden):
++        token, _ = mx.fast.greedy_quantized_argmax(
++            hidden, emb.weight, emb.scales, emb.biases, high, group_size=64, bits=4
++        )
++        logits = emb.as_linear(hidden)
++        return token, (logits - mx.logsumexp(logits, keepdims=True)).squeeze(0)
++
++    head.body = text.model
++    return head
++
++
+ def generate_step(
+     prompt: mx.array,
+     model: nn.Module,
+@@ -383,6 +453,7 @@
+         kv_bits=kv_bits,
+     )
+ 
++    greedy = _greedy_head(model) if sampler is None and not logits_processors else None
+     sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
+ 
+     def _model_call(input_tokens: mx.array, input_embeddings: Optional[mx.array]):
+@@ -397,6 +468,11 @@
+         nonlocal tokens
+ 
+         with mx.stream(generation_stream):
++            if greedy and input_embeddings is None and input_tokens.size == 1:
++                hidden = greedy.body(input_tokens[None], cache=prompt_cache)
++                quantize_cache_fn(prompt_cache)
++                return greedy(hidden[:, -1, :])
++
+             logits = _model_call(
+                 input_tokens=input_tokens[None],
+                 input_embeddings=(
+@@ -452,12 +528,18 @@
+ 
+         y, logprobs = _step(input_tokens=prompt, input_embeddings=input_embeddings)
+ 
+-    mx.async_eval(y, logprobs)
++    if greedy:
++        mx.async_eval(y)
++    else:
++        mx.async_eval(y, logprobs)
+     n = 0
+     while True:
+         if n != max_tokens:
+             next_y, next_logprobs = _step(y)
+-            mx.async_eval(next_y, next_logprobs)
++            if greedy:
++                mx.async_eval(next_y)
++            else:
++                mx.async_eval(next_y, next_logprobs)
+         if n == 0:
+             mx.eval(y)
+             prompt_progress_callback(total_prompt_tokens, total_prompt_tokens)

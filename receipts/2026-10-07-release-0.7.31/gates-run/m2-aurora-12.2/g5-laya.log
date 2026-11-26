@@ -1,0 +1,5 @@
+WHEEL_IDENTITY installed=0.32.4.dev202610071347+9b5c938 (sha=a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
+LAYA_MANIFEST $HOME/v0.7.30-gates/v0.7.31-assist-9b/models/laya-mlx/manifest.json 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851
+LAYA_MANIFEST $HOME/v0.7.30-gates/v0.7.31-assist-4b/models/laya-mlx/manifest.json 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851
+GATE5_LAYA PASS
+GATE5_EXIT 0

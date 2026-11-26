@@ -1,0 +1,83 @@
+#version 460
+
+// Four-wide contiguous unary fast path for Sigmoid on 16-bit storage.
+// Same arithmetic as elementwise.comp case 5 (float math on the widened
+// operand, one round to storage: 1.0 / (1.0 + exp(-x))), same dims == 0
+// modulo addressing (operand size == count: direct; else index % size),
+// read and written as 8-byte vectors so a thread moves four elements per
+// load. The prefill profile spends 234 dispatches per pass at
+// n = 3145728 on the scalar kernel (2026-09-26); those are contiguous
+// gate activations, so they route here. Dispatch gate
+// (dispatch_float_elementwise_to): operation is Sigmoid, count and the
+// operand size are multiples of four (a scalar operand stays on
+// elementwise.comp: an 8-byte load would run past its binding), and
+// every element offset is a multiple of four.
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_VEC f16vec4
+#define LOAD_VEC(x) vec4(x)
+#define STORE_VEC(v) f16vec4(v)
+#else
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_VEC u16vec4
+#define LOAD_VEC(x) uintBitsToFloat(uvec4(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VEC(v) \
+  u16vec4(bf16_store(v.x), bf16_store(v.y), bf16_store(v.z), bf16_store(v.w))
+#endif
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputA {
+  STORAGE_VEC values[];
+} input_a;
+layout(set = 0, binding = 2, std430) writeonly buffer Output {
+  STORAGE_VEC values[];
+} output_data;
+
+// Same push-constant block as binary_vec.comp; only the first, seventh,
+// and ninth words are read. count, size, and offset arrive in elements
+// and are divided by four here.
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+} params;
+
+void main() {
+  if (params.operation != 5u) {
+    // SigmoidOperation; the dispatch gate is the only caller. Refuse
+    // silently unsupported operations rather than compute garbage.
+    return;
+  }
+  uint vec_count = params.count / 4u;
+  uint lhs_vecs = params.lhs_size / 4u;
+  uint index = gl_GlobalInvocationID.x;
+  uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+  while (index < vec_count) {
+    uint lhs_index = params.lhs_offset / 4u +
+        (lhs_vecs == vec_count ? index : index % lhs_vecs);
+    vec4 lhs = LOAD_VEC(input_a.values[lhs_index]);
+    vec4 value = 1.0 / (1.0 + exp(-lhs));
+    output_data.values[params.output_offset / 4u + index] = STORE_VEC(value);
+    if (vec_count - index <= stride) {
+      break;
+    }
+    index += stride;
+  }
+}

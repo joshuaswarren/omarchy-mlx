@@ -1,0 +1,28 @@
+sdpa decode bench 20261028T1559Z load 3.85
+PROVENANCE mlx-omarchy 0.32.4.dev202610050725+5c15fba libs {"libmlx.so": "7df7c9750388ed67"}
+ROOF elementwise copy bandwidth: 59.0 GB/s
+SDPA bf16 9B H16 Hkv4 D256 L512: single 499 us = 4.2 GB/s; 8 chained 334 us each = 6.3 GB/s (KV 2.1 MB)
+SDPA bf16 9B H16 Hkv4 D256 L2048: single 1482 us = 5.7 GB/s; 8 chained 1240 us each = 6.8 GB/s (KV 8.4 MB)
+SDPA bf16 9B H16 Hkv4 D256 L8192: single 10745 us = 3.1 GB/s; 8 chained 10809 us each = 3.1 GB/s (KV 33.6 MB)
+SDPA bf16 9B H16 Hkv4 D256 L16384: single 21438 us = 3.1 GB/s; 8 chained 21258 us each = 3.2 GB/s (KV 67.1 MB)
+SDPA bf16 2B H8 Hkv2 D256 L512: single 338 us = 3.1 GB/s; 8 chained 201 us each = 5.2 GB/s (KV 1.0 MB)
+SDPA bf16 2B H8 Hkv2 D256 L2048: single 896 us = 4.7 GB/s; 8 chained 720 us each = 5.8 GB/s (KV 4.2 MB)
+SDPA bf16 2B H8 Hkv2 D256 L8192: single 5469 us = 3.1 GB/s; 8 chained 5331 us each = 3.1 GB/s (KV 16.8 MB)
+SDPA bf16 2B H8 Hkv2 D256 L16384: single 10658 us = 3.1 GB/s; 8 chained 10558 us each = 3.2 GB/s (KV 33.6 MB)
+SDPA bf16 4B H32 Hkv8 D128 L512: single 526 us = 4.0 GB/s; 8 chained 402 us each = 5.2 GB/s (KV 2.1 MB)
+SDPA bf16 4B H32 Hkv8 D128 L2048: single 1600 us = 5.2 GB/s; 8 chained 1467 us each = 5.7 GB/s (KV 8.4 MB)
+SDPA bf16 4B H32 Hkv8 D128 L8192: single 11398 us = 2.9 GB/s; 8 chained 11310 us each = 3.0 GB/s (KV 33.6 MB)
+SDPA bf16 4B H32 Hkv8 D128 L16384: single 22527 us = 3.0 GB/s; 8 chained 22512 us each = 3.0 GB/s (KV 67.1 MB)
+SDPA f16 9B H16 Hkv4 D256 L512: single 748 us = 2.8 GB/s; 8 chained 577 us each = 3.6 GB/s (KV 2.1 MB)
+SDPA f16 9B H16 Hkv4 D256 L2048: single 2406 us = 3.5 GB/s; 8 chained 2141 us each = 3.9 GB/s (KV 8.4 MB)
+SDPA f16 9B H16 Hkv4 D256 L8192: single 8941 us = 3.8 GB/s; 8 chained 8360 us each = 4.0 GB/s (KV 33.6 MB)
+SDPA f16 9B H16 Hkv4 D256 L16384: single 17643 us = 3.8 GB/s; 8 chained 16775 us each = 4.0 GB/s (KV 67.1 MB)
+SDPA f16 2B H8 Hkv2 D256 L512: single 464 us = 2.3 GB/s; 8 chained 315 us each = 3.3 GB/s (KV 1.0 MB)
+SDPA f16 2B H8 Hkv2 D256 L2048: single 1255 us = 3.3 GB/s; 8 chained 1098 us each = 3.8 GB/s (KV 4.2 MB)
+SDPA f16 2B H8 Hkv2 D256 L8192: single 4497 us = 3.7 GB/s; 8 chained 4221 us each = 4.0 GB/s (KV 16.8 MB)
+SDPA f16 2B H8 Hkv2 D256 L16384: single 8815 us = 3.8 GB/s; 8 chained 8362 us each = 4.0 GB/s (KV 33.6 MB)
+SDPA f16 4B H32 Hkv8 D128 L512: single 215 us = 9.8 GB/s; 8 chained 94 us each = 22.3 GB/s (KV 2.1 MB)
+SDPA f16 4B H32 Hkv8 D128 L2048: single 464 us = 18.1 GB/s; 8 chained 301 us each = 27.8 GB/s (KV 8.4 MB)
+SDPA f16 4B H32 Hkv8 D128 L8192: single 1085 us = 30.9 GB/s; 8 chained 907 us each = 37.0 GB/s (KV 33.6 MB)
+SDPA f16 4B H32 Hkv8 D128 L16384: single 1906 us = 35.2 GB/s; 8 chained 1739 us each = 38.6 GB/s (KV 67.1 MB)
+DONE

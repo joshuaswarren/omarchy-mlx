@@ -1,0 +1,21 @@
+# 2026-10-06T21:28:18Z tag=h8-prod2 boot=abc36fa1-7db1-4088-96ed-4523f5ad087e load=0.09 0.06 0.06 icd=/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json
+# cmd: ./gemm-bench --dtype f16 --reps 6 --rounds 7 --side rb=sh/matmul_rb.comp:64:64:0 --side p=sh/proto.comp:64:64:0 --side d=sh/matmul_coopmat_direct.comp:64:64:0
+probing Apple M1 (G13G B1) api=1.4
+sh/matmul_rb.comp
+sh/proto.comp
+sh/matmul_coopmat_direct.comp
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[1,1,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[0,0,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[8,8,8],"abcr":[0,0,0,0],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[1,1,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[0,0,1,1],"scope":3}
+{"k":"coopmat_shape","mnk":[16,16,16],"abcr":[0,0,0,0],"scope":3}
+{"k":"dev","name":"Apple M1 (G13G B1)","subgroupSize":32,"coopmat":true}
+{"k":"problem","dtype":"f16","m":4096,"n":4096,"kdim":4096,"a_t":0,"b_t":0,"samples":4096}
+{"k":"accuracy","side":"rb","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"p","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"accuracy","side":"d","exact_rounded":0.99487,"mean_ulp":0.2498,"max_ulp":3.546,"nonfinite":0,"bits_vs_rb":0}
+{"k":"time","side":"rb","median_us":229317.6,"min_us":229216.4,"max_us":229347.8,"tflops":0.599,"tflops_best":0.600}
+{"k":"time","side":"p","median_us":79819.1,"min_us":79812.9,"max_us":79822.7,"tflops":1.722,"tflops_best":1.722}
+{"k":"time","side":"d","median_us":79755.1,"min_us":79747.8,"max_us":79763.1,"tflops":1.723,"tflops_best":1.723}
+# end 2026-10-06T21:28:37Z rc=0

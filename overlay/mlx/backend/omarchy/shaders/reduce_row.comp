@@ -1,0 +1,148 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Row reduction over the last axes of a row-contiguous float input: one
+// workgroup (256 invocations) reduces one output row, then a grid-stride
+// loop moves to the next row. The serial chunked kernels (reduce_suffix.comp,
+// reduce_general.comp) give one invocation a whole row, so a single row of
+// 8192 elements costs two serial passes of 4096 trips. Here every invocation
+// reads a strided slice of the row and a shared-memory tree combines the 256
+// partials.
+//
+// The order is fixed by the shader and does not depend on the subgroup size
+// or on the dispatch width: invocation t reads elements t, t+256, t+512, ...
+// in groups of four (four independent accumulators a0..a3, combined a0, a1,
+// a2, a3 at the end), and the tree halves the stride 128, 64, ..., 1 with
+// the lower index as the left operand. The same input gives the same bits on
+// every run and on every device. The sum is NOT bit-equal to the serial
+// route, because the association differs; both are float32 accumulations
+// of the same terms.
+//
+// Operations follow ReduceOperation in primitives.cpp: 0 Sum, 2 Min, 3 Max
+// (Prod and the integer types keep the general kernel). Min and Max keep the
+// upstream NaN rule: a NaN anywhere in the row poisons the result.
+//
+// Variants: float32 (default), -DUSE_FP16, -DUSE_BF16. Accumulation is
+// float32 for all three; 16-bit storage never narrows a partial.
+#version 460
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#define STORE_OUTPUT(v) float16_t(v)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_OUTPUT(v) bf16_store(v)
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) float(x)
+#define STORE_OUTPUT(v) STORAGE_TYPE(v)
+#endif
+
+#define MAX_SENTINEL uintBitsToFloat(0x7f800000u)
+#define MIN_SENTINEL uintBitsToFloat(0xff800000u)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  STORAGE_TYPE values[];
+} input_data;
+layout(set = 0, binding = 1, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+} params;
+
+shared float partial[256];
+
+float init_value(uint operation) {
+  if (operation == 0u) {
+    return 0.0;
+  }
+  if (operation == 2u) {
+    return MAX_SENTINEL;
+  }
+  return MIN_SENTINEL;
+}
+
+float combine(float acc, float next, uint operation) {
+  if (operation == 0u) {
+    return acc + next;
+  }
+  if (isnan(acc)) {
+    return acc;
+  }
+  if (isnan(next)) {
+    return next;
+  }
+  if (operation == 2u) {
+    return acc < next ? acc : next;
+  }
+  return acc > next ? acc : next;
+}
+
+void main() {
+  uint tid = gl_LocalInvocationID.x;
+  uint n = params.reduce_size;
+  uint op = params.operation;
+  for (uint row = gl_WorkGroupID.x; row < params.output_size;
+       row += gl_NumWorkGroups.x) {
+    uint base = params.lhs_offset + row * n;
+    float a0 = init_value(op);
+    float a1 = a0;
+    float a2 = a0;
+    float a3 = a0;
+    uint i = tid;
+    for (; i + 768u < n; i += 1024u) {
+      a0 = combine(a0, LOAD_VALUE(input_data.values[base + i]), op);
+      a1 = combine(a1, LOAD_VALUE(input_data.values[base + i + 256u]), op);
+      a2 = combine(a2, LOAD_VALUE(input_data.values[base + i + 512u]), op);
+      a3 = combine(a3, LOAD_VALUE(input_data.values[base + i + 768u]), op);
+    }
+    for (; i < n; i += 256u) {
+      a0 = combine(a0, LOAD_VALUE(input_data.values[base + i]), op);
+    }
+    float acc = combine(combine(combine(a0, a1, op), a2, op), a3, op);
+    partial[tid] = acc;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (tid < stride) {
+        partial[tid] = combine(partial[tid], partial[tid + stride], op);
+      }
+      barrier();
+    }
+    if (tid == 0u) {
+      output_data.values[params.output_offset + row] =
+          STORE_OUTPUT(partial[0]);
+    }
+    barrier();
+  }
+}

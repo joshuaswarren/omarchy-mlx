@@ -1,0 +1,4 @@
+Chip, kernel	default	split0	Change	Rounds	Digest
+Apple M1, stock	20.5 tok/s	16.8	+22.62%	+21.43 +22.75 +22.75 +22.62 +22.02	8e68ea1ec2d62fcc in every arm
+Apple M1 Max, 12.6 stock	61.4	51.8	+18.53%	+18.53 +18.50 +18.34 +18.57 +18.53	8e68ea1ec2d62fcc
+Apple M2 Max, stock	63.2	56.3	+12.43%	+12.26 +12.46 +12.46 +12.43 +12.06	8e68ea1ec2d62fcc

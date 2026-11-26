@@ -1,0 +1,224 @@
+#version 460
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+// Bonsai 1-bit / 2-bit affine decode, M = 2..5 small-batch (decode).
+//
+// Native qmv_wide (bonsai_quantized.metal affine_qmv_wide<T, gs, bits,
+// vecs_per_tg, k_lanes=8>): transposed w (N, Kp) packed uint32 words
+// (32/bits values per word), one affine scale/bias per group of
+// `reduce_size` channels. M independent x rows share one weight-row
+// dispatch: the same lane group walks the same weight word for every M
+// rows, the row loads stay independent in flight, and the per-row chain
+// is the single-row chain unchanged. Both 1-bit (uint8 storage) and
+// 2-bit (uint32 storage) Bonsai layouts are supported through this
+// single source; the host passes the bit-width in `params.operation`
+// and the pack factor follows from it.
+//
+// Dispatch contract:
+//   SLOTS_PER_GROUP weight rows (output columns) per workgroup, one
+//     per 32-lane slot; each slot computes all M = ROWS_PER_SLOT
+//     (2..5) x rows against its row.
+//   The wide kernel intentionally does not support ROWS_PER_SLOT == 1;
+//     that is the bonsai_qmv_q1.comp / QmmVecQ4Word fast path. The
+//     matrix_m must equal ROWS_PER_SLOT (the wide kernel does NOT batch
+//     multiple decode calls; M is the per-call decode batch).
+//   matrix_k must be a multiple of 32/bits (Bonsai packing).
+//   reduce_size must be in {32, 64, 128} and divide matrix_k.
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) float16_t(f)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat((uint(x)) << 16u)
+#define STORE_VALUE(f) uint16_t((floatBitsToUint(f) + 0x7fffu + ((floatBitsToUint(f) >> 16) & 1u)) >> 16u)
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) (x)
+#define STORE_VALUE(f) (f)
+#endif
+
+#ifndef ROWS_PER_SLOT
+#error "bonsai_qmv_wide.comp requires ROWS_PER_SLOT in {2,3,4,5}"
+#endif
+#ifndef SLOTS_PER_GROUP
+#define SLOTS_PER_GROUP 4
+#endif
+
+const uint LANES = 32u;
+
+layout(local_size_x = SLOTS_PER_GROUP * 32) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  STORAGE_TYPE values[];
+} input_x;
+layout(set = 0, binding = 1, std430) readonly buffer InputW {
+  uint values[];
+} input_w;
+layout(set = 0, binding = 2, std430) readonly buffer Scales {
+  STORAGE_TYPE values[];
+} scales;
+layout(set = 0, binding = 3, std430) readonly buffer Biases {
+  STORAGE_TYPE values[];
+} biases;
+layout(set = 0, binding = 4, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;       // bits: 1 or 2
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;     // group size
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;        // bias base element
+  uint aux_offset;      // scale base element
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+uint byte_at(uint word, uint lane) {
+  return (lane == 0u) ? (word & 0xFFu)
+       : (lane == 1u) ? ((word >> 8u) & 0xFFu)
+       : (lane == 2u) ? ((word >> 16u) & 0xFFu)
+                      : ((word >> 24u) & 0xFFu);
+}
+
+// Exact 0/1 -> float for the Bonsai 1-bit affine code.
+float q1_to_f(uint code) {
+  return uintBitsToFloat((code & 1u) | 0x4B000000u) - 8388608.0;
+}
+
+// Exact 0..3 -> float for the Bonsai 2-bit affine code (matches the
+// Q4 nibble trick: 2^23 + n is exact in fp32 for n in [0, 3]).
+float q2_to_f(uint code) {
+  return uintBitsToFloat((code & 3u) | 0x4B000000u) - 8388608.0;
+}
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint bits = params.operation;
+  uint group_size = params.reduce_size;
+  uint n = params.matrix_n;
+  uint M = params.matrix_m;
+  uint column = gl_WorkGroupID.x * SLOTS_PER_GROUP + column_slot;
+  bool column_active = column < n;
+  uint pack_factor = 32u / bits;  // 32 for bits=1, 16 for bits=2
+  uint words_per_row = params.matrix_k / pack_factor;
+  uint groups_per_row = params.matrix_k / group_size;
+
+  precise float acc[ROWS_PER_SLOT];
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+    acc[r] = 0.0;
+  }
+  if (column_active) {
+    uint w_row = params.rhs_offset + column * words_per_row;
+    // x is laid out M rows of K consecutive elements; per-row base =
+    // x_row + r * matrix_k. The 1-bit case has words_per_row / 4 ==
+    // words_per_row (Bonsai stores 8 vals/byte, so words_per_row =
+    // K/8 * 4 = K/2 words... wait, K/8 bytes = K/8 uint32 words because
+    // we view the buffer as uint[]. bytes_per_row = K / VALUES_PER_BYTE
+    // (8 for bits=1, 16 for bits=2). We read 4 bytes at a time as a
+    // uint word, so the word stride is bytes_per_row / 4 = K / 32
+    // (constant regardless of bits).
+    uint x_row = params.lhs_offset;
+    uint scale_base = params.aux_offset + column * groups_per_row;
+    uint bias_base = params.aux_size + column * groups_per_row;
+    uint words_per_group = group_size / pack_factor;
+    // Walk words_per_row packed words; each lane handles stride-32 words.
+    for (uint w = lane_in_slot; w < words_per_row; w += LANES) {
+      uint group = w / words_per_group;
+      uint word_value = input_w.values[w_row + w];
+      precise float dot[ROWS_PER_SLOT];
+      precise float input_sum[ROWS_PER_SLOT];
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+        dot[r] = 0.0;
+        input_sum[r] = 0.0;
+      }
+      uint k_base = w * pack_factor;
+      if (bits == 1u) {
+        // 4 bytes per word = 32 1-bit codes.
+        // Each row reads the same 32 codes into a chain sum.
+        for (uint b = 0u; b < 4u; ++b) {
+          uint byte_value = byte_at(word_value, b);
+          uint k_off = k_base + b * 8u;
+          for (uint i = 0u; i < 8u; ++i) {
+            uint code = (byte_value >> i) & 1u;
+            float w_val = q1_to_f(code);
+            for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+              float x_val = LOAD_VALUE(input_x.values[
+                  x_row + r * params.matrix_k + k_off + i]);
+              input_sum[r] += x_val;
+              dot[r] = fma(x_val, w_val, dot[r]);
+            }
+          }
+        }
+      } else {
+        // bits == 2: 16 2-bit codes per word.
+        for (uint i = 0u; i < pack_factor; ++i) {
+          uint code = (word_value >> (i * 2u)) & 3u;
+          float w_val = q2_to_f(code);
+          for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+            float x_val = LOAD_VALUE(input_x.values[
+                x_row + r * params.matrix_k + k_base + i]);
+            input_sum[r] += x_val;
+            dot[r] = fma(x_val, w_val, dot[r]);
+          }
+        }
+      }
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+        float scale = LOAD_VALUE(scales.values[scale_base + group]);
+        float bias = LOAD_VALUE(biases.values[bias_base + group]);
+        acc[r] = fma(scale, dot[r], fma(bias, input_sum[r], acc[r]));
+      }
+    }
+  }
+  // Subgroup reduction: each 32-lane slot is one hardware subgroup.
+#ifdef USE_SUBGROUP
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+    float total = subgroupAdd(acc[r]);
+    if (lane_in_slot == 0u && column_active) {
+      output_data.values[params.output_offset + r * params.matrix_n + column] =
+        STORE_VALUE(total);
+    }
+  }
+#else
+  shared float reduce_scratch[SLOTS_PER_GROUP * 32u * ROWS_PER_SLOT];
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+    reduce_scratch[lane + r * SLOTS_PER_GROUP * 32u] = acc[r];
+  }
+  barrier();
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+    for (uint offset = 1u; offset < LANES; offset <<= 1u) {
+      if ((lane_in_slot & (2u * offset - 1u)) == 0u) {
+        reduce_scratch[lane + r * SLOTS_PER_GROUP * 32u] +=
+            reduce_scratch[lane + offset + r * SLOTS_PER_GROUP * 32u];
+      }
+      barrier();
+    }
+    if (lane_in_slot == 0u && column_active) {
+      output_data.values[params.output_offset + r * params.matrix_n + column] =
+          STORE_VALUE(reduce_scratch[lane + r * SLOTS_PER_GROUP * 32u]);
+    }
+  }
+#endif
+}

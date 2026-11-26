@@ -1,0 +1,6 @@
+
+        uint elem = thread_position_in_grid.x;
+        T val = inp[elem];
+        T relu_val = val > T(0) ? val : T(0);
+        out[elem] = relu_val * relu_val;
+    

@@ -1,0 +1,5 @@
+TFSEG segment 0: plain 0.02262 tile1 0.02121 diff +0.00141
+TFSEG segment 1: plain 0.03777 tile1 0.03383 diff +0.00394
+TFSEG segment 2: plain 0.03698 tile1 0.03125 diff +0.00573
+TFSEG segment 3: plain 0.02466 tile1 0.02735 diff -0.00269
+TFSEG paired plain-tile1 over segments +0.00210; enumerated resamples (n=256) 2.5th -0.00103 97.5th +0.00483

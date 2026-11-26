@@ -1,0 +1,45 @@
+GLSLC ['2026.3', '1:1.4.357.0']
+CHANGED-FILES ['overlay/mlx/backend/omarchy/shaders/qmm_vec.comp']
+TARGETS 39
+SPV SAME qmm_vec_f32 tag a5763c83a030 branch a5763c83a030
+SPV SAME qmm_vec_f16 tag 47b2e86e3763 branch 47b2e86e3763
+SPV SAME qmm_vec_bf16 tag 9ad184f6e62b branch 9ad184f6e62b
+SPV SAME qmm_vec_subgroup_f32 tag 62aa0b1d8c52 branch 62aa0b1d8c52
+SPV SAME qmm_vec_subgroup_f16 tag ea172d9dcfbb branch ea172d9dcfbb
+SPV SAME qmm_vec_subgroup_bf16 tag bf3590811d68 branch bf3590811d68
+SPV SAME qmm_vec_q4_word_f32 tag 9031a2ea07c6 branch 9031a2ea07c6
+SPV SAME qmm_vec_q4_word_f16 tag b0a3ae3f643a branch b0a3ae3f643a
+SPV SAME qmm_vec_q4_word_bf16 tag 9deb438ebc8c branch 9deb438ebc8c
+SPV SAME qmm_vec_q4_word_subgroup_f32 tag 10aa33f2b8ee branch 10aa33f2b8ee
+SPV DIFF qmm_vec_q4_word_subgroup_f16 tag 7ad1a23ea636 branch 97eaaf62ba93
+SPV DIFF qmm_vec_q4_word_subgroup_bf16 tag 46720698dbef branch 8fd834749ba4
+SPV SAME qmm_vec_q4_word_subgroup_batch4_bf16 tag a5255a543ca5 branch a5255a543ca5
+SPV DIFF qmm_vec_word_subgroup_f16_q4g32 tag 973032fe757a branch f7be2d020f54
+SPV DIFF qmm_vec_word_subgroup_bf16_q4g32 tag ddda54108bc3 branch 089f1018dbaf
+SPV SAME qmm_vec_word_subgroup_f16_q8g64 tag 3abe62763942 branch 3abe62763942
+SPV SAME qmm_vec_word_subgroup_bf16_q8g64 tag 772154f3cc25 branch 772154f3cc25
+SPV SAME qmm_vec_word_subgroup_f16_q8g32 tag c6ed70c2eb42 branch c6ed70c2eb42
+SPV SAME qmm_vec_word_subgroup_bf16_q8g32 tag 6d9af5a26e1d branch 6d9af5a26e1d
+SPV SAME qmm_vec_q4_multi_f32 tag 0432ef552faa branch 0432ef552faa
+SPV SAME qmm_vec_q4_multi_f16 tag b0c07e965930 branch b0c07e965930
+SPV SAME qmm_vec_q4_multi_bf16 tag 6e3c8e794842 branch 6e3c8e794842
+SPV SAME qmm_vec_q4_multi_subgroup_f32 tag 7bccc4e46be7 branch 7bccc4e46be7
+SPV DIFF qmm_vec_q4_multi_subgroup_f16 tag 1731441f22d6 branch 89e336cd62a0
+SPV DIFF qmm_vec_q4_multi_subgroup_bf16 tag 0c1b5626ddc6 branch 3d27f81227d0
+SPV DIFF qmm_vec_q4_multi_outgate_bf16 tag c8a0e0f6efc5 branch 1261d8cc4cf6
+SPV SAME qmm_vec_q4_multi_token4_subgroup_bf16 tag 5fcd1c944a9f branch 5fcd1c944a9f
+SPV SAME qmm_vec_q4_multi_token16_subgroup_bf16 tag f098ac0c195a branch f098ac0c195a
+SPV SAME qmm_vec_q4_multi_token4_bf16 tag a0ef6961a7fe branch a0ef6961a7fe
+SPV SAME qmm_vec_q4_multi_token16_bf16 tag 286c2c78b72f branch 286c2c78b72f
+SPV SAME qmm_vec_q4_multi_token8_subgroup_bf16 tag 2e7ac0593808 branch 2e7ac0593808
+SPV SAME qmm_vec_q4_multi_token8_bf16 tag e2597d9d01e4 branch e2597d9d01e4
+SPV SAME qmm_vec_greedy_bf16 tag 1047a4a321d8 branch 1047a4a321d8
+SPV SAME qmm_vec_fp_f32 tag 7e41d6c1bd07 branch 7e41d6c1bd07
+SPV SAME qmm_vec_fp_f16 tag ca39cf9ee545 branch ca39cf9ee545
+SPV SAME qmm_vec_fp_bf16 tag 3dd9dd9447c3 branch 3dd9dd9447c3
+SPV SAME qmm_vec_subgroup_fp_f32 tag 8fddcc62ab64 branch 8fddcc62ab64
+SPV SAME qmm_vec_subgroup_fp_f16 tag c3333e269dd4 branch c3333e269dd4
+SPV SAME qmm_vec_subgroup_fp_bf16 tag c5917ca24e0a branch c5917ca24e0a
+SPV-SUMMARY same 32 diff 7
+bf16 tag c5917ca24e0a branch c5917ca24e0a
+SPV-SUMMARY same 32 diff 7

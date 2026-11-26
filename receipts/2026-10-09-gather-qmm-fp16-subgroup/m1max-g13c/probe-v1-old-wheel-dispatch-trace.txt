@@ -1,0 +1,121 @@
+@@HOST 0.32.4.dev202610081236+50e40389 Apple M1 Max (G13C C0)
+@@ARM fp16 gq_default
+[rtmod] DISPATCH kernel=79 count=1 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=79 count=1 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=59 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=217 count=6144 gx=24 gy=1 gz=1
+[rtmod] DISPATCH kernel=79 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=59 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=217 count=6144 gx=24 gy=1 gz=1
+[rtmod] DISPATCH kernel=439 count=6144 gx=6 gy=1 gz=1
+[rtmod] DISPATCH kernel=217 count=16384 gx=64 gy=1 gz=1
+[rtmod] EV-SIGNAL tid=172648 ev=0xaaab2e0f6dc0 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=172648
+[rtmod] SUBMIT tid=172648 cv=37 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=172648 ev=0xaaab2e0f6dc0 val=1 cnt=0 resv=37
+[rtmod] COMMIT-NOOP
+[rtmod] JOIN tid=172648 reason=explicit last=37
+@@END
+@@ARM fp16 gq_scalar
+[rtmod] DISPATCH kernel=79 count=1 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=79 count=1 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=59 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=217 count=6144 gx=24 gy=1 gz=1
+[rtmod] DISPATCH kernel=79 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=59 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=217 count=6144 gx=24 gy=1 gz=1
+[rtmod] DISPATCH kernel=439 count=6144 gx=6 gy=1 gz=1
+[rtmod] DISPATCH kernel=217 count=16384 gx=64 gy=1 gz=1
+[rtmod] EV-SIGNAL tid=172648 ev=0xaaab2e0f6dc0 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=172648
+[rtmod] SUBMIT tid=172648 cv=63 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=172648 ev=0xaaab2e0f6dc0 val=1 cnt=0 resv=63
+[rtmod] COMMIT-NOOP
+[rtmod] JOIN tid=172648 reason=explicit last=63
+@@END
+@@ARM fp16 take_qmm
+[rtmod] DISPATCH kernel=193 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=193 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=195 count=1572864 gx=6144 gy=1 gz=1
+[rtmod] DISPATCH kernel=193 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=193 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=195 count=1572864 gx=6144 gy=1 gz=1
+[rtmod] DISPATCH kernel=56 count=16384 gx=64 gy=1 gz=1
+[rtmod] DISPATCH kernel=409 count=6144 gx=96 gy=1 gz=1
+[rtmod] DISPATCH kernel=193 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=193 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=195 count=1572864 gx=6144 gy=1 gz=1
+[rtmod] DISPATCH kernel=56 count=16384 gx=64 gy=1 gz=1
+[rtmod] DISPATCH kernel=409 count=6144 gx=96 gy=1 gz=1
+[rtmod] DISPATCH kernel=439 count=6144 gx=6 gy=1 gz=1
+[rtmod] DISPATCH kernel=409 count=16384 gx=256 gy=1 gz=1
+[rtmod] EV-SIGNAL tid=172648 ev=0xaaab2e0f6dc0 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=172648
+[rtmod] SUBMIT tid=172648 cv=89 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=172648 ev=0xaaab2e0f6dc0 val=1 cnt=0 resv=89
+[rtmod] COMMIT-NOOP
+[rtmod] JOIN tid=172648 reason=explicit last=89
+@@END
+@@ARM bf16 gq_default
+[rtmod] DISPATCH kernel=79 count=1 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=79 count=1 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=59 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=224 count=6144 gx=6144 gy=1 gz=1
+[rtmod] DISPATCH kernel=79 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=59 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=224 count=6144 gx=6144 gy=1 gz=1
+[rtmod] DISPATCH kernel=419 count=6144 gx=6 gy=1 gz=1
+[rtmod] DISPATCH kernel=224 count=16384 gx=16384 gy=1 gz=1
+[rtmod] EV-SIGNAL tid=172648 ev=0xaaab2e0f6e70 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=172648
+[rtmod] SUBMIT tid=172648 cv=149 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=172648 ev=0xaaab2e0f6e70 val=1 cnt=0 resv=149
+[rtmod] COMMIT-NOOP
+[rtmod] JOIN tid=172648 reason=explicit last=149
+@@END
+@@ARM bf16 gq_scalar
+[rtmod] DISPATCH kernel=79 count=1 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=79 count=1 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=59 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=218 count=6144 gx=24 gy=1 gz=1
+[rtmod] DISPATCH kernel=79 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=59 count=8 gx=1 gy=1 gz=1
+[rtmod] DISPATCH kernel=218 count=6144 gx=24 gy=1 gz=1
+[rtmod] DISPATCH kernel=419 count=6144 gx=6 gy=1 gz=1
+[rtmod] DISPATCH kernel=218 count=16384 gx=64 gy=1 gz=1
+[rtmod] EV-SIGNAL tid=172648 ev=0xaaab2e0f6e70 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=172648
+[rtmod] SUBMIT tid=172648 cv=175 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=172648 ev=0xaaab2e0f6e70 val=1 cnt=0 resv=175
+[rtmod] COMMIT-NOOP
+[rtmod] JOIN tid=172648 reason=explicit last=175
+@@END
+@@ARM bf16 take_qmm
+[rtmod] DISPATCH kernel=194 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=194 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=195 count=1572864 gx=6144 gy=1 gz=1
+[rtmod] DISPATCH kernel=194 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=194 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=195 count=1572864 gx=6144 gy=1 gz=1
+[rtmod] DISPATCH kernel=58 count=16384 gx=64 gy=1 gz=1
+[rtmod] DISPATCH kernel=410 count=6144 gx=96 gy=1 gz=1
+[rtmod] DISPATCH kernel=194 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=194 count=196608 gx=768 gy=1 gz=1
+[rtmod] DISPATCH kernel=195 count=1572864 gx=6144 gy=1 gz=1
+[rtmod] DISPATCH kernel=58 count=16384 gx=64 gy=1 gz=1
+[rtmod] DISPATCH kernel=410 count=6144 gx=96 gy=1 gz=1
+[rtmod] DISPATCH kernel=419 count=6144 gx=6 gy=1 gz=1
+[rtmod] DISPATCH kernel=410 count=16384 gx=256 gy=1 gz=1
+[rtmod] EV-SIGNAL tid=172648 ev=0xaaab2e0f6e70 val=1 st=0 host=0
+[rtmod] SUBMIT-ENTER tid=172648
+[rtmod] SUBMIT tid=172648 cv=201 waits=1 sigs=2 cmds=1
+[rtmod] COMMIT-NOOP
+[rtmod] EV-WAIT tid=172648 ev=0xaaab2e0f6e70 val=1 cnt=0 resv=201
+[rtmod] COMMIT-NOOP
+[rtmod] JOIN tid=172648 reason=explicit last=201
+@@END

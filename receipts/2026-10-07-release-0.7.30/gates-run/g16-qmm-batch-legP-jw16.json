@@ -1,0 +1,88 @@
+{
+  "wheel_version": "0.32.4.dev202610070939+cf71ea2",
+  "libmlx_sha256": "b6a6b4aa4e548f58728c118af2d7765937401ffebe8e6a6bbae7d3736a173381",
+  "icd_json": "/usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json",
+  "libvulkan_sha256": "26c93b8b25b72a947c5aad0b85a2af1179588c08aa5a8e6c6bce525bf357b25c",
+  "uname": "7.1.12-2-12.1-sep-ARCH"
+}
+{
+  "gate": "g16-qmm-batch",
+  "cases": 4,
+  "rows": 12,
+  "failures": [],
+  "digests": [
+    {
+      "case": "B2T16",
+      "row": 0,
+      "bit_identical_to_alone": true,
+      "digest": "86a88f64168ba5b2"
+    },
+    {
+      "case": "B2T16",
+      "row": 1,
+      "bit_identical_to_alone": true,
+      "digest": "20d2c2840c1d6450"
+    },
+    {
+      "case": "B2T17",
+      "row": 0,
+      "bit_identical_to_alone": true,
+      "digest": "80ddb3d553292af5"
+    },
+    {
+      "case": "B2T17",
+      "row": 1,
+      "bit_identical_to_alone": true,
+      "digest": "71aab2543f0d4bef"
+    },
+    {
+      "case": "B4T16",
+      "row": 0,
+      "bit_identical_to_alone": true,
+      "digest": "ccbb97fb2f3f15f9"
+    },
+    {
+      "case": "B4T16",
+      "row": 1,
+      "bit_identical_to_alone": true,
+      "digest": "254d9e981422aa36"
+    },
+    {
+      "case": "B4T16",
+      "row": 2,
+      "bit_identical_to_alone": true,
+      "digest": "aba0d1e5940f3db4"
+    },
+    {
+      "case": "B4T16",
+      "row": 3,
+      "bit_identical_to_alone": true,
+      "digest": "5c95cdaa024924c0"
+    },
+    {
+      "case": "B4T17",
+      "row": 0,
+      "bit_identical_to_alone": true,
+      "digest": "c3e094954664c793"
+    },
+    {
+      "case": "B4T17",
+      "row": 1,
+      "bit_identical_to_alone": true,
+      "digest": "3d83877b2a0113ac"
+    },
+    {
+      "case": "B4T17",
+      "row": 2,
+      "bit_identical_to_alone": true,
+      "digest": "49a7f34d5693e955"
+    },
+    {
+      "case": "B4T17",
+      "row": 3,
+      "bit_identical_to_alone": true,
+      "digest": "adb1951b8fb2b31f"
+    }
+  ],
+  "pass": true
+}

@@ -1,0 +1,49 @@
+int 0 provenance: mlx-omarchy 0.32.4.dev202611020602+08e7d28 mx=0.32.4.dev202611020602+08e7d28 verified=match harness=d645e4a core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:6a33c90dab1d350f
+device: Device(gpu, 0)
+device_name: Apple M4 (G16G B1)
+matmul max|gpu-cpu|=0.00e+00 qmm max|gpu-cpu|=2.67e-05
+REOPEN_OK
+int 0 provenance: mlx-omarchy 0.32.4.dev202611020602+08e7d28 mx=0.32.4.dev202611020602+08e7d28 verified=match harness=d645e4a core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:6a33c90dab1d350f
+120/120 cases bit-identical
+int 0 provenance: mlx-omarchy 0.32.4.dev202611020602+08e7d28 mx=0.32.4.dev202611020602+08e7d28 verified=match harness=d645e4a core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:6a33c90dab1d350f
+72/72 cases bit-identical
+mlx.core.bfloat16 freqs=False q+k pair   92.5 us
+mlx.core.bfloat16 freqs=True  q+k pair 1345.3 us
+mlx.core.float16 freqs=False q+k pair   50.8 us
+mlx.core.float16 freqs=True  q+k pair 1205.9 us
+int 0 provenance: mlx-omarchy 0.32.4.dev202611020602+08e7d28 mx=0.32.4.dev202611020602+08e7d28 verified=match harness=d645e4a core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:6a33c90dab1d350f
+35/35 cases bit-identical
+mlx.core.bfloat16 L=  40 sdpa+scale wall  100.0 us
+mlx.core.bfloat16 L= 400 sdpa+scale wall  137.3 us
+mlx.core.float16 L=  40 sdpa+scale wall   29.4 us
+mlx.core.float16 L= 400 sdpa+scale wall   49.7 us
+int 0 provenance: mlx-omarchy 0.32.4.dev202611020602+08e7d28 mx=0.32.4.dev202611020602+08e7d28 verified=match harness=d645e4a core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:6a33c90dab1d350f
+m=    5 n= 1000 k= 2048 max|ref|=  190.15 max_err=0.50640 = 0.506 bf16 ulps at max|ref| mean_err=0.07428 gflops=17
+m=    5 n= 2050 k= 1024 max|ref|=  128.36 max_err=0.36023 = 0.360 bf16 ulps at max|ref| mean_err=0.05310 gflops=23
+m=    5 n= 3072 k= 2048 max|ref|=  178.61 max_err=0.61369 = 0.614 bf16 ulps at max|ref| mean_err=0.07559 gflops=44
+m=   64 n= 1000 k= 2048 max|ref|=  205.31 max_err=0.56040 = 0.560 bf16 ulps at max|ref| mean_err=0.07526 gflops=243
+m=   64 n= 2050 k= 1024 max|ref|=  158.95 max_err=0.41544 = 0.415 bf16 ulps at max|ref| mean_err=0.05295 gflops=343
+m=   64 n= 3072 k= 2048 max|ref|=  194.36 max_err=0.63142 = 0.631 bf16 ulps at max|ref| mean_err=0.07532 gflops=560
+m=   77 n= 1000 k= 2048 max|ref|=  196.34 max_err=0.66540 = 0.665 bf16 ulps at max|ref| mean_err=0.07514 gflops=259
+m=   77 n= 2050 k= 1024 max|ref|=  150.43 max_err=0.49833 = 0.498 bf16 ulps at max|ref| mean_err=0.05341 gflops=281
+m=   77 n= 3072 k= 2048 max|ref|=  225.27 max_err=0.62873 = 0.629 bf16 ulps at max|ref| mean_err=0.07524 gflops=416
+m=  130 n= 1000 k= 2048 max|ref|=  192.32 max_err=0.62220 = 0.622 bf16 ulps at max|ref| mean_err=0.07534 gflops=380
+m=  130 n= 2050 k= 1024 max|ref|=  142.28 max_err=0.42819 = 0.428 bf16 ulps at max|ref| mean_err=0.05315 gflops=395
+m=  130 n= 3072 k= 2048 max|ref|=  206.41 max_err=0.64159 = 0.642 bf16 ulps at max|ref| mean_err=0.07539 gflops=503
+m=  512 n= 1000 k= 2048 max|ref|=  218.24 max_err=0.69946 = 0.699 bf16 ulps at max|ref| mean_err=0.07549 gflops=704
+m=  512 n= 2050 k= 1024 max|ref|=  167.90 max_err=0.51368 = 0.514 bf16 ulps at max|ref| mean_err=0.05325 gflops=724
+m=  512 n= 3072 k= 2048 max|ref|=  225.72 max_err=0.72217 = 0.722 bf16 ulps at max|ref| mean_err=0.07535 gflops=840
+m= 1024 n= 1000 k= 2048 max|ref|=  227.21 max_err=0.68968 = 0.690 bf16 ulps at max|ref| mean_err=0.07518 gflops=741
+m= 1024 n= 2050 k= 1024 max|ref|=  157.71 max_err=0.56315 = 0.563 bf16 ulps at max|ref| mean_err=0.05309 gflops=745
+m= 1024 n= 3072 k= 2048 max|ref|=  254.07 max_err=0.69898 = 0.699 bf16 ulps at max|ref| mean_err=0.07517 gflops=826
+m= 1500 n= 1000 k= 2048 max|ref|=  229.43 max_err=0.68873 = 0.689 bf16 ulps at max|ref| mean_err=0.07545 gflops=755
+m= 1500 n= 2050 k= 1024 max|ref|=  163.02 max_err=0.61402 = 0.614 bf16 ulps at max|ref| mean_err=0.05317 gflops=759
+m= 1500 n= 3072 k= 2048 max|ref|=  221.18 max_err=0.67803 = 0.678 bf16 ulps at max|ref| mean_err=0.07534 gflops=827
+worst max_err in bf16 ulps at the case max|ref|: 0.722
+21/21 cases bit-identical
+int 0 provenance: mlx-omarchy 0.32.4.dev202611020602+08e7d28 mx=0.32.4.dev202611020602+08e7d28 verified=match harness=d645e4a core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:6a33c90dab1d350f
+device: Device(gpu, 0)
+device_name: Apple M4 (G16G B1)
+matmul max|gpu-cpu|=0.00e+00 qmm max|gpu-cpu|=2.67e-05
+REOPEN_OK
+BITS_DONE

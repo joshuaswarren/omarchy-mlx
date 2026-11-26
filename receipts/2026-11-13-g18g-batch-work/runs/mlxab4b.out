@@ -1,0 +1,24 @@
+PREFLIGHT host=m6 boot=c8ea6c57-5d61-408b-8722-81e179f21a4d ko=3f192f53 icd=ee5fbac9 probe=deb886db 2026-11-13T17GPU-TIMEOUTS after=0 delta=0
+02
+submit-latency: n=1196 p50=1.12ms p99=1.28ms max=4.60ms mean=1.09ms over2x(>33.3ms)=0/1196
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit work=default 17:21:22
+probe: submit-latency: n=5039 p50=6.07ms p99=78.70ms max=112.79ms mean=7.82ms over2x(>33.3ms)=93/5039
+SUMMARY {"n": 2, "mean": 2.418, "sd": 0.126, "min": 2.292, "max": 2.544, "first5": 2.418, "last5": 2.418}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit work=20000 17:24:23
+probe: submit-latency: n=5005 p50=7.58ms p99=27.48ms max=164.02ms mean=8.71ms over2x(>33.3ms)=45/5005
+SUMMARY {"n": 3, "mean": 3.13, "sd": 0.359, "min": 2.782, "max": 3.623, "first5": 3.13, "last5": 3.13}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit work=40000 17:27:36
+probe: submit-latency: n=5010 p50=7.23ms p99=27.00ms max=213.05ms mean=8.25ms over2x(>33.3ms)=45/5010
+SUMMARY {"n": 3, "mean": 3.375, "sd": 0.461, "min": 2.978, "max": 4.021, "first5": 3.375, "last5": 3.375}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit work=default 17:30:37
+probe: submit-latency: n=5029 p50=5.96ms p99=79.07ms max=136.43ms mean=7.76ms over2x(>33.3ms)=94/5029
+SUMMARY {"n": 2, "mean": 2.429, "sd": 0.115, "min": 2.314, "max": 2.544, "first5": 2.429, "last5": 2.429}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit work=20000 17:33:38
+probe: submit-latency: n=5003 p50=7.56ms p99=27.60ms max=178.36ms mean=8.66ms over2x(>33.3ms)=45/5003
+SUMMARY {"n": 3, "mean": 3.128, "sd": 0.352, "min": 2.795, "max": 3.615, "first5": 3.128, "last5": 3.128}
+== models--mlx-community--Qwen3-4B-Instruct-2507-4bit work=40000 17:36:51
+probe: submit-latency: n=5024 p50=7.66ms p99=27.31ms max=164.55ms mean=8.42ms over2x(>33.3ms)=45/5024
+SUMMARY {"n": 3, "mean": 3.379, "sd": 0.466, "min": 3.012, "max": 4.037, "first5": 3.379, "last5": 3.379}
+fail_lines_new=0
+end 17:39:52
+rc=0

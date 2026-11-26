@@ -1,0 +1,95 @@
+SERVEAB7 serve7-g26-20261017T221855Z 22:18:55 start key g26 model mlx-community/gemma-4-26b-a4b-it-4bit weights_gib 15.0 boot BOOT kernel 7.1.12-2-12.6-sep-ARCH load1 0.39 tokens 128 reqs 3 rounds 4
+SERVEAB7 serve7-g26-20261017T221855Z 22:18:55 serve command: env PYTHONPATH=$WORK/score/gprp:$WORK/score/mlxlm-latest-deps:$WORK/serve-pkg/serve MLX_OMARCHY_ALLOW_UNPINNED_MLXLM=1 PYTHONDONTWRITEBYTECODE=1 $WORK/score/venv/bin/python -m mlx_omarchy_serve serve --offline --yes --port PORT --context 4096 --weights-gib 15.0 mlx-community/gemma-4-26b-a4b-it-4bit
+SERVEAB7 serve7-g26-20261017T221855Z 22:18:55 package: 
+SERVEAB7 serve7-g26-20261017T221855Z 22:18:55 found governors: policy0=performance policy2=performance policy6=performance 
+SERVEAB7 serve7-g26-20261017T221855Z 22:18:55 sha256 prefixes: script 7ab70a9a9ffbd050 client ee2cb55198c8c12a threads 2bef8caee53b2909
+started $WORK/sampler/rows-serve7-g26-20261017T221855Z.csv pid 2518894
+SERVEAB7 serve7-g26-20261017T221855Z 22:18:55 sampler csv $WORK/sampler/rows-serve7-g26-20261017T221855Z.csv
+SERVEAB7 serve7-g26-20261017T221855Z 22:19:10 round 1 arm S governors=schedutil, load1=0.44 port 18701 start_epoch=1792275550
+SERVEAB7 serve7-g26-20261017T221855Z 22:19:19 round 1 arm S shim line: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 serve7-g26-20261017T221855Z 22:19:19 round 1 arm S THREADS pid 2519558 total 23 util_min>=1024 12 util_min=0 11 unreadable 0 2519558:1024 2519560:0 2519561:0 2519562:0 2519563:0 2519564:0 2519565:0 2519566:0 2519567:0 2519568:0 2519569:0 2519571:0 2519572:1024 2519841:1024 2519842:1024 2519843:1024 2519844:1024 2519845:1024 2519846:1024 2519847:1024
+SERVEAB7 serve7-g26-20261017T221855Z 22:19:33 round 1 arm S req 1 rc=0 {"decode_tps": 13.6794, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.3683, "wall_short_s": 3.3504}
+SERVEAB7 serve7-g26-20261017T221855Z 22:19:46 round 1 arm S req 2 rc=0 {"decode_tps": 13.4847, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.4679, "wall_short_s": 3.3487}
+SERVEAB7 serve7-g26-20261017T221855Z 22:20:00 round 1 arm S req 3 rc=0 {"decode_tps": 13.7254, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.3428, "wall_short_s": 3.3484}
+SERVEAB7 serve7-g26-20261017T221855Z 22:20:00 round 1 arm S governors at the end: schedutil,
+SERVEAB7 serve7-g26-20261017T221855Z 22:20:00 round 1 arm S end_epoch=1792275600
+SERVEAB7 serve7-g26-20261017T221855Z 22:20:16 round 1 arm P governors=performance, load1=0.51 port 18702 start_epoch=1792275616
+SERVEAB7 serve7-g26-20261017T221855Z 22:20:22 round 1 arm P shim line: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 serve7-g26-20261017T221855Z 22:20:22 round 1 arm P THREADS pid 2522203 total 23 util_min>=1024 12 util_min=0 11 unreadable 0 2522203:1024 2522204:0 2522205:0 2522206:0 2522207:0 2522208:0 2522209:0 2522210:0 2522211:0 2522212:0 2522213:0 2522252:0 2522253:1024 2522419:1024 2522420:1024 2522421:1024 2522422:1024 2522423:1024 2522424:1024 2522425:1024
+SERVEAB7 serve7-g26-20261017T221855Z 22:20:36 round 1 arm P req 1 rc=0 {"decode_tps": 13.8998, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.2099, "wall_short_s": 3.3033}
+SERVEAB7 serve7-g26-20261017T221855Z 22:20:49 round 1 arm P req 2 rc=0 {"decode_tps": 14.0369, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.1425, "wall_short_s": 3.3034}
+SERVEAB7 serve7-g26-20261017T221855Z 22:21:03 round 1 arm P req 3 rc=0 {"decode_tps": 13.9295, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.1875, "wall_short_s": 3.2956}
+SERVEAB7 serve7-g26-20261017T221855Z 22:21:03 round 1 arm P governors at the end: performance,
+SERVEAB7 serve7-g26-20261017T221855Z 22:21:03 round 1 arm P end_epoch=1792275663
+SERVEAB7 serve7-g26-20261017T221855Z 22:21:18 round 2 arm P governors=performance, load1=0.74 port 18703 start_epoch=1792275678
+SERVEAB7 serve7-g26-20261017T221855Z 22:21:24 round 2 arm P shim line: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 serve7-g26-20261017T221855Z 22:21:24 round 2 arm P THREADS pid 2524815 total 23 util_min>=1024 12 util_min=0 11 unreadable 0 2524815:1024 2524816:0 2524817:0 2524818:0 2524819:0 2524820:0 2524821:0 2524822:0 2524823:0 2524824:0 2524825:0 2524863:0 2524864:1024 2525021:1024 2525022:1024 2525023:1024 2525024:1024 2525025:1024 2525026:1024 2525027:1024
+SERVEAB7 serve7-g26-20261017T221855Z 22:21:38 round 2 arm P req 1 rc=0 {"decode_tps": 13.8857, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.2255, "wall_short_s": 3.3119}
+SERVEAB7 serve7-g26-20261017T221855Z 22:21:51 round 2 arm P req 2 rc=0 {"decode_tps": 13.8489, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.2182, "wall_short_s": 3.2863}
+SERVEAB7 serve7-g26-20261017T221855Z 22:22:05 round 2 arm P req 3 rc=0 {"decode_tps": 13.8778, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.2158, "wall_short_s": 3.2982}
+SERVEAB7 serve7-g26-20261017T221855Z 22:22:05 round 2 arm P governors at the end: performance,
+SERVEAB7 serve7-g26-20261017T221855Z 22:22:05 round 2 arm P end_epoch=1792275725
+SERVEAB7 serve7-g26-20261017T221855Z 22:22:20 round 2 arm S governors=schedutil, load1=0.66 port 18704 start_epoch=1792275740
+SERVEAB7 serve7-g26-20261017T221855Z 22:22:27 round 2 arm S shim line: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 serve7-g26-20261017T221855Z 22:22:27 round 2 arm S THREADS pid 2527356 total 23 util_min>=1024 12 util_min=0 11 unreadable 0 2527356:1024 2527391:0 2527392:0 2527393:0 2527394:0 2527395:0 2527396:0 2527397:0 2527398:0 2527399:0 2527400:0 2527402:0 2527403:1024 2527600:1024 2527601:1024 2527602:1024 2527603:1024 2527604:1024 2527605:1024 2527606:1024
+SERVEAB7 serve7-g26-20261017T221855Z 22:22:40 round 2 arm S req 1 rc=0 {"decode_tps": 13.6543, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.3909, "wall_short_s": 3.3601}
+SERVEAB7 serve7-g26-20261017T221855Z 22:22:54 round 2 arm S req 2 rc=0 {"decode_tps": 13.2051, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.6129, "wall_short_s": 3.343}
+SERVEAB7 serve7-g26-20261017T221855Z 22:23:08 round 2 arm S req 3 rc=0 {"decode_tps": 13.3067, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.5621, "wall_short_s": 3.3477}
+SERVEAB7 serve7-g26-20261017T221855Z 22:23:08 round 2 arm S governors at the end: schedutil,
+SERVEAB7 serve7-g26-20261017T221855Z 22:23:08 round 2 arm S end_epoch=1792275788
+SERVEAB7 serve7-g26-20261017T221855Z 22:23:24 round 3 arm S governors=schedutil, load1=0.61 port 18705 start_epoch=1792275804
+SERVEAB7 serve7-g26-20261017T221855Z 22:23:30 round 3 arm S shim line: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 serve7-g26-20261017T221855Z 22:23:30 round 3 arm S THREADS pid 2529999 total 23 util_min>=1024 12 util_min=0 11 unreadable 0 2529999:1024 2530000:0 2530001:0 2530002:0 2530003:0 2530004:0 2530005:0 2530006:0 2530007:0 2530008:0 2530009:0 2530045:0 2530046:1024 2530203:1024 2530204:1024 2530205:1024 2530206:1024 2530207:1024 2530208:1024 2530209:1024
+SERVEAB7 serve7-g26-20261017T221855Z 22:23:44 round 3 arm S req 1 rc=0 {"decode_tps": 13.5954, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.4018, "wall_short_s": 3.3406}
+SERVEAB7 serve7-g26-20261017T221855Z 22:23:58 round 3 arm S req 2 rc=0 {"decode_tps": 13.7551, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.3197, "wall_short_s": 3.3405}
+SERVEAB7 serve7-g26-20261017T221855Z 22:24:11 round 3 arm S req 3 rc=0 {"decode_tps": 13.7718, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.3181, "wall_short_s": 3.3474}
+SERVEAB7 serve7-g26-20261017T221855Z 22:24:11 round 3 arm S governors at the end: schedutil,
+SERVEAB7 serve7-g26-20261017T221855Z 22:24:11 round 3 arm S end_epoch=1792275851
+SERVEAB7 serve7-g26-20261017T221855Z 22:24:27 round 3 arm P governors=performance, load1=0.65 port 18706 start_epoch=1792275867
+SERVEAB7 serve7-g26-20261017T221855Z 22:24:33 round 3 arm P shim line: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 serve7-g26-20261017T221855Z 22:24:33 round 3 arm P THREADS pid 2532565 total 23 util_min>=1024 12 util_min=0 11 unreadable 0 2532565:1024 2532566:0 2532567:0 2532568:0 2532569:0 2532570:0 2532571:0 2532572:0 2532573:0 2532574:0 2532575:0 2532651:0 2532652:1024 2532788:1024 2532789:1024 2532790:1024 2532791:1024 2532792:1024 2532793:1024 2532794:1024
+SERVEAB7 serve7-g26-20261017T221855Z 22:24:47 round 3 arm P req 1 rc=0 {"decode_tps": 13.9842, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.1743, "wall_short_s": 3.3094}
+SERVEAB7 serve7-g26-20261017T221855Z 22:25:00 round 3 arm P req 2 rc=0 {"decode_tps": 13.9812, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.1594, "wall_short_s": 3.2931}
+SERVEAB7 serve7-g26-20261017T221855Z 22:25:14 round 3 arm P req 3 rc=0 {"decode_tps": 13.9351, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.1831, "wall_short_s": 3.294}
+SERVEAB7 serve7-g26-20261017T221855Z 22:25:14 round 3 arm P governors at the end: performance,
+SERVEAB7 serve7-g26-20261017T221855Z 22:25:14 round 3 arm P end_epoch=1792275914
+SERVEAB7 serve7-g26-20261017T221855Z 22:25:29 round 4 arm P governors=performance, load1=0.75 port 18707 start_epoch=1792275929
+SERVEAB7 serve7-g26-20261017T221855Z 22:25:35 round 4 arm P shim line: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 serve7-g26-20261017T221855Z 22:25:35 round 4 arm P THREADS pid 2535175 total 23 util_min>=1024 12 util_min=0 11 unreadable 0 2535175:1024 2535176:0 2535189:0 2535190:0 2535191:0 2535192:0 2535193:0 2535194:0 2535195:0 2535196:0 2535197:0 2535217:0 2535218:1024 2535394:1024 2535395:1024 2535396:1024 2535397:1024 2535398:1024 2535399:1024 2535400:1024
+SERVEAB7 serve7-g26-20261017T221855Z 22:25:49 round 4 arm P req 1 rc=0 {"decode_tps": 13.971, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.1766, "wall_short_s": 3.3052}
+SERVEAB7 serve7-g26-20261017T221855Z 22:26:02 round 4 arm P req 2 rc=0 {"decode_tps": 13.9043, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.1967, "wall_short_s": 3.2924}
+SERVEAB7 serve7-g26-20261017T221855Z 22:26:16 round 4 arm P req 3 rc=0 {"decode_tps": 13.9888, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.1579, "wall_short_s": 3.2952}
+SERVEAB7 serve7-g26-20261017T221855Z 22:26:16 round 4 arm P governors at the end: performance,
+SERVEAB7 serve7-g26-20261017T221855Z 22:26:16 round 4 arm P end_epoch=1792275976
+SERVEAB7 serve7-g26-20261017T221855Z 22:26:31 round 4 arm S governors=schedutil, load1=0.59 port 18708 start_epoch=1792275991
+SERVEAB7 serve7-g26-20261017T221855Z 22:26:38 round 4 arm S shim line: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 serve7-g26-20261017T221855Z 22:26:38 round 4 arm S THREADS pid 2537723 total 23 util_min>=1024 12 util_min=0 11 unreadable 0 2537723:1024 2537724:0 2537725:0 2537726:0 2537727:0 2537728:0 2537729:0 2537730:0 2537731:0 2537732:0 2537733:0 2537769:0 2537770:1024 2537927:1024 2537928:1024 2537929:1024 2537930:1024 2537931:1024 2537932:1024 2537933:1024
+SERVEAB7 serve7-g26-20261017T221855Z 22:26:51 round 4 arm S req 1 rc=0 {"decode_tps": 13.6617, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.3785, "wall_short_s": 3.3515}
+SERVEAB7 serve7-g26-20261017T221855Z 22:27:05 round 4 arm S req 2 rc=0 {"decode_tps": 13.0779, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.6726, "wall_short_s": 3.332}
+SERVEAB7 serve7-g26-20261017T221855Z 22:27:19 round 4 arm S req 3 rc=0 {"decode_tps": 13.3313, "finish": "length", "n_long": 128, "n_short": 32, "text_sha16": "26437c7247eef04b", "wall_long_s": 10.5238, "wall_short_s": 3.3227}
+SERVEAB7 serve7-g26-20261017T221855Z 22:27:19 round 4 arm S governors at the end: schedutil,
+SERVEAB7 serve7-g26-20261017T221855Z 22:27:19 round 4 arm S end_epoch=1792276039
+stopped $WORK/sampler/rows-serve7-g26-20261017T221855Z.csv (499 rows)
+SERVEAB7 RESULT decode: S schedutil median 13.62 tok/s over 12 requests, per-run medians [13.68, 13.31, 13.76, 13.33] spread 3.4% | P performance median 13.93 tok/s over 12 requests, per-run medians [13.93, 13.88, 13.98, 13.97] spread 0.7% | P/S 1.023
+SERVEAB7 VERDICT by the rule registered before the run: DOCS: P/S at or below 1.05
+SERVEAB7 DIGESTS equal in all requests: 26437c7247eef04b
+SERVEAB7 round 1 arm S THREADS pid 2519558 total 23 util_min>=1024 12 util_min=0 11 unreadable 0
+SERVEAB7 round 1 arm P THREADS pid 2522203 total 23 util_min>=1024 12 util_min=0 11 unreadable 0
+SERVEAB7 round 2 arm P THREADS pid 2524815 total 23 util_min>=1024 12 util_min=0 11 unreadable 0
+SERVEAB7 round 2 arm S THREADS pid 2527356 total 23 util_min>=1024 12 util_min=0 11 unreadable 0
+SERVEAB7 round 3 arm S THREADS pid 2529999 total 23 util_min>=1024 12 util_min=0 11 unreadable 0
+SERVEAB7 round 3 arm P THREADS pid 2532565 total 23 util_min>=1024 12 util_min=0 11 unreadable 0
+SERVEAB7 round 4 arm P THREADS pid 2535175 total 23 util_min>=1024 12 util_min=0 11 unreadable 0
+SERVEAB7 round 4 arm S THREADS pid 2537723 total 23 util_min>=1024 12 util_min=0 11 unreadable 0
+SERVEAB7 round 1 arm S shim: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 round 1 arm P shim: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 round 2 arm P shim: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 round 2 arm S shim: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 round 3 arm S shim: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 round 3 arm P shim: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 round 4 arm P shim: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 round 4 arm S shim: shim: uclamp placement applied (uclamp_min=1024)
+SERVEAB7 CLOCK arm P: mean P-cluster 3036 MHz, heatpipe power 39.5 W over 185 one-second samples (whole runs, load and warm-up included)
+SERVEAB7 CLOCK arm S: mean P-cluster 2379 MHz, heatpipe power 36.9 W over 191 one-second samples (whole runs, load and warm-up included)
+SERVEAB7 serve7-g26-20261017T221855Z 22:27:20 DONE
+SERVEAB7 serve7-g26-20261017T221855Z 22:27:20 restored governors: policy0=performance policy2=performance policy6=performance 

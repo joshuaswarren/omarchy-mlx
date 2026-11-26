@@ -1,0 +1,226 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+
+// Split-K decode attention ported from the pinned ggml scalar flash-attn
+// kernel (/tmp/ggml-vulkan-u2/vulkan-shaders/flash_attn.comp with
+// flash_attn_base.glsl, Br=8 Bc=32 D_split=8 row_split=4, f16acc).
+//
+// Pinned contract, mirrored here:
+//   Q arrives as F32 and the whole workgroup stages it once, scaled, into
+//   shared f16 Qf for all rowgroups (flash_attn.comp:55,112-118,151).
+//   Softmax uses NEG_FLT_MAX_OVER_2 init and the FATTN_KQ_MAX_OFFSET rowmax
+//   bias (flash_attn.comp:163,167-168,461-477; flash_attn_base.glsl:264).
+//   Split j-range is start_j = split*split_kv/Bc,
+//   end_j = ceil(min(KV,(split+1)*split_kv)/Bc) (flash_attn_base.glsl:226-227).
+//   Scratch layout is the pinned GQA split-k store: O as
+//   [split][head][HSV], then L and M as [split][head] arrays — stored as
+//   float16_t (fp32 registers converted at the store; the merge kernel
+//   widens back to fp32 for its accumulation) so scratch allocation is
+//   halved (flash_attn.comp:659-680; reduce reads it back in
+//   flash_attn_split_k_reduce.comp:34-35,103).
+// Dispatch is (splits, HKV, 1): x selects the split (gqa_iq1 = 0 for the
+// single decode token), y selects the KV head group (flash_attn_base.glsl
+// init_indices, GQA k_num > 1 branch).
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_EXT_shader_subgroup_extended_types_float16 : require
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(constant_id = 0) const uint KV = 16;
+layout(constant_id = 1) const uint HD = 256;
+layout(constant_id = 2) const uint H = 1;
+layout(constant_id = 3) const uint HKV = 1;
+layout(constant_id = 4) const uint SCALE_BITS = 0x3f800000;
+layout(constant_id = 5) const uint SPLITS = 1;
+layout(constant_id = 6) const uint SPLIT_KV = 32;
+
+layout(set = 0, binding = 0) readonly buffer QBuf { vec4 q32[]; };
+layout(set = 0, binding = 1) readonly buffer KBuf { f16vec4 k16[]; };
+layout(set = 0, binding = 2) readonly buffer VBuf { f16vec4 v16[]; };
+layout(set = 0, binding = 3) buffer ScratchBuf { float16_t scratch[]; };
+
+const uint BC = 32u;   // pinned Bc / block_cols
+const uint D_SPLIT = 8u;   // pinned D_split
+const uint RPT = 2u;   // pinned rows_per_thread = Br / row_split
+const uint CPI = 4u;   // pinned cols_per_iter = WorkGroupSize / D_split / row_split
+const uint ITER = 8u;   // pinned cols_per_thread = Bc / cols_per_iter
+const uint BR = RPT * 4u;   // pinned Br rows per workgroup
+const uint DV = 8u;   // f16vec4 slices per thread = HSK_per_thread / 4
+const uint SGS = 32u;   // pinned SubGroupSize on the comparator GPU
+// pinned qf_stride = HSK/4 + 1 (flash_attn.comp:54)
+const uint QF_STRIDE = HD / 4u + 1u;
+// pinned NEG_FLT_MAX_OVER_2 is declared inside main, as in flash_attn.comp
+// flash_attn_base.glsl:264
+const float FATTN_KQ_MAX_OFFSET = 3.0 * 0.6931;
+
+// pinned dot_product (dot_product_funcs.glsl, non-DOT2, ACC_TYPE = float16_t)
+float16_t fa_dot(f16vec4 a, f16vec4 b, float16_t acc) {
+  return fma(a.x, b.x, fma(a.y, b.y, fma(a.z, b.z, fma(a.w, b.w, acc))));
+}
+
+shared f16vec4 Qf[BR * QF_STRIDE];
+
+void main() {
+  uint tid = gl_LocalInvocationIndex;
+  uint sg = tid / 32u;
+  uint lane = tid % 32u;
+  uint d_tid = lane % D_SPLIT;
+  uint col_tid = lane / D_SPLIT;
+  uint hk = gl_WorkGroupID.y;
+  uint split = gl_WorkGroupID.x;
+  uint nh = H / HKV;
+  uint r4 = HD / 4u;
+  float scale = uintBitsToFloat(SCALE_BITS);
+  // pinned flash_attn.comp:163
+  const float NEG_FLT_MAX_OVER_2 = uintBitsToFloat(0xFEFFFFFF);
+
+  // Stage Q once, scaled, for all rowgroups (flash_attn.comp:110-151).
+  [[unroll]] for (uint idx = 0u; idx < BR * r4; idx += 128u) {
+    uint d = (idx + tid) % r4;
+    uint r = (idx + tid) / r4;
+    bool is_in_bounds = r < BR && d < r4 && r < nh;
+    if (is_in_bounds) {
+      Qf[r * QF_STRIDE + d] = f16vec4(q32[(hk * nh + r) * r4 + d] * scale);
+    }
+  }
+  barrier();
+
+  f16vec4 ov[RPT][DV];
+  float lf[RPT];
+  float mf[RPT];
+  [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+    lf[r] = 0.0;
+    mf[r] = NEG_FLT_MAX_OVER_2;
+    [[unroll]] for (uint u = 0u; u < DV; ++u) {
+      ov[r][u] = f16vec4(0.0);
+    }
+  }
+
+  uint start_j = split * SPLIT_KV / BC;
+  uint end_j = (min(KV, (split + 1u) * SPLIT_KV) + BC - 1u) / BC;
+
+  [[dont_unroll]] for (uint j = start_j; j < end_j; ++j) {
+    float16_t sf[RPT][ITER];
+    [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+      [[unroll]] for (uint c = 0u; c < ITER; ++c) {
+        sf[r][c] = float16_t(0.0);
+      }
+    }
+
+    // Q cached per d-slice from shared Qf, K streamed per column
+    // (flash_attn.comp:300-327).
+    [[unroll]] for (uint d = 0u; d < DV; ++d) {
+      f16vec4 qc[RPT];
+      [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+        qc[r] = Qf[(RPT * sg + r) * QF_STRIDE + d * D_SPLIT + d_tid];
+      }
+      [[unroll]] for (uint c = 0u; c < ITER; ++c) {
+        uint t = j * BC + c * CPI + col_tid;
+        if (t < KV) {
+          f16vec4 kt = k16[(t * HKV + hk) * r4 + d * D_SPLIT + d_tid];
+          [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+            sf[r][c] = fa_dot(qc[r], kt, sf[r][c]);
+          }
+        }
+      }
+    }
+
+    // Reduce the D_split partials (flash_attn.comp:432-439).
+    [[unroll]] for (uint s = D_SPLIT / 2u; s > 0u; s >>= 1u) {
+      [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+        [[unroll]] for (uint c = 0u; c < ITER; ++c) {
+          sf[r][c] += subgroupShuffleXor(sf[r][c], s);
+        }
+      }
+    }
+
+    // Online softmax with the pinned constants (flash_attn.comp:459-477).
+    float16_t emf[RPT];
+    [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+      float rowmax = NEG_FLT_MAX_OVER_2;
+      [[unroll]] for (uint c = 0u; c < ITER; ++c) {
+        if (j * BC + c * CPI + col_tid < KV) {
+          rowmax = max(rowmax, float(sf[r][c]));
+        }
+      }
+      rowmax += FATTN_KQ_MAX_OFFSET;
+      float mold = mf[r];
+      mf[r] = max(rowmax, mold);
+      emf[r] = exp(float16_t(mold - mf[r]));
+      lf[r] = float(emf[r]) * lf[r];
+    }
+    [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+      [[unroll]] for (uint u = 0u; u < DV; ++u) {
+        ov[r][u] = emf[r] * ov[r][u];
+      }
+    }
+
+    // V accumulation per column (flash_attn.comp:509-536).
+    [[unroll]] for (uint c = 0u; c < ITER; ++c) {
+      uint t = j * BC + c * CPI + col_tid;
+      if (t < KV) {
+        float16_t pf[RPT];
+        [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+          pf[r] = exp(sf[r][c] - float16_t(mf[r]));
+          lf[r] += float(pf[r]);
+        }
+        [[unroll]] for (uint u = 0u; u < DV; ++u) {
+          f16vec4 vt = v16[(t * HKV + hk) * r4 + u * D_SPLIT + d_tid];
+          [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+            ov[r][u] += f16vec4(pf[r]) * vt;
+          }
+        }
+      }
+    }
+  }
+
+  // Reduce rowmax/L/O across the rowgroup (flash_attn.comp:544-654,
+  // SubGroupSize > 0 and row_split > 1 path).
+  [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+    float rowmax = mf[r];
+    [[unroll]] for (uint s = D_SPLIT; s < SGS; s <<= 1u) {
+      rowmax = max(rowmax, subgroupShuffleXor(rowmax, s));
+    }
+    float mold = mf[r];
+    mf[r] = max(rowmax, mold);
+    float16_t emf = exp(float16_t(mold - mf[r]));
+    lf[r] = float(emf) * lf[r];
+    [[unroll]] for (uint s = D_SPLIT; s < SGS; s <<= 1u) {
+      lf[r] += subgroupShuffleXor(lf[r], s);
+    }
+    [[unroll]] for (uint u = 0u; u < DV; ++u) {
+      f16vec4 value = emf * ov[r][u];
+      [[unroll]] for (uint s = D_SPLIT; s < SGS; s <<= 1u) {
+        value += subgroupShuffleXor(value, s);
+      }
+      ov[r][u] = value;
+    }
+  }
+
+  // Store with the pinned GQA split-k layout (flash_attn.comp:659-680):
+  // O at [split][head][HD], L at lm_base + head, M at lm_base + H + head.
+  [[unroll]] for (uint r = 0u; r < RPT; ++r) {
+    uint qr = RPT * sg + r;
+    uint head = hk * nh + qr;
+    if (qr < nh && head < H) {
+      uint rowbase = (split * H + head) * HD;
+      uint lm = SPLITS * H * HD + split * 2u * H;
+      if (col_tid == 0u) {
+        [[unroll]] for (uint u = 0u; u < DV; ++u) {
+          uint oi = rowbase + 4u * (u * D_SPLIT + d_tid);
+          scratch[oi + 0u] = ov[r][u].x;
+          scratch[oi + 1u] = ov[r][u].y;
+          scratch[oi + 2u] = ov[r][u].z;
+          scratch[oi + 3u] = ov[r][u].w;
+        }
+      }
+      if (tid % 32u == 0u) {
+        scratch[lm + head] = float16_t(lf[r]);
+        scratch[lm + H + head] = float16_t(mf[r]);
+      }
+    }
+  }
+}

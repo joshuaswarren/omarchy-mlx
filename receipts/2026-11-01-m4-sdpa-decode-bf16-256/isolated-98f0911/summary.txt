@@ -1,0 +1,4 @@
+1 dmain:    SdpaDecodeNativeBF16Hd128  n=1200   total=94.543ms   share=  6.8% mean=78.8us    p50=78.6us
+2 dp320:    SdpaDecodeNativeBF16Hd128  n=1200   total=87.592ms   share=  6.4% mean=73.0us    p50=72.2us
+3 dp320:    SdpaDecodeNativeBF16Hd128  n=1240   total=90.731ms   share=  6.4% mean=73.2us    p50=72.2us
+4 dmain:    SdpaDecodeNativeBF16Hd128  n=1320   total=105.550ms  share=  6.8% mean=80.0us    p50=79.5us

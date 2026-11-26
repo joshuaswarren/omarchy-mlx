@@ -1,0 +1,23 @@
+{
+  "loadavg": "0.30 0.12 0.09 2/332 1881",
+  "barrier_floor_ms": 0.176,
+  "sdpa_sliced_view_L33_ms": 0.42,
+  "sdpa_contiguous_L33_ms": 0.39,
+  "sdpa_mha_no_gqa_L33_ms": 0.399,
+  "matmul_attn_L33_ms": 0.365,
+  "sdpa_sliced_view_L93_ms": 0.531,
+  "sdpa_contiguous_L93_ms": 0.47,
+  "sdpa_mha_no_gqa_L93_ms": 0.469,
+  "matmul_attn_L93_ms": 0.413,
+  "sdpa_sliced_view_L200_ms": 0.649,
+  "sdpa_contiguous_L200_ms": 0.538,
+  "sdpa_mha_no_gqa_L200_ms": 0.541,
+  "matmul_attn_L200_ms": 0.453,
+  "kv_slice_update_ms": 0.222,
+  "kv_concat_L93_ms": 0.255,
+  "argpartition_top50_ms": 1.063,
+  "sort_full_ms": 0.757,
+  "topk_ms": 0.76,
+  "categorical_ms": 3.071,
+  "argmax_ms": 0.197
+}

@@ -1,0 +1,625 @@
+{
+  "suite_sha256": "5cce5bb75b02b3c7815c5e7ecc48212e51ffc5168af17d099f95fa51985a6ebb",
+  "chat_model": "qwen3.8-2b-4bit",
+  "prompts": [
+    {
+      "id": "v3-01",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 35.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# 🏞️ Winter Cabin Closing Checklist\n\n## Before You Leave\n\n- [ ] **Check the weather forecast** for the coming week (snow, wind, temperature).\n- [ ] **Check your propane tank** for leaks and ensure it's topped off.\n- [ ] **Turn off all exterior lights** (solar panels, porch lights).\n- [ ] **Close and secure all windows**, including sliding glass doors.\n- [ ] **Turn off the main water valve** and shut off the water supply to the house.\n- [ ] **Close all exterior doors**, including garage and shed doors.\n- [ ] **Turn off the main electrical breaker** (if applicable).\n\n## Inside the Cabin\n\n- [ ] **Turn off all interior lights**, including vanity and bathroom bulbs.\n- [ ] **Close all interior doors** (bathroom, bedroom, etc.).\n- [ ] **Turn off the main water supply** inside the cabin.\n- [ ] **Close all interior doors** and secure any open windows or vents.\n- [ ] **Turn off the main gas supply** if applicable (for stoves, heaters).\n- [ ] **Close all exterior doors** and secure any open windows or vents.\n\n## Outside the Cabin\n\n- [ ] **Close all exterior doors** and secure any open windows or vents.\n- [ ] **Turn off the main water supply** outside (if applicable).\n- [ ] **Close all exterior doors** and secure any open windows or vents.\n- [ ] **Turn off the main gas supply** outside (if applicable).\n- [ ] **Close all exterior doors** and secure any open windows or vents.\n\n## Storage & Maintenance\n\n- [ ] **Store all outdoor furniture** in a covered area or garage.\n- [ ] **Store any garden tools, plants, and outdoor items** outside.\n- [ ] **Clear all trash** from the cabin (sewage, composting toilets).\n- [ ] **Clean and dry all exterior surfaces** (siding, deck, roof) to prevent mold/mildew.\n- [ ] **Clean and dry all interior surfaces** (walls, floors) to prevent mold/mildew.\n- [ ] **Store all outdoor tools** in a covered area or garage.\n- [ ] **Clear and dry all interior surfaces** (walls, floors) to prevent mold/mildew.\n\n## Final Steps\n\n- [ ] **Turn off all exterior lights** and unplug any remaining devices.\n- [ ] **Check for any leaks** in the plumbing system (especially around exterior doors).\n- [ ] **Leave a small amount of water** in the toilet and sink to prevent freezing.\n- [ ] **Leave a small amount of water** in the shower and tub to prevent freezing.\n- [ ] **Leave a small amount of water** in the toilet and sink to prevent freezing.\n- [ ] **Leave a small amount of water** in the shower and tub to prevent freezing.\n- [ ] **Lock all exterior doors** before leaving.\n\n---\n\n*Note: Always check your specific cabin's manual for any unique requirements (e.g., snow removal systems, special shut-off valves).*"
+    },
+    {
+      "id": "v3-02",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 37.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# 🍂 Thanksgiving Dinner To-Do List (12 Guests)\n\n## Planning & Prep\n- [ ] Purchase or order Thanksgiving turkey (or plan to buy one)\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n- [ ] Buy cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n- [ ] Buy cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n- [ ] Buy cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides & Appetizers\n- [ ] Buy or order cranberry sauce and stuffing\n- [ ] Purchase or order gravy (or make your own)\n\n## Sides &"
+    },
+    {
+      "id": "v3-03",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 20.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# How to Replace a Bike Inner Tube\n\n## 1. Prepare Your Tools\n- New inner tube (check size and type)\n- Inner tube wrench or a small screwdriver with a flathead bit\n- Needle-nose pliers (optional)\n\n## 2. Remove the Old Tube\n1. **Deflate** the tube completely (if it's a puncture) or just remove it from the frame.\n2. **Unclip** the inner tube from the rim:\n   - For a **saddlebag**: unclip the clip.\n   - For a **drop-out** (mountain bike): remove the drop-out bolt with your wrench.\n   - For a **drop-in** (road bike): remove the drop-out bolt with your wrench.\n3. **Pull out** the old tube from the frame.\n\n## 3. Inspect and Clean\n- Check for any remaining debris or damage on the rim.\n- Wipe down the rim with a clean cloth to remove old grease or dirt.\n\n## 4. Install the New Tube\n1. **Insert** the new inner tube into the rim, making sure it's fully seated and not twisted.\n2. **Reattach** the drop-out or saddlebag clip.\n\n## 5. Inflate and Test\n- Inflate to your normal pressure.\n- Ride a few miles or spin the wheel to check for leaks and ensure everything is secure.\n\n## 6. Replace the Tire\n- Remove the old tire, clean the rim, and reinstall a new inner tube.\n\n## 7. Reassemble\n- Put the wheel back on your bike and check all connections.\n\n---\n\n**Tip:** If you're unsure about any step, it's best to consult your bike's manual or a local mechanic."
+    },
+    {
+      "id": "v3-04",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 31.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Packing List: 3-Day Business Trip to Chicago\n\n## 📦 General Essentials\n- [ ] Business travel card / ID\n- [ ] Passport (if applicable) or driver's license with photo\n- [ ] Printed itinerary / meeting schedule\n- [ ] Laptop & charger (and power adapter if needed)\n- [ ] Portable charger / power bank\n- [ ] Notebook & pen (for meetings or notes)\n\n## 👔 Business Wear\n- [ ] Dress code appropriate for the company's culture (e.g., business casual, formal)\n- [ ] Dress shoes or clean sneakers for walking around the city\n- [ ] Jacket / coat (Chicago is known for its cold winters)\n- [ ] Scarf or light sweater\n- [ ] Belt and tie / blazer (for meetings)\n\n## 📋 Documents & Office Supplies\n- [ ] Company laptop and charger\n- [ ] Laptop bag or briefcase\n- [ ] Notebook and pen (for meetings)\n- [ ] Company ID card / badge\n- [ ] Meeting agenda or schedule\n- [ ] Business cards (if applicable)\n\n## 🧴 Personal Items\n- [ ] Comfortable shoes / walking shoes (Chicago has many sidewalks)\n- [ ] Water bottle or reusable hydration pack\n- [ ] Hand sanitizer and tissues\n- [ ] Small first aid kit (band-aids, antiseptic wipes)\n- [ ] Whistle or small signal device for emergencies\n\n## 🧳 Chicago-Specific Items\n- [ ] **Warm layers** – Chicago is known for its cold winters; bring a coat, scarf, and gloves\n- [ ] **Sunglasses** – Chicago has overcast skies; sunglasses are a must\n- [ ] **Umbrella or rain jacket** – Chicago is known for its frequent rain; a compact umbrella works well\n- [ ] **Sneakers** – Chicago has many sidewalks and parks; comfortable walking shoes are essential\n- [ ] **Luggage** – Chicago is a large city with many suitcases; pack enough for the duration\n- [ ] **Power adapter** – Chicago uses a different voltage than the US; bring an appropriate adapter\n- [ ] **Travel pillow** – Chicago has many long walks and meetings; a good travel pillow is helpful\n\n## 📱 Digital & Connectivity\n- [ ] Smartphone and charger\n- [ ] Phone charger (and power bank)\n- [ ] Any required software or apps for work\n\n## 📋 Miscellaneous\n- [ ] Cash (in case of any unexpected expenses)\n- [ ] Emergency contact list for the team\n- [ ] Local area code (for emergencies)\n- [ ] Any travel insurance documents\n\n---\n\n**Pro Tip:** Chicago is a large city with many sidewalks and public transit options. Pack extra shoes and comfortable walking gear, as you'll likely be on your feet for most of the trip."
+    },
+    {
+      "id": "v3-05",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 39.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Electric vs. Gas Stoves: Cost, Speed & Maintenance\n\n## 1. Upfront Cost\n\n| Aspect | Electric Stove | Gas Stove |\n|--------|---------------|-----------|\n| **Range** | $150–$400 (small) to $800+ (large) | $150–$400 (small) to $800+ (large) |\n| **Oven** | $150–$400 | $200–$600 |\n| **Hood** | $150–$400 (small) to $800+ (large) | $150–$400 (small) to $800+ (large) |\n| **Total** | ~$1,500–$2,500 | ~$3,000–$4,500 |\n\n**Winner:** Electric stoves are generally **10–20% cheaper upfront**, especially for smaller units.\n\n---\n\n## 2. Cooking Speed & Performance\n\n| Aspect | Electric Stove | Gas Stove |\n|--------|---------------|-----------|\n| **Heat output** | Lower (typically 1,000–2,500 BTU) | Higher (typically 3,000–10,000+ BTU) |\n| **Heating time** | Slower; takes 5–10+ minutes to reach target temp | Faster; heats in 2–4 minutes |\n| **Heat retention** | Poor; heat dissipates quickly | Excellent; retains heat well |\n| **Smoother results** | Less ideal for delicate sauces or searing | Superior for browning, sizzling, and precise control |\n| **Flavor development** | Can be less nuanced; more \"flat\" results | Better for complex flavors and searing |\n| **Safety** | No open flame; no risk of burns from hot surfaces | Open flame; requires caution with heat |\n\n**Winner:** Gas stoves are **significantly faster and more versatile**, especially for searing, browning, and rapid heating.\n\n---\n\n## 3. Maintenance & Durability\n\n| Aspect | Electric Stove | Gas Stove |\n|--------|---------------|-----------|\n| **Cleaning** | Easy to clean; no open flame to worry about | Requires cleaning around burners and valves |\n| **Leakage risk** | None (no gas) | Risk of gas leaks; requires regular checks |\n| **Wear & tear** | Minimal (no moving parts) | Burners, valves, and regulators wear out over time |\n| **Safety** | No fire risk; no gas to worry about | Requires safety checks (leaks, pressure) |\n| **Cost of repairs** | Low; simple electrical issues | Higher; gas leaks, valve failures, burner damage |\n| **Condensation** | Can cause water spots on glass; needs drying | No condensation issues (no moisture) |\n\n**Winner:** Electric stoves are **easier to maintain and safer**, while gas stoves require more regular maintenance.\n\n---\n\n## Summary Comparison Table\n\n| Category | Electric Stove | Gas Stove"
+    },
+    {
+      "id": "v3-06",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 37.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Kindle vs. Paperback: A Practical Comparison\n\n## Price\n\n| Aspect | Kindle | Paperback |\n|--------|--------|-----------|\n| **Entry cost** | ~$9.99 (eBook) / ~$15–20 (book) | ~$14.99 |\n| **Long-term cost** | ~$0.50–$1.00 per read (eBook) / ~$2–$4 per book | ~$1.00–$3.00 per read / ~$4–$6 per book |\n| **Discounts** | Often 50%+ on used Kindle e-books; ~$1–$2 for new | Rarely discounted; resale value is low |\n| **Price advantage** | ~$1–$3 cheaper per read over time | Slightly more expensive upfront, but no long-term savings |\n\n**Winner:** Kindle is cheaper over time. The $1–$3 difference per read compounds quickly with thousands of reads.\n\n---\n\n## Portability\n\n| Aspect | Kindle | Paperback |\n|--------|--------|-----------|\n| **Weight** | ~10–25 g (eBook) / ~300 g (book) | ~10–25 g (eBook) / ~300 g (book) |\n| **Size** | 6–8 mm thick; ~10 cm × 15 cm | ~2.5 cm × 8 cm (slightly larger) |\n| **Battery** | ~10–24 hours; 5–8 pages/day typical | ~3–6 hours; ~10–20 pages/day typical |\n| **Portability** | Excellent; no weight penalty; easy to carry anywhere | Good; slightly heavier but still very portable |\n\n**Winner:** Kindle is essentially weightless. Paperbacks are only ~10% heavier and still very portable.\n\n---\n\n## Eye Strain\n\n| Aspect | Kindle | Paperback |\n|--------|--------|-----------|\n| **Screen** | ~10–24 hours/day; 5–8 pages per day | ~3–6 hours/day; ~10–20 pages per day |\n| **Brightness** | Brighter, more consistent; less glare from paper | Dimmer; paper reflects ambient light |\n| **Color** | Vibrant, consistent across devices | Can be duller; paper color varies by lighting |\n| **Distraction** | Easy to skip ahead, adjust speed; no page turning | Must turn pages constantly; more physical effort |\n| **Eye strain** | Lower (less time spent reading) / Higher if used long hours | Higher; more physical effort, less screen brightness |\n\n**Winner:** Kindle is generally better for eye strain. Less time spent reading = less strain. Brighter screen and consistent brightness help too.\n\n---\n\n## Summary Table\n\n| Category | Kindle | Paperback |\n|----------|--------|-----------|\n| **Price** | ~$1–$3 cheaper per read over time | Slightly more expensive upfront |\n| **Portability** | Excellent (weightless) | Good (~10% heavier) |\n| **Eye strain** | Better (brighter screen,"
+    },
+    {
+      "id": "v3-07",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 18.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Top 3 US Mobile Carriers: Coverage, Price & Perks\n\n| Carrier | Coverage Area | Typical Price (Monthly) | Key Perks / Features |\n|---------|---------------|------------------------|----------------------|\n| **T-Mobile** | Nationwide (all major markets) | ~$50–$79 / month* | • 12 months free data (paid plans) <br>• Free unlimited texting <br>• 50% off data on mobile plans <br>• No monthly minimums |\n| **Verizon** | Nationwide (all major markets) | ~$50–$79 / month* | • 12 months free data (paid plans) <br>• Free unlimited texting <br>• 50% off data on mobile plans <br>• No monthly minimums |\n| **AT&T** | Nationwide (all major markets) | ~$50–$79 / month* | • 12 months free data (paid plans) <br>• Free unlimited texting <br>• 50% off data on mobile plans <br>• No monthly minimums |\n\n\\*Prices vary by plan and location. *T-Mobile, Verizon, and AT&T are the three largest U.S. carriers by subscriber base.*\n\n**Key Notes:**\n- All three offer **12 months free data** on their standard mobile plans.\n- All three offer **free unlimited texting**.\n- All three offer a **50% discount** on mobile data plans.\n- T-Mobile, Verizon, and AT&T are the three largest carriers by subscriber count in the U.S."
+    },
+    {
+      "id": "v3-08",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 40.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Renting vs. Buying a Home Over Five Years: Side-by-Side Comparison\n\n## 🏠 Renting (5-Year Timeline)\n\n| Aspect | What Happens |\n|--------|-------------|\n| **Upfront Cost** | Renting a 1-bedroom apartment: ~$2,500–$3,500/month |\n| **Monthly Cost** | ~$2,500–$3,500/month (rent + utilities) |\n| **Total 5-Year Cost** | ~$140,000–$175,000 (rent payments only) |\n| **Down Payment** | $0–$1,500 (no down payment needed) |\n| **Interest** | $0–$1,500/year (no mortgage) |\n| **Maintenance** | $200–$500/month (utilities, repairs) |\n| **Property Taxes** | $1–$3/month (varies by location) |\n| **HOOD Fees** | $1–$3/month (varies by location) |\n| **HOOD Insurance** | $1–$3/month (varies by location) |\n| **HOOD Maintenance** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month (varies by location) |\n| **HOOD Reserve** | $1–$3/month ("
+    },
+    {
+      "id": "v3-09",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 29.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Saturday Garage Cleanout Schedule (Starting at 8:00 AM)\n\n## Morning Prep & Setup\n- **8:00 – 8:30 AM** – Set up a large trash bag, grab tools (screwdrivers, wrenches, tape measure), and lay out a checklist.\n- **8:30 – 9:00 AM** – Clear off the garage floor. Remove large items (furniture, tools) and set them aside in a designated area.\n- **9:00 – 10:30 AM** – Sweep and vacuum the entire garage floor. Remove loose debris, dust, and small items.\n\n## Mid-Morning\n- **10:30 – 12:00 PM** – Remove small items (rings, coins, screws, loose hardware). Place them in a labeled bin.\n- **12:00 – 1:30 PM** – Remove larger items (boxes, bins, tools). Organize them by category.\n- **1:30 – 2:00 PM** – Wash and dry your hands.\n\n## Afternoon\n- **2:00 – 3:30 PM** – Remove hanging items (photos, mirrors, artwork). Hang them back up.\n- **3:30 – 4:30 PM** – Remove small items from shelves and drawers.\n- **4:30 – 5:00 PM** – Remove any remaining loose items.\n\n## Evening\n- **5:00 – 6:30 PM** – Sort through remaining items. Keep what you want, donate or discard the rest.\n- **6:30 – 7:00 PM** – Clean up the workspace.\n- **7:00 – 8:00 PM** – Put everything back into its proper place.\n- **8:00 – 9:00 PM** – Final wipe-down of the garage floor.\n\n## Notes\n- Keep a **trash bag** ready at all times to avoid cluttering the garage.\n- Use a **labeled bin** for small items so you don't lose them later.\n- If the garage is very large, consider dividing it into sections (e.g., \"tools,\" \"hanging items,\" \"small stuff\").\n\nLet me know if you'd like a version for a smaller garage or one that includes donation/dealing with unwanted items."
+    },
+    {
+      "id": "v3-10",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 42.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# 6-Month Spanish Roadmap\n\n## 📅 Overview: 12 Months Total (4 months per month)\n\n---\n\n### **Month 1: Foundations & Survival**\n- **Goal:** Build core vocabulary, understand basic grammar, and communicate in daily life.\n\n| Week | Focus |\n|------|-------|\n| 1–2 | Greetings, introductions, basic needs (hello, thank you, please, etc.) |\n| 3–4 | Numbers, days of the week, family members, basic verbs (ser/estar) |\n\n**Key activities:**\n- 10–15 hours of daily study (30 min/day)\n- Learn 20–40 new words per week\n- Practice speaking with a partner or language exchange\n\n---\n\n### **Month 2: Core Vocabulary & Grammar**\n- **Goal:** Expand to everyday topics, understand basic sentence structure.\n\n| Week | Focus |\n|------|-------|\n| 5–6 | Family, food, shopping, numbers (100–200) |\n| 7–8 | Colors, body parts, numbers (100–200), basic verbs (ir/ir a + infinitive) |\n| 9–10 | Time, weather, numbers (200–300), basic verbs (hacer + infinitive) |\n| 11–12 | Numbers (300–400), basic verbs (tener + infinitive) |\n\n**Key activities:**\n- 15–20 hours of daily study (30 min/day)\n- Learn 40–60 new words per week\n- Start using Spanish in real-life situations (ordering food, asking for directions)\n\n---\n\n### **Month 3: Conversation & Daily Life**\n- **Goal:** Start talking about daily routines, hobbies, and personal life.\n\n| Week | Focus |\n|------|-------|\n| 13–14 | Hobbies, daily routines, family members (names, ages) |\n| 15–16 | Hobbies, daily routines, family members (names, ages) — expand to 50 words |\n| 17–18 | Hobbies, daily routines, family members (names, ages) — expand to 70 words |\n| 19–20 | Hobbies, daily routines, family members (names, ages) — expand to 90 words |\n\n**Key activities:**\n- 15–20 hours of daily study (30 min/day)\n- Practice speaking with a language partner or tutor\n- Start recording yourself and listening to your own practice\n\n---\n\n### **Month 4: Travel & Social Topics**\n- **Goal:** Prepare for travel, talk about social situations and future plans.\n\n| Week | Focus |\n|------|-------|\n| 21–22 | Travel, hotels, directions, numbers (300–400) |\n| 23–24 | Travel, hotels, directions, numbers (300–400) — expand to 50 words |\n| 25–26 | Travel, hotels, directions, numbers (30"
+    },
+    {
+      "id": "v3-11",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 37.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# A Typical Wedding Day Timeline\n\n## Morning: Getting Ready & Getting Dressed\n\n**06:30 – 07:00 AM**\n- Hair and makeup artist arrives at the bridal suite.\n- Bride gets ready in the bridal suite (often with a maid of honor or bridesmaid assisting).\n- Bride changes into her wedding dress.\n\n**07:30 – 08:00 AM**\n- Bride and groom get dressed.\n- Groom's outfit is often finalized around 07:30 AM.\n\n**08:15 – 09:00 AM**\n- Bride and groom leave the bridal suite.\n- They may have a final look together in front of the mirror.\n\n**09:30 – 10:00 AM**\n- The couple arrives at the venue.\n- They may have a final walk-through with the wedding party (bridesmaids, groomsmen).\n\n**10:30 – 11:00 AM**\n- The wedding party arrives at the venue.\n\n## Early Morning: Getting Ready for the Ceremony\n\n**10:45 – 11:30 AM**\n- Bride and groom leave the venue.\n\n**12:00 – 12:30 PM**\n- Bride and groom leave the venue.\n\n## The Ceremony\n\n**12:30 – 12:45 PM**\n- Groom enters the church or ceremony venue.\n\n**12:45 – 13:00 PM**\n- Groom and bride exchange vows.\n\n**13:00 – 13:15 PM**\n- Groom and bride exchange rings.\n\n**13:15 – 13:45 PM**\n- Groom and bride kiss.\n\n**13:45 – 14:00 PM**\n- Groom and bride leave the ceremony venue.\n\n## After the Ceremony: Reunion & Reception\n\n**14:00 – 15:30 PM**\n- Bride and groom leave the ceremony venue.\n\n**15:30 – 16:00 PM**\n- Bride and groom leave the venue.\n\n**16:00 – 17:30 PM**\n- Bride and groom leave the venue.\n\n**18:00 – 20:00 PM**\n- Reception begins.\n\n## Late Afternoon: The Send-off\n\n**21:00 – 23:00 PM (or until the ceremony is complete)**\n- Bride and groom leave the venue.\n\n**23:00 – 01:00 AM (or until the ceremony is complete)**\n- Bride and groom leave the venue.\n\n**01:00 – 02:00 AM (or until the ceremony is complete)**\n- Bride and groom leave the venue.\n\n**02:00 – 03:00 AM (or until the ceremony is complete)**\n- Bride and groom leave the venue.\n\n**03:00 – 04:00 AM (or until the ceremony is complete)**\n- Bride and groom leave the venue.\n\n**"
+    },
+    {
+      "id": "v3-12",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 5.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Friday Plan\n\n| Time | Activity |\n|------|----------|\n| 7:00 PM | Dinner with Sam |\n| 8:30 PM | Dentist appointment |\n| 10:00 PM | Team sync meeting |\n| 12:00 PM | Gym session |\n\n**Total time:** ~7 hours (including travel and buffer)"
+    },
+    {
+      "id": "v3-13",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        "Facts (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 37.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Key Facts About Your 2019 Honda Civic\n\n## Vehicle Overview\n- **Model:** 2019 Honda Civic (Sedan)\n- **Mileage:** ~48,000 miles\n- **Last Oil Change:** June (approximately 6 months ago)\n\n## Engine & Performance\n| Item | Detail |\n|------|--------|\n| **Engine** | 2.0L Turbocharged 4-cylinder (1.5L in base, 2.0L in SVT) |\n| **Horsepower** | ~185 hp (base), up to 207 hp (SVT) |\n| **Torque** | ~186 lb-ft (base), up to 207 lb-ft (SVT) |\n| **Transmission** | CVT or Manual (depending on trim) |\n\n## Fuel Economy (Estimates)\n- **City:** ~30–34 mpg\n- **Highway:** ~38–42 mpg\n\n## Safety (Honda Sensing)\n- **Pre-Collision System** – Automatic emergency braking with pedestrian detection\n- **Automatic High-Beam Headlights** – Adjusts beam based on driver's view\n- **Dynamic Radar Cruise Control** – Maintains safe following distance\n- **Lane Departure Warning** – Alerts if vehicle drifts from lane\n- **Blind Spot Monitoring** – Warns of vehicles in blind spots\n\n## Interior & Comfort\n- **Seating:** 5 front seats (3 rows), 7-seat option available\n- **Infotainment:** HondaLink touchscreen with Apple CarPlay/Android Auto\n- **Climate Control:** Dual-zone automatic (2019+ models)\n- **Power Steering** – Power steering with variable assist\n\n## Maintenance Notes\n- Oil change performed in June (last service)\n- **Next recommended oil change:** ~6 months or ~12,000 miles (whichever comes first)\n- **Brake pads:** Likely still good (~48k miles is within typical wear range)\n- **Tires:** Check tread depth (suggested replacement around 6,000–7,000 miles)\n\n## Common Maintenance Items\n- [ ] Brake fluid flush (every 2 years or ~36,000 miles)\n- [ ] Tire rotation (every 10k miles or ~6 months)\n- [ ] Cabin air filter replacement (~2 years)\n- [ ] Windshield washer fluid flush (every 3 years)\n\n## Summary\nThis is a well-maintained Civic with ~48k miles and oil changed in June. It's a reliable, fuel-efficient sedan that Honda Sensing safety features make particularly attractive for daily commuting."
+    },
+    {
+      "id": "v3-14",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        "Facts (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 2.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "Here are the key points from that statement:\n\n- The meeting was moved to Thursday.\n- The budget is frozen.\n- Dana leads the redesign effort."
+    },
+    {
+      "id": "v3-15",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        "Facts (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 10.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "Here are three quick facts about the Eiffel Tower:\n\n1. **Height** – It is 324 meters (1,063 feet) tall and was the tallest structure in the world from 1889 to 1931.\n\n2. **Weight** – It weighs approximately 10,456 metric tons (23,038 short tons).\n\n3. **Design** – Designed by Gustave Eiffel and completed in 1889, it was originally built as a temporary structure to host the World's Fair in Paris."
+    },
+    {
+      "id": "v3-16",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 26.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Zoom vs Google Meet Comparison\n\n## Key Differences\n\n| Aspect | Zoom | Google Meet |\n|--------|------|-------------|\n| **Platform** | Standalone app (desktop, mobile) | Built into Google Workspace |\n| **Cost** | Free tier available; paid plans exist | Included with Google Workspace (free for most) |\n| **Recording** | Built-in recording & export | Built-in recording (free tier) |\n| **Screen Sharing** | Full screen sharing | Screen sharing included |\n| **Whiteboard** | Built-in whiteboard | Built-in whiteboard |\n| **Breakout Rooms** | Yes (paid) / Free for free tier | Built-in breakout rooms |\n| **Customization** | Custom branding, custom URLs | Branding via Google Workspace |\n| **Integration** | Standalone app | Integrated with Gmail, Drive, Calendar |\n| **Mobile App** | Separate app (iOS/Android) | Built into Google Workspace |\n\n## Key Takeaways\n- **Zoom** is best for large meetings, hybrid events, and when you need a standalone app.\n- **Google Meet** is best for teams already using Google Workspace, with built-in breakout rooms and whiteboards.\n\n---\n\n# Agenda for Our First Call\n\n**Topic:** Kick-off & Project Overview\n**Duration:** 60 minutes (30 min meeting + 30 min Q&A)\n\n---\n\n## 1. Welcome & Introductions (5 minutes)\n- Brief introductions of all participants\n- Set ground rules for discussion\n\n## 2. Project Background (10 minutes)\n- Overview of the project's purpose and goals\n- High-level timeline and key milestones\n\n## 3. Current Status & Challenges (10 minutes)\n- What's working well so far\n- Identify current challenges and blockers\n\n## 4. Next Steps & Action Plan (10 minutes)\n- Break down tasks into actionable items\n- Assign owners and deadlines\n\n## 5. Q&A / Wrap-up (10 minutes)\n- Open floor for questions and feedback\n\n---\n\n## Notes:\n- I'd recommend using **Zoom** if you're not already on Google Workspace (for breakout rooms, whiteboard, and custom branding).\n- I'd recommend **Google Meet** if you're already in a Google Workspace environment (for seamless integration and free recording on the free tier).\n\nWould you like me to tailor this agenda further based on your specific project context?"
+    },
+    {
+      "id": "v3-17",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 35.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# 🌱 Spring Garden Prep Checklist & Planting Timeline\n\n## 📅 Month-by-Month Planning (Starting Late Spring)\n\n---\n\n### **Late March – Early April**\n- [ ] Clear and aerate soil (remove dead leaves, debris)\n- [ ] Apply a light layer of organic mulch to protect soil from frost\n- [ ] Start sowing hardy annuals: **daffodils, tulips, crocuses**\n- [ ] Plant perennials: **lilacs, hydrangeas, asters**\n- [ ] Start sowing cool-season crops: **lettuce, spinach, kale, chard**\n- [ ] Start sowing root vegetables: **carrots, radishes, beets**\n\n### **Mid April – Late May**\n- [ ] Plant tender perennials: **roses, peonies, hostas**\n- [ ] Plant spring bulbs: **tulips, daffodils, crocuses**\n- [ ] Plant spring vegetables: **peas, beans, peas**\n- [ ] Start sowing cool-season crops: **broccoli, cauliflower, kale**\n- [ ] Plant spring vegetables: **peppers, tomatoes, eggplant**\n\n### **Late May – Early June**\n- [ ] Plant summer vegetables: **peppers, tomatoes, eggplant**\n- [ ] Plant tender perennials: **roses, peonies, hostas**\n- [ ] Plant summer vegetables: **peppers, tomatoes, eggplant**\n- [ ] Start sowing cool-season crops: **broccoli, cauliflower, kale**\n- [ ] Plant summer vegetables: **peppers, tomatoes, eggplant**\n\n### **Late June – Early July**\n- [ ] Plant summer vegetables: **peppers, tomatoes, eggplant**\n- [ ] Plant tender perennials: **roses, peonies, hostas**\n- [ ] Plant summer vegetables: **peppers, tomatoes, eggplant**\n- [ ] Start sowing cool-season crops: **broccoli, cauliflower, kale**\n\n### **Late July – Early August**\n- [ ] Plant summer vegetables: **peppers, tomatoes, eggplant**\n- [ ] Plant tender perennials: **roses, peonies, hostas**\n- [ ] Plant summer vegetables: **peppers, tomatoes, eggplant**\n- [ ] Start sowing cool-season crops: **broccoli, cauliflower, kale**\n\n### **Late August – Early September**\n- [ ] Plant fall vegetables: **carrots, radishes, beets**\n- [ ] Plant tender perennials: **roses, peonies, hostas**\n- [ ] Plant fall vegetables: **carrots, radishes, beets**\n\n### **Late September – Early October**\n- [ ] Plant fall vegetables: **carrots, radishes, beets**\n- [ ] Plant tender perennials: **roses, peonies, hostas**\n- [ ] Plant fall vegetables: **carrots, radishes, beets**\n\n### **Late October – Early November**\n- [ ] Plant winter vegetables: **turnips, parsnips, leeks**\n- [ ] Plant tender perennials: **ros"
+    },
+    {
+      "id": "v3-18",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 7.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Today's Standup Action Items\n\n| # | Person | Action | Priority |\n|---|--------|--------|----------|\n| 1 | Priya | Fix the login bug | High |\n| 2 | Omar | Update documentation | Medium |\n| 3 | Me (You) | Review the PR | High |\n\n**Next steps:**\n- Priya: Submit a fix for the login bug.\n- Omar: Share the updated docs once it's ready.\n- Me (You): Review the PR and provide feedback or merge if approved."
+    },
+    {
+      "id": "v3-19",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 15.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Why Cats Purr\n\nCats purr for a variety of reasons, and the most widely accepted scientific explanation is that it's a **communication behavior** used to convey information about their physical and emotional state.\n\n## Primary Reasons for Purring\n\n- **Contentment** – A common purr is a sign of comfort and happiness.\n- **Relaxation** – Cats often purr when they are relaxed or feeling safe.\n- **Communication of needs** – Purring can signal hunger, thirst, or a desire for attention.\n- **Stress relief** – Some purring occurs when cats are stressed or feeling threatened.\n\n## Other Factors\n\n- **Age** – Kittens purr when they are learning to hunt; adult cats may purr for comfort.\n- **Health** – Purring can sometimes indicate pain or illness, though this is not always the case.\n- **Social bonding** – Purring can be a way to bond with other cats or their owners.\n\n## What It's Not\n\n- Purring is **not** a sign of happiness in all contexts. A cat purring while being ignored or stressed may not be \"happy.\"\n- It is **not** a sign of pain. Painful cats often do not purr at all.\n\n## Summary\n\nCats purr primarily as a form of communication, with the most common reasons being contentment and relaxation. The exact meaning can vary depending on context, age, and the cat's individual personality."
+    },
+    {
+      "id": "v3-20",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 22.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# What Causes Inflation?\n\nInflation is the sustained increase in the general price level of goods and services over time. It can be caused by several factors:\n\n## 1. **Demand-Pull Inflation**\n- When demand for goods and services exceeds the economy's ability to supply them.\n- Example: A sudden surge in consumer spending or increased government spending on military, infrastructure, etc.\n\n## 2. **Cost-Push Inflation**\n- Rising costs of production push prices up.\n- Example: Higher raw material prices, energy costs, or increased labor costs due to shortages of skilled workers.\n\n## 3. **Monetary Inflation**\n- An increase in the money supply relative to economic output (GDP).\n- Example: Central bank printing more money without a corresponding increase in goods or services.\n\n## 4. **Supply-Side Inflation**\n- A reduction in the supply of goods and services relative to demand.\n- Example: Natural disasters, droughts, or a decline in agricultural productivity reducing food supply.\n\n## 5. **Exchange Rate Inflation**\n- A depreciation of a country's currency relative to others, making imports more expensive.\n\n## 6. **Fiscal Inflation**\n- Government spending on public projects (infrastructure, defense) outpaces revenue growth.\n\n## 7. **Institutional Inflation**\n- Changes in government policy or regulations that increase costs (e.g., new taxes, regulatory requirements).\n\n## 8. **Cyclical Inflation**\n- Fluctuations in the business cycle: economic booms can temporarily raise prices, while recessions can lead to deflation.\n\n---\n\n## Key Distinction:\n- **Demand-pull** and **cost-push** inflation are the most common drivers.\n- **Monetary** and **fiscal** inflation are often associated with government policy (e.g., printing money or increasing spending).\n- **Supply-side** inflation is typically a result of external shocks (natural disasters, resource scarcity).\n\nThe most common and dangerous form is **demand-pull inflation**, which can be triggered by monetary policy, fiscal policy, or external shocks."
+    },
+    {
+      "id": "v3-21",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 29.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# How a Heat Pump Works in Winter\n\nA heat pump is essentially an **inverted** air conditioner. It moves thermal energy from a colder space to a warmer one, using electricity as the \"pump.\"\n\n## The Core Principle: Heat Follows a Temperature Gradient\n\nThe Second Law of Thermodynamics tells us that heat naturally flows from **cold → warm**. A heat pump reverses this by using work (electricity) to force heat in the opposite direction.\n\n## How It Works Step by Step\n\n### 1. The Cycle (Refrigerant Loop)\n- **Evaporation:** Refrigerant absorbs heat from the *outside* (cold outdoor air), turning into a gas.\n- **Compression:** The compressor squeezes the gas, raising its temperature and pressure.\n- **Condensation:** The hot, high-pressure gas releases heat into the *inside* (heating mode), turning back into a liquid.\n- **Expansion:** The liquid expands through an expansion valve, dropping in pressure and temperature.\n\n### 2. Winter-Specific Operation\n| Component | Role |\n|-----------|------|\n| **Outdoor unit** (facing outside) | Absorbs heat from the cold air outside |\n| **Indoor unit** (facing inside) | Releases heat to warm your home |\n\n### 3. The Energy Flow\n```\nCold Outside Air → Heat Pump → Warm Indoor Space\n   (low temp)        (work input: electricity)    (high temp)\n```\n\n## Key Differences from a Standard Air Conditioner\n\n| Feature | Air Conditioner (Summer) | Heat Pump (Winter) |\n|---------|----------------------|-------------------|\n| **Direction** | Cold → Warm (cooling) | Warm → Cold (heating) |\n| **Refrigerant** | Low-pressure liquid | High-pressure gas |\n| **Condenser** | Indoor unit (releases heat) | Outdoor unit (absorbs heat) |\n| **Evaporator** | Outdoor unit (absorbs heat) | Indoor unit (releases heat) |\n\n## Why It Works in Winter\n- The **outdoor unit** is exposed to the cold outdoor air, which absorbs heat from the surrounding environment.\n- The **indoor unit** is inside your home, where it releases that heat to warm the space.\n- The **compressor** uses electricity to push the refrigerant through the loop, doing the \"work\" that makes heat flow against its natural direction.\n\n## Efficiency Note\nHeat pumps are most efficient when the **outdoor temperature is above 0°C (32°F)**. Below that, they can't absorb heat from the outside air and must run in \"cooling\" mode (reversing the cycle)."
+    },
+    {
+      "id": "v3-22",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 15.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Is Raw Cookie Dough Safe to Eat?\n\n## The Short Answer: **No, it is not safe.**\n\nRaw cookie dough (especially with raw eggs) can carry harmful pathogens like **Salmonella**, **E. coli**, and other bacteria that survive in the raw egg yolk.\n\n## Why It's Dangerous:\n\n- **Raw eggs** are a common source of foodborne illness.\n- Raw cookie dough is often made with raw eggs (especially in recipes like chocolate chip cookies).\n- Bacteria can survive in the raw egg yolk and spread through the dough.\n\n## What Makes It Riskier:\n\n| Factor | Why It Matters |\n|--------|----------------|\n| Raw eggs | Eggs are a common source of Salmonella and other pathogens |\n| No cooking | Bacteria survive raw; heat kills them |\n| Contaminated flour | Flour can carry bacteria from the environment |\n\n## What Makes It Safer:\n\n- **Cooking** the dough thoroughly (baking at ~350°F/175°C) kills bacteria.\n- **Refrigerated** dough (not just frozen) is safer because it limits bacterial growth.\n- **Avoiding raw eggs** in the recipe (use pasteurized eggs or commercial egg substitutes).\n\n## Bottom Line:\nIf you're making raw cookie dough, **cook it thoroughly** before baking. If you already have raw cookie dough and plan to eat it, **discard it**."
+    },
+    {
+      "id": "v3-23",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 38.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# The Keeper of the Last Light\n\nElias Thorne had been the keeper of Blackrock Lighthouse for forty years. He was a man who lived in his own world, where the sea was not just water but a living thing that breathed and moved.\n\nThe lighthouse stood on the edge of a cliff, its lantern room a small box with a single beam of light that cut through the dark ocean. For forty years, Elias had tended to it. He knew every crack in the stone, every shift in the tide, and he had learned to read the sea by its rhythm.\n\nOne evening, a young boy named Leo came to see him. He was seven years old and carried a small lantern of his own.\n\n\"I want to see the light,\" Leo said, climbing onto the railing. \"I want to know what's inside.\"\n\nElias looked at him, then back at the sea. \"The light is not what you think it is,\" he said gently.\n\nLeo climbed higher, and Elias followed him up the stairs. He opened the lantern room door. The beam of light was a small, steady circle in the darkness.\n\n\"Is it real?\" Leo asked.\n\nElias looked at him, then back at the sea. \"The light is real,\" he said. \"But it's not what you think.\"\n\nLeo looked at the beam, then back at Elias. \"What?\"\n\nElias turned and walked toward the sea. He stood on the railing, looking out at the dark water below. \"The light is not what you think,\" he said again, his voice calm and steady.\n\nLeo looked at the beam, then back at Elias. \"What?\"\n\nElias turned and walked toward the sea again. He stood on the railing, looking out at the dark water below. \"The light is not what you think,\" he said again, his voice calm and steady.\n\nLeo looked at the beam, then back at Elias. \"What?\"\n\nElias turned and walked toward the sea again. He stood on the railing, looking out at the dark water below. \"The light is not what you think,\" he said again, his voice calm and steady.\n\nLeo looked at the beam, then back at Elias. \"What?\"\n\nElias turned and walked toward the sea again. He stood on the railing, looking out at the dark water below. \"The light is not what you think,\" he said again, his voice calm and steady.\n\nLeo looked at the beam, then back at Elias. \"What?\"\n\nElias turned and walked toward the sea again. He stood on the railing, looking out at the dark water below. \"The light is not what you think,\" he said again, his voice calm and steady.\n\nLeo looked at the beam, then back at Elias. \"What?\"\n\nElias turned and walked toward the sea again. He stood on the railing, looking out at the dark water below. \"The light is not what you think,\" he said again, his voice calm and steady.\n\nLeo looked at the beam, then back at Elias. \"What?\"\n\nElias turned and walked toward the sea again. He stood on the railing, looking out at the dark water below. \"The light is not what you think,\" he said again, his voice calm and steady.\n\nLeo looked at the beam, then back at Elias. \"What"
+    },
+    {
+      "id": "v3-24",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 18.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Baking Soda vs. Baking Powder\n\n## Key Difference: **Baking Soda** is a base (alkali); **Baking Powder** contains an acid.\n\n---\n\n## Baking Soda\n- A pure base (sodium bicarbonate: NaHCO₃)\n- **pH ~8.3** (basic)\n- Must be combined with an acid to produce carbon dioxide gas during baking\n\n## Baking Powder\n- A mixture of **baking soda + an acid** (usually cream of tartar or sodium aluminum tartrate)\n- **pH ~6–7** (neutral to slightly acidic)\n\n---\n\n## The Chemical Difference\n\n| | Baking Soda | Baking Powder |\n|---|---|---|\n| **Main ingredient** | Sodium bicarbonate (NaHCO₃) | Baking soda + acid |\n| **pH** | Basic (~8.3) | Neutral to slightly acidic |\n| **What it does in baking** | Raises pH, helps leavening | Provides both base and acid to produce CO₂ gas |\n\n---\n\n## Why the Difference Matters\n\n- **Baking soda alone** cannot produce CO₂ gas on its own — it needs an acid to react.\n- **Baking powder** already contains the acid, so it can produce CO₂ gas independently.\n\nThis is why they are used differently in recipes:\n- **Baking soda** alone → needs an acid (e.g., buttermilk, lemon juice)\n- **Baking powder** alone → works independently (e.g., in dry mixes like cookies, muffins)"
+    },
+    {
+      "id": "v3-25",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 20.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Compound Interest Explained\n\n**Compound interest** is the process where interest earned on an investment grows over time, and that interest itself earns additional interest in subsequent periods.\n\n## The Core Concept\n\nUnlike simple interest (which only earns interest on the original principal), compound interest earns interest on **both** the principal and any previously accumulated interest.\n\n## The Formula\n\nThe basic formula is:\n\n$$A = P \\left(1 + r\\right)^t$$\n\nWhere:\n- **A** = final amount after time t\n- **P** = principal (initial investment)\n- **r** = annual interest rate (decimal form, e.g., 0.05 for 5%)\n- **t** = number of years\n\n## A Simple Example\n\n| Year | Principal | Interest Earned | Total Balance |\n|------|-----------|-----------------|--------------|\n| 1    | $10,000   | $500            | $10,500      |\n| 2    | $10,500   | $525            | $11,025      |\n| 3    | $11,025   | $551            | $11,576      |\n\nNotice how the interest earned each year increases because it's calculated on a larger base (the previous total balance).\n\n## Key Takeaways\n\n- **Time is your friend** — the longer you let compound interest work, the faster it grows.\n- **Compounding frequency matters** — annual compounding is slower than monthly, daily, or even continuous compounding.\n- **Compound interest works in your favor** (investments) and against you (debt).\n\n## Why It Matters\n\nThis is why long-term savings accounts, retirement accounts, and investments can grow exponentially over decades. The compounding effect turns modest regular contributions into significant wealth over time."
+    },
+    {
+      "id": "v3-26",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 2.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "Autumn rain falls on the leaves,\nThe air grows cold and still.\nA quiet season begins."
+    },
+    {
+      "id": "v3-27",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 22.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# How to Apologize to a Coworker\n\n## The Golden Rule: Be Specific, Not Vague\n\nA vague \"I'm sorry\" feels dismissive. A specific apology shows you actually understand what went wrong and care about the relationship.\n\n---\n\n## 1. Start with a clear statement of what went wrong\n> \"I'm sorry I missed the deadline on the project.\"\n\n## 2. Explain what you did (and didn't do)\n> \"I was overwhelmed by the new requirements and missed the deadline. I've been working on it since yesterday.\"\n\n## 3. Show what you're doing to make it right\n> \"I've already sent the updated version and will send a follow-up email by tomorrow.\"\n\n## 4. Acknowledge their impact (if appropriate)\n> \"I know this was a big part of the team's success, and I'm sorry it affected you.\"\n\n## 5. End with a clear next step\n> \"I'll be back on track by [date] and I'll catch up with you then.\"\n\n---\n\n## What to Avoid\n- ❌ \"I'm sorry I didn't do it.\" (vague, dismissive)\n- ❌ \"I'm sorry I messed up.\" (too vague)\n- ❌ \"Sorry, I'll do it later.\" (sounding like you're making excuses)\n- ❌ \"Sorry, I'll talk to HR.\" (sounds like you're shifting blame)\n\n---\n\n## Timing matters\n- Give them a little grace period (24–48 hours) if you're clearly over the top.\n- If it's a serious mistake, apologize sooner rather than later.\n\n---\n\n## Follow up\n- Send a brief follow-up message within 24 hours: \"I'm sorry I didn't catch this. I've already sent the updated version and will follow up with you by [date].\"\n\n---\n\nThe key is **sincerity + specificity**. A well-timed, specific apology goes a long way."
+    },
+    {
+      "id": "v3-28",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 13.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "Photosynthesis is the process by which plants, algae, and some bacteria convert light energy into chemical energy. It occurs in the chloroplasts of plant cells and involves four main steps:\n\n1) **Light-dependent reactions** – Light energy is captured by pigments (primarily chlorophyll), absorbed in the thylakoid membranes of the chloroplast. This energy is used to split water molecules, releasing oxygen as a byproduct and generating ATP and NADPH.\n\n2) **Calvin cycle (light-independent reactions)** – The energy carriers produced in the light-dependent reactions are used to fix carbon dioxide from the atmosphere into glucose. This occurs in the stroma of the chloroplast and requires ATP and NADPH from the light-dependent reactions.\n\n3) **ATP regeneration** – The ATP produced in step 1 is used again to regenerate ADP and inorganic phosphate, allowing the cycle to continue.\n\n4) **Oxygen release** – Water is split during the light-dependent reactions, releasing oxygen gas as a byproduct.\n\nTogether, these steps convert solar energy into the chemical bonds of glucose and release oxygen as a waste product."
+    },
+    {
+      "id": "v3-29",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 16.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": false,
+      "reply": "The lunar cycle is divided into eight phases, each lasting approximately 2.5 days on average:\n\n1. **New Moon** – The moon is in a new position relative to Earth and the Sun, so its illuminated side faces away from us. It appears as a thin crescent or even a straight line in the sky, depending on where it is in its orbit.\n\n2. **Waxing Crescent** – The illuminated portion grows larger each night, moving from a thin sliver to a half-moon shape.\n\n3. **First Quarter** – Half of the moon's disk is illuminated, and it appears as a quarter circle in the sky.\n\n4. **Waxing Gibbous** – More than half of the disk is illuminated, and it continues to grow toward a full appearance.\n\n5. **Full Moon** – The entire face of the moon is illuminated, and it appears as a perfect circle. This occurs when the Sun, Earth, and Moon are aligned with Earth in between.\n\n6. **Waning Gibbous** – The illuminated portion begins to shrink again, moving from a full circle back toward a thin crescent.\n\n7. **Last Quarter** – Half of the moon's disk is illuminated again, but this time it appears as a quarter circle in the sky.\n\n8. **Waning Crescent** – The illuminated portion shrinks further, moving from a half-moon back toward a thin sliver.\n\nAfter the last quarter, the cycle repeats in reverse order until it returns to the new moon phase."
+    },
+    {
+      "id": "v3-30",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 5.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "Here are four planets:\n\n1. **Mercury** – the smallest planet in our solar system\n2. **Venus** – known for its thick atmosphere and extreme surface temperature\n3. **Earth** – the only planet we know to support life as we understand it\n4. **Mars** – often called the \"Red Planet\" due to its iron-rich surface\n\nThese are all planets in our solar system."
+    },
+    {
+      "id": "v3-31",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 5.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "Here are two excellent houseplants that thrive in low light:\n\n1. **Snake Plant (Sansevieria)** – A tough, evergreen plant that thrives in low light. It tolerates neglect and can survive on a windowsill or even indoors for long periods.\n\n2. **Peace Lily (Spathiphyllum)** – A low-maintenance plant that thrives in indirect light. It will continue to bloom even with minimal light and is known for its beautiful white flowers."
+    },
+    {
+      "id": "v3-32",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 6.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "```bash\nwc -l *.txt\n```\n\n**Explanation:**\n\n- `wc` — word count utility.\n- `-l` — counts lines (not words).\n- `*` — matches all files in the current directory.\n\n**Example:**\n\n```bash\n$ wc -l *.txt\n1000\n```\n\n**Alternative (with a wildcard for all files in the current directory):**\n\n```bash\nwc -l *\n```\n\n**Alternative (with a wildcard for all files in the current directory, including hidden ones):**\n\n```bash\nwc -l *.*\n```"
+    },
+    {
+      "id": "v3-33",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 19.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "```sql\nSELECT *\nFROM orders\nORDER BY order_date DESC\nLIMIT 10;\n```\n\n**Explanation:**\n\n| Clause | Purpose |\n|--------|---------|\n| `SELECT *` | Selects all columns from the table (replace with specific column names if needed) |\n| `FROM orders` | Specifies the source table |\n| `ORDER BY order_date DESC` | Sorts rows in descending chronological order (newest first) |\n| `LIMIT 10` | Restricts the result to only the top 10 rows |\n\n**Notes:**\n\n- If you need a **named column** instead of `*`, use:\n  ```sql\n  SELECT order_id, customer_name, total_amount\n  FROM orders\n  ORDER BY order_date DESC\n  LIMIT 10;\n  ```\n\n- If you need **only the most recent order per customer**, use:\n  ```sql\n  SELECT *\n  FROM (\n      SELECT order_id, customer_name, total_amount\n      FROM orders\n      ORDER BY order_date DESC\n  ) ranked\n  RANK() OVER (ORDER BY order_date DESC) AS r\n  WHERE r = 1\n  LIMIT 10;\n  ```\n\n- If you need **only the most recent order per customer** (one row per customer), use:\n  ```sql\n  SELECT *\n  FROM (\n      SELECT order_id, customer_name, total_amount\n      FROM orders\n      ORDER BY order_date DESC\n  ) ranked\n  GROUP BY customer_name\n  RANK() OVER (ORDER BY order_date DESC) AS r\n  WHERE r = 1\n  LIMIT 10;\n  ```\n\nChoose the version that best fits your specific requirements."
+    },
+    {
+      "id": "v3-34",
+      "category": "near-miss",
+      "kind": "table-noun",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 29.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# Lookup Tables (Index) in Databases\n\nA **lookup table** is a database structure that stores data for one or more fields, typically used to retrieve information based on a key value.\n\n## What It Is\n\nA lookup table is essentially an **index** — a data structure that allows fast retrieval of records by referencing another table.\n\n## How It Works\n\n```\n┌─────────────┐         ┌─────────────┐\n│   Lookup    │         │  Main Table │\n│   Table     │         └─────────────┘\n│             │           │\n│  Key Value  │         ┌─────────────┐\n│             │           │   Table A   │\n│             │         └─────────────┘\n│             │           │   Table B   │\n│             │         └─────────────┘\n│             │           │   Table C   │\n│             │         └─────────────┘\n│             │           │   Table D   │\n│             └─────────────┘\n```\n\n## Key Concepts\n\n| Term | Definition | Example |\n|------|----------|---------|\n| **Key** | A unique identifier used to locate a record | `customer_id` in the main table |\n| **Index** | A separate structure that speeds up lookups | `customer_id` index on the main table |\n| **Join** | Combining data from multiple tables using a lookup key | `SELECT * FROM customers JOIN orders ON customers.customer_id = orders.customer_id` |\n\n## Why Use Lookup Tables?\n\n1. **Speed** — Lookups are O(log n) instead of O(n), making them much faster for large datasets.\n2. **Efficiency** — Reduces the need to scan every row when retrieving specific records.\n3. **Simplicity** — Makes queries easier to write and understand.\n\n## Example in SQL\n\n```sql\n-- Without a lookup table (full scan)\nSELECT * FROM orders WHERE customer_id = 10;\n\n-- With a lookup table (index)\nSELECT * FROM orders JOIN customers ON customers.customer_id = orders.customer_id;\n```\n\n## Common Lookup Table Types\n\n- **Primary Key Index** — Unique identifier for a single table\n- **Foreign Key Index** — Links to another table (e.g., `orders.customer_id`)\n- **Composite Key Index** — Multiple columns used together for unique identification\n\n## Summary\n\nA lookup table is a performance-optimized data structure that enables fast, efficient retrieval of records by referencing another table through a key value. It is the fundamental mechanism behind most database joins and index-based lookups."
+    },
+    {
+      "id": "v3-35",
+      "category": "near-miss",
+      "kind": "explanation-with-bullets",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 12.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# How Vaccines Train the Immune System\n\nVaccines work by mimicking a controlled version of an actual pathogen to teach the body how to fight infection without causing disease.\n\n## Key Mechanisms\n\n- **Immunization** — A vaccine introduces a harmless version of an antigen (e.g., a weakened or dead virus) into the body.\n- **Antigen Presentation** — Dendritic cells capture and present these antigens to T-cells, which then activate B-cells.\n- **B-cell Activation** — B-cells produce antibodies specific to the antigen, creating a targeted immune response.\n- **Memory Formation** — B-cells and T-cells become memory cells, allowing a faster and stronger response upon future exposure.\n\n## Why It Works\n\n- The immune system has evolved to recognize and respond quickly to pathogens, so it can be \"trained\" by introducing a controlled antigen.\n- The body produces memory cells that provide long-term protection without needing repeated exposure to the pathogen.\n\n## Summary\n\nVaccines train the immune system by introducing a harmless antigen that triggers an adaptive response, resulting in memory cells that provide rapid and robust protection against future infections."
+    },
+    {
+      "id": "v3-36",
+      "category": "near-miss",
+      "kind": "history",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 36.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "# The French Revolution (Brief Overview)\n\n## Background\nThe revolution began in **1789**, when the Estates-General was called to address France's growing debt and economic crisis.\n\n## Key Stages\n\n### 1. Estates-General (July–August 1789)\n- The three estates met, but the Third Estate (representing ~96% of the population) refused to accept a compromise.\n- They declared themselves **\"The National Assembly\"** and took control of Paris.\n\n### 2. Storming the Bastille (July 14, 1789)\n- Revolutionaries stormed the fortress in Paris.\n- It marked a turning point: **power shifted from the monarchy to the people**.\n\n### 3. The Reign of Terror (1792–1794)\n- A radical committee called the **Committee of Public Safety** seized power.\n- Thousands were executed (including Robespierre, Danton, and Louis XVI).\n- The **National Convention** replaced the Committee of Public Safety.\n\n### 4. Reign of Louis XVI (1793–1794)\n- King Louis XVI was imprisoned in the **Tuileries** and later guillotined.\n\n### 5. The Directory (1795–1799)\n- A five-member executive government took power.\n\n### 6. Thermidorian Reaction (1794–1795)\n- The **Brumaire** coup d'état overthrew the Directory.\n\n### 7. The Republic (1795–1804)\n- **Napoleon Bonaparte** became First Consul (effectively president).\n\n### 8. The Consulate & Napoleon's Empire (1799–1804)\n- **Napoleon Bonaparte** became Emperor in 1804.\n\n### 9. The Napoleonic Wars (1804–1815)\n- France fought wars against Britain, Austria, and Prussia.\n\n### 10. The Restoration (1814–1815)\n- Napoleon was exiled; the Bourbon monarchy returned briefly.\n\n### 11. The Napoleonic Wars (1815)\n- Napoleon was defeated at the **Battle of Waterloo**.\n\n### 12. The Second Republic (1815–1830)\n- Napoleon was exiled again; the monarchy returned briefly.\n\n### 13. The July Revolution (July 1789)\n- A second uprising led to the **abolition of feudal privileges** and the creation of a more democratic constitution.\n\n### 14. The Napoleonic Wars (1805–1812)\n- France defeated Britain at the **Battle of Trafalgar** and the **Battle of Waterloo**.\n\n### 15. The Napoleonic Wars (1813–1814)\n- France defeated Austria and Prussia.\n\n### 16. The Napoleonic Wars (1815)\n- Napoleon was defeated at the **Battle of Waterloo**.\n\n### 17. The Second Empire (1830–1848)\n- **Napoleon III**"
+    }
+  ],
+  "_path": "<home>/agents/MarkdownCards/results/held_out_v3_qwen3.8-2b-4bit.json"
+}

@@ -1,0 +1,23 @@
+BEGIN 2026-10-07T21:00:04Z tag=v0.7.31 boot_id=f0eafd96-0532-4db9-ab2f-5f42f3eba49c uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202610071347+9b5c938 (sha=a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
+== leg A: default (routing expected ON) ==
+SETUP_COMPLETE 0.1s
+STATUS_ROUTING {"enabled": true, "disabled_reason": null, "policy_version": "3", "head_ready": true, "pair_state": "ready", "last_head_ms": null, "last_route": null, "last_reason": null, "last_timed_out": null, "last_at": null}
+ANSWER {"status": "complete", "model": "", "head_ms": "", "text_head": "Coffee"}
+SETUP_COMPLETE 0.1s
+STATUS_ROUTING {"enabled": true, "disabled_reason": null, "policy_version": "3", "head_ready": true, "pair_state": "ready", "last_head_ms": null, "last_route": null, "last_reason": null, "last_timed_out": null, "last_at": null}
+ANSWER {"status": "complete", "model": "", "head_ms": "", "text_head": "Coffee"}
+MODEL unrecorded
+== leg B: MLX_OMARCHY_ROUTING=0 (routing expected OFF) ==
+SETUP_COMPLETE 0.1s
+STATUS_ROUTING {"enabled": false, "disabled_reason": "Automatic routing is disabled by MLX_OMARCHY_ROUTING=0. Unset it to re-enable, or use explicit Compare options.", "policy_version": "3", "head_ready": false, "pair_state": "ready", "last_head_ms": null, "last_route": null, "last_reason": null, "last_timed_out":
+ANSWER {"status": "complete", "model": "", "head_ms": "", "text_head": "Coffee"}
+SETUP_COMPLETE 0.1s
+STATUS_ROUTING {"enabled": false, "disabled_reason": "Automatic routing is disabled by MLX_OMARCHY_ROUTING=0. Unset it to re-enable, or use explicit Compare options.", "policy_version": "3", "head_ready": false, "pair_state": "ready", "last_head_ms": null, "last_route": null, "last_reason": null, "last_timed_out":
+ANSWER {"status": "complete", "model": "", "head_ms": "", "text_head": "Coffee"}
+MODEL unrecorded
+MODEL_A unrecorded
+MODEL_B unrecorded
+ROUTE_ON PASS (status: routing enabled by default; head ready)
+KILL_SWITCH PASS (status: routing disabled under MLX_OMARCHY_ROUTING=0)
+GATE14_EXIT 0

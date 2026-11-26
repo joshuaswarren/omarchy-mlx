@@ -1,0 +1,74 @@
+[
+ {
+  "width": 1440,
+  "scenario": "loaded",
+  "button": "Microphone",
+  "disabled": false,
+  "live": "",
+  "draft": ""
+ },
+ {
+  "width": 1440,
+  "scenario": "permission-denied",
+  "ms": 115,
+  "transcribeRequests": 0,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Microphone permission denied. Allow microphone access for this page, then try again.",
+  "draft": "Typed draft before speaking.",
+  "announcements": [
+   "Microphone permission denied. Allow microphone access for this page, then try again."
+  ]
+ },
+ {
+  "width": 1440,
+  "scenario": "permission-denied-injected",
+  "ms": 13,
+  "transcribeRequests": 0,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Microphone permission denied. Allow microphone access for this page, then try again.",
+  "draft": "Typed draft before speaking.",
+  "announcements": [
+   "Microphone permission denied. Allow microphone access for this page, then try again."
+  ]
+ },
+ {
+  "width": 375,
+  "scenario": "loaded",
+  "button": "Microphone",
+  "disabled": false,
+  "live": "",
+  "draft": ""
+ },
+ {
+  "width": 375,
+  "scenario": "permission-denied",
+  "ms": 119,
+  "transcribeRequests": 0,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Microphone permission denied. Allow microphone access for this page, then try again.",
+  "draft": "Typed draft before speaking.",
+  "announcements": [
+   "Microphone permission denied. Allow microphone access for this page, then try again."
+  ]
+ },
+ {
+  "width": 375,
+  "scenario": "permission-denied-injected",
+  "ms": 11,
+  "transcribeRequests": 0,
+  "draftIntact": true,
+  "button": "Microphone",
+  "disabled": false,
+  "live": "Microphone permission denied. Allow microphone access for this page, then try again.",
+  "draft": "Typed draft before speaking.",
+  "announcements": [
+   "Microphone permission denied. Allow microphone access for this page, then try again."
+  ]
+ }
+]

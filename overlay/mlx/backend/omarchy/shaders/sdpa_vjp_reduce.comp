@@ -1,0 +1,92 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// SDPA VJP GQA reduce (upstream #4563 sdpa_vjp_reduce twin): sums the
+// repeat-group axis of a per-query-head gradient tile and stores the cast
+// to the KV-head output dtype. src is float32 [B*kv, reps, rows, dim] (the
+// dK/dV gemm output with one slice per query head); out is [B*kv, rows,
+// dim] in the attention storage dtype, narrowed round-to-nearest-even.
+// float32 accumulation throughout.
+
+#version 460
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#ifdef OUT_BF16
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
+
+layout(local_size_x = 32, local_size_y = 4, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer SrcBuf { float v[]; } src_buf;
+#ifdef OUT_F16
+layout(set = 0, binding = 1, std430) writeonly buffer OutBuf { float16_t v[]; } out_buf;
+#elif defined(OUT_BF16)
+layout(set = 0, binding = 1, std430) writeonly buffer OutBuf { uint16_t v[]; } out_buf;
+#else
+layout(set = 0, binding = 1, std430) writeonly buffer OutBuf { float v[]; } out_buf;
+#endif
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;   // src
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;     // rows (kL)
+  uint matrix_n;     // dim (D or Dv)
+  uint matrix_k;     // reps
+  uint flags;
+  float alpha;
+  float beta_f;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if ((bits & 0x7fff0000u) == 0x7f800000u) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+void store_value(uint index, float value) {
+#ifdef OUT_F16
+  out_buf.v[index] = float16_t(value);
+#elif defined(OUT_BF16)
+  out_buf.v[index] = bf16_store(value);
+#else
+  out_buf.v[index] = value;
+#endif
+}
+
+void main() {
+  uint c = gl_GlobalInvocationID.x;
+  uint row = gl_GlobalInvocationID.y;
+  uint bkv = gl_GlobalInvocationID.z;
+  if (c >= params.matrix_n || row >= params.matrix_m) {
+    return;
+  }
+  uint sbase = uint(bkv) * uint(params.matrix_k) *
+      uint(params.matrix_m) * uint(params.matrix_n);
+  float total = 0.0f;
+  for (uint g = 0u; g < params.matrix_k; ++g) {
+    total += src_buf.v[params.lhs_offset + sbase +
+        (uint(g) * uint(params.matrix_m) + uint(row)) *
+            uint(params.matrix_n) + uint(c)];
+  }
+  store_value(
+      params.output_offset +
+          (uint(bkv) * uint(params.matrix_m) + uint(row)) *
+              uint(params.matrix_n) + uint(c),
+      total);
+}

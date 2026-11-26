@@ -1,0 +1,393 @@
+{
+  "suite_sha256": "93f606a995e97f9c41398f315d6a91d725330db5c6f1e2361947dcd1b97f9f5c",
+  "chat_model": "qwen3.8-27b-4bit",
+  "prompts": [
+    {
+      "id": "v2-01",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 174.6,
+      "status": "stopped",
+      "pass": false
+    },
+    {
+      "id": "v2-02",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 181.6,
+      "status": "stopped",
+      "pass": false
+    },
+    {
+      "id": "v2-03",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 60.2,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-04",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 217.3,
+      "status": "stopped",
+      "pass": false
+    },
+    {
+      "id": "v2-05",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 152.6,
+      "status": "stopped",
+      "pass": false
+    },
+    {
+      "id": "v2-06",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 109.4,
+      "status": "stopped",
+      "pass": false
+    },
+    {
+      "id": "v2-07",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "elapsed_s": 116.4,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-08",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "elapsed_s": 49.2,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-09",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "elapsed_s": 34.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-10",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "elapsed_s": 65.2,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-11",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 29.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-12",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "elapsed_s": 72.2,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-13",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 21.1,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "v2-14",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 156.5,
+      "status": "stopped",
+      "pass": false
+    },
+    {
+      "id": "v2-15",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 38.1,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "v2-16",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 54.2,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-17",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [],
+      "elapsed_s": 187.6,
+      "status": "stopped",
+      "pass": false
+    },
+    {
+      "id": "v2-18",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "elapsed_s": 58.2,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-19",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 187.6,
+      "status": "stopped",
+      "pass": true
+    },
+    {
+      "id": "v2-20",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 94.3,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "v2-21",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 91.3,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "v2-22",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 169.5,
+      "status": "stopped",
+      "pass": true
+    },
+    {
+      "id": "v2-23",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 40.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-24",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 169.6,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-25",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 131.6,
+      "status": "stopped",
+      "pass": true
+    },
+    {
+      "id": "v2-26",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 184.6,
+      "status": "stopped",
+      "pass": true
+    },
+    {
+      "id": "v2-27",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 187.6,
+      "status": "stopped",
+      "pass": true
+    },
+    {
+      "id": "v2-28",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 47.2,
+      "status": "complete",
+      "pass": false
+    },
+    {
+      "id": "v2-29",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 23.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-30",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 25.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-31",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 25.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-32",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 39.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-33",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 33.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-34",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 26.1,
+      "status": "complete",
+      "pass": true
+    },
+    {
+      "id": "v2-35",
+      "category": "near-miss",
+      "kind": "explanation-with-bullets",
+      "expect": "none",
+      "components": [],
+      "elapsed_s": 173.5,
+      "status": "stopped",
+      "pass": true
+    },
+    {
+      "id": "v2-36",
+      "category": "near-miss",
+      "kind": "explanation-with-bullets",
+      "expect": "none",
+      "components": [
+        "checklist"
+      ],
+      "elapsed_s": 97.3,
+      "status": "complete",
+      "pass": false
+    }
+  ],
+  "_path": "<home>/agents/MarkdownCards/results/held_out_v2_qwen3.8-27b-4bit.json"
+}

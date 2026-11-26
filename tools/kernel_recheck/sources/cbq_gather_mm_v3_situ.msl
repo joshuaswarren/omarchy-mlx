@@ -1,0 +1,46 @@
+
+    constexpr int TG = 256;
+    uint ot = threadgroup_position_in_grid.x;      // o-타일 (8출력)
+    uint r  = threadgroup_position_in_grid.y;
+    uint tid = thread_position_in_threadgroup.x;
+    if (r >= (uint)R) return;
+    uint sg   = tid >> 5;                          // simdgroup 0..7
+    uint lane = tid & 31;
+
+    const device InT* xg = x + (size_t)tokidx[r] * K;
+    const device int64_t* g64 = (const device int64_t*)grid;
+
+    uint o = ot * 8 + sg;
+    if (o >= (uint)O) return;
+    uint e = eidx[r];
+    const device uint8_t*  qs = cb_qs + ((size_t)e * O + o) * (K / 8);
+    const device uint16_t* qh = cb_qh + ((size_t)e * O + o) * (K / 32);
+    const device DT*       dd = cb_d  + ((size_t)e * O + o) * (K / 256);
+    float acc = 0.0f;
+    for (uint sb = lane; sb < (uint)(K / 32); sb += 32) {
+        uint16_t h = qh[sb];
+        float dl = (float)dd[sb / 8] * (float)(2 * ((h >> 12) & 7) + 1);
+        float del = (h & 0x8000) ? -0.125f : 0.125f;
+        float part = 0.0f;
+        for (uint l = 0; l < 4; ++l) {
+            uint gi = (uint)qs[sb * 4 + l] | ((uint)((h >> (3 * l)) & 7) << 8);
+            int64_t gv = g64[gi];
+            char4 c0 = as_type<char4>((int)(gv & 0xFFFFFFFF));
+            char4 c1 = as_type<char4>((int)(gv >> 32));
+            // 벡터 로드: bf16 8개 = uint4 1회(스칼라 8회 대비 1.25×, 비트-정확)
+            const device uint4* xvv = (const device uint4*)(xg + sb * 32 + l * 8);
+            uint4 raw = xvv[0];
+            float4 xa = float4(as_type<bfloat4>(uint2(raw.x, raw.y)));
+            float4 xb = float4(as_type<bfloat4>(uint2(raw.z, raw.w)));
+            part += dot(float4(c0) + del, xa) + dot(float4(c1) + del, xb);
+        }
+        acc += dl * part;
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) {
+        float uu = (float)(bfloat16_t)acc;
+        float gg = (float)gbuf[(size_t)r * O + o];
+        float yv = (4.0f * tanh(gg / 4.0f)) * (1.0f / (1.0f + exp(-gg)))
+                   * (25.0f * tanh(uu / 25.0f));
+        y[(size_t)r * O + o] = (InT)yv;
+    }

@@ -1,0 +1,25 @@
+== m1-rung21-pairs 2026-10-18T17:05:51Z host: 13-inch M1 kernel 7.1.12-2-20261013.18-sep-ARCH boot <id>
+script sha256 f32a6852bdd733c3703bcbfc907221916c9241a5a23e7d2ea9b9656bcf9ce2fb
+ane-run sha256 480040b5f700f407f11563f5349e7614df9fefe0efe57327c68ebc35b9779805
+rung 21 seal ok
+ane_stats before: busy_ns 0 jobs 0 
+RUNG 1 c12 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0208 check='sha 349660b07708914e want 349660b07708914e' | exec ms over 200 calls: min 0.028 p10 0.028 p25 0.028 median 0.028 p75 0.028 p90 0.028 p99 0.036 max 0.039
+RUNG 1 c13 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0207 check='sha 38ba08b67bbf46fb want 38ba08b67bbf46fb' | exec ms over 200 calls: min 0.028 p10 0.028 p25 0.028 median 0.028 p75 0.028 p90 0.028 p99 0.035 max 0.035
+RUNG 1 e16 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0314 check='sha ac6bed71607943b2 want ac6bed71607943b2' | exec ms over 200 calls: min 0.037 p10 0.038 p25 0.038 median 0.038 p75 0.040 p90 0.040 p99 0.045 max 0.046
+RUNG 1 e17 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0326 check='sha 8c1a5db08fbdc50a want 8c1a5db08fbdc50a' | exec ms over 200 calls: min 0.038 p10 0.039 p25 0.039 median 0.041 p75 0.041 p90 0.041 p99 0.045 max 0.047
+RUNG 1 c15 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0495 check='sha b4eefa2b5bb56001 want b4eefa2b5bb56001' | exec ms over 200 calls: min 0.055 p10 0.056 p25 0.057 median 0.057 p75 0.057 p90 0.059 p99 0.063 max 0.064
+RUNG 1 21 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0477 check='sha 0ef4463f1642d6f5 want 0ef4463f1642d6f5' | exec ms over 200 calls: min 0.053 p10 0.053 p25 0.053 median 0.056 p75 0.056 p90 0.057 p99 0.061 max 0.061
+RUNG 2 c12 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0197 check='sha 349660b07708914e want 349660b07708914e' | exec ms over 200 calls: min 0.027 p10 0.027 p25 0.027 median 0.027 p75 0.028 p90 0.028 p99 0.033 max 0.034
+RUNG 2 c13 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0206 check='sha 38ba08b67bbf46fb want 38ba08b67bbf46fb' | exec ms over 200 calls: min 0.028 p10 0.028 p25 0.028 median 0.028 p75 0.028 p90 0.028 p99 0.032 max 0.034
+RUNG 2 e16 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0319 check='sha ac6bed71607943b2 want ac6bed71607943b2' | exec ms over 200 calls: min 0.038 p10 0.038 p25 0.038 median 0.040 p75 0.040 p90 0.040 p99 0.043 max 0.043
+RUNG 2 e17 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0328 check='sha 8c1a5db08fbdc50a want 8c1a5db08fbdc50a' | exec ms over 200 calls: min 0.038 p10 0.040 p25 0.040 median 0.040 p75 0.041 p90 0.041 p99 0.046 max 0.046
+RUNG 2 c15 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0491 check='sha b4eefa2b5bb56001 want b4eefa2b5bb56001' | exec ms over 200 calls: min 0.055 p10 0.056 p25 0.056 median 0.057 p75 0.057 p90 0.057 p99 0.060 max 0.061
+RUNG 2 21 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0470 check='sha 0ef4463f1642d6f5 want 0ef4463f1642d6f5' | exec ms over 200 calls: min 0.048 p10 0.053 p25 0.053 median 0.054 p75 0.056 p90 0.056 p99 0.059 max 0.061
+RUNG 3 c12 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0195 check='sha 349660b07708914e want 349660b07708914e' | exec ms over 200 calls: min 0.027 p10 0.027 p25 0.027 median 0.027 p75 0.027 p90 0.028 p99 0.032 max 0.033
+RUNG 3 c13 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0208 check='sha 38ba08b67bbf46fb want 38ba08b67bbf46fb' | exec ms over 200 calls: min 0.028 p10 0.028 p25 0.028 median 0.028 p75 0.028 p90 0.028 p99 0.034 max 0.038
+RUNG 3 e16 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0328 check='sha ac6bed71607943b2 want ac6bed71607943b2' | exec ms over 200 calls: min 0.038 p10 0.040 p25 0.040 median 0.040 p75 0.041 p90 0.041 p99 0.043 max 0.047
+RUNG 3 e17 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0328 check='sha 8c1a5db08fbdc50a want 8c1a5db08fbdc50a' | exec ms over 200 calls: min 0.039 p10 0.040 p25 0.040 median 0.040 p75 0.040 p90 0.041 p99 0.045 max 0.047
+RUNG 3 c15 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0492 check='sha b4eefa2b5bb56001 want b4eefa2b5bb56001' | exec ms over 200 calls: min 0.054 p10 0.056 p25 0.056 median 0.057 p75 0.057 p90 0.057 p99 0.060 max 0.064
+RUNG 3 21 rc=0 wall_s=0.01 jobs_delta=200 busy_per_job_ms=0.0474 check='sha 0ef4463f1642d6f5 want 0ef4463f1642d6f5' | exec ms over 200 calls: min 0.051 p10 0.054 p25 0.054 median 0.055 p75 0.056 p90 0.056 p99 0.060 max 0.062
+ane_stats after: busy_ns 121247179 jobs 3600 
+== end 2026-10-18T17:05:51Z

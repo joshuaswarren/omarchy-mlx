@@ -1,0 +1,259 @@
+{
+ "version": "2026-09-30.4",
+ "status": "frozen-held-out-v4",
+ "rule": "FROZEN before any model or the promotion code sees it; hash this file (sha256 in the commit message and the receipt) and never edit it. Wording differs from cards_dev.json and held-out v1, v2 and v3. 18 card-worthy (4 checklist, 4 comparison, 4 timeline, 3 facts, 3 mixed), 9 plain, 9 near-miss (3 prose requests, 2 short lists, 2 code-only, 2 explanations likely to use headed sections). Thresholds fixed now: >= 15 of 18 card-worthy produce a valid card, 0 cards on the 18 plain and near-miss prompts from either the model fence or promotion, every card passes validate_components.",
+ "prompts": [
+  {
+   "id": "v4-01",
+   "category": "card-worthy",
+   "kind": "checklist",
+   "expect": "card",
+   "text": "Build me a checklist for getting a used car inspected before I buy it."
+  },
+  {
+   "id": "v4-02",
+   "category": "card-worthy",
+   "kind": "checklist",
+   "expect": "card",
+   "text": "What tasks should I finish before my parents visit this weekend?"
+  },
+  {
+   "id": "v4-03",
+   "category": "card-worthy",
+   "kind": "checklist",
+   "expect": "card",
+   "text": "Draft a to-do list for launching a small online bakery shop."
+  },
+  {
+   "id": "v4-04",
+   "category": "card-worthy",
+   "kind": "checklist",
+   "expect": "card",
+   "text": "I'm moving offices on Monday. Give me the action items for my team."
+  },
+  {
+   "id": "v4-05",
+   "category": "card-worthy",
+   "kind": "comparison",
+   "expect": "card",
+   "text": "Compare a Roth IRA and a traditional IRA for someone in their twenties."
+  },
+  {
+   "id": "v4-06",
+   "category": "card-worthy",
+   "kind": "comparison",
+   "expect": "card",
+   "text": "Mac mini versus a mid-range Windows desktop for photo editing: contrast them on price, software, and upgrades."
+  },
+  {
+   "id": "v4-07",
+   "category": "card-worthy",
+   "kind": "comparison",
+   "expect": "card",
+   "text": "Show sourdough, rye, and whole wheat bread side by side on flavor, difficulty, and rise time."
+  },
+  {
+   "id": "v4-08",
+   "category": "card-worthy",
+   "kind": "comparison",
+   "expect": "card",
+   "text": "Can you contrast leasing and financing a car for a three-year horizon?"
+  },
+  {
+   "id": "v4-09",
+   "category": "card-worthy",
+   "kind": "timeline",
+   "expect": "card",
+   "text": "Give me an itinerary for two days in Lisbon."
+  },
+  {
+   "id": "v4-10",
+   "category": "card-worthy",
+   "kind": "timeline",
+   "expect": "card",
+   "text": "Create a schedule for my kid's birthday party from 2 pm to 5 pm."
+  },
+  {
+   "id": "v4-11",
+   "category": "card-worthy",
+   "kind": "timeline",
+   "expect": "card",
+   "text": "Lay out a training timeline for running my first half marathon in twelve weeks."
+  },
+  {
+   "id": "v4-12",
+   "category": "card-worthy",
+   "kind": "timeline",
+   "expect": "card",
+   "text": "What does the agenda look like for a half-day team offsite that starts at 9?"
+  },
+  {
+   "id": "v4-13",
+   "category": "card-worthy",
+   "kind": "facts",
+   "expect": "card",
+   "text": "Here's what I know about my new job: it starts October 14, pay is $82,000, and my manager is Leah. List the key facts."
+  },
+  {
+   "id": "v4-14",
+   "category": "card-worthy",
+   "kind": "facts",
+   "expect": "card",
+   "text": "Give me three key points from this note: the roof leak is fixed, the invoice is due Friday, and the gutters need cleaning next month."
+  },
+  {
+   "id": "v4-15",
+   "category": "card-worthy",
+   "kind": "facts",
+   "expect": "card",
+   "text": "Four facts about honeybees, please."
+  },
+  {
+   "id": "v4-16",
+   "category": "card-worthy",
+   "kind": "mixed",
+   "expect": "card",
+   "text": "Compare the Pixel and the iPhone for a first smartphone, then give me a checklist for setting it up."
+  },
+  {
+   "id": "v4-17",
+   "category": "card-worthy",
+   "kind": "mixed",
+   "expect": "card",
+   "text": "Make a packing list for a beach week, and a day-by-day schedule for the trip."
+  },
+  {
+   "id": "v4-18",
+   "category": "card-worthy",
+   "kind": "mixed",
+   "expect": "card",
+   "text": "Key takeaways from our retro: deploys were slow, on-call was quiet, and docs are outdated. Then list next steps."
+  },
+  {
+   "id": "v4-19",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "Why do leaves change color in autumn?"
+  },
+  {
+   "id": "v4-20",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "How does a credit score get calculated?"
+  },
+  {
+   "id": "v4-21",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "Write a limerick about a forgetful robot."
+  },
+  {
+   "id": "v4-22",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "What's the best way to keep basil alive indoors?"
+  },
+  {
+   "id": "v4-23",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "Explain the difference between weather and climate."
+  },
+  {
+   "id": "v4-24",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "Is it normal for a dog to sleep fourteen hours a day?"
+  },
+  {
+   "id": "v4-25",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "Tell me a bedtime story about a sleepy dragon."
+  },
+  {
+   "id": "v4-26",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "What causes hiccups?"
+  },
+  {
+   "id": "v4-27",
+   "category": "plain",
+   "kind": "none",
+   "expect": "none",
+   "text": "How should I respond to a friend who forgot my birthday?"
+  },
+  {
+   "id": "v4-28",
+   "category": "near-miss",
+   "kind": "prose-request",
+   "expect": "none",
+   "text": "Describe the stages of a butterfly's life without using a list."
+  },
+  {
+   "id": "v4-29",
+   "category": "near-miss",
+   "kind": "prose-request",
+   "expect": "none",
+   "text": "Tell me how to brew pour-over coffee, but keep it to one paragraph."
+  },
+  {
+   "id": "v4-30",
+   "category": "near-miss",
+   "kind": "prose-request",
+   "expect": "none",
+   "text": "Explain the main differences between cats and dogs as pets in plain prose, no bullet points."
+  },
+  {
+   "id": "v4-31",
+   "category": "near-miss",
+   "kind": "short-list",
+   "expect": "none",
+   "text": "Name two oceans."
+  },
+  {
+   "id": "v4-32",
+   "category": "near-miss",
+   "kind": "short-list",
+   "expect": "none",
+   "text": "Give me one word that rhymes with orange."
+  },
+  {
+   "id": "v4-33",
+   "category": "near-miss",
+   "kind": "code-only",
+   "expect": "none",
+   "text": "Write a Python function that checks whether a number is prime."
+  },
+  {
+   "id": "v4-34",
+   "category": "near-miss",
+   "kind": "code-only",
+   "expect": "none",
+   "text": "Show me a CSS rule that centers a div."
+  },
+  {
+   "id": "v4-35",
+   "category": "near-miss",
+   "kind": "explanation-with-sections",
+   "expect": "none",
+   "text": "How does the immune system fight a cold?"
+  },
+  {
+   "id": "v4-36",
+   "category": "near-miss",
+   "kind": "explanation-with-sections",
+   "expect": "none",
+   "text": "What were the main causes of World War I?"
+  }
+ ]
+}

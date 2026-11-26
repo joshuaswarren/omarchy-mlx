@@ -1,0 +1,123 @@
+--- a/src/tensorfold/families/h3/weights.py
++++ b/src/tensorfold/families/h3/weights.py
+@@ -123,3 +123,120 @@
+             changed += 1
+     mx.clear_cache()
+     return changed
++
++
++def load_int8_dit(state_dir, blocks: int | None = None):
++    """The DiT assembled from a saved swapped state (see kernels/minimax/h3/v1).
++
++    Peak memory is the int8 state plus one bf16 block: the skeleton is built
++    with zero layers, then each block is constructed once, its projections
++    wrapped from the saved state (``from_state`` — bit-identical to the swap
++    that produced it), and only then appended. ``state_dir`` holds the
++    base/delta manifests, the shard files, and ``transformer-config.json``.
++    """
++
++    import json
++    from pathlib import Path
++
++    from tensorfold.kernels.minimax.h3.v1 import mlp_int8
++
++    import mlx.core as mx
++
++    from .dit import Block, H3DiT
++
++    state_dir = Path(state_dir)
++    config = DiTConfig.from_dict(json.loads((state_dir / "transformer-config.json").read_text()))
++    state: dict = {}
++    if (state_dir / "index.json").exists():
++        index = json.loads((state_dir / "index.json").read_text())
++        files = [name for name, _ in index["files"]]
++    else:
++        # Base/delta manifest layout: the small host holds the non-swapped
++        # base plus the swapped-weights delta, each with its own manifest.
++        files = []
++        for manifest in ("base-manifest.json", "delta-manifest.json"):
++            entries = json.loads((state_dir / manifest).read_text())["files"]
++            files.extend(entry["name"] for entry in entries)
++    for name in files:
++        state.update(mx.load(str(state_dir / name)))
++
++    skeleton = DiTConfig(**{**config.__dict__, "num_layers": 0})
++    model = H3DiT(skeleton)
++
++    layers = config.num_layers if blocks is None else min(blocks, config.num_layers)
++    built = []
++    for i in range(layers):
++        prefix = f"blocks.{i}."
++        block = Block(config)
++        block.mlp = mlp_int8.Int8MLP.from_state(
++            state[prefix + "mlp.w1"], state[prefix + "mlp.s1"],
++            state[prefix + "mlp.w2"], state[prefix + "mlp.s2"],
++            state.get(prefix + "mlp.b1"), state.get(prefix + "mlp.b2"))
++        attention = block.attn
++        # The fused QKV state loads as an unfused int8 Linear: the fused rows
++        # are interleaved per head exactly like the checkpoint's qkv_proj, and
++        # the unfused attention path applies the same q/k norms and rotary in
++        # plain mlx. The fused MSL kernel stays macOS-only.
++        if prefix + "attn.fused_qkv.w" in state:
++            attention.qkv_proj = mlp_int8.Int8Linear.from_state(
++                state[prefix + "attn.fused_qkv.w"], state[prefix + "attn.fused_qkv.s"], None,
++                group=config.hidden_size)
++        elif prefix + "attn.qkv_proj.w" in state:
++            attention.qkv_proj = mlp_int8.Int8Linear.from_state(
++                state[prefix + "attn.qkv_proj.w"], state[prefix + "attn.qkv_proj.s"], None,
++                group=config.hidden_size)
++        if prefix + "attn.out_proj.w" in state:
++            attention.out_proj = mlp_int8.Int8Linear.from_state(
++                state[prefix + "attn.out_proj.w"], state[prefix + "attn.out_proj.s"], None)
++        built.append(block)
++    model.blocks = built
++
++    # One strict load applies the plain parameters (norms, AdaLN, embeddings,
++    # refiner, final layer) and re-applies the int8 arrays identically.
++    # rope.inv_freq is recomputed at runtime and absent from the state.
++    def load_key(key: str) -> str:
++        if ".fused_qkv." in key:
++            # The fused state loads under the unfused qkv_proj name; the rows
++            # are identical (interleaved per head) and the norms/rotary ride
++            # the plain attention path.
++            return key.replace("attn.fused_qkv.", "attn.qkv_proj.")
++        return key
++
++    def built(key: str) -> bool:
++        key = load_key(key)
++        return blocks is None or not key.startswith("blocks.") or int(key.split(".")[1]) < layers
++
++    model.load_weights([(load_key(k), v) for k, v in state.items()
++                        if load_key(k) != "rope.inv_freq"
++                        and not load_key(k).endswith(".norms")
++                        and built(k)])
++
++    # 8-bit AdaLN projections (the published recipe): official QuantizedLinear
++    # from the bf16 weights pulled back out of the loaded state.
++    import mlx.nn as nn
++
++    adaln_weights = {k: v for k, v in state.items()
++                     if k.endswith((".adaln_proj.linear.weight", ".adaln_proj.linear.bias"))}
++
++    adaln_by_index = {}
++
++    def requantize_adaln(module, prefix=None):
++        if prefix is None:
++            return
++        weight = adaln_weights[prefix + ".linear.weight"]
++        bias = adaln_weights.get(prefix + ".linear.bias")
++        # from_linear quantizes the module it is given: the real checkpoint
++        # weight must be assigned first or the tables quantize noise (a fresh
++        # nn.Linear default-initializes randomly).
++        source = nn.Linear(weight.shape[1], weight.shape[0], bias=bias is not None)
++        source.weight = weight
++        if bias is not None:
++            source.bias = bias
++        module.linear = nn.QuantizedLinear.from_linear(source, bits=8, group_size=64)
++        if bias is not None:
++            module.linear.bias = bias.astype(mx.bfloat16)
++
++    for i, block in enumerate(model.blocks):
++        requantize_adaln(block.adaln_proj, prefix=f"blocks.{i}.adaln_proj")
++    requantize_adaln(model.final_layer.adaln_proj, prefix="final_layer.adaln_proj")
++    return model

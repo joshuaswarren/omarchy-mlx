@@ -1,0 +1,27 @@
+steps 7599; reference NLL 1.39471; second reference NLL 1.39471
+base: NLL 1.39821 gap to reference +0.00350 (+0.2507 percent), to second reference +0.00350 (+0.2506 percent)
+split: NLL 1.40089 gap to reference +0.00617 (+0.4426 percent), to second reference +0.00617 (+0.4425 percent)
+blk: NLL 1.39807 gap to reference +0.00336 (+0.2408 percent), to second reference +0.00336 (+0.2407 percent)
+perm: NLL 1.39845 gap to reference +0.00373 (+0.2678 percent), to second reference +0.00373 (+0.2677 percent)
+rev: NLL 1.40152 gap to reference +0.00681 (+0.4881 percent), to second reference +0.00681 (+0.4880 percent)
+paired differences (second arm minus first arm):
+split minus base: +0.00268 [+0.00055, +0.00486]
+blk minus base: -0.00014 [-0.00229, +0.00201]
+perm minus base: +0.00024 [-0.00180, +0.00241]
+rev minus base: +0.00331 [+0.00107, +0.00540]
+blk minus split: -0.00281 [-0.00491, -0.00082]
+perm minus split: -0.00244 [-0.00453, -0.00021]
+rev minus split: +0.00063 [-0.00139, +0.00245]
+perm minus blk: +0.00038 [-0.00166, +0.00249]
+rev minus blk: +0.00345 [+0.00140, +0.00549]
+rev minus perm: +0.00307 [+0.00084, +0.00509]
+split minus base by position bin of 950 steps:
+positions 0-950: +0.00047
+positions 950-1900: +0.00654
+positions 1900-2850: +0.00406
+positions 2850-3800: -0.00256
+positions 3800-4750: +0.00449
+positions 4750-5700: +0.00256
+positions 5700-6650: +0.00219
+positions 6650-7599: +0.00365
+float32 references, per-step difference of the next-token log-probability: maximum 3.36e-04, mean 1.06e-05, bit-equal steps 3691 of 7599

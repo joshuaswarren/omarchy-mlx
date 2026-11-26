@@ -1,0 +1,29 @@
+[provenance] gdn_bf16a_pf_off mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+[gdn_bf16a_pf_off] device "Apple M2 Max (G14C B1)" legacy 0: default kernel 455, TILE=0 kernel 479
+[provenance] gdn_pf_gqa_kill mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+[gdn_pf_gqa_kill] with the kill switch set: opt-in kernel 516 (3 dispatches), untiled 516 (3)
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[provenance] gdn_gqa_bf16a mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+[gdn_gqa_bf16a] B=1: expanded route 3 dispatches, repeated 1, native 1
+[gdn_gqa_bf16a] B=1, q/k views with a buffer offset: expanded route 3 dispatches, repeated 1, native 1
+[gdn_gqa_bf16a] B=3 batched decode: expanded route 3 dispatches, repeated 1, native 1
+[gdn_gqa_bf16a] B=3, q/k views with a buffer offset: expanded route 5 dispatches, repeated 1, native 3
+[provenance] gdn_gqa_bf16a_outside mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+[provenance] gdn_pf_gqa mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+[gdn_pf_gqa] B=1: expanded 3 dispatches, repeated 1, native 1
+[gdn_pf_gqa] B=1, q/k views with a buffer offset: expanded 3 dispatches, repeated 1, native 1
+[gdn_pf_gqa] B=3 batched decode: expanded 3 dispatches, repeated 1, native 1
+[gdn_pf_gqa] B=3, q/k views with a buffer offset: expanded 5 dispatches, repeated 1, native 3
+[provenance] gdn_pf_gqa_outside mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+[provenance] gdn_pf_gqa_default mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+[gdn_pf_gqa_default] device "Apple M2 Max (G14C B1)" measured 1 legacy 0: default 1 dispatches kernel 637, tiled 1, untiled 3
+[provenance] gdn_bf16a_untiled_default mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+[gdn_bf16a_untiled_default] device "Apple M2 Max (G14C B1)" measured ratio 2 0 ratio 3 1 legacy 0: default 3 dispatches kernel 455, tiled 3, untiled 3
+[gdn_bf16a_untiled_default] ratio 3: default kernel 480, 3 dispatches
+[provenance] gdn_bf16a_pf_off mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+[provenance] gdn_pf_gqa_kill mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-a5b1797446)" subgroup_size=32
+===============================================================================
+[doctest] test cases:   8 |   8 passed | 0 failed | 0 skipped
+[doctest] assertions: 121 | 121 passed | 0 failed |
+[doctest] Status: SUCCESS!

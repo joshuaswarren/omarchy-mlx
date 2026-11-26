@@ -1,0 +1,17 @@
+diff --git a/mlx/backend/common/metal_kernel.cpp b/mlx/backend/common/metal_kernel.cpp
+--- a/mlx/backend/common/metal_kernel.cpp
++++ b/mlx/backend/common/metal_kernel.cpp
+@@ -9,1 +9,4 @@
+-#include "mlx/fast_primitives.h"
++#include "mlx/fast_primitives.h"
++#ifdef MLX_OMARCHY_BACKEND
++#include "mlx/backend/omarchy/device.h"
++#endif
+@@ -21,1 +24,6 @@
+-  if (metal::is_available()) {
++  bool custom_kernel_available = metal::is_available();
++#ifdef MLX_OMARCHY_BACKEND
++  custom_kernel_available = custom_kernel_available || omarchy::is_available();
++#endif
++
++  if (custom_kernel_available) {

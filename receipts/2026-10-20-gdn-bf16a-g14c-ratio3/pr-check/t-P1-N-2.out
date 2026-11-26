@@ -1,0 +1,8 @@
+uclamp: perf_placement not found, no clamp
+provenance: mlx-omarchy 0.32.4.dev202610201405+7076d7a mx=0.32.4.dev202610201405+7076d7a verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:a32e5cdf868fb03e
+decode 15.98 tok/s over 63 tokens (64 requested, EOS suppressed)
+prefill 0.883s (reported separately, excluded from decode)
+prompt_tokens 62
+decode mean per-token 62.6 ms
+generated_ids sha256:0d82f8330773b862 n=64 first=1596,1144,310 last=198,17,13
+{"decode_tps": 15.978, "device": "Apple M2 Max (G14C B1)", "engine": "bench_decode", "generated": 64, "ids_first": [1596, 1144, 310], "ids_last": [198, 17, 13], "ids_sha256_16": "0d82f8330773b862", "prefill_s": 0.882806, "prefill_tps": 70.2306, "prompt_tokens": 62}

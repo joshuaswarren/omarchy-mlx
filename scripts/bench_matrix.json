@@ -1,0 +1,102 @@
+{
+  "schema": "bench-matrix/1",
+  "comment": "Cross-platform workload matrix for mlx-omarchy (Linux/Omarchy) and native-MLX (macOS) baseline runs. Runner: scripts/bench_matrix.py; engine: scripts/bench_decode.py (pinned-length decode, EOS suppressed, prefill timed separately, provenance gate). Greedy generation (temp 0, seed 0) with a fixed warmup so both platforms run the identical computation. Models with a pinned revision MUST match the local snapshot exactly or the leg is skipped. Models with revision null are optional: the runner resolves the factual revision from the local Hugging Face cache at run time and skips when absent. Never guess or invent a revision; a missing downloaded model is reported skipped, never passing. Cross-machine comparisons must pass machine A's pins map via --expect-pins on machine B: a cache-resolved revision that differs between machines REFUSES the run (exit 4) instead of quietly comparing same-model-different-weights numbers. Workloads marked selection=explicit run only when named via --select, to bound normal runs. Cross-platform output identity uses the generated_ids hash line (scripts/bench_decode.py additive line); decoded text alone is the encode(decode(ids)) truncation trap and is never the comparison key.",
+  "generation": {
+    "temp": 0.0,
+    "seed": 0,
+    "warmup_tokens": 4,
+    "engine": "bench_decode",
+    "engine_script": "scripts/bench_decode.py",
+    "env": {
+      "MLX_DISABLE_COMPILE": "1"
+    }
+  },
+  "models": [
+    {
+      "id": "qwen25-0.5b-4bit",
+      "repo": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+      "revision": "a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3",
+      "revision_source": "pinned; local HF cache snapshot dir, matches receipts 2026-09-01-macos-native-mlx-baseline.md and 2026-09-01-m1-same-chip-parity.md",
+      "optional": false
+    },
+    {
+      "id": "qwen25-0.5b-bf16",
+      "repo": "mlx-community/Qwen2.5-0.5B-Instruct-bf16",
+      "revision": "56d07e766edd7159fbe12ed12d9cf114bf38bf1e",
+      "revision_source": "pinned; local HF cache snapshot dir, matches receipts 2026-09-01-macos-native-mlx-baseline.md and 2026-09-01-m1-same-chip-parity.md",
+      "optional": false
+    },
+    {
+      "id": "qwen25-7b-4bit",
+      "repo": "mlx-community/Qwen2.5-7B-Instruct-4bit",
+      "revision": null,
+      "revision_policy": "resolve-from-local-cache",
+      "revision_source": "resolved at run time from the local HF cache snapshot; skipped when absent (offline hosts never fetch); cross-machine comparison requires --expect-pins so a different resolved revision refuses the run",
+      "optional": true,
+      "note": "optional larger model; weights fit a 64 GiB machine"
+    },
+    {
+      "id": "qwen25-14b-4bit",
+      "repo": "mlx-community/Qwen2.5-14B-Instruct-4bit",
+      "revision": null,
+      "revision_policy": "resolve-from-local-cache",
+      "revision_source": "resolved at run time from the local HF cache snapshot; skipped when absent (offline hosts never fetch); cross-machine comparison requires --expect-pins so a different resolved revision refuses the run",
+      "optional": true,
+      "note": "optional larger model; weights fit a 64 GiB machine"
+    }
+  ],
+  "prompts": {
+    "short": {
+      "text": "Hi",
+      "source": "existing baseline prompt (receipts 2026-09-01); 30 chat-template tokens on Qwen2.5-0.5B"
+    },
+    "long": {
+      "text": "You are reviewing a measurement protocol for a small language-model benchmark. The benchmark runs the same workload matrix on two operating systems and compares prefill and decode throughput. Each leg loads one pinned model snapshot, applies the model chat template to the prompt, runs greedy decoding with a fixed random seed, and records the prompt phase, the per-token phase, the generated token count, a hash of the generated token ids, and peak memory. A leg is valid only when the model snapshot revision matches the manifest pin, the power state is recorded, and no other model-serving process is holding the accelerator. The runner never downloads models on an offline host; a missing snapshot is reported as skipped, never as a pass. Provenance for each run captures the chip, core count, memory, operating system version and build, Python version, MLX and mlx-lm versions, the GPU driver identity where available, the exact source commit, and whether the source tree was dirty. Hostnames, user names, and serial numbers are deliberately excluded from the recorded output. Timing on a machine that is also serving other model processes is labeled contended and is not compared against clean numbers.",
+      "source": "deterministic long prompt embedded verbatim; 262 chat-template tokens on Qwen2.5-0.5B, measured"
+    },
+    "ctx1024": {
+      "template": "numbered",
+      "base": "You are reviewing a measurement protocol for a small language-model benchmark. The benchmark runs the same workload matrix on two operating systems and compares prefill and decode throughput. Each leg loads one pinned model snapshot, applies the model chat template to the prompt, runs greedy decoding with a fixed random seed, and records the prompt phase, the per-token phase, the generated token count, a hash of the generated token ids, and peak memory. A leg is valid only when the model snapshot revision matches the manifest pin, the power state is recorded, and no other model-serving process is holding the accelerator. The runner never downloads models on an offline host; a missing snapshot is reported as skipped, never as a pass. Provenance for each run captures the chip, core count, memory, operating system version and build, Python version, MLX and mlx-lm versions, the GPU driver identity where available, the exact source commit, and whether the source tree was dirty. Hostnames, user names, and serial numbers are deliberately excluded from the recorded output. Timing on a machine that is also serving other model processes is labeled contended and is not compared against clean numbers.",
+      "item": "Checkpoint: the runner records the prefill duration, the pinned decode length, the generated token identity, and the peak memory before the next workload starts.",
+      "items": 20,
+      "reference_tokens_qwen2_5": 1053,
+      "source": "deterministic numbered template expanded by the runner (base, then '<item> Entry i of <items>.'); ~1024 chat-template tokens on Qwen2.5-0.5B; exact count recorded per leg at run time, never assumed"
+    },
+    "ctx4096": {
+      "template": "numbered",
+      "base": "You are reviewing a measurement protocol for a small language-model benchmark. The benchmark runs the same workload matrix on two operating systems and compares prefill and decode throughput. Each leg loads one pinned model snapshot, applies the model chat template to the prompt, runs greedy decoding with a fixed random seed, and records the prompt phase, the per-token phase, the generated token count, a hash of the generated token ids, and peak memory. A leg is valid only when the model snapshot revision matches the manifest pin, the power state is recorded, and no other model-serving process is holding the accelerator. The runner never downloads models on an offline host; a missing snapshot is reported as skipped, never as a pass. Provenance for each run captures the chip, core count, memory, operating system version and build, Python version, MLX and mlx-lm versions, the GPU driver identity where available, the exact source commit, and whether the source tree was dirty. Hostnames, user names, and serial numbers are deliberately excluded from the recorded output. Timing on a machine that is also serving other model processes is labeled contended and is not compared against clean numbers.",
+      "item": "Checkpoint: the runner records the prefill duration, the pinned decode length, the generated token identity, and the peak memory before the next workload starts.",
+      "items": 96,
+      "reference_tokens_qwen2_5": 4093,
+      "source": "same deterministic numbered template at 96 entries; ~4096 chat-template tokens on Qwen2.5-0.5B; exact count recorded per leg at run time, never assumed"
+    }
+  },
+  "workloads": [
+    {
+      "id": "short-decode-32",
+      "prompt": "short",
+      "tokens": 32,
+      "measures": "short-prompt prefill and 32-token pinned decode"
+    },
+    {
+      "id": "long-decode-128",
+      "prompt": "long",
+      "tokens": 128,
+      "measures": "long-prompt prefill and 128-token pinned decode"
+    },
+    {
+      "id": "longctx-1024-decode-32",
+      "prompt": "ctx1024",
+      "tokens": 32,
+      "measures": "~1024-token prefill and 32-token pinned decode"
+    },
+    {
+      "id": "longctx-4096-decode-32",
+      "prompt": "ctx4096",
+      "tokens": 32,
+      "selection": "explicit",
+      "measures": "~4096-token prefill and 32-token pinned decode; runs only when named in --select, to bound normal runs"
+    }
+  ],
+  "matrix": "cartesian: every non-skipped model x every selected workload; prefill and decode metrics extracted from each leg's bench_decode output; exact prompt token counts recorded per leg from the model's own tokenizer"
+}

@@ -1,0 +1,56 @@
+bgdecode 13-inch M1 20261029T2040Z load 0.25 kernel 7.1.12-2-20261013.18-sep-ARCH
+-- B=2 pair 1 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [69.431, 69.473, 69.548, 69.493, 69.539], "median_ms_per_step": 69.493, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 pair 1 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [64.186, 64.444, 64.257, 64.227, 64.263], "median_ms_per_step": 64.257, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 pair 2 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [64.307, 64.326, 64.174, 64.508, 64.398], "median_ms_per_step": 64.326, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 pair 2 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [69.563, 69.584, 69.494, 69.627, 69.513], "median_ms_per_step": 69.563, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 pair 3 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [69.358, 69.504, 69.411, 69.567, 69.45], "median_ms_per_step": 69.45, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 pair 3 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [64.305, 64.243, 64.245, 64.515, 64.267], "median_ms_per_step": 64.267, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=3 pair 1 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [89.419, 89.417, 89.268, 89.811, 89.633], "median_ms_per_step": 89.419, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 pair 1 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [76.976, 77.133, 77.081, 76.884, 77.049], "median_ms_per_step": 77.049, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 pair 2 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [77.047, 77.129, 76.941, 76.967, 76.935], "median_ms_per_step": 76.967, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 pair 2 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [89.496, 90.016, 89.515, 89.21, 89.727], "median_ms_per_step": 89.515, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 pair 3 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [89.615, 89.675, 89.576, 89.646, 89.737], "median_ms_per_step": 89.646, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 pair 3 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [76.806, 76.921, 76.766, 76.962, 77.047], "median_ms_per_step": 76.921, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=4 pair 1 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [117.398, 116.353, 116.455, 116.62, 116.359], "median_ms_per_step": 116.455, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 pair 1 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [96.913, 96.88, 96.782, 96.653, 96.556], "median_ms_per_step": 96.782, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 pair 2 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [97.001, 96.739, 96.808, 96.784, 96.819], "median_ms_per_step": 96.808, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 pair 2 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [116.566, 116.679, 116.572, 117.566, 116.145], "median_ms_per_step": 116.572, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 pair 3 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [116.433, 116.24, 116.737, 117.44, 116.327], "median_ms_per_step": 116.433, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 pair 3 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [96.691, 96.69, 97.146, 97.224, 96.574], "median_ms_per_step": 96.691, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+done 20:52:38

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "tool": "omarchy-ane-probe",
+  "generated_at": "2026-10-02T18:43:51Z",
+  "elapsed_ms": 6,
+  "soc": null,
+  "board": null,
+  "truncated": true,
+  "unreadable": ["size: over --max-kib with every optional field dropped"]
+}

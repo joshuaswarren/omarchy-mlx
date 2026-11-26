@@ -1,0 +1,46 @@
+so base 7b1a4b8476844217 cand f9a1f2ecaf293722
+shaderdb base CS shader: 375 instrs, 297 alu, 297 fscib, 134 ic, 2828 code size, 111 gprs, 90 uniforms, 0 scratch, 896 threads, 2 loops, 0:0 spills:fills, 60 preamble inst
+shaderdb cand CS shader: 375 instrs, 297 alu, 297 fscib, 134 ic, 2828 code size, 111 gprs, 90 uniforms, 0 scratch, 896 threads, 2 loops, 0:0 spills:fills, 60 preamble inst
+start 2026-10-06T23:58:00Z boot 79dec028 7.1.12-2-11.38-sep-ARCH load 2.64
+prov base }
+prov cand }
+r1 base gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":5.695
+r1 base gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.453
+r1 base gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.522
+r1 base lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/base.icd.json
+r1 cand gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":5.621
+r1 cand gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.426
+r1 cand gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.712
+r1 cand lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/cand.icd.json
+r2 base gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":5.632
+r2 base gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.474
+r2 base gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.702
+r2 base lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/base.icd.json
+r2 cand gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":5.621
+r2 cand gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.373
+r2 cand gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.548
+r2 cand lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/cand.icd.json
+r3 base gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":5.648
+r3 base gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.507
+r3 base gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.662
+r3 base lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/base.icd.json
+r3 cand gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":5.680
+r3 cand gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.466
+r3 cand gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.759
+r3 cand lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/cand.icd.json
+mlxcheck2 base 
+mlxcheck2 cand 
+end 2026-10-06T23:58:37Z
+start 2026-10-06T23:58:37Z boot 79dec028 load 1.75
+prov base   "mx_version": "0.32.4.dev202610062245+41ca6e47",   "version_match": true } 
+prov cand   "mx_version": "0.32.4.dev202610062245+41ca6e47",   "version_match": true } 
+r1 base lm {"pf512_ms": 372.61, "decode_tok_s": 45.52, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+r1 cand lm {"pf512_ms": 373.84, "decode_tok_s": 45.05, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+r2 base lm {"pf512_ms": 372.85, "decode_tok_s": 45.43, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+r2 cand lm {"pf512_ms": 373.37, "decode_tok_s": 44.9, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+r3 base lm {"pf512_ms": 372.99, "decode_tok_s": 45.18, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+r3 cand lm {"pf512_ms": 373.35, "decode_tok_s": 45.67, "logits_sha": "3aab90898fb77c7c", "tokens_sha": "1ae717857465ab7f"}
+mlxcheck2 base "tflops_4096": {"float16": 5.988, "bfloat16": 2.64, "float32": 2.641}
+mlxcheck2 cand "tflops_4096": {"float16": 5.949, "bfloat16": 2.637, "float32": 2.605}
+mlxcheck2 hash diffs: [] of 21
+end 2026-10-07T00:00:06Z

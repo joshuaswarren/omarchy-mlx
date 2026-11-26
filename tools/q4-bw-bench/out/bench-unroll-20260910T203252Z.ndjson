@@ -1,0 +1,19 @@
+{"k":"dev","name":"Apple M1 (G13G B1)","subgroupSize":32,"arith":true,"ts_period_ns":1.000}
+{"k":"mode","variant":"subgroup","reps":21}
+{"k":"peak","tag":"copy","bytes":536870912,"med_gpu_ns":58292,"min_gpu_ns":50209,"med_gb_s":9210.03,"min_gb_s":10692.72}
+{"k":"peak","tag":"read","bytes":268435456,"med_gpu_ns":46208,"min_gpu_ns":41708,"med_gb_s":5809.29,"min_gb_s":6436.07}
+{"k":"eq","shape":"qkv","dim":0,"elements":896,"bit_mismatches":0}
+{"k":"eq","shape":"qkv","dim":1,"elements":128,"bit_mismatches":0}
+{"k":"eq","shape":"qkv","dim":2,"elements":128,"bit_mismatches":0}
+{"k":"eq","shape":"o","dim":0,"elements":896,"bit_mismatches":0}
+{"k":"eq","shape":"gate_up","dim":0,"elements":4864,"bit_mismatches":0}
+{"k":"eq","shape":"gate_up","dim":1,"elements":4864,"bit_mismatches":0}
+{"k":"eq","shape":"down","dim":0,"elements":896,"bit_mismatches":0}
+{"k":"shape","name":"qkv","grid":144,"bytes":584704,"base_med_ns":15708,"cand_med_ns":15792,"base_min_ns":14584,"cand_min_ns":13291,"base_gb_s":37.22,"cand_gb_s":37.03,"ratio":1.0053}
+{"k":"shape","name":"o","grid":112,"bytes":455168,"base_med_ns":16166,"cand_med_ns":16209,"base_min_ns":15042,"cand_min_ns":12459,"base_gb_s":28.16,"cand_gb_s":28.08,"ratio":1.0027}
+{"k":"shape","name":"gate_up","grid":1216,"bytes":4924160,"base_med_ns":34084,"cand_med_ns":33959,"base_min_ns":33083,"cand_min_ns":27875,"base_gb_s":144.47,"cand_gb_s":145.00,"ratio":0.9963}
+{"k":"shape","name":"down","grid":112,"bytes":2462976,"base_med_ns":29750,"cand_med_ns":29875,"base_min_ns":22000,"cand_min_ns":29208,"base_gb_s":82.79,"cand_gb_s":82.44,"ratio":1.0042}
+{"k":"chain","round":0,"bytes":8427008,"base_med_ns":483834,"cand_med_ns":535875,"base_min_ns":382708,"cand_min_ns":417000,"base_gb_s":17.42,"cand_gb_s":15.73,"ratio":1.1076}
+{"k":"chain_dispatch","base":[52000,267334,135125,29250],"cand":[56208,306750,141375,29458]}
+{"k":"chain","round":1,"bytes":8427008,"base_med_ns":384417,"cand_med_ns":420083,"base_min_ns":377167,"cand_min_ns":412459,"base_gb_s":21.92,"cand_gb_s":20.06,"ratio":1.0928}
+{"k":"done"}

@@ -1,0 +1,211 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+
+// Exact ggml scalar Vulkan geometry: Br 8, Bc 32, row_split 4, D_split 8.
+// Requires a 32-lane subgroup. Honeykrisp requires constant per-thread array indices.
+
+#version 450
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_shader_subgroup_extended_types_float16 : require
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(constant_id = 0) const uint M = 16;
+layout(constant_id = 1) const uint KV = 16;
+layout(constant_id = 2) const uint HD = 256;
+layout(constant_id = 3) const uint H = 1;
+layout(constant_id = 4) const uint HKV = 1;
+layout(constant_id = 5) const uint SCALE_BITS = 0x3f800000;
+
+layout(set = 0, binding = 0) readonly buffer QBuf { f16vec4 q4[]; };
+layout(set = 0, binding = 1) readonly buffer KBuf { f16vec4 k4[]; };
+layout(set = 0, binding = 2) readonly buffer VBuf { f16vec4 v4[]; };
+layout(set = 0, binding = 3) writeonly buffer OBuf { float o[]; };
+
+#define BR 8u
+#define BC 32u
+#define QR 2u
+#define SC 8u
+#define D8 8u
+
+float16_t dot4(f16vec4 a, f16vec4 b, float16_t acc) {
+  return fma(a.x, b.x, fma(a.y, b.y, fma(a.z, b.z, fma(a.w, b.w, acc))));
+}
+
+const uint qf_stride = HD / 4u + 1u;
+
+shared f16vec4 Qf[BR * qf_stride];
+
+void main() {
+  uint tid = gl_LocalInvocationIndex;
+  uint sg = tid / 32u;
+  uint lane = tid % 32u;
+  uint d_tid = tid % 8u;
+  uint col_tid = lane / 8u;
+  uint h = gl_WorkGroupID.x;
+  uint q0 = gl_WorkGroupID.y * BR;
+  uint hk = h / (H / HKV);
+  uint q4r = HD / 4u;
+
+  float scale = uintBitsToFloat(SCALE_BITS);
+  const float NEG_FLT_MAX_OVER_2 = uintBitsToFloat(0xFEFFFFFFu);
+  const float NEG_INF = uintBitsToFloat(0xFF800000u);
+  const float FATTN_KQ_MAX_OFFSET = 3.0f * 0.6931f;
+
+  [[unroll]]
+  for (uint idx = 0u; idx < BR * q4r; idx += 128u) {
+    uint w = idx + tid;
+    if (w < BR * q4r) {
+      uint qr = w / q4r;
+      uint dv = w % q4r;
+      Qf[qr * qf_stride + dv] = ((q0 + qr) < M)
+          ? f16vec4(vec4(q4[((q0 + qr) * H + h) * q4r + dv]) * scale)
+          : f16vec4(0.0);
+    }
+  }
+  barrier();
+
+  f16vec4 Of[QR][D8];
+  float Lf[QR];
+  float Mf[QR];
+  for (uint r = 0u; r < QR; ++r) {
+    Lf[r] = 0.0;
+    Mf[r] = NEG_FLT_MAX_OVER_2;
+    for (uint d = 0u; d < D8; ++d) {
+      Of[r][d] = f16vec4(0.0);
+    }
+  }
+
+  uint tiles = (min(KV, q0 + BR) + BC - 1u) / BC;
+
+  [[dont_unroll]]
+  for (uint tile = 0u; tile < tiles; ++tile) {
+    uint t0 = BC * tile;
+    float16_t Sf[QR][SC];
+    for (uint r = 0u; r < QR; ++r) {
+      for (uint c = 0u; c < SC; ++c) {
+        Sf[r][c] = float16_t(0.0);
+      }
+    }
+
+    [[unroll]]
+    for (uint d = 0u; d < D8; ++d) {
+      f16vec4 Q_cache[QR];
+      [[unroll]]
+      for (uint r = 0u; r < QR; ++r) {
+        Q_cache[r] = Qf[(QR * sg + r) * qf_stride + D8 * d + d_tid];
+      }
+      [[unroll]]
+      for (uint c = 0u; c < SC; ++c) {
+        uint t = t0 + 4u * c + col_tid;
+        if (t >= KV) {
+          continue;
+        }
+        f16vec4 K_Tf = k4[(t * HKV + hk) * q4r + D8 * d + d_tid];
+        [[unroll]]
+        for (uint r = 0u; r < QR; ++r) {
+          Sf[r][c] = dot4(Q_cache[r], K_Tf, Sf[r][c]);
+        }
+      }
+    }
+
+    [[unroll]]
+    for (uint c = 0u; c < SC; ++c) {
+      [[unroll]]
+      for (uint s = 4u; s > 0u; s >>= 1u) {
+        [[unroll]]
+        for (uint r = 0u; r < QR; ++r) {
+          Sf[r][c] += subgroupShuffleXor(Sf[r][c], s);
+        }
+      }
+    }
+
+    [[unroll]]
+    for (uint r = 0u; r < QR; ++r) {
+      uint qr = q0 + QR * sg + r;
+      float rowmaxf = NEG_FLT_MAX_OVER_2;
+      [[unroll]]
+      for (uint c = 0u; c < SC; ++c) {
+        uint t = t0 + 4u * c + col_tid;
+        if (qr < M && t > qr) {
+          Sf[r][c] = float16_t(NEG_INF);
+        }
+        if (t < KV) {
+          rowmaxf = max(rowmaxf, float(Sf[r][c]));
+        }
+      }
+      rowmaxf += FATTN_KQ_MAX_OFFSET;
+      float Moldf = Mf[r];
+      Mf[r] = max(rowmaxf, Moldf);
+      float eMf = exp(Moldf - Mf[r]);
+      Lf[r] = eMf * Lf[r];
+      [[unroll]]
+      for (uint d = 0u; d < D8; ++d) {
+        Of[r][d] = float16_t(eMf) * Of[r][d];
+      }
+    }
+
+    [[unroll]]
+    for (uint c = 0u; c < SC; ++c) {
+      uint t = t0 + 4u * c + col_tid;
+      if (t >= KV) {
+        continue;
+      }
+      float16_t Pf[QR];
+      [[unroll]]
+      for (uint r = 0u; r < QR; ++r) {
+        Pf[r] = float16_t(exp(Sf[r][c] - Mf[r]));
+        Lf[r] += Pf[r];
+      }
+      [[unroll]]
+      for (uint d = 0u; d < D8; ++d) {
+        f16vec4 Vf = v4[(t * HKV + hk) * q4r + D8 * d + d_tid];
+        [[unroll]]
+        for (uint r = 0u; r < QR; ++r) {
+          Of[r][d] += Pf[r] * Vf;
+        }
+      }
+    }
+  }
+
+  [[unroll]]
+  for (uint r = 0u; r < QR; ++r) {
+    float rowmaxf = Mf[r];
+    rowmaxf = max(rowmaxf, subgroupShuffleXor(rowmaxf, 8u));
+    rowmaxf = max(rowmaxf, subgroupShuffleXor(rowmaxf, 16u));
+    float Moldf = Mf[r];
+    Mf[r] = max(rowmaxf, Moldf);
+    float eMf = exp(Moldf - Mf[r]);
+    Lf[r] = eMf * Lf[r];
+    Lf[r] += subgroupShuffleXor(Lf[r], 8u);
+    Lf[r] += subgroupShuffleXor(Lf[r], 16u);
+    [[unroll]]
+    for (uint d = 0u; d < D8; ++d) {
+      Of[r][d] = float16_t(eMf) * Of[r][d];
+      Of[r][d] += subgroupShuffleXor(Of[r][d], 8u);
+      Of[r][d] += subgroupShuffleXor(Of[r][d], 16u);
+    }
+  }
+
+  [[unroll]]
+  for (uint r = 0u; r < QR; ++r) {
+    float Lfrcp = (Lf[r] == 0.0) ? 0.0 : (1.0 / Lf[r]);
+    [[unroll]]
+    for (uint d = 0u; d < D8; ++d) {
+      Of[r][d] = Of[r][d] * float16_t(Lfrcp);
+    }
+    uint qr = q0 + QR * sg + r;
+    if (qr < M) {
+      [[unroll]]
+      for (uint d = 0u; d < D8; ++d) {
+        uint ob = (qr * H + h) * HD + 4u * (D8 * d + d_tid);
+        o[ob + 0u] = float(Of[r][d].x);
+        o[ob + 1u] = float(Of[r][d].y);
+        o[ob + 2u] = float(Of[r][d].z);
+        o[ob + 3u] = float(Of[r][d].w);
+      }
+    }
+  }
+}

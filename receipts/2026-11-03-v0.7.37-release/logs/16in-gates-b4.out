@@ -1,0 +1,53 @@
+IDLE-GUARD-JOB-START 20261103T130835Z lane=w72 class=validation release v0.7.37 gate batch b4 g11-card-9b pin=06d1038d draft-assets longcap=30 host-16in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261103.2-lab-ARCH
+PREFLIGHT-RUN
+SETTLE load1=2.22 SETTLE-SKIPPED
+GPU-TIMEOUTS before=23 boot=9de8ae34-9ba5-4817-88c2-c550a9df82dd
+=== g11-card-9b  13:08:36 free   30G ===
+BEGIN 2026-11-03T13:08:36Z tag=v0.7.37 boot_id=9de8ae34-9ba5-4817-88c2-c550a9df82dd uname=7.1.12-2-20261103.2-lab-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+OUTBOUND_DENIED False
+SETUP_COMPLETE 3.6s pair=everyday
+CHAT status=complete 3.72s text='Ready'
+CARD status=complete wall_s=12.03 text_len=109 components=1 component_types=['chart'] sse_component_types=['chart'] first_visible_text_s=4.119 first_visible_component_s=11.071 notices=['working', 'generating']
+CARD_CHECK PASS
+GATE PASS
+SSE_EVENT_COUNT 27
+SSE {"type": "status", "data": {"state": "working"}, "at_s": 0.001}
+SSE {"type": "status", "data": {"state": "generating", "context_tokens": 1685, "context_limit": 4096, "output_tokens": 700}, "at_s": 0.003}
+SSE {"type": "text", "data": {"text": "Here"}, "at_s": 4.119}
+SSE {"type": "text", "data": {"text": " is"}, "at_s": 4.159}
+SSE {"type": "text", "data": {"text": " a"}, "at_s": 4.202}
+SSE {"type": "text", "data": {"text": " bar"}, "at_s": 4.244}
+SSE {"type": "text", "data": {"text": " chart"}, "at_s": 4.285}
+SSE {"type": "text", "data": {"text": " comparing"}, "at_s": 4.326}
+SSE {"type": "text", "data": {"text": " the"}, "at_s": 4.374}
+SSE {"type": "text", "data": {"text": " populations"}, "at_s": 4.415}
+SSE {"type": "text", "data": {"text": " of"}, "at_s": 4.455}
+SSE {"type": "text", "data": {"text": " Paris"}, "at_s": 4.496}
+SSE {"type": "text", "data": {"text": ","}, "at_s": 4.537}
+SSE {"type": "text", "data": {"text": " Tokyo"}, "at_s": 4.581}
+SSE {"type": "text", "data": {"text": ","}, "at_s": 4.623}
+SSE {"type": "text", "data": {"text": " and"}, "at_s": 4.666}
+SSE {"type": "text", "data": {"text": " Lagos"}, "at_s": 4.707}
+SSE {"type": "text", "data": {"text": " based"}, "at_s": 4.752}
+SSE {"type": "text", "data": {"text": " on"}, "at_s": 4.795}
+SSE {"type": "text", "data": {"text": " the"}, "at_s": 4.837}
+SSE {"type": "text", "data": {"text": " figures"}, "at_s": 4.883}
+SSE {"type": "text", "data": {"text": " you"}, "at_s": 4.923}
+SSE {"type": "text", "data": {"text": " provided"}, "at_s": 4.965}
+SSE {"type": "text", "data": {"text": "."}, "at_s": 5.007}
+SSE {"type": "text", "data": {"text": "\n\n"}, "at_s": 5.048}
+SSE {"type": "component", "data": {"type": "chart", "kind": "bar", "series": [{"id": "s1", "label": "City Population (Millions)", "unit": "M", "source": "User message: Paris 2.1M, Tokyo 13.9M, Lagos 21.0M", "estimate": false, "values": [{"label": "Paris", "value": 2.1}, {"label": "Tokyo", "value": 13.9}, {"label": "Lagos", "value": 21.0}]}], "id": "ac6dd96c2d1c4e8ca63941818fcf17a5", "turn_id": "392fa6ab26a849be83daa0e41d64e708", "revision": 1}, "at_s": 11.071}
+SSE {"type": "done", "data": {"stopped": false}, "at_s": 11.131}
+fuser_port=34351 exit=1 output=
+GATE11_EXIT 0
+g11-card-9b_RC=0 13:09:01
+BATCH_OK g11-card-9b
+GPU-TIMEOUTS after=23 delta=0
+.9M, Lagos 21.0M", "estimate": false, "values": [{"label": "Paris", "value": 2.1}, {"label": "Tokyo", "value": 13.9}, {"label": "Lagos", "value": 21.0}]}], "id": "ac6dd96c2d1c4e8ca63941818fcf17a5", "turn_id": "392fa6ab26a849be83daa0e41d64e708", "revision": 1}, "at_s": 11.071}
+SSE {"type": "done", "data": {"stopped": false}, "at_s": 11.131}
+fuser_port=34351 exit=1 output=
+GATE11_EXIT 0
+g11-card-9b_RC=0 13:09:01
+BATCH_OK g11-card-9b

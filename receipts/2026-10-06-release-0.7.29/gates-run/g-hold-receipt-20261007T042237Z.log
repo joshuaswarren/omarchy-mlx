@@ -1,0 +1,58 @@
+== wheel + vendored mlx-lm + rule ==
+/tmp/hold-gate-work.0jdl/vendor-wheels/annotated_doc-0.0.5-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/anyio-4.15.1-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/certifi-2026.7.22-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/cffi-2.1.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/click-8.5.0-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/filelock-4.0.12-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/fsspec-2026.9.0-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/h11-0.16.0-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/hf_xet-1.7.0-cp38-abi3-manylinux_2_28_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/httpcore-1.0.9-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/httpx-0.28.1-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/huggingface_hub-1.33.0-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/idna-3.20-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/jinja2-3.1.6-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/markdown_it_py-4.2.0-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/markupsafe-3.0.4-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/mdurl-0.1.2-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/mlx_lm-0.31.3-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/mlx_omarchy-0.32.4.dev202610070139+d86daf9-cp314-cp314-linux_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/numpy-2.5.3-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/packaging-26.3-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/protobuf-7.36.2-cp310-abi3-manylinux2014_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/pycparser-3.0-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/pygments-2.21.0-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/pyyaml-6.0.3-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/regex-2026.9.29-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/rich-15.0.0-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/safetensors-0.8.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/sentencepiece-0.2.2-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/shellingham-1.5.4-py2.py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/soundfile-0.14.0-py2.py3-none-manylinux_2_28_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/tokenizers-0.23.2-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/tqdm-4.70.1-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/transformers-5.16.1-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/typer-0.27.3-py3-none-any.whl
+/tmp/hold-gate-work.0jdl/vendor-wheels/typing_extensions-4.16.0-py3-none-any.whl
+MLX_PIN version=0.32.4.dev202610070139+d86daf9 expected=0.32.4.dev202610070139+d86daf9 ok=True
+MLX_PIN libmlx_sha=5ea117efca8321384214715bac8b4abf078f3373414c740afae9f9a9d84c982a record_sha=5ea117efca8321384214715bac8b4abf078f3373414c740afae9f9a9d84c982a ok=True
+mlx_lm 0.31.3
+HOLD_UDEV root video 660
+== live hold tests (H2: must really run, under the same ticket/lock) ==
+test_forced_hold_is_held_during_work_and_released_after_idle (__main__.CpuPdHoldLiveTest.test_forced_hold_is_held_during_work_and_released_after_idle) ... ok
+test_off_switch_never_opens_the_request (__main__.CpuPdHoldLiveTest.test_off_switch_never_opens_the_request) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 5.554s
+
+OK
+HOLD_TESTS 2 run, 0 skipped, OK
+== greedy A/B (H1/H4: token ids from generate_step, 4 digests) ==
+AB_DIGEST be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 ntok 64
+AB_DIGEST be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 ntok 64
+AB_DIGEST be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 ntok 64
+AB_DIGEST be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 ntok 64
+HOLD_AB 4 digests: be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361 be0c1fc43414078d4c688a81702b66520673bb6d1434f04880eb3bb1f2153361
+HOLD_AB all 4 digests equal and non-empty
+HOLD_PASS receipt=~/g-hold-receipt-20261007T042237Z.log

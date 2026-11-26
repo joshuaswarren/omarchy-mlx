@@ -1,0 +1,8 @@
+## decode_bench.py mlx-community/granite-4.0-1b-4bit 64 4
+  A main+a69d9e6 n=2 median=38.845 values=[38.85, 38.84] prompt_med 160.72500000000002 ids ['259a3ad0945ce5ef'] peak_gpu_gib=0.902 temps_c=31.894-40.394 load1_before<=0.11
+  B p5+98f0911 n=2 median=39.21 values=[39.21, 39.21] prompt_med 160.675 ids ['259a3ad0945ce5ef'] peak_gpu_gib=0.902 temps_c=31.627-40.062 load1_before<=0.13
+  B/A = 1.009
+## decode_bench.py mlx-community/Qwen3.5-4B-MLX-4bit 64 4
+  A main+a69d9e6 n=2 median=13.3025 values=[13.3, 13.305] prompt_med 27.075000000000003 ids ['a8b4d9efb0dcc626'] peak_gpu_gib=2.414 temps_c=31.536-43.886 load1_before<=0.23
+  B p5+98f0911 n=2 median=13.322500000000002 values=[13.315000000000001, 13.33] prompt_med 27.075000000000003 ids ['a8b4d9efb0dcc626'] peak_gpu_gib=2.414 temps_c=31.715-43.179 load1_before<=0.33
+  B/A = 1.002

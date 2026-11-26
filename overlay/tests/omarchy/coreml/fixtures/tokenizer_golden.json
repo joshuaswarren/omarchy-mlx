@@ -1,0 +1,9 @@
+{
+  "schema": "mlx-omarchy.parakeet-tokenizer-golden.v1",
+  "reference_commit": "75aec2a1c991319657ff4dec5f602c12da6c5012",
+  "model_revision": "b650695c2322ee5281dff48d7345b2f3a58ff018",
+  "tokenizer_sha256": "bd321b096832a3f270bd3b2a88823957920f1a5c5ada71114a26ea729d0cbe91",
+  "token_output_sha256": "a175a5f9ce8c1e91fc28f6e1fce9deee29c24c3ef49e62ce4b144cc44f8401c8",
+  "transcript_sha256": "db501a8c080380ea027ffa50a4b4956c39df77cb692c4fb78e556311a11a0790",
+  "transcript": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick, peppered, flour-fattened sauce........................................... Юн Ю"
+}

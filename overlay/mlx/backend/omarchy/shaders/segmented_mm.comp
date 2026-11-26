@@ -1,0 +1,143 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// SegmentedMM: the tiled matmul kernel with a per-segment K range. a and
+// b are single row-major (or uniformly transposed) matrices, and binding 2
+// carries uint32 segment pairs [k_start, k_end); workgroup z is the
+// segment index. Each segment contracts a's columns k_start..k_end with
+// b's rows k_start..k_end into its own MxN output matrix; an empty or
+// inverted segment (k_end <= k_start) runs no tiles and writes zeros,
+// which is the upstream contract. matrix_k stays the FULL row length of
+// a so row addressing never depends on the segment range.
+
+#version 460
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VALUE(f) bf16_store(f)
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#endif
+
+const uint TILE_SIZE = 16u;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputA {
+  STORAGE_TYPE values[];
+} input_a;
+layout(set = 0, binding = 1, std430) readonly buffer InputB {
+  STORAGE_TYPE values[];
+} input_b;
+layout(set = 0, binding = 2, std430) readonly buffer Segments {
+  uint values[];
+} segments;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+shared float tile_a[16][16];
+shared float tile_b[16][16];
+
+void main() {
+  uint local_x = gl_LocalInvocationID.x;
+  uint local_y = gl_LocalInvocationID.y;
+  // Workgroup z is the segment index; the pair for segment s lives at
+  // words [aux_offset + 2s, aux_offset + 2s + 1).
+  uint batch_index = gl_WorkGroupID.z;
+  uint k_start = segments.values[params.aux_offset + 2u * batch_index];
+  uint k_end = segments.values[params.aux_offset + 2u * batch_index + 1u];
+  uint k_length = k_end > k_start ? k_end - k_start : 0u;
+  uint out_matrix = params.matrix_m * params.matrix_n;
+  uint tile_rows = params.matrix_m / TILE_SIZE +
+      uint(params.matrix_m % TILE_SIZE != 0u);
+  uint tile_columns = params.matrix_n / TILE_SIZE +
+      uint(params.matrix_n % TILE_SIZE != 0u);
+  uint k_tiles = k_length / TILE_SIZE + uint(k_length % TILE_SIZE != 0u);
+
+  for (uint tile_row = gl_WorkGroupID.y; tile_row < tile_rows;
+       tile_row += gl_NumWorkGroups.y) {
+    uint row = tile_row * TILE_SIZE + local_y;
+    for (uint tile_column = gl_WorkGroupID.x; tile_column < tile_columns;
+         tile_column += gl_NumWorkGroups.x) {
+      uint column = tile_column * TILE_SIZE + local_x;
+      float accumulator = 0.0;
+
+      for (uint tile = 0u; tile < k_tiles; ++tile) {
+        uint a_column = k_start + tile * TILE_SIZE + local_x;
+        uint b_row = k_start + tile * TILE_SIZE + local_y;
+        uint a_index = params.lhs_offset +
+            ((params.flags & 4u) != 0u
+                ? a_column * params.matrix_m + row
+                : row * params.matrix_k + a_column);
+        tile_a[local_y][local_x] = row < params.matrix_m &&
+                tile * TILE_SIZE + local_x < k_length
+            ? LOAD_VALUE(input_a.values[a_index])
+            : 0.0;
+        uint b_index = params.rhs_offset +
+            ((params.flags & 1u) != 0u
+                ? column * params.matrix_k + b_row
+                : b_row * params.matrix_n + column);
+        tile_b[local_y][local_x] = tile * TILE_SIZE + local_y < k_length &&
+                column < params.matrix_n
+            ? LOAD_VALUE(input_b.values[b_index])
+            : 0.0;
+        barrier();
+
+        for (uint index = 0; index < TILE_SIZE; ++index) {
+          accumulator += tile_a[local_y][index] * tile_b[index][local_x];
+        }
+        barrier();
+      }
+
+      if (row < params.matrix_m && column < params.matrix_n) {
+        uint output_index = batch_index * out_matrix +
+            row * params.matrix_n + column;
+        output_data.values[params.output_offset + output_index] =
+            STORE_VALUE(params.alpha * accumulator);
+      }
+    }
+  }
+}

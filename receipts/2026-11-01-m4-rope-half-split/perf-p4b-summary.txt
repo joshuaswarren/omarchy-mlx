@@ -1,0 +1,8 @@
+## decode_bench.py mlx-community/Qwen2.5-0.5B-Instruct-4bit 64 4 [MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1]
+  A int+749902d n=2 median=116.1275 values=[116.34, 115.91499999999999] prompt_med 581.175 ids ['ec5337135cdd6172'] peak_gpu_gib=0.284 temps_c=32.7-43.238 load1_before<=0.07
+## decode_bench.py mlx-community/Qwen2.5-0.5B-Instruct-4bit 64 4
+  B int+749902d n=2 median=121.22 values=[121.37, 121.07] prompt_med 587.5 ids ['ec5337135cdd6172'] peak_gpu_gib=0.284 temps_c=32.788-42.898 load1_before<=0.11
+## decode_bench.py mlx-community/gemma-3-1b-it-4bit 64 4 [MLX_OMARCHY_NO_ROPE_HALF_SPLIT=1]
+  A int+749902d n=2 median=52.9575 values=[52.980000000000004, 52.935] prompt_med 176.225 ids ['23e4ff200b87cf7a'] peak_gpu_gib=0.707 temps_c=32.164-41.515 load1_before<=0.06
+## decode_bench.py mlx-community/gemma-3-1b-it-4bit 64 4
+  B int+749902d n=2 median=54.055 values=[54.06, 54.05] prompt_med 177.29999999999998 ids ['23e4ff200b87cf7a'] peak_gpu_gib=0.707 temps_c=32.339-41.308 load1_before<=0.1

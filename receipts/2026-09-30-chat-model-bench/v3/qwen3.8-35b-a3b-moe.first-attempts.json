@@ -1,0 +1,75 @@
+{
+ "model_id": "NovaeonStudio/Qwen3.8-35B-A3B-Distill-oQ8-fp16-mtp",
+ "revision": "5315bc8a40d751f5bded428eadd6a22007a3bf17",
+ "label": "qwen3.8-35b-a3b-moe",
+ "harness_version": 2,
+ "turns": [
+  {
+   "boot_id": "a32ca689-dae5-4b1a-8d2e-c51e11759cc6",
+   "loadavg_start": "0.47 0.34 0.30 1/344 7256",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 86846,
+   "page_cache": "cold or unknown: first load recorded in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T05:11:11Z",
+   "load_s": 8.471228975000031,
+   "peak_mem_gb_after_load": 36.807671808
+  },
+  {
+   "boot_id": "a32ca689-dae5-4b1a-8d2e-c51e11759cc6",
+   "loadavg_start": "0.34 0.37 0.33 1/329 15628",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 88815,
+   "page_cache": "warm: loaded earlier in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T05:20:10Z",
+   "load_s": 40.1110844509999,
+   "peak_mem_gb_after_load": 36.807671808
+  },
+  {
+   "boot_id": "35df33be-ada4-4d3e-9028-3d761a510c65",
+   "loadavg_start": "0.68 0.48 0.28 1/405 13976",
+   "other_gpu_processes": 3,
+   "mem_available_mib_before_load": 85815,
+   "page_cache": "cold or unknown: first load recorded in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T05:36:22Z",
+   "load_s": 53.73265779500002,
+   "peak_mem_gb_after_load": 36.807671808,
+   "peak_mem_gb_turn": 41.511477248,
+   "finished": "2026-09-30T05:43:18Z"
+  }
+ ],
+ "perf": {
+  "ttft_card_prompt_s": {
+   "median": 26.953901290500028,
+   "max": 27.227411087000064,
+   "min": 26.68039149399999,
+   "n": 2
+  },
+  "ttft_prompt_tokens": 244,
+  "prefill_512_s": {
+   "median": 50.016306995000036,
+   "max": 50.45086603200002,
+   "min": 49.58174795800005,
+   "n": 2
+  },
+  "prefill_512_tok_s": 10.236661416269357,
+  "prefill_2048_s": null,
+  "prefill_2048_tok_s": "skipped (--prefill2048-n 0)",
+  "decode_after_512_tok_s": {
+   "median": 3.4776523094712233,
+   "max": 3.5204644300992713,
+   "min": 3.434840188843175,
+   "n": 2
+  },
+  "decode_after_2048_tok_s": null,
+  "decode_tokens": 128,
+  "peak_mem_gb_mx": 41.511477248,
+  "rss_mib_after_perf": 423,
+  "mem_available_mib_before_load": 85815,
+  "mem_available_min_mib": 41437,
+  "mem_available_delta_mib": 44378,
+  "gpu_shared_during_turn": true
+ }
+}

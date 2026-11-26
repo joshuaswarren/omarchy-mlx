@@ -1,0 +1,21 @@
+{
+ "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+ "commit": "a69d9e6",
+ "provenance": "provenance: mlx-omarchy 0.32.4.dev202611021803+a69d9e6 mx=0.32.4.dev202611021803+a69d9e6 verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:7542a0bcff502c00 libmlx.so=sha256:73c89b42774ef082",
+ "mlx_lm": "0.31.3",
+ "env": {
+  "AGX_APPLE9_MAX_SHARED": "32768",
+  "MLX_OMARCHY_BATCH_WORK": "120000"
+ },
+ "segments": [
+  0,
+  1
+ ],
+ "s1_positions": 1024,
+ "s1_ppl": 5.780091710161293,
+ "one_pass_positions": 1024,
+ "one_pass_ppl": 5.788234450299374,
+ "rel_diff": 0.0014067744159291795,
+ "threshold": 0.01,
+ "passed": true
+}

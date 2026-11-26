@@ -1,0 +1,56 @@
+{
+  "in_channels": 768,
+  "audio_codec": {
+    "encoder_dim": 64,
+    "encoder_rates": [
+      2,
+      8,
+      10,
+      12
+    ],
+    "latent_dim": 1024,
+    "decoder_dim": 1536,
+    "decoder_rates": [
+      12,
+      10,
+      8,
+      2
+    ],
+    "n_codebooks": 16,
+    "codebook_size": 1024,
+    "codebook_dim": 128,
+    "quantizer_dropout": false,
+    "sample_rate": 48000,
+    "mean": 0,
+    "std": 1
+  },
+  "text_encoder": {
+    "dim": 768,
+    "name": "t5-base",
+    "max_length": 512,
+    "pad_mode": "longest"
+  },
+  "vision_encoder": {
+    "dim": 1024,
+    "batch_size": 300,
+    "name": "PE-Core-L14-336",
+    "normalize_feature": true,
+    "interpolation_mode": "BICUBIC",
+    "image_size": 336
+  },
+  "transformer": {
+    "dim": 1536,
+    "n_heads": 12,
+    "n_layers": 12
+  },
+  "num_anchors": 3,
+  "anchor_embedding_dim": 128,
+  "visual_ranker": {
+    "checkpoint": null,
+    "kind": "imagebind"
+  },
+  "text_ranker": {
+    "kind": "ensemble"
+  },
+  "span_predictor": "pe-a-frame-large"
+}

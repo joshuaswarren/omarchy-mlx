@@ -1,0 +1,264 @@
+### o1025h4p
+prediction G13G-1KV-1025-keys-is-9-workgroups-win-gain-between-plus-10-and-plus-40pct-provenance-rerun
+falsifier gain-below-plus-5pct-or-CI-contains-0
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+{'keys': 1025, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 152.69, 'variant_us_per_call': 104.61, 'gain_pct': 31.49, 'gain_ci95': (31.43, 31.55)}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T03:15:45Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 37500
+  temp nvme temp1_input 50850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 56538
+  temp macsmc_hwmon temp2_input 37500
+  temp macsmc_hwmon temp3_input 54403
+  temp macsmc_hwmon temp4_input 48926
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 1.03 1.08 1.08
+thermal-post.txt
+  time_utc 2026-11-13T03:16:14Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 37500
+  temp nvme temp1_input 50850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 56769
+  temp macsmc_hwmon temp2_input 37500
+  temp macsmc_hwmon temp3_input 55192
+  temp macsmc_hwmon temp4_input 49253
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 1.10 1.08 1.09
+receipt PEROP-PASS
+### o1920h4p
+prediction G13G-1KV-1920-keys-is-15-workgroups-win-gain-between-plus-10-and-plus-40pct-provenance-rerun
+falsifier gain-below-plus-5pct-or-CI-contains-0
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+{'keys': 1920, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 1.52587890625e-05, 'stock_us_per_call': 173.89, 'variant_us_per_call': 126.83, 'gain_pct': 27.06, 'gain_ci95': (27.02, 27.1)}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T03:17:14Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 37500
+  temp nvme temp1_input 50850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 56086
+  temp macsmc_hwmon temp2_input 37500
+  temp macsmc_hwmon temp3_input 53846
+  temp macsmc_hwmon temp4_input 48940
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 1.09 1.08 1.09
+thermal-post.txt
+  time_utc 2026-11-13T03:17:49Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 37500
+  temp nvme temp1_input 50850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 57442
+  temp macsmc_hwmon temp2_input 37500
+  temp macsmc_hwmon temp3_input 55663
+  temp macsmc_hwmon temp4_input 49100
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 1.06 1.07 1.08
+receipt PEROP-PASS
+### o513h16p
+prediction G13G-4KV-513-keys-is-20-workgroups-above-16-loss-gain-between-minus-50-and-minus-3pct-provenance-rerun
+falsifier gain-above-plus-0pct-or-CI-contains-0
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+{'keys': 513, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 157.79, 'variant_us_per_call': 171.07, 'gain_pct': -8.42, 'gain_ci95': (-8.45, -8.38)}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T03:18:49Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 37500
+  temp nvme temp1_input 50850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 56317
+  temp macsmc_hwmon temp2_input 37500
+  temp macsmc_hwmon temp3_input 54411
+  temp macsmc_hwmon temp4_input 48926
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 1.09 1.09 1.09
+thermal-post.txt
+  time_utc 2026-11-13T03:19:26Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 37500
+  temp nvme temp1_input 50850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 58076
+  temp macsmc_hwmon temp2_input 37500
+  temp macsmc_hwmon temp3_input 56538
+  temp macsmc_hwmon temp4_input 49086
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 1.29 1.15 1.11
+receipt PEROP-PASS
+### o641h12p
+prediction G13G-3KV-641-keys-is-18-workgroups-above-16-loss-gain-between-minus-50-and-minus-3pct-provenance-rerun
+falsifier gain-above-plus-0pct-or-CI-contains-0
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+{'keys': 641, 'reps_per_arm': 3000, 'engaged_op_maxabs_diff': 0.0, 'stock_us_per_call': 158.31, 'variant_us_per_call': 170.42, 'gain_pct': -7.65, 'gain_ci95': (-7.69, -7.62)}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T03:20:24Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 37500
+  temp nvme temp1_input 51850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 56769
+  temp macsmc_hwmon temp2_input 37500
+  temp macsmc_hwmon temp3_input 54604
+  temp macsmc_hwmon temp4_input 49086
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 1.25 1.15 1.11
+thermal-post.txt
+  time_utc 2026-11-13T03:21:02Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 37500
+  temp nvme temp1_input 51850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 58125
+  temp macsmc_hwmon temp2_input 37500
+  temp macsmc_hwmon temp3_input 56346
+  temp macsmc_hwmon temp4_input 49400
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 1.21 1.15 1.11
+receipt PEROP-PASS
+### f64h8c1024p
+prediction G13G-op-float64-gate-passes-at-8Q-2KV-1024-keys-16-workgroups-provenance-rerun
+falsifier f64_gate_pass-false
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+{'keys': 1024, 'qh': 8, 'kvh': 2, 'hd': 256, 'half_step': 0.0007803958203622902, 'err_max': {'fused': 0.0004769786232447504, 'stock': 0.0004769786232447504, 'variant': 0.0004769786232447504}, 'err_mean': {'fused': 6.024675853882447e-05, 'stock': 6.024677150624466e-05, 'variant': 6.024675853882447e-05}, 'arms_maxabs_diff': 6.103515625e-05, 'f64_gate_pass': True}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T03:22:04Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 37500
+  temp nvme temp1_input 50850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 56769
+  temp macsmc_hwmon temp2_input 37500
+  temp macsmc_hwmon temp3_input 54411
+  temp macsmc_hwmon temp4_input 48926
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 1.33 1.18 1.12
+thermal-post.txt
+  time_utc 2026-11-13T03:22:04Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 37500
+  temp nvme temp1_input 50850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 56769
+  temp macsmc_hwmon temp2_input 37500
+  temp macsmc_hwmon temp3_input 54411
+  temp macsmc_hwmon temp4_input 48926
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 1.33 1.18 1.12
+receipt PEROP-PASS
+### trp1025h4c
+prediction G13G-dispatch-trace-cpu-control-on-cpu-1KV-1025-keys-9-workgroups-arm1-distinct-dispatch-set-differs-from-arm0-gpu-add-control-dispatches-cpu-add-control-zero
+falsifier arm1-and-arm0-dispatch-sets-identical-or-cpu-control-dispatches
+provenance dist=mlx-omarchy version=0.32.4.dev202611120448+8937c93e verified=match
+  mlx/core.cpython-314-aarch64-linux-gnu.so sha256=615f0eb19f8f7d178f79fafee02158c3ac33d1ad165f80d76c86cfb2b94682cc record-match=True
+  mlx/lib/libmlx.so sha256=7bdd38590f3853ac47bc42b67832e9aaef91e4e885a81b3bc2708653ee63ea64 record-match=True
+TRACE-JSON {"arm0-old-pass1": {"dispatches": 2, "distinct": ["[rtmod] DISPATCH kernel=652  gx=1 gy=9 gz=1", "[rtmod] DISPATCH kernel=654  gx=4 gy=1 gz=1"], "rc": 0}, "arm1-variant": {"dispatches": 2, "distinct": ["[rtmod] DISPATCH kernel=654  gx=4 gy=1 gz=1", "[rtmod] DISPATCH kernel=676  gx=1 gy=9 gz=1"], "rc": 0}, "control-cpu-add": {"dispatches": 0, "distinct": [], "rc": 0}, "control-gpu-add": {"dispatches": 1, "distinct": ["[rtmod] DISPATCH kernel=469  gx=1 gy=1 gz=1"], "rc": 0}}
+FUSE-DONE
+reopen REOPEN-OK Device(gpu, 0)
+thermal-pre.txt
+  time_utc 2026-11-13T04:35:54Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 40200
+  temp nvme temp1_input 59850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 67277
+  temp macsmc_hwmon temp2_input 40199
+  temp macsmc_hwmon temp3_input 63465
+  temp macsmc_hwmon temp4_input 54024
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 2.05 1.55 1.31
+thermal-post.txt
+  time_utc 2026-11-13T04:35:54Z
+  kernel 7.3.0-2-20261110.1-lab-ARCH
+  boot_id 8021eaa7-eab4-448c-9fee-986d69502b09
+  dt_model Apple MacBook Pro (13-inch, M1, 2020)
+  temp macsmc_battery temp1_input 40200
+  temp nvme temp1_input 59850
+  temp tas2770 temp1_input 31437
+  temp macsmc_hwmon temp1_input 67277
+  temp macsmc_hwmon temp2_input 40199
+  temp macsmc_hwmon temp3_input 63465
+  temp macsmc_hwmon temp4_input 54024
+  temp tas2770 temp1_input 29187
+  temp tas2770 temp1_input 29812
+  temp tas2770 temp1_input 33187
+  governor performance
+  load 2.05 1.55 1.31
+receipt PEROP-PASS

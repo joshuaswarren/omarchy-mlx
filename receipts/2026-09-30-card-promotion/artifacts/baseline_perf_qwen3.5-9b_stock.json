@@ -1,0 +1,62 @@
+{
+  "model_id": "mlx-community/Qwen3.5-9B-MLX-4bit",
+  "revision": "938d8919941c6e7efd3c7150eff7fe9d12afa631",
+  "label": "qwen3.5-9b-stock-baseline",
+  "harness_version": 2,
+  "turns": [
+    {
+      "boot_id": "4aed18b3-a96b-4959-8f3d-a877e3e96ef9",
+      "loadavg_start": "0.78 0.65 0.90 1/326 212579",
+      "other_gpu_processes": 0,
+      "mem_available_mib_before_load": 90536,
+      "page_cache": "cold or unknown: first load recorded in this boot",
+      "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=unknown core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+      "started": "2026-09-30T22:39:10Z",
+      "load_s": 2.7285817560000396,
+      "peak_mem_gb_after_load": 5.0383872,
+      "peak_mem_gb_turn": 6.46678528,
+      "finished": "2026-09-30T22:41:15Z"
+    }
+  ],
+  "perf": {
+    "ttft_card_prompt_s": {
+      "median": 0.804730008999968,
+      "max": 0.8048617110000578,
+      "min": 0.8037870919999932,
+      "n": 5
+    },
+    "ttft_prompt_tokens": 244,
+    "prefill_512_s": {
+      "median": 1.6437930429999597,
+      "max": 4.075790996000023,
+      "min": 1.3989909139997962,
+      "n": 5
+    },
+    "prefill_512_tok_s": 311.47473350148044,
+    "prefill_2048_s": {
+      "median": 6.212157753999918,
+      "max": 8.788819627000066,
+      "min": 5.4916529580000315,
+      "n": 5
+    },
+    "prefill_2048_tok_s": 329.6761095098273,
+    "decode_after_512_tok_s": {
+      "median": 16.681477485017794,
+      "max": 23.962667058322456,
+      "min": 13.081459109871586,
+      "n": 5
+    },
+    "decode_after_2048_tok_s": {
+      "median": 20.74063608163987,
+      "max": 21.17496336670071,
+      "min": 20.463266504698648,
+      "n": 5
+    },
+    "decode_tokens": 128,
+    "peak_mem_gb_mx": 6.46678528,
+    "rss_mib_after_perf": 438,
+    "mem_available_mib_before_load": 90536,
+    "mem_available_min_mib": 73963,
+    "mem_available_delta_mib": 16573
+  }
+}

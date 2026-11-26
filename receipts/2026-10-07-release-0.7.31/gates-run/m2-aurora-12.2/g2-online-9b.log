@@ -1,0 +1,13 @@
+BEGIN 2026-10-07T20:57:35Z tag=v0.7.31 boot_id=f0eafd96-0532-4db9-ab2f-5f42f3eba49c uname=7.1.12-2-12.2-sep-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202610071347+9b5c938 (sha=a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d)
+df_before 104G
+hf_bytes_before 0
+OUTBOUND_DENIED False
+SETUP_COMPLETE 31.3s pair=everyday
+CHAT status=complete 3.22s text='Ready'
+COMPARE status=complete 9.08s choice=cat p={'cat': 0.7192, 'elephant': 0.2808} model=laya-mlx
+GATE PASS
+fuser_port=43247 exit=1 output=
+GATE2_ONLINE_EXIT 0
+df_after 103G
+hf_bytes_after 6824245753

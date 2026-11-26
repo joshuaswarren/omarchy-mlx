@@ -1,0 +1,42 @@
+wheel_sha256 a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d mlx_omarchy-0.32.4.dev202610071347+9b5c938-cp314-cp314-linux_aarch64.whl
+pip mlx_omarchy 0.32.4.dev202610071347+9b5c938
+== device (from the wheel's own mlx-omarchy-info) ==
+mlx-omarchy-info
+  device:            Apple M1 Max (G13C C0)
+  driver:            Honeykrisp
+  driver info:       Mesa 26.3.0-devel (git-e7631595df)
+  driver SHA:        e7631595df
+  ICD:               /usr/lib/omarchy-mlx/vulkan/honeykrisp_icd.aarch64.json
+  ICD source:        packaged
+  expected SHA:      e7631595df
+  expected SHA from: packaged file
+  api version:       1.4.362
+  vendor:device id:  0x10005:0x0
+  queue family:      0 (1 queues)
+  total memory:      47480 MiB (device-local heap)
+  unified memory:    yes
+  host coherent:     yes
+  timeline semaphore:yes
+  shader float16:    yes
+  shader int16:      yes
+  16-bit storage:    yes
+  max compute shm:   32768 B
+  max wg invocations:1024
+  storage buffer bindings (per stage / per set): 1048576 / 1048576
+  ane fdt node:      yes
+  ane compatible:    apple,t6000-ane
+  ane accel0:        yes
+  ane module:        yes
+  ane available:     yes
+  coreml frontend:   no
+  coreml command:    no
+  coreml cache:      ~/.cache/mlx-omarchy/coreml
+  coreml cache ents: 0 (absent)
+  device:            Apple M1 Max (G13C C0)
+G13C_CHIP_OK G13C
+== GPU probes (root: isolates the gate decision from permissions) ==
+RESULT during=0 after=0
+G13C_GATE default during=0 after=0
+RESULT during=1 after=0
+G13C_GATE forced during>=1 after=0
+G13C_PASS receipt=~/v0731-gates/g-g13c-receipt.log

@@ -1,0 +1,13 @@
+{
+  "wheel": "0.32.3.dev202609291615+06711ad",
+  "model": "qwen3.8-2b-4bit",
+  "max_tokens": 700,
+  "elapsed_s": 14.28,
+  "completion_tokens": 0,
+  "has_assistant_ui_fence": false,
+  "components": [
+    "checklist"
+  ],
+  "non_finite_hits": 0,
+  "content_preview": "# Weekend Camping Packing Checklist\n\n## \ud83c\udf32 Shelter & Sleep\n- [ ] Tent (or tarp)\n- [ ] Sleeping bag rated for expected temperature\n- [ ] Sleeping pad or air mattress\n- [ ] Tent stakes and guylines\n- [ ]"
+}

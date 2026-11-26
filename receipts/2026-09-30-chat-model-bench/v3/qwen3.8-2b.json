@@ -1,0 +1,515 @@
+{
+ "model_id": "SiddhJagani/Qwen3.8-2B-mlx-4Bit",
+ "revision": "0867d98bfb174b042d88461c0e7c97b86b34b381",
+ "label": "qwen3.8-2b",
+ "harness_version": 2,
+ "turns": [
+  {
+   "boot_id": "2a4f18f7-c9cb-4358-8573-1082ad33823b",
+   "loadavg_start": "1.36 0.78 0.73 1/617 76244",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 85839,
+   "page_cache": "cold or unknown: first load recorded in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T04:06:18Z",
+   "load_s": 1.7855478010005754,
+   "peak_mem_gb_after_load": 1.05979904,
+   "peak_mem_gb_turn": 1.78454528,
+   "finished": "2026-09-30T04:11:03Z"
+  },
+  {
+   "boot_id": "2a4f18f7-c9cb-4358-8573-1082ad33823b",
+   "loadavg_start": "0.49 0.61 0.68 1/636 80492",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 85932,
+   "page_cache": "warm: loaded earlier in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T04:11:25Z",
+   "load_s": 1.5314464519997273,
+   "peak_mem_gb_after_load": 1.05979904,
+   "peak_mem_gb_turn": 1.05979904,
+   "finished": "2026-09-30T04:11:27Z"
+  }
+ ],
+ "perf": {
+  "ttft_card_prompt_s": {
+   "median": 0.23817099900043104,
+   "max": 0.34032791599929624,
+   "min": 0.20294028699936462,
+   "n": 5
+  },
+  "ttft_prompt_tokens": 244,
+  "prefill_512_s": {
+   "median": 0.6070813110000017,
+   "max": 0.708107555999959,
+   "min": 0.4348020119996363,
+   "n": 5
+  },
+  "prefill_512_tok_s": 843.3796111374586,
+  "prefill_2048_s": {
+   "median": 1.5970693179997397,
+   "max": 2.10240946399972,
+   "min": 1.4291936190002161,
+   "n": 5
+  },
+  "prefill_2048_tok_s": 1282.3488479291752,
+  "decode_after_512_tok_s": {
+   "median": 34.68992236305428,
+   "max": 36.833537905880185,
+   "min": 31.538956880800757,
+   "n": 5
+  },
+  "decode_after_2048_tok_s": {
+   "median": 32.00822322001995,
+   "max": 32.949708713261884,
+   "min": 30.65580837065209,
+   "n": 5
+  },
+  "decode_tokens": 128,
+  "peak_mem_gb_mx": 1.78454528,
+  "rss_mib_after_perf": 440,
+  "mem_available_mib_before_load": 85839,
+  "mem_available_min_mib": 81047,
+  "mem_available_delta_mib": 4792,
+  "gpu_shared_during_turn": false
+ },
+ "cards": {
+  "1": {
+   "expect": "card",
+   "category": "checklist",
+   "full_schema": false,
+   "md_checklist": true,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "prose-only",
+   "promotable": "checklist",
+   "tokens": 423,
+   "truncated": false,
+   "seconds": 11.370381841999915,
+   "text": "# Weekend Camping Packing Checklist\n\n## \ud83c\udf32 Shelter & Sleep\n- [ ] Tent (or tarp if you're camping under a tree)\n- [ ] Sleeping bag rated for your expected temperature (down is best in cold weather)\n- [ ] Sleeping pad or air mattress\n- [ ] Tent stakes and guylines\n- [ ] Rain poncho or lightweight rain jacket\n\n## \ud83c\udf7d\ufe0f Food & Water\n- [ ] 2\u20133 days of food (meals for the whole family)\n- [ ] Water bottles or a hydration bladder\n- [ ] Sunscreen and bug spray\n- [ ] First aid kit (including any personal medications)\n- [ ] Whistle or signal device\n\n## \ud83e\uddf3 Personal Items\n- [ ] Backpack or duffel bag\n- [ ] Headlamp or flashlight (with extra batteries)\n- [ ] Whistle\n- [ ] Map and compass (or GPS device)\n- [ ] Rain jacket or windbreaker\n- [ ] Hat and sunglasses\n\n## \ud83d\udccb Documents & Safety\n- [ ] Emergency contact list (phone numbers, addresses)\n- [ ] Map of the area you'll be camping in\n- [ ] Whistle or signal device\n- [ ] First aid kit (including any personal medications)\n\n## \ud83c\udf33 Nature & Comfort\n- [ ] Sturdy boots or hiking shoes\n- [ ] Extra socks (at least 2 pairs)\n- [ ] Rain poncho or lightweight rain jacket\n- [ ] Sunscreen and bug spray\n- [ ] Map of the area you'll be camping in\n\n## \ud83d\udce6 General Tips\n- Pack a \"shower bag\" with extra clothes and toiletries for the night before\n- Leave all food at home; pack only what you'll actually eat\n- Pack a small first aid kit with any personal medications\n- Bring a whistle for emergencies\n\n**Remember:** The golden rule is to pack more than you think you need. Leave extra food, water, and a spare pair of socks if possible!"
+  },
+  "2": {
+   "expect": "card",
+   "category": "timeline",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": true,
+   "md_numbered_or_bullets": true,
+   "outcome": "prose-only",
+   "promotable": "comparison",
+   "tokens": 163,
+   "truncated": false,
+   "seconds": 4.442116881000402,
+   "text": "# Monday Plan\n\n| Time | Activity |\n|------|----------|\n| 9:00 AM | Standup meeting |\n| 11:00 AM | Code review |\n| 12:00 PM | Lunch break |\n| 2:00 PM | Planning session |\n\n---\n\n**Notes:**\n- Standup at 9:00 AM is a bit early for most teams; consider moving to 8:30 AM.\n- Code review at 11:00 AM is fine if you're in a fast-paced environment.\n- Lunch at noon works well for teams with short meetings or remote workers.\n- Planning at 2:00 PM is ideal for a team that needs to wrap up the day."
+  },
+  "3": {
+   "expect": "card",
+   "category": "comparison",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": true,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "promotable": "comparison",
+   "tokens": 700,
+   "truncated": true,
+   "seconds": 17.8595958169999,
+   "text": "# Cats vs Dogs: A Comparison as Pets\n\n## Cost\n\n| Aspect | Cats | Dogs |\n|--------|------|------|\n| **Initial purchase** | $10\u2013$50 (kitten) | $200\u2013$3,000+ (breed-dependent) |\n| **Food** | ~$15/month | ~$30\u2013$60/month |\n| **Grooming** | Low (brush, occasional bath) | Moderate (bathing weekly, brushing daily) |\n| **Medical** | $50\u2013$150/year (vaccines, flea/tick) | $200+/year (vaccines, spay/neuter, dental) |\n| **Training** | Low cost (basic commands) | Moderate to high cost (training, socialization) |\n| **Total annual** | ~$150\u2013$400 | ~$800\u2013$2,500+ |\n\n**Winner:** Cats are significantly cheaper overall. Dogs require much higher upfront investment and ongoing expenses.\n\n---\n\n## Space\n\n| Aspect | Cats | Dogs |\n|--------|------|------|\n| **Size** | Small to large (cats need ~10\u00d7 more space per pound) | Varies widely; larger breeds need more room |\n| **Living area** | 10\u201325 sq ft per cat; cats can be in small rooms, on shelves | 10\u201325 sq ft per dog; larger breeds need dedicated rooms or yards |\n| **Furniture** | Low (cat trees, shelves) | Moderate to high (beds, crates, furniture) |\n| **Grooming** | Low; cats can be left alone for long periods | Moderate; dogs need regular walks and grooming time |\n| **Social needs** | Can be left alone for hours; less social interaction required | More social; need regular play and companionship |\n\n**Winner:** Cats generally require less space. Dogs, especially large breeds, need more room and dedicated furniture.\n\n---\n\n## Noise\n\n| Aspect | Cats | Dogs |\n|--------|------|------|\n| **Barking** | Very quiet; rarely vocalize | Can bark frequently; more vocal |\n| **Meowing** | Low volume; rarely loud | Moderate to high volume; more vocal |\n| **Loudness** | Generally quiet; less likely to disturb neighbors | Can be loud; more likely to attract attention |\n| **Social noise** | Less interaction with others | More social; more likely to interact with roommates/neighbors |\n\n**Winner:** Cats are quieter. Dogs tend to be more vocal and can be noisier, especially large breeds or those with separation anxiety.\n\n---\n\n## Summary Table\n\n| Category | Cats | Dogs |\n|----------|------|------|\n| **Cost** | \u2705 Lower (cheaper) | \u274c Higher (more expensive) |\n| **Space** | \u2705 Less space needed | \u274c More space needed |\n| **Noise** | \u2705 Quieter | \u274c Noisier (more vocal) |\n\n---\n\n## Key Takeaways\n\n- **Cats** are ideal for people with limited space, on a budget, and who prefer quiet companionship.\n-"
+  },
+  "4": {
+   "expect": "card",
+   "category": "timeline",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": true,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "promotable": "comparison",
+   "tokens": 700,
+   "truncated": true,
+   "seconds": 20.551046024999778,
+   "text": "# Apollo Program Milestones Timeline\n\n## 1960s \u2013 Early Development\n\n| Year | Event |\n|------|-------|\n| 1960 | Apollo program established; first spacecraft launched (Saturn V) |\n| 1962 | Apollo 8 orbits the Moon; first crewed mission to lunar orbit |\n| 1962 | Apollo 7 launched; first crewed mission to lunar surface (John Glenn) |\n| 1962\u20131963 | Apollo 8, Apollo 7, and Apollo 5 land on the Moon; first humans to walk on the lunar surface |\n| 1963 | Apollo 8 crew (Neil Armstrong, Buzz Aldrin, Alan Bean) lands on the Moon; first humans to see Earth from space |\n| 1964 | Apollo 7 crew (John Glenn) orbits the Moon; first American to orbit a celestial body |\n| 1964\u20131965 | Apollo 8, Apollo 7, and Apollo 5 land on the Moon; first humans to walk on the lunar surface |\n| 1965 | Apollo 8 crew (Neil Armstrong, Buzz Aldrin, Alan Bean) lands on the Moon; first humans to see Earth from space |\n| 1965\u20131967 | Apollo 8, Apollo 7, and Apollo 5 land on the Moon; first humans to walk on the lunar surface |\n| 1967 | Apollo 8 crew (Neil Armstrong, Buzz Aldrin, Alan Bean) lands on the Moon; first humans to see Earth from space |\n| 1967\u20131968 | Apollo 8, Apollo 7, and Apollo 5 land on the Moon; first humans to walk on the lunar surface |\n| 1968 | Apollo 8 crew (Neil Armstrong, Buzz Aldrin, Alan Bean) lands on the Moon; first humans to see Earth from space |\n| 1968\u20131970 | Apollo 8, Apollo 7, and Apollo 5 land on the Moon; first humans to walk on the lunar surface |\n| 1970 | Apollo 8 crew (Neil Armstrong, Buzz Aldrin, Alan Bean) lands on the Moon; first humans to see Earth from space |\n| 1970\u20131972 | Apollo 8, Apollo 7, and Apollo 5 land on the Moon; first humans to walk on the lunar surface |\n| 1972 | Apollo 8 crew (Neil Armstrong, Buzz Aldrin, Alan Bean) lands on the Moon; first humans to see Earth from space |\n| 1972\u20131974 | Apollo 8, Apollo 7, and Apollo 5 land on the Moon; first humans to walk on the lunar surface |\n| 1974 | Apollo 8 crew (Neil Armstrong, Buzz Aldrin, Alan Bean) lands on the Moon; first humans to see Earth from space |\n| 1974\u20131976 | Apollo 8, Apollo 7, and Apollo 5 land on the Moon; first humans to walk on the lunar surface |\n| 1976 | Apollo "
+  },
+  "5": {
+   "expect": "card",
+   "category": "chart",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 39,
+   "truncated": false,
+   "seconds": 1.7476862040002743,
+   "text": "```\n[Analyze the data, choose your approach (e.g., bar chart for comparison),\n  consider styling and layout choices.]\n```\n\nBrief explanation of what the chart shows."
+  },
+  "6": {
+   "expect": "card",
+   "category": "facts",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 326,
+   "truncated": false,
+   "seconds": 10.318277065000075,
+   "text": "# Facts About the Moon\n\n## 1. The Moon Has No Atmosphere\nThe moon lacks a significant atmosphere, which is why it experiences extreme temperature variations \u2014 from scorching daytime temperatures to freezing nighttime temperatures. Without an atmosphere to retain heat, the moon's surface temperature can range from approximately **127\u00b0C (260\u00b0F)** during the day to **-183\u00b0C (-299\u00b0F)** at night. This is why astronauts on the lunar surface experience intense heat and cold without any atmospheric protection or insulation.\n\n## 2. The Moon Orbits Earth Every ~27 Days\nThe moon completes one orbit around Earth in approximately **27.3 days** (sidereal period), which is the time it takes to complete one full revolution around Earth's center. This orbital period varies slightly depending on the moon's position in its orbit relative to Earth and the Sun, ranging from about 27.3 days at perigee (closest approach) to roughly 29.8 days at apogee (farthest point).\n\n## 3. The Moon Is About 384,000 km Away\nThe average distance between Earth and the Moon is approximately **384,400 kilometers (238,855 miles)**, which is roughly 60 times the distance between Earth and the Sun. This vast distance means that sunlight takes about **1.3 seconds** to reach Earth from the Moon, and it is also the only celestial body in our solar system with a significantly smaller size relative to its distance from Earth."
+  },
+  "7": {
+   "expect": "card",
+   "category": "decision",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": true,
+   "md_numbered_or_bullets": true,
+   "outcome": "prose-only",
+   "promotable": "comparison",
+   "tokens": 275,
+   "truncated": false,
+   "seconds": 6.187514409999494,
+   "text": "# Bus vs. Walk: Rainy Day Decision\n\n## The short answer\n**Walk it.**\n\nHere's why:\n\n| Factor | Bus | Walk |\n|--------|-----|------|\n| Rain | Wet, slippery, cold | Dry, warm, comfortable |\n| Time | 15 min (still) | 30 min (double the time) |\n| Weather | Rain makes it miserable | Walking in rain is still doable |\n\n## Why the bus isn't worth it:\n- **Time cost:** 15 minutes is still a long time in rain. You'll be soaked, cold, and miserable for 15 minutes anyway.\n- **Weather cost:** Rain makes the bus ride unpleasant \u2014 cold seats, wet floors, slippery surfaces.\n- **Health cost:** Walking in rain is still exercise; it's just less enjoyable than walking on a dry day.\n\n## The real question:\n- Do you have the energy to walk 30 minutes in rain?\n- Is there a reason not to go out (sick, tired, etc.)?\n\nIf you're fit and have the energy to walk 30 minutes in rain, go for it. It's still a workout and you'll feel better afterward than sitting on a bus in the rain for 15 minutes."
+  },
+  "8": {
+   "expect": "card",
+   "category": "form",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 700,
+   "truncated": true,
+   "seconds": 17.859179731999575,
+   "text": "```html\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <title>New Supplier Form</title>\n    <style>\n        body {\n            font-family: Arial, sans-serif;\n            max-width: 600px;\n            margin: 40px auto;\n            padding: 20px;\n        }\n        h1 {\n            text-align: center;\n            color: #2c3e50;\n        }\n        .form-group {\n            margin-bottom: 16px;\n        }\n        label {\n            display: block;\n            margin-bottom: 4px;\n            font-weight: bold;\n        }\n        label small {\n            color: #7f8c9d;\n            display: block;\n            margin-top: 4px;\n        }\n        input[type=\"text\"],\n        input[type=\"email\"],\n        select {\n            width: 100%;\n            padding: 8px;\n            border: 1px solid #bdc3c7;\n            border-radius: 4px;\n            box-sizing: border-box;\n        }\n        input[type=\"text\"]:focus,\n        input[type=\"email\"]:focus {\n            border-color: #3498db;\n        }\n        .form-group label:first-of-type {\n            margin-top: 0;\n        }\n        .form-group label:first-of-type small {\n            margin-top: 4px;\n        }\n        .form-group label:last-of-type {\n            margin-top: 0;\n        }\n        .form-group label:last-of-type small {\n            margin-top: 4px;\n        }\n        .form-group label:last-of-type {\n            margin-top: 0;\n        }\n        .form-group label:last-of-type {\n            margin-top: 0;\n        }\n    </style>\n</head>\n<body>\n\n<h1>New Supplier Registration</h1>\n\n<form method=\"POST\" action=\"/submit-supplier\">\n    <div class=\"form-group\">\n        <label for=\"name\">Supplier Name</label>\n        <input type=\"text\" id=\"name\" name=\"supplier_name\" required placeholder=\"Enter supplier name\">\n    </div>\n\n    <div class=\"form-group\">\n        <label for=\"email\">Contact Email</label>\n        <input type=\"email\" id=\"email\" name=\"contact_email\" required placeholder=\"Enter contact email\">\n    </div>\n\n    <div class=\"form-group\">\n        <label for=\"country\">Country</label>\n        <select id=\"country\" name=\"country\" required>\n            <option value=\"\">-- Select Country --</option>\n            <option value=\"US\">United States</option>\n            <option value=\"UK\">United Kingdom</option>\n            <option value=\"DE\">Germany</option>\n            <option value=\"FR\">France</option>\n            <option value=\"JP\">Japan</option>\n            <option value=\"CN\">China</option>\n            <option value=\"AU\">Australia</option"
+  },
+  "9": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 8,
+   "truncated": false,
+   "seconds": 0.6276052610000988,
+   "text": "The capital of France is **Paris**."
+  },
+  "10": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 15,
+   "truncated": false,
+   "seconds": 0.5734419789996537,
+   "text": "Hi! I'm doing well, thanks for asking. How about you?"
+  },
+  "11": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 63,
+   "truncated": false,
+   "seconds": 1.8486221570001362,
+   "text": "The sky appears blue because sunlight is scattered by the atmosphere. Shorter wavelengths of light (blue and violet) are scattered more strongly than longer ones, so blue light reaches our eyes from all directions. Violet light scatters even more but is absorbed by the atmosphere, which is why we perceive blue rather than violet."
+  },
+  "12": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 18,
+   "truncated": false,
+   "seconds": 0.7768056419999994,
+   "text": "Why do programmers feel like they're always late? Because they spend so much time debugging!"
+  },
+  "13": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 28,
+   "truncated": false,
+   "seconds": 0.8246078169995599,
+   "text": "A checklist is a list of items or tasks that are checked off as they are completed, used to track progress and ensure everything is done."
+  },
+  "14": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 12,
+   "truncated": false,
+   "seconds": 1.43567639199955,
+   "text": "You're doing great, and that's what matters most."
+  },
+  "15": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 53,
+   "truncated": false,
+   "seconds": 1.1958215120002933,
+   "text": "People like making lists because they turn overwhelming information into manageable chunks. A list breaks down a big problem into small, actionable steps, making it easier to plan and track progress. It also helps reduce cognitive load by organizing thoughts visually, which can improve focus and productivity."
+  },
+  "16": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 54,
+   "truncated": false,
+   "seconds": 1.9226099709994742,
+   "text": "A timeline is better for showing history because it arranges events chronologically, making the sequence of time clear and easy to follow. A table is better for showing history because it allows you to compare multiple events side by side, highlighting similarities and differences across different time periods."
+  }
+ },
+ "gsm": {
+  "0": {
+   "gold": 18,
+   "pass": true,
+   "truncated": false,
+   "text": "**Step 1: Find the number of eggs left to sell.**\n- Eggs laid per day = 16\n- Eggs eaten for breakfast = 3\n- Eggs used to bake muffins = 4\n\n$$16 - 3 - 4 = 9 \\text{ eggs left to sell}$$\n\n**Step 2: Calculate the daily earnings.**\n- Price per egg = $2\n- Daily earnings = 9 \u00d7 $2 = **$18**\n\nJanet makes **$18** every day at the farmers' market."
+  },
+  "1": {
+   "gold": 3,
+   "pass": false,
+   "truncated": false,
+   "text": "The robe takes 2 bolts of blue fiber and half that amount of white fiber.\n\nHalf of 2 is:\n$$\\frac{1}{2} \\times 2 = 1$$\n\nSo the robe takes **3 bolts** in total (2 blue + 1 white)."
+  },
+  "2": {
+   "gold": 70000,
+   "pass": true,
+   "truncated": false,
+   "text": "## Step 1: Calculate the total cost to buy and repair the house.\n\n- Purchase price of the house: **$80,000**\n- Repairs cost: **$50,000**\n\n$$\\text{Total Cost} = 80,\\!000 + 50,\\!000 = \\boxed{130,\\!000}$$\n\n## Step 2: Calculate the value of the house after repairs.\n\nThe value increases by **150%** over the original purchase price:\n\n$$\\text{Value after repairs} = 80,\\!000 + (150\\% \\times 80,\\!000) = 80,\\!000 + 120,\\!000 = \\boxed{200,\\!000}$$\n\n## Step 3: Calculate the profit.\n\n$$\\text{Profit} = \\text{Value after repairs} - \\text{Total Cost} = 200,\\!000 - 130,\\!000 = \\boxed{70,\\!000}$$\n\n**Josh made a profit of $70,000.**"
+  },
+  "3": {
+   "gold": 540,
+   "pass": false,
+   "truncated": false,
+   "text": "James runs 3 sprints per week.\nEach sprint is 60 meters long.\n\nTotal distance = 3 \u00d7 60 = **180**"
+  },
+  "4": {
+   "gold": 20,
+   "pass": false,
+   "truncated": false,
+   "text": "Let me solve this step by step:\n\n**Step 1:** Determine how many meals per day.\nSince she gives the chickens their feed in three separate meals, there are **3 meals** per day.\n\n**Step 2:** Calculate the total feed needed for one chicken per day.\n- Morning: 15 cups\n- Afternoon: 25 cups\n- Total per chicken = 15 + 25 = **40 cups**\n\n**Step 3:** Calculate the total feed needed for all chickens.\n- Total = 40 cups \u00d7 20 chickens = **800 cups**\n\n**Step 4:** Calculate the feed for the final meal.\nSince she gives each chicken their full daily supply in three meals, the last (final) meal contains:\n- 40 cups \u00f7 3 = **13.33... cups**\n\nThis means the final meal contains approximately **13 and 1/3 cups** of feed.\n\n\\boxed{13 \\dfrac{1}{3}}"
+  },
+  "5": {
+   "gold": 64,
+   "pass": false,
+   "truncated": false,
+   "text": "# Finding the Total Cost of 16 Glasses\n\n## Step 1: Identify the pricing rule\n- **First glass:** $5 (base price)\n- **Every second glass after the first costs 60% of $5**\n\n## Step 2: Calculate the cost per additional glass\n$$60\\% \\times \\$5 = 0.60 \\times 5 = \\$3$$\n\n## Step 3: Set up the total cost\n- **1st glass:** $5.00\n- **Remaining 15 glasses (at the discounted rate):** $3 \u00d7 15 = $45.00\n\n## Step 4: Add them together\n$$\\$5 + \\$45 = \\boxed{\\$50}$$\n\nKylar needs to pay **$50** for all 16 glasses."
+  },
+  "6": {
+   "gold": 260,
+   "pass": true,
+   "truncated": false,
+   "text": "Let me solve this step by step.\n\n**Given information:**\n- Seattle has 20 sheep.\n- Charleston has 4 times as many sheep as Seattle.\n- Toulouse has twice as many sheep as Charleston.\n\n**Step 1: Find how many sheep Charleston has.**\nCharleston = 4 \u00d7 Seattle = 4 \u00d7 20 = **80**\n\n**Step 2: Find how many sheep Toulouse has.**\nToulouse = 2 \u00d7 Charleston = 2 \u00d7 80 = **160**\n\n**Step 3: Find the total number of sheep.**\nTotal = Seattle + Charleston + Toulouse = 20 + 80 + 160 = **260**\n\n\\boxed{260}"
+  },
+  "7": {
+   "gold": 160,
+   "pass": false,
+   "truncated": false,
+   "text": "## Step-by-Step Solution\n\n**Given:**\n- Total file size: 200 GB\n- Normal download speed: 2 GB/minute\n- First part downloaded: 40% of the file = 0.4 \u00d7 200 GB = **80 GB**\n- Restart time: 20 minutes\n\n---\n\n### Step 1: Download the first portion (80 GB) at normal speed\n\n$$\n\\text{Time} = \\frac{\\text{Data downloaded}}{\\text{Speed}} = \\frac{80}{2} = 40 \\text{ minutes}\n$$\n\n---\n\n### Step 2: Restart and download the remaining portion\n\nRemaining data to download = $100\\% - 40\\% = 60\\%$ of the file\n\n$$\n= 0.6 \\times 200 = 120 \\text{ GB}\n$$\n\nTime to download this portion:\n\n$$\n\\frac{120}{2} = 60 \\text{ minutes}\n$$\n\n---\n\n### Step 3: Total time\n\n$$\n40 + 60 = \\boxed{100} \\text{ minutes}\n$$\n\n---\n\n## Final Answer: $\\boxed{100}$ minutes"
+  },
+  "8": {
+   "gold": 45,
+   "pass": false,
+   "truncated": false,
+   "text": "# Solving the Distance Problem\n\n## Step 1: Calculate distance from home to work\nJohn drives for **3 hours** at **60 mph**:\n\n$$d_1 = 60 \\times 3 = 180 \\text{ miles}$$\n\n## Step 2: Calculate distance back to home\nHe spends the first **2 hours** in standstill traffic, then drives for the remaining time:\n\n$$4 - 2 = 2 \\text{ hours}$$\n\nAt **80 mph** for those 2 hours:\n\n$$d_2 = 80 \\times 2 = 160 \\text{ miles}$$\n\n## Step 3: Total distance from home\n$$d_{\\text{total}} = d_1 + d_2 = 180 + 160 = \\boxed{340}$$\n\n**Answer: He is 340 miles from home at the end of those 4 hours.**"
+  },
+  "9": {
+   "gold": 460,
+   "pass": true,
+   "truncated": false,
+   "text": "## Step 1: Calculate regular pay for the first 40 hours\n\nEliza earns $10 per hour.\n\n$$\n\\text{Regular pay} = 40 \\times \\$10 = \\$400\n$$\n\n## Step 2: Calculate overtime pay for the remaining hours\n\nShe worked 45 hours total, so she worked $45 - 40 = 5$ overtime hours.\n\n$$\n\\text{Overtime pay} = 5 \\times \\$10 \\times 1.2 = \\$60\n$$\n\n## Step 3: Calculate total earnings\n\n$$\n\\text{Total earnings} = \\$400 + \\$60 = \\boxed{\\$460}\n$$"
+  },
+  "10": {
+   "gold": 366,
+   "pass": true,
+   "truncated": false,
+   "text": "## Step-by-Step Calculation\n\n**Month 1:** The program had **60 downloads**.\n\n**Month 2:** Three times as many as Month 1:\n$$60 \\times 3 = 180 \\text{ downloads}$$\n\n**Month 3:** Reduced by 30% from Month 2:\n$$180 \\times (1 - 0.30) = 180 \\times 0.70 = 126 \\text{ downloads}$$\n\n## Total Downloads Over Three Months:\n\n$$60 + 180 + 126 = \\boxed{366}$$"
+  },
+  "11": {
+   "gold": 694,
+   "pass": true,
+   "truncated": false,
+   "text": "**Step 1: Calculate the cost of donuts.**\n- She bought 3 dozen at $68 per dozen.\n- Cost = 3 \u00d7 $68 = **$204**\n\n**Step 2: Calculate the cost of mini cupcakes.**\n- She bought 2 dozen at $80 per dozen.\n- Cost = 2 \u00d7 $80 = **$160**\n\n**Step 3: Calculate the cost of mini cheesecakes.**\n- She bought 6 dozen at $55 per dozen.\n- Cost = 6 \u00d7 $55 = **$330**\n\n**Step 4: Add all costs together.**\n- Total = $204 + $160 + $330 = **$694**\n\nThe total cost was **$694**."
+  },
+  "12": {
+   "gold": 13,
+   "pass": false,
+   "truncated": false,
+   "text": "# Finding When Carlos Starts Earning Money on the Lemon Tree\n\n## Step 1: Identify the costs\n- Planting cost: **$90** (one-time)\n- Water and feed cost per year: **$3/year**\n\n## Step 2: Identify the revenue\n- Each lemon sells for $1.50\n- The tree produces **7 lemons per year**\n\n## Step 3: Calculate annual profit\n$$\\text{Annual Profit} = \\text{Revenue} - \\text{Costs}$$\n$$\\text{Annual Profit} = (7 \\times \\$1.50) - (\\$90 + \\$3)$$\n$$\\text{Annual Profit} = \\$10.50 - \\$93 = -\\$82.50$$\n\n## Step 4: Determine when he breaks even\nSince the annual profit is negative, Carlos loses money every year. He needs to recover his initial $90 planting cost:\n\n$$\\text{Years needed} = \\frac{\\$90}{\\$3/\\text{year}} = 30 \\text{ years}$$\n\n## Step 5: Verify\nAfter **30 years**:\n- Total revenue = $7 \\times \\$1.50 \\times 30 = \\$105$\n- Total costs = $90 + (30 \\times \\$3) = \\$180$\n- Net result: $-\\$75$ (still a loss)\n\nHe needs **31 years** to break even:\n$$\\text{Total revenue} = \\$7 \\times \\$1.50 \\times 31 = \\$106.50$$\n$$\\text{Total costs} = \\$90 + (31 \\times \\$3) = \\$183$$\n$$\\text{Net result} = -\\$76.50$$\n\n## Step 6: Final answer\nAfter **31 years**, Carlos will have earned enough to cover his initial planting cost.\n\n$$\\boxed{31}$$"
+  },
+  "13": {
+   "gold": 18,
+   "pass": false,
+   "truncated": true,
+   "text": "Let Melanie start with **x** vacuum cleaners.\n\n- After selling a third to the green house:  \n  $$x - \\frac{x}{3} = \\frac{2x}{3}$$\n\n- After selling 2 more to the red house:  \n  $$\\frac{2x}{3} - 2$$\n\n- After selling half of what was left to the orange house:  \n  $$\\frac{1}{2}\\left(\\frac{2x}{3} - 2\\right) = \\frac{x}{3} - 1$$\n\nWe are told this equals 5:\n$$\\frac{x}{3} - 1 = 5$$\n\nSolving for $x$:\n$$\\frac{x}{3} = 6 \\implies x = 18$$\n\n**Verification:**\n- Start: 18\n- Green house: $18 \\div 3 = 6$ left \u2192 12\n- Red house: $12 - 2 = 10$ left \u2192 8\n- Orange house: half of 8 is 4 \u2192 $8 - 4 = 4$ left\n\nThat's not right. Let me recheck.\n\nWait, let me redo:\n- Start with $x$\n- Green house: sells $\\frac{x}{3}$, remaining = $\\frac{2x}{3}$\n- Red house: sells 2 more, remaining = $\\frac{2x}{3} - 2$\n- Orange house: sells half of what's left, remaining = $\\frac{1}{2}\\left(\\frac{2x}{3} - 2\\right) = \\frac{x}{3} - 1$\n\nSetting equal to 5:\n$$\\frac{x}{3} - 1 = 5 \\implies x = 18$$\n\nLet me verify:\n- Start with 18\n- Green house: $18 \\div 3 = 6$ left \u2192 12\n- Red house: $12 - 2 = 10$ left \u2192 8\n- Orange house: half of 8 is 4, so $10 - 4 = 6$ left\n\nThat's still not 5. Let me recheck the problem statement...\n\nHmm, let me try again with x = 18:\n- Green house: $18 \\div 3 = 6$ left \u2192 12\n- Red house: $12 - 2 = 10$ left \u2192 8\n- Orange house: half of 8 is 4, so $10 - 4 = 6$ left\n\nThat gives 6, not 5. Let me try x = 19:\n- Green house: $19 \\div 3$... that's not a whole number.\n\nLet me try x = 21:\n- Green house: $21 \\div 3 = 7$ left \u2192 14\n- Red house: $14 - 2 = 12$ left \u2192 10\n- Orange house: half of 10 is 5, so $12 - 5 = 7$ left\n\nThat's not 5 either. Let me try x = 24:\n- Green house: $24 \\div 3 = 8$ left \u2192 16\n- Red house: $16 - 2 = 14$ left \u2192 12\n- Orange house: half of 12 is 6, so $14 - 6 = "
+  },
+  "14": {
+   "gold": 60,
+   "pass": true,
+   "truncated": false,
+   "text": "Let me solve this step by step.\n\n**Step 1: Find the number of students in contemporary dance.**\n- Total students = 20\n- Contemporary dance enrollment = 20% of 20 = 4 students\n\n**Step 2: Find the number of remaining students.**\n- Remaining students = 20 - 4 = 16\n\n**Step 3: Find the number of students in jazz dance.**\n- Jazz dance enrollment = 25% of 16 = 0.25 \u00d7 16 = 4 students\n\n**Step 4: Find the number of students in hip-hop dance.**\n- Hip-hop enrollment = Total - Contemporary - Jazz = 20 - 4 - 4 = 12 students\n\n**Step 5: Calculate the percentage.**\n- Percentage in hip-hop = (12 / 20) \u00d7 100% = 60%\n\n**Verification:**\n- Contemporary: 4 students (20%)\n- Jazz: 4 students (25% of remaining)\n- Hip-hop: 12 students (60%)\n- Total: 4 + 4 + 12 = 20 \u2713\n\nThe answer is **60%**."
+  },
+  "15": {
+   "gold": 125,
+   "pass": false,
+   "truncated": false,
+   "text": "# Comparing the Two Purchase Plans\n\n## Step 1: Calculate Profit from Jewelry Plan\n- **Cost:** $5,000\n- **Market growth:** 2.5%\n- **Profit:** $5,000 \u00d7 0.025 = **$125**\n\n## Step 2: Calculate Profit from Electronic Gadgets Plan\n- **Cost:** $8,000\n- **Market growth:** 1.2%\n- **Profit:** $8,000 \u00d7 0.012 = **$96**\n\n## Step 3: Compare\n- Jewelry profit: $125\n- Electronic gadgets profit: $96\n\n## Conclusion\n\nThe jewelry plan yields a higher profit. The difference is:\n\n$$125 - 96 = \\boxed{29}$$"
+  },
+  "16": {
+   "gold": 230,
+   "pass": true,
+   "truncated": false,
+   "text": "# Finding the Total Distance for Each Train\n\n## Step 1: First Day's Travel\n- Both trains travel **80 miles** westward.\n\n## Step 2: Second Day's Travel\n- Both trains travel **150 miles** northward.\n\n## Step 3: Total Distance per Train\n$$\\text{Total distance} = 80 + 150 = \\boxed{230 \\text{ miles}}$$\n\nEach train covers a total of **230 miles** over the two days."
+  },
+  "17": {
+   "gold": 57500,
+   "pass": true,
+   "truncated": false,
+   "text": "## Step 1: Calculate Jill's earnings as a teacher\n\n- **Hourly rate:** $20 per hour\n- **Hours worked per week:** 35 hours\n- **Weekly earnings as teacher:** $20 \u00d7 35 = $700\n\n## Step 2: Calculate Jill's earnings as a coach\n\n- **Hourly rate:** $30 per hour\n- **Hours worked per week:** 15 hours\n- **Weekly earnings as coach:** $30 \u00d7 15 = $450\n\n## Step 3: Calculate total weekly earnings\n\n- **Total per week:** $700 + $450 = $1,150\n\n## Step 4: Calculate annual salary (working 50 weeks a year)\n\n- **Annual salary:** $1,150 \u00d7 50 = **$57,500**\n\n## Final Answer:\n$$\\boxed{57500}$$"
+  },
+  "18": {
+   "gold": 7,
+   "pass": true,
+   "truncated": false,
+   "text": "# Solving the Problem Step by Step\n\n## Step 1: Determine total eggs per week\nClaire makes a 3-egg omelet every morning.\n\n$$3 \\text{ eggs} \\times 7 \\text{ days/week} = 21 \\text{ eggs per week}$$\n\n## Step 2: Determine total eggs over 4 weeks\n$$21 \\text{ eggs/week} \\times 4 \\text{ weeks} = 84 \\text{ eggs total}$$\n\n## Step 3: Convert to dozens\nSince $1 \\text{ dozen} = 12$ eggs:\n\n$$84 \\div 12 = 7 \\text{ dozens}$$\n\n## \u2705 Final Answer:\n**7 dozen eggs**"
+  },
+  "19": {
+   "gold": 6,
+   "pass": true,
+   "truncated": false,
+   "text": "# Solving the Problem\n\n## Step 1: Find the remaining distance\n- Total trail length = 12 miles\n- Distance already walked = 4 + 2 = **6 miles**\n- Remaining distance = 12 - 6 = **6 miles**\n\n## Step 2: Find the time already spent\n- Time for first part = **1 hour**\n- Time for second part = **1 hour**\n- Total time already spent = 1 + 1 = **2 hours**\n\n## Step 3: Calculate the required speed\n- Remaining distance = 6 miles\n- Time remaining = 1 hour (since she needs to finish the trail in total)\n- Required speed = Distance \u00f7 Time = 6 \u00f7 1 = **6 miles per hour**\n\n## Verification\n- Total distance covered in total time: 4 + 2 = 6 miles\n- Total time elapsed: 1 + 1 = 2 hours\n- Average speed = 6 \u00f7 2 = **3 miles per hour** \u2713\n\n## Answer\n$$\\boxed{6}$$"
+  }
+ },
+ "ife": {
+  "1": {
+   "pass": true,
+   "truncated": false,
+   "text": "OK"
+  },
+  "2": {
+   "pass": true,
+   "truncated": false,
+   "text": "42"
+  },
+  "3": {
+   "pass": true,
+   "truncated": false,
+   "text": "Red\nBlue\nGreen"
+  },
+  "4": {
+   "pass": false,
+   "truncated": false,
+   "text": "{\"Alice\": 30}"
+  },
+  "5": {
+   "pass": true,
+   "truncated": false,
+   "text": "YES"
+  },
+  "6": {
+   "pass": true,
+   "truncated": false,
+   "text": "The ocean is a vast and powerful body of water that surrounds the Earth. It holds an enormous amount of salt, minerals, and life-sustaining organisms in its deep depths."
+  },
+  "7": {
+   "pass": true,
+   "truncated": false,
+   "text": "DONE"
+  },
+  "8": {
+   "pass": true,
+   "truncated": false,
+   "text": "Apple, banana, orange, grapefruit, mango"
+  },
+  "9": {
+   "pass": true,
+   "truncated": false,
+   "text": "PING PING PING"
+  },
+  "10": {
+   "pass": false,
+   "truncated": false,
+   "text": "```json\n{\"answer\": 7}\n```"
+  },
+  "11": {
+   "pass": true,
+   "truncated": false,
+   "text": "100"
+  },
+  "12": {
+   "pass": false,
+   "truncated": false,
+   "text": "abc"
+  },
+  "13": {
+   "pass": true,
+   "truncated": false,
+   "text": "END"
+  },
+  "14": {
+   "pass": true,
+   "truncated": false,
+   "text": "- Item one\n- Item two"
+  },
+  "15": {
+   "pass": true,
+   "truncated": false,
+   "text": "X"
+  },
+  "16": {
+   "pass": true,
+   "truncated": false,
+   "text": "OLLEH"
+  },
+  "17": {
+   "pass": true,
+   "truncated": false,
+   "text": "1\n2\n3\n4"
+  },
+  "18": {
+   "pass": true,
+   "truncated": false,
+   "text": "yes"
+  },
+  "19": {
+   "pass": true,
+   "truncated": false,
+   "text": "Blue"
+  },
+  "20": {
+   "pass": true,
+   "truncated": false,
+   "text": "[1, 2, 3]"
+  }
+ }
+}

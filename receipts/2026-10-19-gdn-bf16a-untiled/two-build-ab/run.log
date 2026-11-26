@@ -1,0 +1,24 @@
+AB start 2026-10-19T23:31:32Z boot=<id> load1=1.24
+AB O wheel mlx_omarchy-0.32.4.dev202610181348+49e6b3c1-cp314-cp314-linux_aarch64.whl sha256 7654db6b519b221ab5b221e96e1bda3b28c6317b0969b78de2abf3d101f8fe59 libmlx 960f0f358a2aba25
+AB N wheel mlx_omarchy-0.32.4.dev202610192245+a2b0864-cp314-cp314-linux_aarch64.whl sha256 a1eb9765672cf21873a032eeb10e3e27dc6c03be908d267585183a4101b55f5c libmlx 818270b8ca578548
+AB time P1 round 1 O rc=0 decode 28.97 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610181348+49e6b3c1
+AB time P1 round 1 N rc=0 decode 31.24 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610192245+a2b0864
+AB time P2 round 1 O rc=0 decode 28.97 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610181348+49e6b3c1
+AB time P2 round 1 N rc=0 decode 31.24 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610192245+a2b0864
+AB time P1 round 2 N rc=0 decode 31.24 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610192245+a2b0864
+AB time P1 round 2 O rc=0 decode 28.88 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610181348+49e6b3c1
+AB time P2 round 2 N rc=0 decode 31.20 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610192245+a2b0864
+AB time P2 round 2 O rc=0 decode 28.94 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610181348+49e6b3c1
+AB time P1 round 3 O rc=0 decode 28.92 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610181348+49e6b3c1
+AB time P1 round 3 N rc=0 decode 31.23 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610192245+a2b0864
+AB time P2 round 3 O rc=0 decode 28.88 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610181348+49e6b3c1
+AB time P2 round 3 N rc=0 decode 31.20 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610192245+a2b0864
+AB time P1 round 4 N rc=0 decode 31.24 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610192245+a2b0864
+AB time P1 round 4 O rc=0 decode 28.93 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610181348+49e6b3c1
+AB time P2 round 4 N rc=0 decode 31.20 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610192245+a2b0864
+AB time P2 round 4 O rc=0 decode 28.99 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610181348+49e6b3c1
+AB time P1 round 5 O rc=0 decode 28.89 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610181348+49e6b3c1
+AB time P1 round 5 N rc=0 decode 31.27 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610192245+a2b0864
+AB time P2 round 5 O rc=0 decode 28.93 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610181348+49e6b3c1
+AB time P2 round 5 N rc=0 decode 31.20 tok/s over 63 tokens (64 requested, EOS suppres verified=match mx=0.32.4.dev202610192245+a2b0864
+AB end 2026-10-19T23:34:28Z

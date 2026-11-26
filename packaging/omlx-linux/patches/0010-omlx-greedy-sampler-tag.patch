@@ -1,0 +1,12 @@
+--- a/omlx/utils/sampling.py	2026-10-06 20:03:35.358156194 -0500
++++ b/omlx/utils/sampling.py	2026-10-06 20:56:06.902110927 -0500
+@@ -185,6 +185,9 @@
+     """
+     if temp == 0:
+         sampler = lambda x: mx.argmax(x, axis=-1)
++        # Plain argmax: the mlx-omarchy BatchGenerator decodes batches whose
++        # samplers carry this tag through the pruned greedy head.
++        sampler._mlx_omarchy_greedy = True
+     else:
+         sampling_methods = []
+         if 0 < top_p < 1.0 and top_k > 0 and min_p == 0.0 and xtc_probability <= 0.0:

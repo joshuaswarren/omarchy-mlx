@@ -1,0 +1,11 @@
+CGATE start 2026-10-22T02:29:25Z boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH governor=performance load1=1.92
+CGATE tfctx 4eb015a1cbf9b0fc text 3972dc9744f6499f model b0d5de688567bf4a new libmlx fd536b16c05e08b0 old libmlx 0f9e6d6529dae3a4
+CGATE arm tile1-2048 rc=0 TFCTX prompt 1939 steps 129 device gpu dtype native mlx 0.32.4.dev202610211005+a04423e files 1
+CGATE arm new-2048 rc=0 TFCTX prompt 1939 steps 129 device gpu dtype native mlx 0.32.4.dev202610220201+aaef3b6 files 1
+CGATE arm plain-2048 rc=0 TFCTX prompt 1939 steps 129 device gpu dtype native mlx 0.32.4.dev202610220201+aaef3b6 files 1
+CGATE arm tile1b-2048 rc=0 TFCTX prompt 1939 steps 129 device gpu dtype native mlx 0.32.4.dev202610211005+a04423e files 1
+CGATE arm tile1-4096 rc=0 TFCTX prompt 3877 steps 129 device gpu dtype native mlx 0.32.4.dev202610211005+a04423e files 1
+CGATE arm new-4096 rc=0 TFCTX prompt 3877 steps 129 device gpu dtype native mlx 0.32.4.dev202610220201+aaef3b6 files 1
+CGATE arm plain-4096 rc=0 TFCTX prompt 3877 steps 129 device gpu dtype native mlx 0.32.4.dev202610220201+aaef3b6 files 1
+CGATE arm tile1b-4096 rc=0 TFCTX prompt 3877 steps 129 device gpu dtype native mlx 0.32.4.dev202610211005+a04423e files 1
+CGATE end 2026-10-22T02:30:17Z

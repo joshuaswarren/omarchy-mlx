@@ -1,0 +1,16 @@
+#!/bin/sh
+# pre-push hook: block pushes that add private content.
+# Install: cp scripts/privacy-check.sh .git/hooks/privacy-check.sh (or PATH)
+#          ln -sf ../../scripts/privacy-check.sh.sample …
+# This hook reads the pushed range from stdin (pre-push protocol).
+zero=0000000000000000000000000000000000000000
+while read local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  if [ "$remote_sha" = "$zero" ]; then
+    range="$(git merge-base origin/HEAD "$local_sha" 2>/dev/null || git rev-parse "$local_sha^")..$local_sha"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  privacy-check.sh "$range" || exit 1
+done
+exit 0

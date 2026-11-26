@@ -1,0 +1,62 @@
+{
+ "model_id": "mlx-community/Qwen3.5-9B-MLX-4bit",
+ "revision": "938d8919941c6e7efd3c7150eff7fe9d12afa631",
+ "label": "qwen3.5-9b",
+ "harness_version": 2,
+ "turns": [
+  {
+   "boot_id": "95675db4-da91-42e5-bdee-dfb3329e7369",
+   "loadavg_start": "0.43 0.54 0.62 1/332 34613",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 90424,
+   "page_cache": "cold or unknown: first load recorded in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T15:12:57Z",
+   "load_s": 1.932048431000112,
+   "peak_mem_gb_after_load": 5.0383872,
+   "peak_mem_gb_turn": 6.466760704,
+   "finished": "2026-09-30T15:14:35Z"
+  }
+ ],
+ "perf": {
+  "ttft_card_prompt_s": {
+   "median": 0.7825165309998283,
+   "max": 0.7831282969998483,
+   "min": 0.781361188000119,
+   "n": 5
+  },
+  "ttft_prompt_tokens": 244,
+  "prefill_512_s": {
+   "median": 1.482944648000057,
+   "max": 1.49702034500001,
+   "min": 1.380484312000135,
+   "n": 5
+  },
+  "prefill_512_tok_s": 345.2590092897252,
+  "prefill_2048_s": {
+   "median": 5.102412424000022,
+   "max": 5.222967857999947,
+   "min": 5.093404039000006,
+   "n": 5
+  },
+  "prefill_2048_tok_s": 401.3787655358671,
+  "decode_after_512_tok_s": {
+   "median": 26.023674109275138,
+   "max": 26.08434466175035,
+   "min": 25.912339158527217,
+   "n": 5
+  },
+  "decode_after_2048_tok_s": {
+   "median": 21.6437248364258,
+   "max": 21.698449233548903,
+   "min": 21.560204812004624,
+   "n": 5
+  },
+  "decode_tokens": 128,
+  "peak_mem_gb_mx": 6.466760704,
+  "rss_mib_after_perf": 437,
+  "mem_available_mib_before_load": 90424,
+  "mem_available_min_mib": 75062,
+  "mem_available_delta_mib": 15362
+ }
+}

@@ -1,0 +1,718 @@
+#version 460
+
+// Fused matrix-vector path for QuantizedMatmul when x is a single row:
+// out[1, n] = x[1, k] @ dequant(w) with w packed uint32 words holding
+// 32/bits affine values along the packed axis in the low bits first
+// (bits 2/4/8) or lane-atomic little-endian byte packs of 8/3, 8/5,
+// or 4/3 bytes (bits 3/5/6), one affine scale and bias per group_size
+// elements; with -DFP_MODE the fp modes instead (fp4 e2m1 / fp8 e4m3
+// element bytes, one scale byte per group, no bias). Decode is this
+// shape on every layer, and the general kernel serializes it: one
+// thread per output column walks the whole row serially, so its
+// 32-lane reads sit words-per-row*4 bytes apart - every lane a
+// separate cache line. Here one of the workgroup's eight 32-lane
+// subgroups owns one weight row and lanes stride single k steps, so
+// consecutive lanes read consecutive x elements, consecutive
+// weight-row words, and one shared cache line of row bytes per step.
+// Dequantization happens in registers inside the dot product - no
+// dequantized intermediate tensor, no extra pass over memory, one
+// dispatch.
+//
+// Two reduction flavors compile from this same source via -DUSE_SUBGROUP:
+//   * default: five-round workgroup-shared tree (correct on any
+//     subgroup size; lane split is plain workgroup arithmetic). The
+//     five barrier rounds are the cost.
+//   * USE_SUBGROUP=1: one subgroupAdd(accumulator) per 32-lane slot
+//     (Honeykrisp's actual subgroupSize). Trades the barriers for the
+//     hardware reduction; the bench (tools/subgroup-bench) decides
+//     whether the trade pays on this device. Dispatch is gated on
+//     caps.subgroup_size == 32 and the ARITHMETIC subgroup-feature bit,
+//     so a device that lacks either falls back to the tree path
+//     unchanged.
+// Both flavors pair lanes stride 1 first, then 2, 4, 8, 16. That is the
+// order native Metal simd_sum reduces in, and Honeykrisp's 32-bit float
+// subgroupAdd is the same hardware reduction (agx_nir_lower_subgroups
+// leaves it unlowered) and measured that pairing bit for bit, so the Q4
+// word path below is bit-identical to native qmv
+// (receipts/2026-09-09-q4-gemv-order). subgroupShuffleXor is not used:
+// Honeykrisp emulates arbitrary shuffles with four read_invocation
+// selects per step.
+//
+// QMM_VEC_Q4_WORD compiles the transposed affine 4-bit/group-64 decode
+// path in native qmv arithmetic: one lane owns one packed word per
+// block, loads scale and bias once, and applies all eight nibbles with
+// constant shifts.
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VALUE(f) bf16_store(f)
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#endif
+#ifdef USE_SUBGROUP
+// The subgroup reduction variant assumes subgroupSize == 32, gated in
+// dispatch (see QuantizedMatmul::eval_gpu). The kernel does not check
+// this itself because Vulkan does not let compute shaders query
+// subgroupSize at runtime. Compiling this on a device with a different
+// subgroup size produces a wrong sum, so the dispatch gate is the
+// load-bearing part of this codepath.
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+#if defined(FP_MODE) && defined(QMM_VEC_Q4_WORD)
+#error "QMM_VEC_Q4_WORD applies to affine quantization only"
+#endif
+
+const uint COLUMNS_PER_GROUP = 8u;
+const uint LANES = 32u;
+
+layout(local_size_x = 256) in;
+
+#if defined(USE_FP16) && defined(QMM_VEC_Q4_WORD)
+// Decode x rows are 16-byte aligned by dispatch. Reading eight packed halves
+// at once keeps native's half arithmetic while avoiding eight scalar loads.
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  uvec4 values[];
+} input_x;
+#else
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  STORAGE_TYPE values[];
+} input_x;
+#endif
+#ifdef QMM_VEC_MULTI
+#ifndef QMM_VEC_Q4_WORD
+#error "QMM_VEC_MULTI builds on QMM_VEC_Q4_WORD"
+#endif
+// Multi-weight decode dispatch: up to three transposed 4-bit/group-64
+// weights against one x row in one dispatch, each with its own
+// scale/bias/output triple and an optional fused Add epilogue
+// (sum = out + addend, the elementwise Add's float add and storage
+// rounding). Workgroups are laid out weight after weight; shape[i]
+// carries weight i's N, dims the weight count, flags bit 8+i the
+// epilogue for weight i. Every weight, scale, bias, output, and addend
+// starts at element 0 of its buffer (the host refuses otherwise), so
+// no per-weight offsets ride in the push constants.
+#define QMM_VEC_MULTI_WEIGHT(I, B) \
+layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
+  uint values[]; \
+} input_w##I; \
+layout(set = 0, binding = B + 1, std430) readonly buffer Scales##I { \
+  STORAGE_TYPE values[]; \
+} scales##I; \
+layout(set = 0, binding = B + 2, std430) readonly buffer Biases##I { \
+  STORAGE_TYPE values[]; \
+} biases##I; \
+layout(set = 0, binding = B + 3, std430) writeonly buffer Output##I { \
+  STORAGE_TYPE values[]; \
+} output##I; \
+layout(set = 0, binding = B + 4, std430) readonly buffer Addend##I { \
+  STORAGE_TYPE values[]; \
+} addend##I; \
+layout(set = 0, binding = B + 5, std430) writeonly buffer Sum##I { \
+  STORAGE_TYPE values[]; \
+} sum##I;
+QMM_VEC_MULTI_WEIGHT(0, 1)
+QMM_VEC_MULTI_WEIGHT(1, 7)
+QMM_VEC_MULTI_WEIGHT(2, 13)
+#else
+layout(set = 0, binding = 1, std430) readonly buffer InputW {
+  uint values[];
+} input_w;
+#ifdef FP_MODE
+// Scale bytes addressed through the word view; no bias term.
+layout(set = 0, binding = 2, std430) readonly buffer ScaleBias {
+  uint values[];
+} scale_bias;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+#else
+layout(set = 0, binding = 2, std430) readonly buffer Scales {
+  STORAGE_TYPE values[];
+} scales;
+layout(set = 0, binding = 3, std430) readonly buffer Biases {
+  STORAGE_TYPE values[];
+} biases;
+layout(set = 0, binding = 4, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+#endif
+#endif
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+#ifndef USE_SUBGROUP
+shared float reduce_scratch[256];
+#endif
+
+// Push-constant routing: operation carries bits (2, 3, 4, 5, 6, or 8),
+// reduce_size the group size, flags bit 0 the non-transposed layout.
+// Affine bindings 2/3 are the separate scale/bias streams; aux_offset
+// is the scale base item and aux_size the bias base item (storage
+// offsets in elements), shape[2] the per-batch param stride. FP_MODE
+// binding 2 is the scale-byte stream (one byte per group, aux_offset =
+// byte offset into it).
+
+// Constant-shift select chain from scatter.comp: runtime word and lane,
+// constant shift per lane.
+uint byte_at(uint word, uint lane) {
+  return (lane == 0u)
+      ? (word & 0xFFu)
+      : (lane == 1u)
+      ? ((word >> 8u) & 0xFFu)
+      : (lane == 2u)
+      ? ((word >> 16u) & 0xFFu)
+      : ((word >> 24u) & 0xFFu);
+}
+
+#ifdef FP_MODE
+float fp8_decode(uint bits) {
+  float magnitude = unpackHalf2x16((bits & 127u) << 7u).x * 256.0;
+  return ((bits & 128u) != 0u) ? -magnitude : magnitude;
+}
+
+float e8m0_decode(uint bits) {
+  return uintBitsToFloat(bits == 0u ? 0x400000u : bits << 23u);
+}
+
+// FP4 E2M1 decode via the fp16 bit trick from the Metal fp4_e2m1
+// constructor: (bits & 7) << 9 reinterprets the exponent and mantissa
+// as fp16 subnormals, the missing 2^14 lands in the scale factor.
+float fp4_decode(uint code) {
+  float magnitude = unpackHalf2x16((code & 7u) << 9u).x * 16384.0;
+  return ((code & 8u) != 0u) ? -magnitude : magnitude;
+}
+#else
+// Affine byte-pack decode: element e of a pack, upstream extract table
+// (all constant shifts; e routes between constant expressions).
+uint q3_at(uint e, uint c0, uint c1, uint c2) {
+  if (e == 0u) return c0 & 0x7u;
+  if (e == 1u) return (c0 >> 3) & 0x7u;
+  if (e == 2u) return ((c0 >> 6) & 0x3u) + ((c1 & 0x1u) << 2);
+  if (e == 3u) return (c1 >> 1) & 0x7u;
+  if (e == 4u) return (c1 >> 4) & 0x7u;
+  if (e == 5u) return ((c1 >> 7) & 0x1u) + ((c2 & 0x3u) << 1);
+  if (e == 6u) return (c2 >> 2) & 0x7u;
+  return (c2 >> 5) & 0x7u;
+}
+
+uint q5_at(uint e, uint c0, uint c1, uint c2, uint c3, uint c4) {
+  if (e == 0u) return c0 & 0x1fu;
+  if (e == 1u) return ((c0 >> 5) & 0x7u) + ((c1 & 0x3u) << 3);
+  if (e == 2u) return (c1 >> 2) & 0x1fu;
+  if (e == 3u) return ((c1 >> 7) & 0x1u) + ((c2 & 0xfu) << 1);
+  if (e == 4u) return ((c2 >> 4) & 0xfu) + ((c3 & 0x1u) << 4);
+  if (e == 5u) return (c3 >> 1) & 0x1fu;
+  if (e == 6u) return ((c3 >> 6) & 0x3u) + ((c4 & 0x7u) << 2);
+  return (c4 >> 3) & 0x1fu;
+}
+
+uint q6_at(uint e, uint c0, uint c1, uint c2) {
+  if (e == 0u) return c0 & 0x3fu;
+  if (e == 1u) return ((c0 >> 6) & 0x3u) + ((c1 & 0xfu) << 2);
+  if (e == 2u) return ((c1 >> 4) & 0xfu) + ((c2 & 0x3u) << 4);
+  return (c2 >> 2) & 0x3fu;
+}
+#endif
+
+#ifdef QMM_VEC_Q4_WORD
+// One x quad against the low 16 bits of `packed` (nibbles low first).
+// The quad's half chain sum joins input_sum; ((p0 + p1) + p2) + p3 joins
+// dot as an fma chain: every product is exact (11-bit x times a 4-bit
+// nibble), so each fma rounds exactly the sum native qdot rounds, and
+// nibble i times x equals native's (x / 16^i) * (word & mask_i).
+#ifdef USE_FP16
+// Native load_vector adds the four T=half values in half. unpackFloat2x16 is
+// an f16vec2 bitcast, not a widening conversion. Q4_WORD supplies one uvec4
+// load for all eight x values.
+#define Q4_QUAD_LOAD(lo, hi) \
+  f16vec2 h01 = unpackFloat2x16(lo); \
+  f16vec2 h23 = unpackFloat2x16(hi); \
+  float16_t h0 = h01.x; \
+  float16_t h1 = h01.y; \
+  float16_t h2 = h23.x; \
+  float16_t h3 = h23.y; \
+  input_sum += float(((h0 + h1) + h2) + h3); \
+  float x0 = float(h0); \
+  float x1 = float(h1); \
+  float x2 = float(h2); \
+  float x3 = float(h3);
+#else
+// f32 x has nothing to round; the bf16 native quad sum is uncaptured,
+// so bf16 keeps the float chain.
+#define Q4_QUAD_LOAD(base, unused) \
+  float x0 = LOAD_VALUE(input_x.values[base]); \
+  float x1 = LOAD_VALUE(input_x.values[(base) + 1u]); \
+  float x2 = LOAD_VALUE(input_x.values[(base) + 2u]); \
+  float x3 = LOAD_VALUE(input_x.values[(base) + 3u]); \
+  input_sum += ((x0 + x1) + x2) + x3;
+#endif
+#define Q4_QUAD(packed, a, b) { \
+  Q4_QUAD_LOAD(a, b) \
+  uint p = (packed); \
+  dot += fma(x3, float((p >> 12u) & 0xfu), \
+      fma(x2, float((p >> 8u) & 0xfu), \
+          fma(x1, float((p >> 4u) & 0xfu), \
+              x0 * float(p & 0xfu)))); \
+}
+// One packed weight word and its eight x values.
+#ifdef USE_FP16
+#define Q4_WORD(word, x_base) { \
+  uint word_value = (word); \
+  uvec4 x_words = input_x.values[(x_base) / 8u]; \
+  Q4_QUAD(word_value, x_words.x, x_words.y) \
+  Q4_QUAD(word_value >> 16u, x_words.z, x_words.w) \
+}
+#else
+#define Q4_WORD(word, x_base) { \
+  uint word_value = (word); \
+  uint quad_base = (x_base); \
+  Q4_QUAD(word_value, quad_base, 0u) \
+  Q4_QUAD(word_value >> 16u, quad_base + 4u, 0u) \
+}
+#endif
+// Block epilogue: result += fma(scale, dot, sum * bias) with the group
+// of word w (every word of a lane's block sits in one group). S and B
+// name the scale and bias buffers so the multi-weight variant can
+// instantiate the same chain per weight.
+#define Q4_BLOCK_FINISH(w, S, B) { \
+  uint group = (w) / 8u; \
+  float scale = LOAD_VALUE(S.values[scale_base + group]); \
+  float bias = LOAD_VALUE(B.values[bias_base + group]); \
+  precise float bias_term = input_sum * bias; \
+  accumulator += fma(scale, dot, bias_term); \
+}
+// One output column of one transposed 4-bit/group-64 weight, native qmv
+// arithmetic (metal/kernels/quantized.h qmv_impl / qmv_fast_impl +
+// load_vector + qdot, T=half, U=float): a lane owns one word (two when
+// K % 512 == 0 and N % 8 == 0, the qmv_fast tile) per 256- or 512-wide
+// block. Per block it forms the half-precision chain sum of each x
+// quad, accumulates those in float, and the dot against the nibbles in
+// source order, then result += fma(scale, dot, sum * bias). Metal
+// compiles with -fno-fast-math: it contracts scale * accum + sum * bias
+// into that fma, leaves sum * bias separate, and keeps every add in
+// source order. Honeykrisp's NIR reassociates add chains into fma
+// ladders unless the ops are exact, so accumulator, dot, and input_sum
+// are precise (receipts/2026-09-09-q4-gemv-order). Straight-line
+// bodies: the qmv_fast tile and the qmv tile each get their own loop so
+// no runtime-count inner loop sits between the loads and the math.
+// Expects w_base, scale_base, bias_base, x_row, words_per_row, n and
+// lane_in_slot in scope and accumulates into `accumulator`.
+// Candidate vs base: the plain tile below walks two words per pair
+// iteration in the SAME lane order (w, then w + LANES; a general tail
+// loop finishes the row), so every lane applies the identical
+// word/fma sequence and the result stays bit-identical, while the
+// second half's weight/x loads can issue while the first half's math
+// is still in flight.
+#define Q4_ROW(W, S, B) { \
+  if (params.matrix_k % 512u == 0u && n % 8u == 0u) { \
+    for (uint w = lane_in_slot * 2u; w < words_per_row; \
+         w += LANES * 2u) { \
+      precise float dot = 0.0; \
+      precise float input_sum = 0.0; \
+      Q4_WORD(W.values[w_base + w], x_row + w * 8u) \
+      Q4_WORD(W.values[w_base + w + 1u], x_row + w * 8u + 8u) \
+      Q4_BLOCK_FINISH(w, S, B) \
+    } \
+  } else { \
+    uint w = lane_in_slot; \
+    for (; w + LANES * 2u <= words_per_row; w += LANES * 2u) { \
+      precise float dot = 0.0; \
+      precise float input_sum = 0.0; \
+      Q4_WORD(W.values[w_base + w], x_row + w * 8u) \
+      Q4_BLOCK_FINISH(w, S, B) \
+      dot = 0.0; \
+      input_sum = 0.0; \
+      Q4_WORD(W.values[w_base + w + LANES], \
+          x_row + (w + LANES) * 8u) \
+      Q4_BLOCK_FINISH(w + LANES, S, B) \
+    } \
+    for (; w < words_per_row; w += LANES) { \
+      precise float dot = 0.0; \
+      precise float input_sum = 0.0; \
+      Q4_WORD(W.values[w_base + w], x_row + w * 8u) \
+      Q4_BLOCK_FINISH(w, S, B) \
+    } \
+  } \
+}
+#endif
+
+#ifdef QMM_VEC_MULTI
+// Multi-weight main: workgroup ranges [0, g0), [g0, g0 + g1), and the
+// rest select weight 0, 1, 2; the selection is uniform per workgroup so
+// the barrier rounds of the tree reduction stay uniform. Each weight's
+// column runs the same Q4_ROW chain the single kernel runs for that
+// weight alone (n is that weight's N, so the qmv_fast tile choice is
+// the same). The epilogue must add the STORED value: the per-node Add
+// reads the rounded output back from memory. A float16_t round trip
+// in registers does not survive the AGX compiler (the epilogue then
+// added the unrounded total; 270 of 896 sums differed on the M1), so
+// the rounding goes through integer packing, as fused_chain.comp
+// does, and both the output and the sum derive from that rounded
+// value (converting an f16-representable float to float16_t is exact).
+#ifdef USE_FP16
+#define ROUND_STORAGE(f) (unpackHalf2x16(packHalf2x16(vec2(f, 0.0))).x)
+#elif defined(USE_BF16)
+#define ROUND_STORAGE(f) LOAD_VALUE(bf16_store(f))
+#else
+#define ROUND_STORAGE(f) (f)
+#endif
+#define Q4_MULTI_STORE(I, rounded) { \
+  output##I.values[column] = STORE_VALUE(rounded); \
+  if ((params.flags & (256u << I)) != 0u) { \
+    sum##I.values[column] = STORE_VALUE( \
+        (rounded) + LOAD_VALUE(addend##I.values[column])); \
+  } \
+}
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint n0 = params.shape[0];
+  uint n1 = params.shape[1];
+  uint n2 = params.shape[2];
+  uint groups0 = (n0 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+  uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+  uint workgroup = gl_WorkGroupID.x;
+  uint which;
+  uint n;
+  if (workgroup < groups0) {
+    which = 0u;
+    n = n0;
+  } else if (workgroup < groups0 + groups1) {
+    which = 1u;
+    workgroup -= groups0;
+    n = n1;
+  } else {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  }
+  uint column = workgroup * COLUMNS_PER_GROUP + column_slot;
+  bool column_active = column < n;
+  precise float accumulator = 0.0;
+  if (column_active) {
+    uint words_per_row = params.matrix_k / 8u;
+    uint groups_per_row = params.matrix_k / 64u;
+    uint w_base = column * words_per_row;
+    uint scale_base = column * groups_per_row;
+    uint bias_base = scale_base;
+    uint x_row = params.lhs_offset;
+    if (which == 0u) {
+      Q4_ROW(input_w0, scales0, biases0)
+    } else if (which == 1u) {
+      Q4_ROW(input_w1, scales1, biases1)
+    } else {
+      Q4_ROW(input_w2, scales2, biases2)
+    }
+  }
+#ifdef USE_SUBGROUP
+  float total = subgroupAdd(accumulator);
+#else
+  reduce_scratch[lane] = accumulator;
+  barrier();
+  for (uint offset = 1u; offset < LANES; offset <<= 1u) {
+    if ((lane_in_slot & (2u * offset - 1u)) == 0u) {
+      reduce_scratch[lane] += reduce_scratch[lane + offset];
+    }
+    barrier();
+  }
+  float total = reduce_scratch[lane];
+#endif
+  if (lane_in_slot == 0u && column_active) {
+    float rounded = ROUND_STORAGE(total);
+    if (which == 0u) {
+      Q4_MULTI_STORE(0, rounded)
+    } else if (which == 1u) {
+      Q4_MULTI_STORE(1, rounded)
+    } else {
+      Q4_MULTI_STORE(2, rounded)
+    }
+  }
+}
+#else
+// Weight layout routing mirrors qmm.comp. Transposed (flags bit 0
+// clear): w batch slice [N, Kp], groups along K, scale [n][k / gs].
+// Non-transposed (bit 0 set): w batch slice [K, Np], packed N per row,
+// groups along N, scale [k][n / gs]. shape[0] carries the batch count
+// B and the per-slot work runs once per batch slice; each thread's
+// lane nibble and scale column stay fixed for the whole reduction.
+// FP_MODE dispatches only a single x row against a 2D w (batch = 1).
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint bits = params.operation;
+  uint group_size = params.reduce_size;
+  bool non_transposed = (params.flags & 1u) != 0u;
+#ifdef FP_MODE
+  uint batch = 1u;
+#else
+  uint batch = params.shape[0];
+#endif
+  uint w_batch_words = params.shape[1];
+  uint param_batch = params.shape[2];
+  uint column = gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot;
+  bool column_active = column < params.matrix_n;
+  for (uint b = 0u; b < batch; ++b) {
+    precise float accumulator = 0.0;
+    if (column_active) {
+      uint w_row = params.rhs_offset + b * w_batch_words;
+      uint p_base = params.aux_offset + b * param_batch;
+      // Runtime trip count and runtime shift/mask: lane-uniform per
+      // step, never unrolled, so the unpack state stays out of
+      // registers.
+#ifdef FP_MODE
+      uint fp_pack_factor = (bits == 8u) ? 1u : 2u;
+      if (non_transposed) {
+        // FP_MODE non-transposed: w [K, Np] with fp bytes packed along
+        // N (2 nibbles per byte little-endian), scale bytes
+        // [k][column / group_size]. Fixed column per lane, walk k.
+        uint n_bytes_per_row = params.matrix_n * bits / 8u;
+        uint col_byte = column / fp_pack_factor;
+        uint col_group = column / group_size;
+        uint nibble = column & 1u;
+        uint groups_per_col_row = params.matrix_n / group_size;
+        for (uint k = lane_in_slot; k < params.matrix_k; k += LANES) {
+          uint scale_addr =
+              p_base + k * groups_per_col_row + col_group;
+          uint scale_byte = byte_at(
+              scale_bias.values[scale_addr >> 2u], scale_addr & 3u);
+          float scale = (group_size == 16u) ? fp8_decode(scale_byte)
+                                            : e8m0_decode(scale_byte);
+          uint byte_addr =
+              w_row * 4u + k * n_bytes_per_row + col_byte;
+          uint packed_byte = byte_at(
+              input_w.values[byte_addr >> 2u], byte_addr & 3u);
+          uint code = (bits == 8u)
+              ? packed_byte
+              : ((nibble == 0u) ? (packed_byte & 0xFu)
+                                : (packed_byte >> 4u));
+          float value =
+              (bits == 8u) ? fp8_decode(code) : fp4_decode(code);
+          float x_value = LOAD_VALUE(input_x.values[
+              params.lhs_offset + b * params.matrix_k + k]);
+          accumulator += x_value * (scale * value);
+        }
+      } else {
+        // FP_MODE transposed: w [N, Kp], scale bytes
+        // [column][k / group_size].
+        uint groups_per_row = params.matrix_k / group_size;
+        uint w_base =
+            w_row + column * (params.matrix_k / (fp_pack_factor * 4u));
+        for (uint k = lane_in_slot; k < params.matrix_k; k += LANES) {
+          uint scale_addr = p_base + column * groups_per_row +
+              k / group_size;
+          uint scale_byte = byte_at(
+              scale_bias.values[scale_addr >> 2u], scale_addr & 3u);
+          float scale = (group_size == 16u) ? fp8_decode(scale_byte)
+                                            : e8m0_decode(scale_byte);
+          uint byte_addr = w_base * 4u + k / fp_pack_factor;
+          uint packed_byte = byte_at(
+              input_w.values[byte_addr >> 2u], byte_addr & 3u);
+          uint code = (bits == 8u)
+              ? packed_byte
+              : (((k & 1u) == 0u) ? (packed_byte & 0xFu)
+                                  : (packed_byte >> 4u));
+          float value =
+              (bits == 8u) ? fp8_decode(code) : fp4_decode(code);
+          float x_value = LOAD_VALUE(input_x.values[
+              params.lhs_offset + b * params.matrix_k + k]);
+          accumulator += x_value * (scale * value);
+        }
+      }
+#else
+#ifdef QMM_VEC_Q4_WORD
+      // Native qmv arithmetic; see Q4_ROW.
+      uint words_per_row = params.matrix_k / 8u;
+      uint groups_per_row = params.matrix_k / 64u;
+      uint w_base = w_row + column * words_per_row;
+      uint scale_base = p_base + column * groups_per_row;
+      uint bias_base =
+          params.aux_size + b * param_batch + column * groups_per_row;
+      uint x_row = params.lhs_offset + b * params.matrix_k;
+      uint n = params.matrix_n;
+      Q4_ROW(input_w, scales, biases)
+#else
+      bool is_byte_bits =
+          (bits == 3u || bits == 5u || bits == 6u);
+      uint pack_factor = is_byte_bits
+          ? (bits == 6u ? 4u : 8u)
+          : (32u / bits);
+      uint bytes_per_pack = is_byte_bits ? (bits == 5u ? 5u : 3u) : 1u;
+      uint value_mask = (1u << bits) - 1u;
+      if (non_transposed) {
+        // Non-transposed: fixed lane nibble and fixed scale column per
+        // lane, walking the k rows. Byte bits decode the lane from the
+        // byte packs in the w row; word bits keep the fixed lane shift.
+        uint n_bytes_per_row = params.matrix_n * bits / 8u;
+        uint n_words_per_row = params.matrix_n * bits / 32u;
+        uint group_bytes = (group_size / pack_factor) * bytes_per_pack;
+        uint col_byte_off = (column / group_size) * group_bytes +
+            ((column % group_size) / pack_factor) * bytes_per_pack;
+        uint lane_n = column % pack_factor;
+        uint col_word_off = column / pack_factor;
+        uint lane_shift = lane_n * bits;
+        uint param_step = params.matrix_n / group_size;
+        uint param_col = p_base + column / group_size;
+        uint bias_col =
+            params.aux_size + b * param_batch + column / group_size;
+        for (uint k = lane_in_slot; k < params.matrix_k; k += LANES) {
+          uint q;
+          if (is_byte_bits) {
+            uint byte_addr =
+                w_row * 4u + k * n_bytes_per_row + col_byte_off;
+            uint c0 = byte_at(
+                input_w.values[byte_addr >> 2u], byte_addr & 3u);
+            uint c1 = byte_at(
+                input_w.values[(byte_addr + 1u) >> 2u],
+                (byte_addr + 1u) & 3u);
+            uint c2 = byte_at(
+                input_w.values[(byte_addr + 2u) >> 2u],
+                (byte_addr + 2u) & 3u);
+            q = (bits == 3u)
+                ? q3_at(lane_n, c0, c1, c2)
+                : (bits == 5u)
+                ? q5_at(lane_n, c0, c1, c2, byte_at(
+                      input_w.values[(byte_addr + 3u) >> 2u],
+                      (byte_addr + 3u) & 3u), byte_at(
+                      input_w.values[(byte_addr + 4u) >> 2u],
+                      (byte_addr + 4u) & 3u))
+                : q6_at(lane_n, c0, c1, c2);
+          } else {
+            uint word = input_w.values[
+                w_row + k * n_words_per_row + col_word_off];
+            q = (word >> lane_shift) & value_mask;
+          }
+          float x_value = LOAD_VALUE(
+              input_x.values[params.lhs_offset + b * params.matrix_k + k]);
+          accumulator += x_value *
+              (LOAD_VALUE(scales.values[param_col + k * param_step]) *
+                    float(q) +
+                LOAD_VALUE(biases.values[bias_col + k * param_step]));
+        }
+      } else {
+        uint words_per_row = params.matrix_k * bits / 32u;
+        uint groups_per_row = params.matrix_k / group_size;
+        uint w_base = w_row + column * words_per_row;
+        uint scale_base = p_base + column * groups_per_row;
+        uint bias_base =
+            params.aux_size + b * param_batch + column * groups_per_row;
+        for (uint k = lane_in_slot; k < params.matrix_k; k += LANES) {
+          uint group = k / group_size;
+          float x_value = LOAD_VALUE(
+              input_x.values[params.lhs_offset + b * params.matrix_k + k]);
+          float dequant;
+          if (is_byte_bits) {
+            uint byte_addr =
+                w_base * 4u + (k / pack_factor) * bytes_per_pack;
+            uint c0 = byte_at(
+                input_w.values[byte_addr >> 2u], byte_addr & 3u);
+            uint c1 = byte_at(
+                input_w.values[(byte_addr + 1u) >> 2u],
+                (byte_addr + 1u) & 3u);
+            uint c2 = byte_at(
+                input_w.values[(byte_addr + 2u) >> 2u],
+                (byte_addr + 2u) & 3u);
+            uint e = k % pack_factor;
+            uint q = (bits == 3u)
+                ? q3_at(e, c0, c1, c2)
+                : (bits == 5u)
+                ? q5_at(e, c0, c1, c2, byte_at(
+                      input_w.values[(byte_addr + 3u) >> 2u],
+                      (byte_addr + 3u) & 3u), byte_at(
+                      input_w.values[(byte_addr + 4u) >> 2u],
+                      (byte_addr + 4u) & 3u))
+                : q6_at(e, c0, c1, c2);
+            dequant = float(q);
+          } else {
+            uint word = input_w.values[w_base + k / pack_factor];
+            uint q = (word >> ((k % pack_factor) * bits)) & value_mask;
+            dequant = float(q);
+          }
+          accumulator += x_value *
+              (LOAD_VALUE(scales.values[scale_base + group]) *
+                    dequant +
+                  LOAD_VALUE(biases.values[bias_base + group]));
+        }
+      }
+#endif
+#endif
+    }
+    // Every lane reaches the reduction, including inactive slots
+    // (accumulator 0), so the barriers stay uniform across the
+    // workgroup.
+#ifdef USE_SUBGROUP
+    // Subgroup reduction path. Each 32-lane slot is one hardware
+    // subgroup; subgroupAdd folds the per-lane accumulators inside the
+    // subgroup without shared-memory scratch or barriers, pairing lanes
+    // stride 1 first (see the header). Every lane reaches it (uniform
+    // control flow); the lane_in_slot == 0 thread of each slot owns
+    // that column's output.
+    float total = subgroupAdd(accumulator);
+    if (lane_in_slot == 0u && column_active) {
+      output_data.values[params.output_offset + b * params.matrix_n +
+          column] = STORE_VALUE(total);
+    }
+#else
+    // Tree reduction path (default). Five rounds of barrier-synchronized
+    // shared-memory adds fold the 32-lane per-slot accumulators in the
+    // same stride-1-first pairing as the hardware reduction; first lane
+    // of each slot owns the column output. Correct on any subgroup size
+    // because the lane split is plain workgroup arithmetic.
+    reduce_scratch[lane] = accumulator;
+    barrier();
+    for (uint offset = 1u; offset < LANES; offset <<= 1u) {
+      if ((lane_in_slot & (2u * offset - 1u)) == 0u) {
+        reduce_scratch[lane] += reduce_scratch[lane + offset];
+      }
+      barrier();
+    }
+    if (lane_in_slot == 0u && column_active) {
+      output_data.values[params.output_offset + b * params.matrix_n +
+          column] = STORE_VALUE(reduce_scratch[lane]);
+    }
+#endif
+  }
+}
+#endif

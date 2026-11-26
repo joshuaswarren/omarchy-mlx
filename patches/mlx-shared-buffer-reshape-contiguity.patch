@@ -1,0 +1,53 @@
+# Upstream: ml-explore/mlx aa4096a34f399138c20d7275c4c719c9182b9a65 (#4589)
+# License: MIT; upstream copyright and license notices retained.
+diff --git a/mlx/backend/common/common.cpp b/mlx/backend/common/common.cpp
+index e972cdee..f9d3c76e 100644
+--- a/mlx/backend/common/common.cpp
++++ b/mlx/backend/common/common.cpp
+@@ -156,6 +156,12 @@ void shared_buffer_reshape(
+     //    becomes col contiguous again.
+     auto max_dim = std::max_element(out.shape().begin(), out.shape().end());
+     flags.col_contiguous = out.size() <= 1 || out.size() == *max_dim;
++  } else {
++    // New shape can change contiguity
++    auto [_, row_contiguous, col_contiguous] =
++        check_contiguity(out.shape(), out_strides);
++    flags.row_contiguous = row_contiguous;
++    flags.col_contiguous = col_contiguous;
+   }
+   out.copy_shared_buffer(in, out_strides, flags, in.data_size());
+ }
+diff --git a/python/tests/test_ops.py b/python/tests/test_ops.py
+index b3589580..d9cc71fc 100644
+--- a/python/tests/test_ops.py
++++ b/python/tests/test_ops.py
+@@ -3531,6 +3531,14 @@ class TestOps(mlx_tests.MLXTestCase):
+         self.assertEqual(x.flatten(start_axis=1).shape, (2, 3 * 4))
+         self.assertEqual(x.flatten(end_axis=1).shape, (2 * 3, 4))
+ 
++    def test_reshape_col_contiguous(self):
++        # Reshape without a copy
++        a = mx.arange(12).reshape(3, 4).T.reshape(2, 2, 3)
++        b = mx.arange(12).reshape(3, 2, 2).T
++        a_np = np.arange(12).reshape(3, 4).T.reshape(2, 2, 3)
++        b_np = np.arange(12).reshape(3, 2, 2).T
++        self.assertTrue(np.array_equal(a + b, a_np + b_np))
++
+     def test_clip(self):
+         a = np.array([1, 4, 3, 8, 5], np.int32)
+         expected = np.clip(a, 2, 6)
+diff --git a/tests/ops_tests.cpp b/tests/ops_tests.cpp
+index b6dac689..977d25c7 100644
+--- a/tests/ops_tests.cpp
++++ b/tests/ops_tests.cpp
+@@ -124,8 +124,9 @@ TEST_CASE("test reshape") {
+   CHECK(x.flags().col_contiguous);
+   y = reshape(x, {2, 5, 10});
+   eval(y);
++  // Strides (5, 1, 10) are neither row nor col major
+   CHECK(!y.flags().row_contiguous);
+-  CHECK(y.flags().col_contiguous);
++  CHECK(!y.flags().col_contiguous);
+   y = reshape(x, {2, 50});
+   eval(y);
+   CHECK(y.flags().row_contiguous);

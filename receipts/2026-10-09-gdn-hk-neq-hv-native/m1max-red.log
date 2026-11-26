@@ -1,0 +1,43 @@
+start 2026-10-09T20:57:55Z label red load 0.86 bin d98c4d8341938e8d HEAD d858fccbc1f70b6ec99b99db1d83bf13ffb00a35 (was 91004b98b50d83ead8393124b3cc6551b06f01d7)
+
+$WORK/src/.work/mlx/tests/omarchy/test_gdn_fast_route_repeat.cpp:200: ERROR: CHECK( array_equal(a.out[1], b.out[1]).item<bool>() ) is NOT correct!
+  values: CHECK( false )
+  logged: PTR: final state differs between the repeated and un-repeated routes
+
+[gdn_fast_route_repeat] prefill T=96 (chunked route): repeated route 1 dispatches, un-repeated route 1634
+$WORK/src/.work/mlx/tests/omarchy/test_gdn_fast_route_repeat.cpp:192: ERROR: CHECK( b.dispatches <= 16 ) is NOT correct!
+  values: CHECK( 1634 <= 16 )
+  logged: PTR: un-repeated route took 1634 dispatches; the backend should expand q and k and run the fused kernels, not the composed fallback
+
+$WORK/src/.work/mlx/tests/omarchy/test_gdn_fast_route_repeat.cpp:197: ERROR: CHECK( array_equal(a.out[0], b.out[0]).item<bool>() ) is NOT correct!
+  values: CHECK( false )
+  logged: PTR: output differs between the repeated and un-repeated routes
+
+$WORK/src/.work/mlx/tests/omarchy/test_gdn_fast_route_repeat.cpp:200: ERROR: CHECK( array_equal(a.out[1], b.out[1]).item<bool>() ) is NOT correct!
+  values: CHECK( false )
+  logged: PTR: final state differs between the repeated and un-repeated routes
+
+[gdn_fast_route_repeat] prefill T=32, q/k views with a buffer offset: repeated route 1 dispatches, un-repeated route 546
+$WORK/src/.work/mlx/tests/omarchy/test_gdn_fast_route_repeat.cpp:192: ERROR: CHECK( b.dispatches <= 16 ) is NOT correct!
+  values: CHECK( 546 <= 16 )
+  logged: PTR: un-repeated route took 546 dispatches; the backend should expand q and k and run the fused kernels, not the composed fallback
+
+$WORK/src/.work/mlx/tests/omarchy/test_gdn_fast_route_repeat.cpp:197: ERROR: CHECK( array_equal(a.out[0], b.out[0]).item<bool>() ) is NOT correct!
+  values: CHECK( false )
+  logged: PTR: output differs between the repeated and un-repeated routes
+
+$WORK/src/.work/mlx/tests/omarchy/test_gdn_fast_route_repeat.cpp:200: ERROR: CHECK( array_equal(a.out[1], b.out[1]).item<bool>() ) is NOT correct!
+  values: CHECK( false )
+  logged: PTR: final state differs between the repeated and un-repeated routes
+
+[gdn_fast_route_repeat] decode, q/k views with a buffer offset: repeated route 1 dispatches, un-repeated route 18
+$WORK/src/.work/mlx/tests/omarchy/test_gdn_fast_route_repeat.cpp:192: ERROR: CHECK( b.dispatches <= 16 ) is NOT correct!
+  values: CHECK( 18 <= 16 )
+  logged: PTR: un-repeated route took 18 dispatches; the backend should expand q and k and run the fused kernels, not the composed fallback
+
+===============================================================================
+[doctest] test cases:    2 |    1 passed |  1 failed | 0 skipped
+[doctest] assertions: 3863 | 3852 passed | 11 failed |
+[doctest] Status: FAILURE!
+rc=1
+end 2026-10-09T20:57:55Z

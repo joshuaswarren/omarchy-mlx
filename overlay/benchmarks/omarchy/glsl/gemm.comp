@@ -1,0 +1,136 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+
+// C[M,N] = A[M,K] * W[N,K]^T. Each 128-thread workgroup computes a
+// 64x64 tile with fp32 accumulation. FP16 inputs stay packed in uint words.
+// Shared K-pairs use padded strides to avoid bank conflicts. The host requires
+// K % 4 == 0 and dispatches ceil(N/64) by ceil(M/64).
+
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+layout(local_size_x = 16, local_size_y = 8, local_size_z = 1) in;
+
+layout(constant_id = 0) const uint M = 1;
+layout(constant_id = 1) const uint N = 1;
+layout(constant_id = 2) const uint K = 1;
+
+#ifdef FP16
+#define chunk_t uvec2
+#define pair_t uint
+vec4 unpack_chunk(chunk_t q) {
+  return vec4(unpackHalf2x16(q.x), unpackHalf2x16(q.y));
+}
+pair_t to_pair(vec2 v) {
+  return packHalf2x16(v);
+}
+vec2 from_pair(pair_t p) {
+  return unpackHalf2x16(p);
+}
+#else
+#define chunk_t vec4
+#define pair_t vec2
+vec4 unpack_chunk(chunk_t q) {
+  return q;
+}
+pair_t to_pair(vec2 v) {
+  return v;
+}
+vec2 from_pair(pair_t p) {
+  return p;
+}
+#endif
+
+// Index unit is the 4-element chunk: chunk i of row r holds elements
+// 4*i .. 4*i+3 of that row. Requires K % 4 == 0.
+layout(set = 0, binding = 0) readonly buffer ABuf { chunk_t a[]; };
+layout(set = 0, binding = 1) readonly buffer WBuf { chunk_t w[]; };
+layout(set = 0, binding = 2) writeonly buffer CBuf { float c[]; };
+
+// +1 pad on both strides spreads warp reads across banks.
+shared pair_t sa[64][17];  // A tile, k-pairs [row][k/2]
+shared pair_t tb[16][65];  // W tile, k-pairs [k/2][col]
+void main() {
+  uint row0 = gl_WorkGroupID.y * 64u;
+  uint col0 = gl_WorkGroupID.x * 64u;
+  uint t = gl_LocalInvocationIndex;
+  uint warp_i = t / 32u;
+  uint tiw = t % 32u;
+  uint warp_r = warp_i % 2u;
+  uint warp_c = warp_i / 2u;
+  uint tiwr = tiw % 8u;
+  uint tiwc = tiw / 8u;
+  uint sq = t % 8u;
+  uint sr = (t / 8u) % 16u;
+
+  float acc[4][8];
+  for (uint i = 0u; i < 4u; ++i) {
+    for (uint j = 0u; j < 8u; ++j) {
+      acc[i][j] = 0.0;
+    }
+  }
+
+  for (uint kt = 0u; kt < K; kt += 32u) {
+    uint kbase = kt / 4u;
+    uint krow = K / 4u;
+    for (uint hi = 0u; hi < 4u; ++hi) {
+      uint r = sr + 16u * hi;
+      bool inside = (row0 + r) < M && (kbase + sq + 1u) * 4u <= K;
+      vec4 v = inside
+          ? unpack_chunk(a[(row0 + r) * krow + kbase + sq])
+          : vec4(0.0);
+      sa[r][2u * sq] = to_pair(v.xy);
+      sa[r][2u * sq + 1u] = to_pair(v.zw);
+    }
+    for (uint hi = 0u; hi < 4u; ++hi) {
+      uint n = sr + 16u * hi;
+      bool inside = (col0 + n) < N && (kbase + sq + 1u) * 4u <= K;
+      vec4 v = inside
+          ? unpack_chunk(w[(col0 + n) * krow + kbase + sq])
+          : vec4(0.0);
+      tb[2u * sq][n] = to_pair(v.xy);
+      tb[2u * sq + 1u][n] = to_pair(v.zw);
+    }
+    barrier();
+    memoryBarrierShared();
+
+    for (uint kp = 0u; kp < 16u; ++kp) {
+      vec2 av[4];
+      av[0] = from_pair(sa[32u * warp_r + 2u * tiwr][kp]);
+      av[1] = from_pair(sa[32u * warp_r + 2u * tiwr + 1u][kp]);
+      av[2] = from_pair(sa[32u * warp_r + 16u + 2u * tiwr][kp]);
+      av[3] = from_pair(sa[32u * warp_r + 16u + 2u * tiwr + 1u][kp]);
+      uint c0 = 32u * warp_c + 2u * tiwc;
+      vec2 wv[8];
+      wv[0] = from_pair(tb[kp][c0]);
+      wv[1] = from_pair(tb[kp][c0 + 1u]);
+      wv[2] = from_pair(tb[kp][c0 + 8u]);
+      wv[3] = from_pair(tb[kp][c0 + 9u]);
+      wv[4] = from_pair(tb[kp][c0 + 16u]);
+      wv[5] = from_pair(tb[kp][c0 + 17u]);
+      wv[6] = from_pair(tb[kp][c0 + 24u]);
+      wv[7] = from_pair(tb[kp][c0 + 25u]);
+      for (uint dr = 0u; dr < 4u; ++dr) {
+        for (uint dn = 0u; dn < 8u; ++dn) {
+          acc[dr][dn] += dot(av[dr], wv[dn]);
+        }
+      }
+    }
+    barrier();
+  }
+
+  for (uint dr = 0u; dr < 4u; ++dr) {
+    uint r = row0 + 32u * warp_r + 16u * (dr / 2u) +
+        2u * tiwr + (dr % 2u);
+    if (r >= M) {
+      continue;
+    }
+    for (uint dn = 0u; dn < 8u; ++dn) {
+      uint cc = col0 + 32u * warp_c + 8u * (dn / 2u) +
+          2u * tiwc + (dn % 2u);
+      if (cc < N) {
+        c[r * N + cc] = acc[dr][dn];
+      }
+    }
+  }
+}

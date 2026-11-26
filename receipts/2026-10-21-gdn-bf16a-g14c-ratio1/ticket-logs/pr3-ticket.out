@@ -1,0 +1,129 @@
+IDLE-GUARD-JOB-START 20261021T162239Z lane=<lane> pr3 build at 356c2df: CPU build of the mlx-omarchy wheel and two doctest binaries of branch w7b/gdn-bf16a-hk-eq-hv-g14c in a fresh clone, then the doctests and the 128-token log-prob comparison on Qwen3.8-2B 4-bit (plain against new default, tiled against new default), untimed
+KERNEL-CMDLINE <vendor>-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.22 SETTLED
+GPU-TIMEOUTS before=0 boot=<id>-dd34-428f-9997-6f135fcbe64b
+PR3 start 2026-10-21T16:22:39Z boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH sha 356c2df282513057385df5fdc747983e77232fd4 load1=0.22
+PR3 wheel mlx_omarchy-0.32.4.dev202610211622+356c2df-cp314-cp314-linux_aarch64.whl sha256 0f5294f585d878bdf15e2ac2fb35411688b509e55e0dd510704fd563e09e87f5
+PR3 tree libmlx 1edd35f48ad2baea
+
+[notice] A new release of pip is available: 26.2.1 -> 26.2.2
+[notice] To update, run: $HOME/work/venv-pr3/bin/python -m pip install --upgrade pip
+PR3 venv mx 0.32.4.dev202610211622+356c2df libmlx 1edd35f48ad2baea
+PR3 tests built 2026-10-21T16:26:28Z
+PR3 doctest omarchy_gdn_gqa_bf16a_tests eb86a36885958ad8
+[gdn_bf16a_untiled_default] ratio 1: default kernel 638, 1 dispatches
+[provenance] gdn_pf_wide mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-f144c7949b)" subgroup_size=32
+[gdn_pf_wide] Hv 16: plain kernel 480, wide kernel 638
+[gdn_pf_wide] Hv 48: plain kernel 480, wide kernel 638
+[doctest] test cases:   9 |   9 passed | 0 failed | 0 skipped
+[doctest] assertions: 143 | 143 passed | 0 failed |
+[doctest] Status: SUCCESS!
+PR3 doctest omarchy_gdn_gqa_bf16a_tests rc=0
+PR3 doctest omarchy_runtime_tests 240138b59a44e0dd
+[doctest] test cases:    59 |    59 passed | 0 failed | 0 skipped
+[doctest] assertions: 27070 | 27070 passed | 0 failed |
+[doctest] Status: SUCCESS!
+PR3 doctest omarchy_runtime_tests rc=0
+AB start 2026-10-21T16:27:10Z part=num boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH governor=performance load1=2.11
+AB model $HOME/.local/share/coreglass/models/qwen3_5-4bit base [MLX_OMARCHY_GDN_PF_WIDE=0] x [MLX_AB_UNUSED=1]; env GDN/MLX/HK/AGX present: 0
+AB wheel mlx_omarchy-0.32.4.dev202610211622+356c2df-cp314-cp314-linux_aarch64.whl sha256 0f5294f585d878bdf15e2ac2fb35411688b509e55e0dd510704fd563e09e87f5 libmlx 1edd35f48ad2baea driver c499962c742f399
+AB numerics P1 D rc=0 logits-run ids_sha256_16 efdd5f38ebf8bd79 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P1 X rc=0 logits-run ids_sha256_16 efdd5f38ebf8bd79 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P1 D2 rc=0 logits-run ids_sha256_16 efdd5f38ebf8bd79 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P2 D rc=0 logits-run ids_sha256_16 605f37d9d7150429 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P2 X rc=0 logits-run ids_sha256_16 605f37d9d7150429 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB census D tokens=6 dispatches=2553 kernels=33
+AB census D tokens=10 dispatches=3481 kernels=33
+AB census X tokens=6 dispatches=2553 kernels=33
+AB census X tokens=10 dispatches=3481 kernels=33
+AB compare P1 D vs X
+  ids_equal: True
+  max_abs_dlogprob_full: 0.0
+  top1_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 1.875
+AB compare P1 D vs D2
+  ids_equal: True
+  max_abs_dlogprob_full: 0.0
+  top1_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 1.875
+AB compare P2 D vs X
+  ids_equal: True
+  max_abs_dlogprob_full: 0.0
+  top1_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 1.375
+AB start 2026-10-21T16:27:40Z part=num boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH governor=performance load1=2.41
+AB model $HOME/.local/share/coreglass/models/qwen3_5-4bit base [MLX_OMARCHY_GDN_DECODE_TILE=1] x [MLX_AB_UNUSED=1]; env GDN/MLX/HK/AGX present: 0
+AB wheel mlx_omarchy-0.32.4.dev202610211622+356c2df-cp314-cp314-linux_aarch64.whl sha256 0f5294f585d878bdf15e2ac2fb35411688b509e55e0dd510704fd563e09e87f5 libmlx 1edd35f48ad2baea driver c499962c742f399
+AB numerics P1 D rc=0 logits-run ids_sha256_16 e0db8a2bbafd3b28 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P1 X rc=0 logits-run ids_sha256_16 efdd5f38ebf8bd79 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P1 D2 rc=0 logits-run ids_sha256_16 e0db8a2bbafd3b28 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P2 D rc=0 logits-run ids_sha256_16 a871d4413d52c3ff n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P2 X rc=0 logits-run ids_sha256_16 605f37d9d7150429 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB census D tokens=6 dispatches=2553 kernels=33
+AB census D tokens=10 dispatches=3481 kernels=33
+AB census X tokens=6 dispatches=2553 kernels=33
+AB census X tokens=10 dispatches=3481 kernels=33
+AB compare P1 D vs X
+  ids_equal: False
+  max_abs_dlogprob_full: 0.5
+  top1_equal_steps: 105/106
+  max_abs_dlogprob_top20_all_steps: 0.25
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 1.875
+AB compare P1 D vs D2
+  ids_equal: True
+  max_abs_dlogprob_full: 0.0
+  top1_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 2.0
+AB compare P2 D vs X
+  ids_equal: False
+  max_abs_dlogprob_full: 0.5
+  top1_equal_steps: 124/124
+  max_abs_dlogprob_top20_all_steps: 0.25
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 1.40625
+PR3 end 2026-10-21T16:28:10Z
+GPU-TIMEOUTS after=0 delta=0
+l=7.1.12-2-20261013.18-sep-ARCH governor=performance load1=2.41
+AB model $HOME/.local/share/coreglass/models/qwen3_5-4bit base [MLX_OMARCHY_GDN_DECODE_TILE=1] x [MLX_AB_UNUSED=1]; env GDN/MLX/HK/AGX present: 0
+AB wheel mlx_omarchy-0.32.4.dev202610211622+356c2df-cp314-cp314-linux_aarch64.whl sha256 0f5294f585d878bdf15e2ac2fb35411688b509e55e0dd510704fd563e09e87f5 libmlx 1edd35f48ad2baea driver c499962c742f399
+AB numerics P1 D rc=0 logits-run ids_sha256_16 e0db8a2bbafd3b28 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P1 X rc=0 logits-run ids_sha256_16 efdd5f38ebf8bd79 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P1 D2 rc=0 logits-run ids_sha256_16 e0db8a2bbafd3b28 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P2 D rc=0 logits-run ids_sha256_16 a871d4413d52c3ff n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB numerics P2 X rc=0 logits-run ids_sha256_16 605f37d9d7150429 n=128 prompt_tokens=20 vocab=248320 full_steps=32 verified=match
+AB census D tokens=6 dispatches=2553 kernels=33
+AB census D tokens=10 dispatches=3481 kernels=33
+AB census X tokens=6 dispatches=2553 kernels=33
+AB census X tokens=10 dispatches=3481 kernels=33
+AB compare P1 D vs X
+  ids_equal: False
+  max_abs_dlogprob_full: 0.5
+  top1_equal_steps: 105/106
+  max_abs_dlogprob_top20_all_steps: 0.25
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 1.875
+AB compare P1 D vs D2
+  ids_equal: True
+  max_abs_dlogprob_full: 0.0
+  top1_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 2.0
+AB compare P2 D vs X
+  ids_equal: False
+  max_abs_dlogprob_full: 0.5
+  top1_equal_steps: 124/124
+  max_abs_dlogprob_top20_all_steps: 0.25
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 1.40625
+PR3 end 2026-10-21T16:28:10Z

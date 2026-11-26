@@ -1,0 +1,52 @@
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[provenance] gdn_gqa_bf16a mlx=0.32.4 device="Apple M1 (G13G B1)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[gdn_gqa_bf16a] B=1: expanded route 3 dispatches, repeated 1, native 3
+===============================================================================
+$WORK/mlx-src/.work/mlx/tests/omarchy/test_gdn_gqa_bf16a.cpp:180:
+TEST CASE:  gdn raw decode bf16 A_log: native GQA equals the expanded and the repeated routes bit for bit
+
+$WORK/mlx-src/.work/mlx/tests/omarchy/test_gdn_gqa_bf16a.cpp:206: ERROR: CHECK( native.dispatches + 2 == expanded.dispatches ) is NOT correct!
+  values: CHECK( 5 == 3 )
+  logged: 0xaaab3d1a5f58: the native route took 3 dispatches against 3 expanded (expected two fewer)
+
+$WORK/mlx-src/.work/mlx/tests/omarchy/test_gdn_gqa_bf16a.cpp:211: ERROR: CHECK( native.dispatches == repeated.dispatches ) is NOT correct!
+  values: CHECK( 3 == 1 )
+  logged: 0xaaab3d1a5f58: native 3 against the repeated route 1
+
+[gdn_gqa_bf16a] B=1, q/k views with a buffer offset: expanded route 3 dispatches, repeated 1, native 3
+$WORK/mlx-src/.work/mlx/tests/omarchy/test_gdn_gqa_bf16a.cpp:206: ERROR: CHECK( native.dispatches + 2 == expanded.dispatches ) is NOT correct!
+  values: CHECK( 5 == 3 )
+  logged: 0xaaab3d1a5f60: the native route took 3 dispatches against 3 expanded (expected two fewer)
+
+$WORK/mlx-src/.work/mlx/tests/omarchy/test_gdn_gqa_bf16a.cpp:211: ERROR: CHECK( native.dispatches == repeated.dispatches ) is NOT correct!
+  values: CHECK( 3 == 1 )
+  logged: 0xaaab3d1a5f60: native 3 against the repeated route 1
+
+[gdn_gqa_bf16a] B=3 batched decode: expanded route 3 dispatches, repeated 1, native 3
+$WORK/mlx-src/.work/mlx/tests/omarchy/test_gdn_gqa_bf16a.cpp:206: ERROR: CHECK( native.dispatches + 2 == expanded.dispatches ) is NOT correct!
+  values: CHECK( 5 == 3 )
+  logged: 0xaaab3d1a5f88: the native route took 3 dispatches against 3 expanded (expected two fewer)
+
+$WORK/mlx-src/.work/mlx/tests/omarchy/test_gdn_gqa_bf16a.cpp:211: ERROR: CHECK( native.dispatches == repeated.dispatches ) is NOT correct!
+  values: CHECK( 3 == 1 )
+  logged: 0xaaab3d1a5f88: native 3 against the repeated route 1
+
+[gdn_gqa_bf16a] B=3, q/k views with a buffer offset: expanded route 5 dispatches, repeated 1, native 5
+$WORK/mlx-src/.work/mlx/tests/omarchy/test_gdn_gqa_bf16a.cpp:206: ERROR: CHECK( native.dispatches + 2 == expanded.dispatches ) is NOT correct!
+  values: CHECK( 7 == 5 )
+  logged: 0xaaab3d1a5fa0: the native route took 5 dispatches against 5 expanded (expected two fewer)
+
+[provenance] gdn_gqa_bf16a_outside mlx=0.32.4 device="Apple M1 (G13G B1)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[provenance] gdn_pf_gqa mlx=0.32.4 device="Apple M1 (G13G B1)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[gdn_pf_gqa] B=1: expanded 3 dispatches, repeated 1, native 1
+[gdn_pf_gqa] B=1, q/k views with a buffer offset: expanded 3 dispatches, repeated 1, native 1
+[gdn_pf_gqa] B=3 batched decode: expanded 3 dispatches, repeated 1, native 1
+[gdn_pf_gqa] B=3, q/k views with a buffer offset: expanded 5 dispatches, repeated 1, native 3
+[provenance] gdn_pf_gqa_outside mlx=0.32.4 device="Apple M1 (G13G B1)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[provenance] gdn_pf_gqa_default mlx=0.32.4 device="Apple M1 (G13G B1)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[gdn_pf_gqa_default] device "Apple M1 (G13G B1)" measured 0 legacy 1: default 3 dispatches kernel 516, tiled 1, untiled 3
+===============================================================================
+[doctest] test cases:  5 |  4 passed | 1 failed | 0 skipped
+[doctest] assertions: 89 | 82 passed | 7 failed |
+[doctest] Status: FAILURE!

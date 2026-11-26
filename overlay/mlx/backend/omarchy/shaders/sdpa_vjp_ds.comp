@@ -1,0 +1,79 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// SDPA VJP P/dS pass (upstream #4563 sdpa_vjp_ds twin), full-length form:
+// for every score element,
+//   P  = exp(scale * S - lse)     (0 on fully masked rows / past causal)
+//   dS = P * (dP - delta) * scale
+// S and dP are the float32 score tiles the caller's matmuls produced; dS
+// lands in S's buffer (each element read then rewritten by exactly one
+// invocation) and P in its own buffer, both float32. lse and odo (delta =
+// rowsum(o * cot_o)) are float32 [B*H*qL]. The causal limit sits at
+// j == i + (kL - qL); a negative offset (prefix queries) rides the same
+// uint in two's complement. Fully masked rows carry lse == -inf; the dead
+// guard keeps exp(-inf - -inf) from producing NaN, so dead rows contribute
+// zero gradients.
+
+#version 460
+
+layout(local_size_x = 16, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) buffer SDsBuf { float v[]; } s_buf;
+layout(set = 0, binding = 1, std430) readonly buffer DPBuf { float v[]; } dp_buf;
+layout(set = 0, binding = 2, std430) readonly buffer LseBuf { float v[]; } lse_buf;
+layout(set = 0, binding = 3, std430) readonly buffer OdoBuf { float v[]; } odo_buf;
+layout(set = 0, binding = 4, std430) writeonly buffer PBuf { float v[]; } p_buf;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;   // S
+  uint rhs_offset;   // dP
+  uint output_offset;  // P
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;     // qL (rows)
+  uint matrix_n;     // kL (cols)
+  uint matrix_k;     // B*H
+  uint flags;        // bit0: causal
+  float alpha;       // scale
+  float beta_f;
+  uint dims;         // diag_off, two's complement for negatives
+  uint shape[4];     // [0]=lse offset [1]=odo offset
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+void main() {
+  int col = int(gl_GlobalInvocationID.x);
+  int row = int(gl_GlobalInvocationID.y);
+  uint bh = gl_GlobalInvocationID.z;
+  if (col >= int(params.matrix_n) || row >= int(params.matrix_m)) {
+    return;
+  }
+  uint sbase = (uint(bh) * uint(params.matrix_m) + uint(row)) *
+      uint(params.matrix_n);
+  uint qi = uint(bh) * uint(params.matrix_m) + uint(row);
+
+  float l = lse_buf.v[params.shape[0] + qi];
+  float dlt = odo_buf.v[params.shape[1] + qi];
+  bool dead = (l < 0.0f) && isinf(l);
+  int lim = row + int(params.dims);
+
+  float pv;
+  if (dead ||
+      ((params.flags & 1u) != 0u && col > lim)) {
+    pv = 0.0f;
+  } else {
+    pv = exp(s_buf.v[params.lhs_offset + sbase + uint(col)] * params.alpha - l);
+  }
+  float dsv = pv * (dp_buf.v[params.rhs_offset + sbase + uint(col)] - dlt) *
+      params.alpha;
+
+  s_buf.v[params.lhs_offset + sbase + uint(col)] = dsv;
+  p_buf.v[params.output_offset + sbase + uint(col)] = pv;
+}

@@ -1,0 +1,16 @@
+#version 460
+// Streaming copy peak probe: one uvec4 (16 B) per invocation, fully
+// coalesced. Bandwidth = 2 * bytes / time (read + write).
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, std430) readonly buffer Src {
+  uvec4 values[];
+}
+src;
+layout(set = 0, binding = 1, std430) writeonly buffer Dst {
+  uvec4 values[];
+}
+dst;
+void main() {
+  uint idx = gl_GlobalInvocationID.x;
+  dst.values[idx] = src.values[idx];
+}

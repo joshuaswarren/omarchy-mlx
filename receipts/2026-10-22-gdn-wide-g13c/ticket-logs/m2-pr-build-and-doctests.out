@@ -1,0 +1,35 @@
+IDLE-GUARD-JOB-START 20261022T042944Z lane=<lane> m2 pr doctests at ba12383: wheel and two doctest binaries of branch w7b/gdn-wide-g13c-equal-heads built in a fresh clone, doctests run on the M2 Max GPU (G14C expectations of the changed rule), no measurement
+KERNEL-CMDLINE <vendor>-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.97 SETTLE-SKIPPED
+GPU-TIMEOUTS before=0 boot=<id>-68f8-4198-93eb-bc61d9e5f07c
+G13M2 start 2026-10-22T04:29:44Z boot=<id> kernel=7.1.12-2-20261013.18-sep-ARCH sha ba12383f5c1c44fb2d69692bf79864b271c2d7e9 load1=0.97
+G13M2 wheel mlx_omarchy-0.32.4.dev202610220429+ba12383-cp314-cp314-linux_aarch64.whl sha256 b62e673707eb7e13fb1c259f5fd0afabcd0d3ec2e85a1a55621c82b5145668fc
+G13M2 tree libmlx 182da0a54d7aba0f
+G13M2 tests built 2026-10-22T04:33:13Z
+G13M2 doctest omarchy_gdn_gqa_bf16a_tests ac59ca02634e57e6
+[gdn_bf16a_untiled_default] ratio 1: default kernel 638, 1 dispatches
+[provenance] gdn_pf_wide mlx=0.32.4 device="Apple M2 Max (G14C B1)" driver="Mesa 26.3.0-devel (git-f144c7949b)" subgroup_size=32
+[gdn_pf_wide] Hv 16: plain kernel 480, wide kernel 638
+[gdn_pf_wide] Hv 48: plain kernel 480, wide kernel 638
+[doctest] test cases:   9 |   9 passed | 0 failed | 0 skipped
+[doctest] assertions: 151 | 151 passed | 0 failed |
+[doctest] Status: SUCCESS!
+G13M2 doctest omarchy_gdn_gqa_bf16a_tests rc=0
+G13M2 doctest omarchy_runtime_tests 69802b20e4fca3f8
+[doctest] test cases:    59 |    59 passed | 0 failed | 0 skipped
+[doctest] assertions: 27070 | 27070 passed | 0 failed |
+[doctest] Status: SUCCESS!
+G13M2 doctest omarchy_runtime_tests rc=0
+G13M2 end 2026-10-22T04:33:55Z
+GPU-TIMEOUTS after=0 delta=0
+0 failed | 0 skipped
+[doctest] assertions: 151 | 151 passed | 0 failed |
+[doctest] Status: SUCCESS!
+G13M2 doctest omarchy_gdn_gqa_bf16a_tests rc=0
+G13M2 doctest omarchy_runtime_tests 69802b20e4fca3f8
+[doctest] test cases:    59 |    59 passed | 0 failed | 0 skipped
+[doctest] assertions: 27070 | 27070 passed | 0 failed |
+[doctest] Status: SUCCESS!
+G13M2 doctest omarchy_runtime_tests rc=0
+G13M2 end 2026-10-22T04:33:55Z

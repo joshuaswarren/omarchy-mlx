@@ -1,0 +1,14 @@
+baseline sys_used=7197.1 MiB
+do_setup=False
+setup complete
+chat port: 54863
+plain_chat: status=complete text_len=32 components=[] valid=True wall=11.0s
+long_context: status=complete text_len=105 components=[] valid=True wall=12.0s
+compare: status=complete text_len=1081 components=['decision'] valid=True wall=128.3s
+card: status=complete text_len=109 components=['chart'] valid=True wall=53.1s
+wrote <home>/.local/share/apple-silicon-lab/artifacts/PairGates/v2-quality27b-run2/measure.json
+baseline_MiB=7197.1
+pair_resident_MiB=2410.9
+peak_over_baseline_MiB=18736.2
+backend_peak_MiB=16283.7
+run_valid=True

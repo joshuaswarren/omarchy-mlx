@@ -1,0 +1,8 @@
+round final start 2026-10-07T11:23:12Z so ace68aa69a17a407
+0.32.4.dev202610071056+ef70b8cc Apple M1 Max (G13C C0) bf16_8 None
+0.32.4.dev202610071118+fd2e3848 Apple M1 Max (G13C C0) bf16_8 1
+0.32.4.dev202610071119+27aa6738 Apple M1 Max (G13C C0) bf16_8 1
+mlxcheck2 C1 vs M diffs: [] of 21
+mlxcheck2 C2 vs M diffs: [] of 21
+family (C2) rc=0 [doctest] test cases:       32 |       32 passed | 0 failed | 0 skipped [doctest] assertions: 82942792 | 82942792 passed | 0 failed | 
+round final end 2026-10-07T11:25:40Z

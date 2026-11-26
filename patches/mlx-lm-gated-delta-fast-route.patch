@@ -1,0 +1,13 @@
+--- a/mlx_lm/models/gated_delta.py	2026-09-22 06:20:13.228038386 -0500
++++ b/mlx_lm/models/gated_delta.py	2026-09-22 06:20:34.848005698 -0500
+@@ -278,6 +278,9 @@
+         Hv, Dv = v.shape[-2:]
+         state = mx.zeros((B, Hv, Dv, Dk), dtype=mx.float32)
+ 
+-    if not use_kernel or mx.default_device() != mx.gpu or not mx.metal.is_available():
++    if not use_kernel or mx.default_device() != mx.gpu:
+         return gated_delta_ops(q, k, v, g, beta, state, mask)
++    if hasattr(mx.fast, "gated_delta_update"):
++        out, st = mx.fast.gated_delta_update(q, k, v, g, beta, state, mask)
++        return out, st
+     return gated_delta_kernel(q, k, v, g, beta, state, mask)

@@ -1,0 +1,2 @@
+end: {"k": "end", "t": 11975750709747, "dispatches": 1896, "dropped": 0, "submissions": 384, "joins": 1, "barriers": 955, "barriers_skipped": 1319}
+    580 MatmulBF16Coopmat

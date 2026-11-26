@@ -1,0 +1,11 @@
+PREREG pv (written before the decode screens; the microbench sd5 on the Apple M2 Max had already run when this was written, and is not part of the decision below).
+Context: split-K decode attention (default on from 128 / 320 / 448 keys by chip, PR 274) has a flat floor of about 80 us per call. The value-phase variant (MLX_OMARCHY_SDPA_SPLIT_PV=1, commit 3841edc1, default off) read on the Apple M2 Max microbench (chain, us per call): 128 to 1024 keys 86 to 93 -> 64 to 75 (about -19 us), 2048 keys 103.8 -> 89.1, 4096 124.8 -> 150.1, 8192 229.7 -> 272.1. So it is expected to help at short caches and hurt at long ones.
+Question: does PV=1 speed up Qwen3-4B decode at 477 and 1888 prompt tokens on each chip?
+Arms (swscreen6.sh, set pv): base = tree-pv default routes (PV off); pv = tree-pv with MLX_OMARCHY_SDPA_SPLIT_PV=1; ledger = installed ledger wheel (reference only). 128 generated tokens, 5 interleaved rounds, one process per sample. Compare only inside one boot, base against pv (same tree).
+Reading rules:
+ P1 Speed: pv over base median decode tok/s per chip and prompt length. The bar for a default change is +3 percent median over 3 or more interleaved rounds. A bar met only at 477 and not at 1888 leads to a length rule (PV only below a key count, taken from the microbench crossover per chip), not to a blanket default.
+ P2 Digests: pv digest equals base digest in every round. If it differs, the numerics gap to the float32 reference is measured with the same method as PR 274 before any default change, and the PR states the result.
+ P3 Loss: a pv arm below -1 percent on any chip and length is reported and the rule above is limited to the lengths that win.
+ P4 Control: base and ledger within 2 percent (different wheels; reference only).
+ P5 The next work item, whatever the outcome: microbench sd5 on the other two chips decides the per-chip key crossover.
+Every result row carries chip, kernel string, boot id, wheel version of tree-pv, libmlx hash and token digest from the run log.

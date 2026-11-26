@@ -1,0 +1,290 @@
+[
+ {
+  "i": 0,
+  "warmup": true,
+  "seconds": 4.565,
+  "corr": 0.517,
+  "rms_ratio": 0.929,
+  "ms": 1305.4,
+  "words": 17
+ },
+ {
+  "i": 1,
+  "warmup": true,
+  "seconds": 4.352,
+  "corr": 0.265,
+  "rms_ratio": 0.956,
+  "ms": 905,
+  "words": 15
+ },
+ {
+  "i": 2,
+  "warmup": false,
+  "seconds": 3.829,
+  "corr": 0.217,
+  "rms_ratio": 1.028,
+  "ms": 1290.9,
+  "words": 23
+ },
+ {
+  "i": 3,
+  "warmup": false,
+  "seconds": 3.851,
+  "corr": 0.315,
+  "rms_ratio": 0.847,
+  "ms": 695.4,
+  "words": 10
+ },
+ {
+  "i": 4,
+  "warmup": false,
+  "seconds": 4.224,
+  "corr": 0.35,
+  "rms_ratio": 0.949,
+  "ms": 1362.4,
+  "words": 21
+ },
+ {
+  "i": 5,
+  "warmup": false,
+  "seconds": 3.979,
+  "corr": 0.504,
+  "rms_ratio": 0.935,
+  "ms": 978.1,
+  "words": 15
+ },
+ {
+  "i": 6,
+  "warmup": false,
+  "seconds": 3.797,
+  "corr": 0.406,
+  "rms_ratio": 0.863,
+  "ms": 1058.9,
+  "words": 14
+ },
+ {
+  "i": 7,
+  "warmup": false,
+  "seconds": 4.277,
+  "corr": 0.275,
+  "rms_ratio": 0.922,
+  "ms": 1057.9,
+  "words": 15
+ },
+ {
+  "i": 8,
+  "warmup": false,
+  "seconds": 3.243,
+  "corr": 0.292,
+  "rms_ratio": 0.903,
+  "ms": 797.7,
+  "words": 14
+ },
+ {
+  "i": 9,
+  "warmup": false,
+  "seconds": 4.565,
+  "corr": 0.295,
+  "rms_ratio": 0.909,
+  "ms": 932.1,
+  "words": 15
+ },
+ {
+  "i": 10,
+  "warmup": false,
+  "seconds": 4.16,
+  "corr": 0.164,
+  "rms_ratio": 0.946,
+  "ms": 806.2,
+  "words": 14
+ },
+ {
+  "i": 11,
+  "warmup": false,
+  "seconds": 4.235,
+  "corr": 0.353,
+  "rms_ratio": 0.945,
+  "ms": 1255.7,
+  "words": 19
+ },
+ {
+  "i": 12,
+  "warmup": false,
+  "seconds": 4.501,
+  "corr": 0.219,
+  "rms_ratio": 0.888,
+  "ms": 777.6,
+  "words": 15
+ },
+ {
+  "i": 13,
+  "warmup": false,
+  "seconds": 4.405,
+  "corr": 0.31,
+  "rms_ratio": 0.875,
+  "ms": 1252.5,
+  "words": 14
+ },
+ {
+  "i": 14,
+  "warmup": false,
+  "seconds": 4.267,
+  "corr": 0.318,
+  "rms_ratio": 0.917,
+  "ms": 1113.3,
+  "words": 14
+ },
+ {
+  "i": 15,
+  "warmup": false,
+  "seconds": 4.256,
+  "corr": 0.233,
+  "rms_ratio": 0.927,
+  "ms": 1440.8,
+  "words": 17
+ },
+ {
+  "i": 16,
+  "warmup": false,
+  "seconds": 3.744,
+  "corr": 0.312,
+  "rms_ratio": 0.974,
+  "ms": 506.8,
+  "words": 15
+ },
+ {
+  "i": 17,
+  "warmup": false,
+  "seconds": 4.256,
+  "corr": 0.257,
+  "rms_ratio": 0.914,
+  "ms": 807.3,
+  "words": 14
+ },
+ {
+  "i": 18,
+  "warmup": false,
+  "seconds": 3.893,
+  "corr": 0.395,
+  "rms_ratio": 1.003,
+  "ms": 1014.6,
+  "words": 14
+ },
+ {
+  "i": 19,
+  "warmup": false,
+  "seconds": 3.925,
+  "corr": 0.398,
+  "rms_ratio": 0.897,
+  "ms": 1021.9,
+  "words": 14
+ },
+ {
+  "i": 20,
+  "warmup": false,
+  "seconds": 4.107,
+  "corr": 0.455,
+  "rms_ratio": 0.957,
+  "ms": 1768.1,
+  "words": 27
+ },
+ {
+  "i": 21,
+  "warmup": false,
+  "seconds": 4.32,
+  "corr": 0.289,
+  "rms_ratio": 0.944,
+  "ms": 1579.4,
+  "words": 15
+ },
+ {
+  "i": 22,
+  "warmup": false,
+  "seconds": 4.075,
+  "corr": 0.464,
+  "rms_ratio": 0.911,
+  "ms": 921.5,
+  "words": 14
+ },
+ {
+  "i": 23,
+  "warmup": false,
+  "seconds": 4.117,
+  "corr": 0.184,
+  "rms_ratio": 0.791,
+  "ms": 889.1,
+  "words": 15
+ },
+ {
+  "i": 24,
+  "warmup": false,
+  "seconds": 3.915,
+  "corr": 0.584,
+  "rms_ratio": 0.823,
+  "ms": null,
+  "words": 0
+ },
+ {
+  "i": 25,
+  "warmup": false,
+  "seconds": 3.573,
+  "corr": 0.258,
+  "rms_ratio": 0.989,
+  "ms": 895.9,
+  "words": 13
+ },
+ {
+  "i": 26,
+  "warmup": false,
+  "seconds": 4.149,
+  "corr": 0.617,
+  "rms_ratio": 0.956,
+  "ms": 990.2,
+  "words": 15
+ },
+ {
+  "i": 27,
+  "warmup": false,
+  "seconds": 3.627,
+  "corr": 0.277,
+  "rms_ratio": 0.875,
+  "ms": 909.9,
+  "words": 13
+ },
+ {
+  "i": 28,
+  "warmup": false,
+  "seconds": 3.307,
+  "corr": 0.332,
+  "rms_ratio": 0.917,
+  "ms": 1359,
+  "words": 12
+ },
+ {
+  "i": 29,
+  "warmup": false,
+  "seconds": 3.701,
+  "corr": 0.265,
+  "rms_ratio": 0.925,
+  "ms": 947.2,
+  "words": 15
+ },
+ {
+  "i": 30,
+  "warmup": false,
+  "seconds": 4.352,
+  "corr": 0.458,
+  "rms_ratio": 0.938,
+  "ms": 1301.2,
+  "words": 14
+ },
+ {
+  "i": 31,
+  "warmup": false,
+  "seconds": 3.541,
+  "corr": 0.201,
+  "rms_ratio": 0.807,
+  "ms": 925.3,
+  "words": 15
+ }
+]

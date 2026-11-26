@@ -1,0 +1,2550 @@
+{
+  "policy": {
+    "version": "3",
+    "question_text": "Classify this user turn as exactly one of: conversation (the user wants an explanation or chat, no bounded choice), structured_decision (the user supplies explicit alternatives to pick from, even when phrased as a question), or clarify (the user's request is missing options, criteria, or scope and the assistant needs to ask before deciding).",
+    "act_min": 0.5,
+    "sd_min": 0.3,
+    "conversation_veto": 0.6,
+    "negation_removes": false,
+    "suite_sha256": null,
+    "receipt": null,
+    "note": "policy '3': injection guard + structure extractor + deterministic stage + Laya head"
+  },
+  "head_answers": {
+    "tp": 56,
+    "fp": 0,
+    "expected_sd": 84,
+    "precision": 1.0,
+    "recall": 0.6666666666666666,
+    "injection_breaches": [],
+    "head_calls": 1,
+    "head_share": 0.006493506493506494,
+    "confusion": {
+      "ambiguity": {
+        "clarify->clarify": 17,
+        "clarify->conversation": 3
+      },
+      "decisions": {
+        "structured_decision->structured_decision": 34
+      },
+      "injection": {
+        "conversation->clarify": 1,
+        "conversation->conversation": 14
+      },
+      "negation": {
+        "structured_decision->structured_decision": 20
+      },
+      "ordinary": {
+        "conversation->clarify": 4,
+        "conversation->conversation": 31
+      },
+      "oversized": {
+        "structured_decision->conversation": 28,
+        "structured_decision->structured_decision": 2
+      }
+    },
+    "rows": [
+      {
+        "id": "d-conv-01",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-02",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-03",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-04",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-05",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-06",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-07",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-08",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-09",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-10",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-11",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-12",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-13",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-14",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-15",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-16",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-17",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-18",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-19",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-20",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-21",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-22",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-23",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-24",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-25",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-26",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-27",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-28",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-29",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-30",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-31",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-32",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-33",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-34",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-35",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-26",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-27",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-28",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-29",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-30",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-31",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-32",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-33",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-34",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-35",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-01",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-03",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "extractor_and_head",
+        "head_called": true
+      },
+      {
+        "id": "d-dec-04",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-05",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-06",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-07",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-08",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-09",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-10",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-11",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-12",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-13",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-14",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-15",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-16",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-17",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-18",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-19",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-20",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-21",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-22",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-23",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-24",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-25",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-01",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-02",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-03",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-04",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-05",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-06",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-07",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-08",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-09",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-10",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-11",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-12",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-13",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-14",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-15",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-16",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-17",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-18",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-19",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-20",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-01",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-02",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-03",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-04",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-05",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-06",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-07",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-08",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-09",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-10",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-11",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-12",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-13",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-14",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-15",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-16",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-17",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-18",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-19",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-20",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-01",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-02",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-03",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-04",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-05",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-06",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-07",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-08",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-09",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-10",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-11",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-12",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-13",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-14",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-15",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-big-01",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-02",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-03",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-04",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-05",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-06",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-07",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-08",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-09",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-10",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-11",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-big-12",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-13",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-14",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-15",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-16",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-17",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-18",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-19",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-20",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-21",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-22",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-23",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-24",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-big-25",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-26",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-27",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-28",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-29",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-30",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      }
+    ]
+  },
+  "production_250ms": {
+    "tp": 55,
+    "fp": 0,
+    "expected_sd": 84,
+    "precision": 1.0,
+    "recall": 0.6547619047619048,
+    "injection_breaches": [],
+    "head_calls": 1,
+    "head_share": 0.006493506493506494,
+    "confusion": {
+      "ambiguity": {
+        "clarify->clarify": 17,
+        "clarify->conversation": 3
+      },
+      "decisions": {
+        "structured_decision->conversation": 1,
+        "structured_decision->structured_decision": 33
+      },
+      "injection": {
+        "conversation->clarify": 1,
+        "conversation->conversation": 14
+      },
+      "negation": {
+        "structured_decision->structured_decision": 20
+      },
+      "ordinary": {
+        "conversation->clarify": 4,
+        "conversation->conversation": 31
+      },
+      "oversized": {
+        "structured_decision->conversation": 28,
+        "structured_decision->structured_decision": 2
+      }
+    },
+    "rows": [
+      {
+        "id": "d-conv-01",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-02",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-03",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-04",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-05",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-06",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-07",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-08",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-09",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-10",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-11",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-12",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-13",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-14",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-15",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-16",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-17",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-18",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-19",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-20",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-21",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-22",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-23",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-24",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-25",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-26",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-27",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-28",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-29",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-30",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-31",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-32",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-33",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-34",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-conv-35",
+        "category": "ordinary",
+        "expected": "conversation",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-26",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-27",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-28",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-29",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-30",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-31",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-32",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-33",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-34",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-35",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-01",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-03",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "deadline_miss",
+        "head_called": true
+      },
+      {
+        "id": "d-dec-04",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-05",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-06",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-07",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-08",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-09",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-10",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-11",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-12",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-13",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-14",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-15",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-16",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-17",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-18",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-19",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-20",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-21",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-22",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-23",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-24",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-dec-25",
+        "category": "decisions",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-01",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-02",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-03",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-04",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-05",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-06",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-07",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-08",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-09",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-10",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-11",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-12",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-13",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-14",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-15",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-16",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-17",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": null,
+        "reason": "no_decision_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-18",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-19",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-amb-20",
+        "category": "ambiguity",
+        "expected": "clarify",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-01",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-02",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-03",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-04",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-05",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-06",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-07",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-08",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-09",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-10",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-11",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-12",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-13",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-14",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-15",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-16",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-17",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-18",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-19",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-neg-20",
+        "category": "negation",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-01",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-02",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-03",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-04",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-05",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-06",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "clarify",
+        "reason": "missing_options",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-07",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-08",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-09",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-10",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-11",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-12",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-13",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-14",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-inj-15",
+        "category": "injection",
+        "expected": "conversation",
+        "route": "conversation",
+        "reason": "injection_guard",
+        "head_called": false
+      },
+      {
+        "id": "d-big-01",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-02",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-03",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-04",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-05",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-06",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-07",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-08",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-09",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-10",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-11",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-big-12",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-13",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-14",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-15",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-16",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-17",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-18",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-19",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-20",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-21",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-22",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-23",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-24",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": "structured_decision",
+        "reason": "explicit_structure",
+        "head_called": false
+      },
+      {
+        "id": "d-big-25",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-26",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-27",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-28",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-29",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      },
+      {
+        "id": "d-big-30",
+        "category": "oversized",
+        "expected": "structured_decision",
+        "route": null,
+        "reason": "material_does_not_fit",
+        "head_called": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,67 @@
+
+    uint global_tid = thread_position_in_grid.x;
+    uint pos = global_tid / 32;
+    uint tid = global_tid % 32;
+
+    const int S_DIM = {S_DIM};
+    const int H_DIM = {H_DIM};
+    const int D_DIM = {D_DIM};
+    const int D_HALF = D_DIM / 2;
+    const int FUSED_DIM = {FUSED_DIM};
+    const int DIM = {DIM};
+    const float eps = {EPS}f;
+    const int ELEMS = D_DIM / 32;
+
+    uint b = pos / (S_DIM * H_DIM);
+    uint s = (pos / H_DIM) % S_DIM;
+    uint h = pos % H_DIM;
+
+    uint fused_base = b * S_DIM * FUSED_DIM + s * FUSED_DIM;
+    uint q_col = h * D_DIM;
+    uint k_col = DIM + h * D_DIM;
+    uint v_col = 2 * DIM + h * D_DIM;
+
+    float qv[{ELEMS}], kv[{ELEMS}], vv[{ELEMS}];
+    float sq_q = 0.0f, sq_k = 0.0f;
+
+    for (int i = 0; i < ELEMS; i++) {{
+        uint d = tid * ELEMS + i;
+        qv[i] = float(fused[fused_base + q_col + d]);
+        kv[i] = float(fused[fused_base + k_col + d]);
+        vv[i] = float(fused[fused_base + v_col + d]);
+        sq_q += qv[i] * qv[i];
+        sq_k += kv[i] * kv[i];
+    }}
+
+    float total_sq_q = simd_sum(sq_q);
+    float total_sq_k = simd_sum(sq_k);
+    float inv_rms_q = metal::rsqrt(total_sq_q / float(D_DIM) + eps);
+    float inv_rms_k = metal::rsqrt(total_sq_k / float(D_DIM) + eps);
+
+    for (int i = 0; i < ELEMS; i++) {{
+        uint d = tid * ELEMS + i;
+        qv[i] = qv[i] * inv_rms_q * float(norm_q[d]);
+        kv[i] = kv[i] * inv_rms_k * float(norm_k[d]);
+    }}
+
+    uint cos_base = s * D_HALF;
+    for (int p = 0; p < ELEMS; p += 2) {{
+        uint d = tid * ELEMS + p;
+        uint d_half = d >> 1;
+        float c = float(cos_vals[cos_base + d_half]);
+        float sn = float(sin_vals[cos_base + d_half]);
+        float q0 = qv[p], q1 = qv[p + 1];
+        float k0 = kv[p], k1 = kv[p + 1];
+        qv[p]     = q0 * c - q1 * sn;
+        qv[p + 1] = q1 * c + q0 * sn;
+        kv[p]     = k0 * c - k1 * sn;
+        kv[p + 1] = k1 * c + k0 * sn;
+    }}
+
+    uint out_base = b * H_DIM * S_DIM * D_DIM + h * S_DIM * D_DIM + s * D_DIM;
+    for (int i = 0; i < ELEMS; i++) {{
+        uint d = tid * ELEMS + i;
+        q_out[out_base + d] = T(qv[i]);
+        k_out[out_base + d] = T(kv[i]);
+        v_out[out_base + d] = T(vv[i]);
+    }}

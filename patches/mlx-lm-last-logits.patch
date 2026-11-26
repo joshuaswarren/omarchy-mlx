@@ -1,0 +1,25 @@
+--- a/mlx_lm/models/qwen3_5.py	2026-09-29 11:18:44.138791759 -0500
++++ b/mlx_lm/models/qwen3_5.py	2026-09-29 11:18:55.947680471 -0500
+@@ -3,6 +3,8 @@
+ from dataclasses import dataclass, field
+ from typing import Any, Dict, List, Optional, Union
+ 
++import os
++
+ import mlx.core as mx
+ import mlx.nn as nn
+ from mlx.nn.layers.distributed import shard_inplace, shard_linear, sum_gradients
+@@ -314,6 +316,13 @@
+         input_embeddings: Optional[mx.array] = None,
+     ) -> mx.array:
+         out = self.model(inputs, cache, input_embeddings=input_embeddings)
++        # mlx-omarchy last-logits: incremental inference consumes only the
++        # final position's logits, but the quantized head over every prompt
++        # position cost 448 ms of the T=2048 prefill (Jw16PrefillGap2).
++        # Whole-sequence calls (cache=None: scoring, training) keep full
++        # logits. MLX_OMARCHY_FULL_LOGITS=1 restores the full head.
++        if cache is not None and os.environ.get("MLX_OMARCHY_FULL_LOGITS", "") != "1":
++            out = out[:, -1:, :]
+         if self.args.tie_word_embeddings:
+             out = self.model.embed_tokens.as_linear(out)
+         else:

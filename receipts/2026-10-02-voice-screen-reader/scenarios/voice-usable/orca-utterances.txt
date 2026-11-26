@@ -1,0 +1,45 @@
+# scenario: voice-usable (Tab through controls (voice-usable))
+# total utterances: 42
+
+[06:12:06.059571] tab 
+[06:12:06.088643] Classify or score toggle button not pressed.
+[06:12:06.294744] tab 
+[06:12:06.318437] Conversation mode check box not checked.
+[06:12:06.531208] tab 
+[06:12:06.563016] History & constraints push button.
+[06:12:06.758970] tab 
+[06:12:06.778468] Output allowance in tokens combo box.
+[06:12:06.778514] Answer length: automatic.
+[06:12:06.778528] opens menu
+[06:12:06.990978] tab 
+[06:12:07.010559] Send push button.
+[06:12:07.219120] tab 
+[06:12:07.257388] Skip to message box link.
+[06:12:07.258228] Browse mode
+[06:12:07.444350] tab 
+[06:12:07.470464] banner
+[06:12:07.470505] Start a new conversation push button.
+[06:12:07.672538] tab 
+[06:12:07.698649] Open conversation history push button.
+[06:12:07.698705] opens dialog
+[06:12:07.699386] Focus mode
+[06:12:07.913939] tab 
+[06:12:07.932836] Prepare another computer or install an offline bundle push button.
+[06:12:07.932872] opens dialog
+[06:12:08.140970] tab 
+[06:12:08.164293] Open model and memory details push button.
+[06:12:08.164326] opens dialog
+[06:12:08.379728] tab 
+[06:12:08.413900] leaving banner.
+[06:12:08.413951] main content
+[06:12:08.413966] information
+[06:12:08.413980] Message entry Type a message. Enter sends, Shift+Enter adds a newline.
+[06:12:08.608198] tab 
+[06:12:08.632321] Composer controls tool bar
+[06:12:08.632373] Compare options toggle button not pressed.
+[06:12:08.836185] tab 
+[06:12:08.870794] Classify or score toggle button not pressed.
+[06:12:09.071912] tab 
+[06:12:09.098796] Conversation mode check box not checked.
+[06:12:09.303732] tab 
+[06:12:09.329714] History & constraints push button.

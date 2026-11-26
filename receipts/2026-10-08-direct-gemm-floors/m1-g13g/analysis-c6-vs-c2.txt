@@ -1,0 +1,62 @@
+bf16 nn m=  128 gains%   +0.1   -0.0   +0.1  C2 spread  0.2%  hash_eq True  control ok
+bf16 nn m=  256 gains%   -0.0   +0.0   +0.2  C2 spread  0.1%  hash_eq True  control ok
+bf16 nn m=  512 gains%   -0.2   +0.0   +0.2  C2 spread  0.2%  hash_eq True  control ok
+bf16 nn m= 1024 gains%   +0.2   -0.1   -0.1  C2 spread  0.3%  hash_eq True  control ok
+bf16 nn m= 2048 gains%   -0.0   +0.1   -0.0  C2 spread  0.1%  hash_eq True  control ok
+bf16 nn m= 4096 gains%   +0.0   -0.0   -0.0  C2 spread  0.0%  hash_eq True  control ok
+bf16 nt m=  128 gains%   +0.4   -0.7   +0.0  C2 spread  0.2%  hash_eq True  control ok
+bf16 nt m=  256 gains%   -1.0   -0.1   -0.1  C2 spread  0.4%  hash_eq True  control ok
+bf16 nt m=  512 gains%   +0.0   +0.0   +0.0  C2 spread  0.1%  hash_eq True  control ok
+bf16 nt m= 1024 gains%   +0.0   -0.1   -0.1  C2 spread  0.1%  hash_eq True  control ok
+bf16 nt m= 2048 gains%   +0.0   -0.0   -0.1  C2 spread  0.0%  hash_eq True  control ok
+bf16 nt m= 4096 gains%   +0.0   +0.0   -0.0  C2 spread  0.1%  hash_eq True  control ok
+bf16 tn m=  128 gains%   +0.3   +0.3   -0.0  C2 spread  0.2%  hash_eq True  control ok
+bf16 tn m=  256 gains%   -0.0   +0.0   +0.1  C2 spread  0.1%  hash_eq True  control ok
+bf16 tn m=  512 gains%  +11.3  +10.9  +11.7  C2 spread  0.0%  hash_eq True  REGION PASS
+bf16 tn m= 1024 gains%  +11.2  +11.3  +11.0  C2 spread  0.1%  hash_eq True  REGION PASS
+bf16 tn m= 2048 gains%  +11.2  +11.0  +11.2  C2 spread  0.1%  hash_eq True  REGION PASS
+bf16 tn m= 4096 gains%   +0.0   -0.0   -0.0  C2 spread  0.1%  hash_eq True  control ok
+f16  nn m=  128 gains%   -0.2   -0.0   -0.1  C2 spread  0.2%  hash_eq True  control ok
+f16  nn m=  256 gains%   -0.3   +0.0   -0.1  C2 spread  0.3%  hash_eq True  control ok
+f16  nn m=  512 gains%   -0.4   -0.0   +0.1  C2 spread  0.3%  hash_eq True  control ok
+f16  nn m= 1024 gains%   -0.5   -0.0   +0.1  C2 spread  0.5%  hash_eq True  control ok
+f16  nn m= 2048 gains%   -0.2   -0.0   -0.1  C2 spread  0.3%  hash_eq True  control ok
+f16  nn m= 4096 gains%   -0.0   -0.1   -0.2  C2 spread  0.0%  hash_eq True  control ok
+f16  nt m=  128 gains%   -1.7   -8.7   -7.2  C2 spread  8.0%  hash_eq True  REGION FAIL VOID
+f16  nt m=  256 gains%   +3.2   +1.5   +1.8  C2 spread  1.4%  hash_eq True  REGION FAIL
+f16  nt m=  512 gains%   +2.3   -0.1   -0.3  C2 spread  2.6%  hash_eq True  control ok
+f16  nt m= 1024 gains%   +2.0   -0.0   -0.0  C2 spread  2.2%  hash_eq True  control ok
+f16  nt m= 2048 gains%   +1.2   +0.0   -0.1  C2 spread  1.3%  hash_eq True  control ok
+f16  nt m= 4096 gains%   +0.1   +0.0   -0.1  C2 spread  0.1%  hash_eq True  control ok
+f16  tn m=  128 gains%   -0.1   -0.0   -0.2  C2 spread  0.1%  hash_eq True  control ok
+f16  tn m=  256 gains%   -0.3   -0.1   +0.1  C2 spread  0.3%  hash_eq True  control ok
+f16  tn m=  512 gains%   -0.2   +0.2   +0.0  C2 spread  0.6%  hash_eq True  control ok
+f16  tn m= 1024 gains%   +7.6   +7.5   +7.7  C2 spread  0.1%  hash_eq True  REGION PASS
+f16  tn m= 2048 gains%   +7.7   +7.7   +7.7  C2 spread  0.1%  hash_eq True  REGION PASS
+f16  tn m= 4096 gains%   +0.0   -0.0   -0.0  C2 spread  0.1%  hash_eq True  control ok
+f32  nn m=  128 gains%   +0.6   +1.0   -0.8  C2 spread  1.7%  hash_eq True  control ok
+f32  nn m=  256 gains%   +0.0   -0.4   +0.1  C2 spread  0.4%  hash_eq True  control ok
+f32  nn m=  512 gains%   -3.7   -4.5   -3.9  C2 spread  0.3%  hash_eq True  REGION FAIL
+f32  nn m= 1024 gains%   +3.0   +3.4   +3.6  C2 spread  0.6%  hash_eq True  REGION FAIL
+f32  nn m= 2048 gains%  +20.7  +22.4  +21.5  C2 spread  1.6%  hash_eq True  REGION PASS
+f32  nn m= 4096 gains%   -0.1   +0.4   +0.3  C2 spread  1.4%  hash_eq True  control ok
+f32  nt m=  128 gains%   +0.2   +0.2   +0.3  C2 spread  0.4%  hash_eq True  control ok
+f32  nt m=  256 gains%   -0.7   +0.7   +0.4  C2 spread  0.3%  hash_eq True  control ok
+f32  nt m=  512 gains%  +79.5  +79.6  +79.0  C2 spread  0.3%  hash_eq True  REGION PASS
+f32  nt m= 1024 gains%  +91.6  +88.3  +90.4  C2 spread  0.9%  hash_eq True  REGION PASS
+f32  nt m= 2048 gains%  +96.9  +98.3  +96.9  C2 spread  0.6%  hash_eq True  REGION PASS
+f32  nt m= 4096 gains%   +0.5   +0.2   +0.3  C2 spread  0.2%  hash_eq True  control ok
+f32  tn m=  128 gains%   -1.4   +2.1   -1.1  C2 spread  2.1%  hash_eq True  control ok
+f32  tn m=  256 gains%   -0.2   -0.1   +0.0  C2 spread  0.3%  hash_eq True  control ok
+f32  tn m=  512 gains%  +31.4  +31.6  +28.7  C2 spread  1.2%  hash_eq True  REGION PASS
+f32  tn m= 1024 gains%  +34.7  +33.7  +34.9  C2 spread  0.6%  hash_eq True  REGION PASS
+f32  tn m= 2048 gains%  +45.9  +45.5  +46.0  C2 spread  0.1%  hash_eq True  REGION PASS
+f32  tn m= 4096 gains%   +0.0   +0.2   +0.2  C2 spread  0.3%  hash_eq True  control ok
+hash mismatches: none
+control cells outside 3 %: none
+row bf16 tn: region [512, 1024, 2048] passes [True, True, True] -> new floor 512
+row f16 nt: region [128, 256] passes [False, False] -> new floor DROP (keep old floor)
+row f16 tn: region [1024, 2048] passes [True, True] -> new floor 1024
+row f32 nn: region [512, 1024, 2048] passes [False, False, True] -> new floor 2048
+row f32 nt: region [512, 1024, 2048] passes [True, True, True] -> new floor 512
+row f32 tn: region [512, 1024, 2048] passes [True, True, True] -> new floor 512

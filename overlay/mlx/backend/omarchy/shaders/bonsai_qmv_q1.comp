@@ -1,0 +1,194 @@
+#version 460
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+// Bonsai 1-bit affine decode, M=1 (decode), group sizes 32/64/128.
+//
+// Native qmv_fast (bonsai_quantized.metal affine_qmv_fast<T, gs, bits=1>):
+// transposed w [N, K/8] packed uint8 (8 values/byte, lane bit i of byte e
+// carries w[e*8 + i]), one affine scale/bias per group of `reduce_size`
+// channels. Output [N] = sum_e scale[g_e] * w[e] * x[e] + sum_e bias[g_e] * x[e],
+// with the bias term computed as input_sum * bias so the chain reuses one
+// per-element x load for both terms. The Bonsai pack is uint8 (not uint32
+// as in stock mlx 2-bit affine), so this kernel cannot be merged with
+// qmm_vec.comp's word reader.
+//
+// Dispatch contract (matches qmm_vec.comp -DUSE_SUBGROUP=1):
+//   SLOTS_PER_GROUP output columns per workgroup, 32 lanes each.
+//   COLUMNS_PER_GROUP = SLOTS_PER_GROUP * ROWS_PER_SLOT
+//     (ROWS_PER_SLOT == 1; the wide kernel is in bonsai_qmv_wide.comp).
+//   matrix_k must be a multiple of 8 (Bonsai packing).
+//   reduce_size must be in {32, 64, 128} and divide matrix_k.
+//   group_size == reduce_size, signed at the host side.
+//
+// Numerics: identical to native qmv_fast - the inner loop accumulates one
+// precise float per (byte, lane) pair via the (nibble-exact) float-byte
+// trick, the chain sums input_sum and dot independently and only fma's
+// the (scale, dot) and (input_sum, bias) products at the group boundary,
+// matching the Bonsai C++ affine_qmv_fast_impl reference bit for bit
+// under Honeykrisp subgroup reduction (gate at the dispatch site, see
+// ComputeKernel::BonsaiQ1QmvSubgroup*).
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) float16_t(f)
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat((uint(x)) << 16u)
+#define STORE_VALUE(f) uint16_t((floatBitsToUint(f) + 0x7fffu + ((floatBitsToUint(f) >> 16) & 1u)) >> 16u)
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) (x)
+#define STORE_VALUE(f) (f)
+#endif
+
+// Bonsai's M=1 decode is the single-row case. The wide kernel
+// (ROWS_PER_SLOT > 1) lives in bonsai_qmv_wide.comp.
+#ifndef SLOTS_PER_GROUP
+#define SLOTS_PER_GROUP 8
+#endif
+
+const uint COLUMNS_PER_GROUP = uint(SLOTS_PER_GROUP);
+const uint LANES = 32u;
+const uint BITS = 1u;
+// Codes per BYTE (8 one-bit codes per byte). 32u / BITS here would be
+// codes per WORD: the byte walk then covers only K/32 bytes (16 codes
+// at k=64) and every dot product silently drops three quarters of its
+// terms — first seen on hardware 2026-10-07 (G13G, Honeykrisp).
+const uint VALUES_PER_BYTE = 8u / BITS;
+
+layout(local_size_x = SLOTS_PER_GROUP * 32) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  STORAGE_TYPE values[];
+} input_x;
+layout(set = 0, binding = 1, std430) readonly buffer InputW {
+  uint values[];  // 4 bytes per element (uint8 storage viewed as uint words)
+} input_w;
+layout(set = 0, binding = 2, std430) readonly buffer Scales {
+  STORAGE_TYPE values[];
+} scales;
+layout(set = 0, binding = 3, std430) readonly buffer Biases {
+  STORAGE_TYPE values[];
+} biases;
+layout(set = 0, binding = 4, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+#ifndef USE_SUBGROUP
+shared float reduce_scratch[SLOTS_PER_GROUP * 32u];
+#endif
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;       // bits (= 1 for this shader)
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;     // group size
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;        // bias base element
+  uint aux_offset;      // scale base element
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+// Constant-shift byte select: byte `lane` of word `word`.
+uint byte_at(uint word, uint lane) {
+  return (lane == 0u) ? (word & 0xFFu)
+       : (lane == 1u) ? ((word >> 8u) & 0xFFu)
+       : (lane == 2u) ? ((word >> 16u) & 0xFFu)
+                      : ((word >> 24u) & 0xFFu);
+}
+
+// Exact 0/1 -> float: 1-bit codes are 0 or 1 (no -1 mapping; the bias
+// term carries the asymmetric offset). 2^23 + n with n in {0, 1} is
+// exact in fp32, mirroring the Q4 nibble trick.
+float q1_to_f(uint code) {
+  return uintBitsToFloat((code & 1u) | 0x4B000000u) - 8388608.0;
+}
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint n = params.matrix_n;
+  uint group_size = params.reduce_size;
+  uint column = gl_WorkGroupID.x * COLUMNS_PER_GROUP + column_slot;
+  bool column_active = column < n;
+  uint bytes_per_row = params.matrix_k / VALUES_PER_BYTE;  // K/8 for bits=1
+  uint groups_per_row = params.matrix_k / group_size;
+
+  precise float accumulator = 0.0;
+  if (column_active) {
+    uint w_row = params.rhs_offset + column * (bytes_per_row / 4u);  // uint32 word stride
+    // The packed weights are uint8 (Bonsai native); we read them through
+    // a uint word view (4 bytes per element) so the word-aligned stride
+    // is (bytes_per_row / 4). byte_addr = w_row*4 + byte_index.
+    uint scale_base = params.aux_offset + column * groups_per_row;
+    uint bias_base = params.aux_size + column * groups_per_row;
+    uint x_row = params.lhs_offset;
+    uint bytes_per_group = group_size / VALUES_PER_BYTE;
+    // Outer loop: walk the row byte by byte. Each lane owns a stride-32
+    // subset (8 k values per byte, 32 lanes => 256 k values per stride).
+    for (uint byte_idx = lane_in_slot; byte_idx < bytes_per_row; byte_idx += LANES) {
+      uint group = byte_idx / bytes_per_group;
+      float scale = LOAD_VALUE(scales.values[scale_base + group]);
+      float bias = LOAD_VALUE(biases.values[bias_base + group]);
+      uint word_addr = w_row + byte_idx / 4u;
+      uint word_value = input_w.values[word_addr];
+      uint byte_value = byte_at(word_value, byte_idx & 3u);
+      // 8 codes per byte; sum into dot and input_sum in the same pass.
+      precise float dot = 0.0;
+      precise float input_sum = 0.0;
+      // Constant unroll: 8 bits, each is a q1_to_f code times an x value.
+      uint k_base = byte_idx * VALUES_PER_BYTE;
+      for (uint i = 0u; i < VALUES_PER_BYTE; ++i) {
+        uint code = (byte_value >> i) & 1u;
+        float x_val = LOAD_VALUE(input_x.values[x_row + k_base + i]);
+        input_sum += x_val;
+        dot += x_val * q1_to_f(code);
+      }
+      accumulator = fma(scale, dot, fma(bias, input_sum, accumulator));
+    }
+  }
+  // Subgroup reduction: each 32-lane slot is one hardware subgroup; the
+  // first lane of each slot owns the column output. Group-uniform control
+  // flow keeps the reduction uniform even with inactive columns (which
+  // contribute 0).
+#ifdef USE_SUBGROUP
+  float total = subgroupAdd(accumulator);
+  if (lane_in_slot == 0u && column_active) {
+    output_data.values[params.output_offset + column] = STORE_VALUE(total);
+  }
+#else
+  // Tree reduction fallback (correct on any subgroup size). The shared
+  // scratch array lives at file scope so its size is statically
+  // resolvable (a function-scope shared declaration is invalid GLSL).
+  reduce_scratch[lane] = accumulator;
+  barrier();
+  for (uint offset = 1u; offset < LANES; offset <<= 1u) {
+    if ((lane_in_slot & (2u * offset - 1u)) == 0u) {
+      reduce_scratch[lane] += reduce_scratch[lane + offset];
+    }
+    barrier();
+  }
+  if (lane_in_slot == 0u && column_active) {
+    output_data.values[params.output_offset + column] = STORE_VALUE(reduce_scratch[lane]);
+  }
+#endif
+}

@@ -1,0 +1,2 @@
+end: {"k": "end", "t": 11956930158790, "dispatches": 1896, "dropped": 0, "submissions": 378, "joins": 1, "barriers": 955, "barriers_skipped": 1319}
+    572 MatmulBf16Fma

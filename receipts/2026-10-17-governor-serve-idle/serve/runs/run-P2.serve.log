@@ -1,0 +1,69 @@
+warning: MLX_OMARCHY_ALLOW_UNPINNED_MLXLM=1 - mlx-lm 0.32.0 is not the pinned ('0.31.3',); the cap hooks may not hold
+shim: PROBE_ENV=None installing=False
+shim: uclamp placement applied (uclamp_min=1024)
+$WORK/score/gprp/mlx_lm/server.py:1752: UserWarning: mlx_lm.server is not recommended for production as it only implements basic security checks.
+  warnings.warn(
+2026-10-17 17:21:19,419 - INFO - Starting httpd at 127.0.0.1 on port 18703...
+127.0.0.1 - - [17/Oct/2026 17:21:20] "GET /v1/models HTTP/1.1" 200 -
+2026-10-17 17:21:23,087 - INFO - Prompt Cache: 0 sequences, 0.00 GB
+2026-10-17 17:21:23,087 - INFO - - assistant: 0 sequences, 0.00 GB
+2026-10-17 17:21:23,087 - INFO - - user: 0 sequences, 0.00 GB
+2026-10-17 17:21:23,087 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [17/Oct/2026 17:21:23] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-10-17 17:21:24,136 - INFO - Prompt processing progress: 31/32
+2026-10-17 17:21:24,222 - INFO - Prompt processing progress: 32/32
+2026-10-17 17:21:24,828 - INFO - Prompt Cache: 0 sequences, 0.00 GB
+2026-10-17 17:21:24,828 - INFO - - assistant: 0 sequences, 0.00 GB
+2026-10-17 17:21:24,828 - INFO - - user: 0 sequences, 0.00 GB
+2026-10-17 17:21:24,828 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [17/Oct/2026 17:21:24] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-10-17 17:21:25,866 - INFO - Prompt processing progress: 31/32
+2026-10-17 17:21:25,944 - INFO - Prompt processing progress: 32/32
+2026-10-17 17:21:28,135 - INFO - Prompt Cache: 0 sequences, 0.00 GB
+2026-10-17 17:21:28,135 - INFO - - assistant: 0 sequences, 0.00 GB
+2026-10-17 17:21:28,135 - INFO - - user: 0 sequences, 0.00 GB
+2026-10-17 17:21:28,135 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [17/Oct/2026 17:21:28] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-10-17 17:21:29,169 - INFO - Prompt processing progress: 31/32
+2026-10-17 17:21:29,249 - INFO - Prompt processing progress: 32/32
+2026-10-17 17:21:38,398 - INFO - Prompt Cache: 0 sequences, 0.00 GB
+2026-10-17 17:21:38,398 - INFO - - assistant: 0 sequences, 0.00 GB
+2026-10-17 17:21:38,398 - INFO - - user: 0 sequences, 0.00 GB
+2026-10-17 17:21:38,398 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [17/Oct/2026 17:21:38] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-10-17 17:21:39,426 - INFO - Prompt processing progress: 31/32
+2026-10-17 17:21:39,507 - INFO - Prompt processing progress: 32/32
+2026-10-17 17:21:41,680 - INFO - Prompt Cache: 0 sequences, 0.00 GB
+2026-10-17 17:21:41,680 - INFO - - assistant: 0 sequences, 0.00 GB
+2026-10-17 17:21:41,680 - INFO - - user: 0 sequences, 0.00 GB
+2026-10-17 17:21:41,680 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [17/Oct/2026 17:21:41] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-10-17 17:21:42,714 - INFO - Prompt processing progress: 31/32
+2026-10-17 17:21:42,795 - INFO - Prompt processing progress: 32/32
+2026-10-17 17:21:51,935 - INFO - Prompt Cache: 0 sequences, 0.00 GB
+2026-10-17 17:21:51,935 - INFO - - assistant: 0 sequences, 0.00 GB
+2026-10-17 17:21:51,935 - INFO - - user: 0 sequences, 0.00 GB
+2026-10-17 17:21:51,935 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [17/Oct/2026 17:21:51] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-10-17 17:21:52,966 - INFO - Prompt processing progress: 31/32
+2026-10-17 17:21:53,045 - INFO - Prompt processing progress: 32/32
+2026-10-17 17:21:55,229 - INFO - Prompt Cache: 0 sequences, 0.00 GB
+2026-10-17 17:21:55,229 - INFO - - assistant: 0 sequences, 0.00 GB
+2026-10-17 17:21:55,229 - INFO - - user: 0 sequences, 0.00 GB
+2026-10-17 17:21:55,229 - INFO - - system: 0 sequences, 0.00 GB
+127.0.0.1 - - [17/Oct/2026 17:21:55] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-10-17 17:21:56,266 - INFO - Prompt processing progress: 31/32
+2026-10-17 17:21:56,344 - INFO - Prompt processing progress: 32/32
+model:        mlx-community/gemma-4-26b-a4b-it-4bit
+backend:      mlx-lm
+bind:         127.0.0.1:18703
+context:      4096 tokens
+weights:      15.00 GiB
+kv cache:     UNKNOWN -> flat 2.00 GiB margin included
+margin:       5.75 GiB (workspace margin, unmeasured estimate)
+mem:          MemAvailable:      57.13 GiB
+mem:          safety reserve:    2.00 GiB
+mem:          reservations:      0.00 GiB
+mem:          model requirement: 20.75 GiB
+mem:          headroom:          34.38 GiB
+verdict:      FITS

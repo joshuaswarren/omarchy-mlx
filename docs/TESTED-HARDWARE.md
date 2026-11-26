@@ -1,0 +1,101 @@
+# Tested hardware
+
+Back to the [README](../README.md). How to produce a row:
+[ANY-GPU.md](ANY-GPU.md).
+
+One row per real output. Empty cell = not recorded, never guessed.
+Source kinds: **author run** (the testing section of a merged PR),
+**reporter run** (an issue that posts the outputs; not reproduced here),
+**collector row** (the community dataset), **benchmark** (a published
+benchmark table). Author-run, reporter-run, and benchmark rows carry test results.
+Collector rows do not: the collector captures machine facts and runs
+no test suite, so the collector sections are a capture inventory, not
+a compatibility list.
+
+## Non-Apple GPUs
+
+| GPU | Driver and version | OS and kernel | MLX build | Tests passed of total | What failed | Source kind |
+|---|---|---|---|---|---|---|
+| Intel UHD 770 | Mesa ANV 26.2.4, Vulkan loader 1.4.363 | CachyOS, Linux 7.2.9 | source build on main `e95e86b6` + PR #111 (MLX 0.32.3, upstream `9c3d355`) | 55/55 `omarchy_runtime_tests`; op check 0 bad, 0 failed | none | author run, [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111) |
+| NVIDIA GeForce RTX 5060 Ti | NVIDIA proprietary 615.71.09, Vulkan loader 1.4.363 | CachyOS, Linux 7.2.9 | source build on main `e95e86b6` + PR #111 (MLX 0.32.3, upstream `9c3d355`) | 54/55 `omarchy_runtime_tests`; all op checks within bf16 tolerance | independent-streams timing ratio 0.78-0.88 against the 0.95 floor (5 runs); one `SUBMIT-RECOVER ... resubmitted 1 stalled batch` line per run | author run, [PR #111](https://github.com/joshuaswarren/omarchy-mlx/pull/111) |
+
+AMD: no result yet.
+
+## Apple silicon GPU (author runs)
+
+Source build of #407 head `ec849019` (main `f3ec9599` plus the submission-budget rows), built on each machine with `MLX_BUILD_TESTS=ON`, against the system Borealis driver with no override.
+
+| GPU | Driver and version | OS and kernel | MLX build | Tests passed of total | What failed | Source kind |
+|---|---|---|---|---|---|---|
+| Apple M1 Pro (G13S C0), MacBook Pro 16-inch 2021, `apple,t6000`, 16-core GPU, 16 GB | Mesa 26.3.0-devel Borealis (git-be147e3625), driver ID 35, Vulkan API 1.4.363, system ICD | Fedora 45, Linux 7.3.0 | source build `ec849019`; release wheel v0.7.41 for the collector and LLM runs | 60/60 `omarchy_runtime_tests` (27086 assertions); 29/29 `omarchy_copy_offset_tests` (131707 assertions); `mlx-omarchy-info` and `--trace-smoke` exit 0; 6/6 collector probe ops | none | author run, [receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md) |
+| Apple M2 (G14G B0), MacBook Air 13-inch 2022, `apple,t8112`, 8-core GPU, 8 GB | Mesa 26.3.0-devel Borealis (git-be147e3625), driver ID 35, Vulkan API 1.4.363, system ICD | Fedora 44, Linux 7.3.0 | source build `ec849019`; release wheel v0.7.41 for the collector and LLM runs | 60/60 `omarchy_runtime_tests` (27086 assertions); 29/29 `omarchy_copy_offset_tests` (131707 assertions); `mlx-omarchy-info` and `--trace-smoke` exit 0; 6/6 collector probe ops | none | author run, [receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md) |
+| Apple M4 Pro (G16S B1), MacBook Pro 16-inch, `apple,t6040`, 20-core GPU, 24 GB | Mesa 26.3.0-devel Borealis (git-c208afc352), driver ID 35, Vulkan API 1.4.363, system ICD | Fedora 45, Linux 7.3.0 | source build `ec849019`; release wheel v0.7.41 for the collector and LLM runs | 59/60 `omarchy_runtime_tests` (27085/27086 assertions); 29/29 `omarchy_copy_offset_tests` (131711 assertions); `mlx-omarchy-info` and `--trace-smoke` exit 0; 6/6 collector probe ops | independent-streams timing ratio 0.876 against the 0.95 floor of that build (rerun; the first run also failed one case, which its log does not name); main has the 0.80 Borealis floor since #439, which 0.876 clears, not re-run; both copies verify byte-for-byte ([context](KNOWN-ISSUES.md#a18-pro-g17p-on-borealis-the-independent-streams-timing-floor-fails)) | author run, [receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md) |
+| Apple A18 Pro (G17P B1), MacBook Neo, `apple,t8140`, 5-core GPU, 8 GB | Mesa 26.3.0-devel Borealis (git-c208afc352), driver ID 35, Vulkan API 1.4.363, system ICD | Fedora 45, Linux 7.3.0 | source build `ec849019`; release wheel v0.7.41 for the collector and LLM runs | 59/60 `omarchy_runtime_tests` (27085/27086 assertions); 29/29 `omarchy_copy_offset_tests` (131711 assertions); `mlx-omarchy-info` and `--trace-smoke` exit 0; 6/6 collector probe ops | independent-streams timing ratio 0.437 against the 0.95 floor of that build and below the 0.80 Borealis floor of main (0.384 to 0.442 in three more runs of that case); both copies verify byte-for-byte ([known issue](KNOWN-ISSUES.md#a18-pro-g17p-on-borealis-the-independent-streams-timing-floor-fails)) | author run, [receipt](../receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md) |
+
+## Apple silicon GPU (reporter runs)
+
+These rows are reporter runs. The README supported-hardware table
+keeps the M2 GPU untested until the suite runs on one here.
+
+| GPU | Driver and version | OS and kernel | MLX build | Tests passed of total | What failed | Source kind |
+|---|---|---|---|---|---|---|
+| Apple M2 (G14G B0), 13-inch 2022, `apple,t8112`, 8 cores, 24 GB | private ICD, Mesa 26.3.0-devel (git-6f6afc8968), Vulkan API 1.4.359, loader 1.4.357 | NixOS, Linux 7.1.13, 16 KiB pages | source build on main `e422231`, upstream `9c3d355`, CPU backend on | 57/57 `omarchy_runtime_tests` (27055 assertions); 28/28 `omarchy_copy_offset_tests` (639 assertions); streams check passed; `mlx-omarchy-info` exit 0 | none in the suite. A package build with the CPU backend off does not link ([issue #156](https://github.com/joshuaswarren/omarchy-mlx/issues/156)) | reporter run, [issue #157](https://github.com/joshuaswarren/omarchy-mlx/issues/157) |
+
+The same issue reports one warm Qwen2.5-0.5B run. The reporter said it
+is not a speed claim, so it is not in the table.
+
+
+## Apple silicon capture inventory (community collector rows)
+
+Machine captures from the community dataset snapshot of 2026-10-12,
+205 records:
+[SUMMARY.md](https://github.com/joshuaswarren/omarchy-mlx/blob/community-data/snapshot/SUMMARY.md)
+and
+[latest.jsonl](https://github.com/joshuaswarren/omarchy-mlx/blob/community-data/snapshot/latest.jsonl)
+(counts below; the snapshot holds the per-row detail). Linux rows name
+the SoC by its devicetree compatible string; macOS rows are native
+reference captures. Driver for Linux rows: Mesa Honeykrisp where
+recorded, not recorded otherwise. Tests passed of total: not collected.
+
+| GPU / SoC | Rows | Driver and version | OS and kernel | MLX build | Tests passed of total | What failed | Source kind |
+|---|---|---|---|---|---|---|---|
+| apple,t6020 | 47 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.3.dev where recorded | not collected | not collected | collector row |
+| Apple M2 Pro | 14 | (native macOS) | macOS where recorded (15.7 to 27.0.1) | 0.32.1 where recorded | not collected | not collected | collector row |
+| apple,t6000 | 13 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.4.dev where recorded | not collected | not collected | collector row |
+| apple,t8103 | 12 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev where recorded | not collected | not collected | collector row |
+| Apple M1 Ultra | 11 | (native macOS) | macOS 26.2 to 26.6.2 (Darwin 25.2 to 25.6) | 0.29.3 to 0.32.1 where recorded | not collected | not collected | collector row |
+| Apple M5 Max | 10 | (native macOS) | macOS 27.0 to 27.0.1 (Darwin 27.0) | 0.32.3 where recorded | not collected | not collected | collector row |
+| Apple M3 Pro | 8 | (native macOS) | macOS where recorded (15.5 to 27.0) | 0.32.1 to 0.32.3 where recorded | not collected | not collected | collector row |
+| apple,t6001 | 7 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.3.dev where recorded | not collected | not collected | collector row |
+| apple,t8112 | 8 | Honeykrisp where recorded | Linux 7.1.x-ARCH | 0.32.2.dev to 0.32.4.dev where recorded | not collected | not collected | collector row |
+| Apple M4 Max | 7 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
+| apple,t6021 | 6 | Honeykrisp where recorded | Linux 7.1.x-ARCH, and one record with a 7.1.12 USB-C build | 0.32.2.dev to 0.32.3.dev where recorded | not collected | not collected | collector row |
+| Apple M2 Max | 6 | (native macOS) | macOS where recorded (26.3 to 27.0) | where recorded | not collected | not collected | collector row |
+| Apple M5 | 6 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
+| Apple M2 Ultra | 5 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
+| Apple M3 | 4 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
+| Apple M4 | 4 | (native macOS) | macOS where recorded | not recorded | not collected | not collected | collector row |
+| Apple M5 Pro | 4 | (native macOS) | macOS 26.6.2 / 27.2 beta | 0.32.3 where recorded | not collected | not collected | collector row |
+| linux,dummy-virt | 4 | no GPU captured | Linux 7.2.x aarch64-ARCH (VM) | 0.32.4.dev where recorded | not collected | not collected | collector row |
+| apple,t8122 | 3 | Honeykrisp where recorded | Linux 7.1.x where recorded | not recorded | not collected | not collected | collector row |
+| Apple M1 Max | 3 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
+| apple,t6031 | 3 | not recorded | Linux 7.1.12-2 sep builds | not recorded | not collected | not collected | collector row |
+| Apple M1 Pro | 2 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
+| Apple M1 | 2 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
+| Apple M3 Max | 2 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
+| Apple M2 | 1 | (native macOS) | macOS 26.6.2 (Darwin 25.6.0) | 0.32.1 | not collected | not collected | collector row |
+| Apple M4 Pro | 1 | (native macOS) | macOS where recorded | where recorded | not collected | not collected | collector row |
+| apple,t8140 | 1 | not recorded | Linux 7.1.x-ARCH | not recorded | not collected | not collected | collector row |
+| apple,t6030 | 1 | not recorded | Linux 7.1.x-ARCH | not recorded | not collected | not collected | collector row |
+| chip not captured | 10 | no GPU captured | Linux 6.17.2-1-pve (x86_64 hosts without Vulkan) | none | not collected | not collected | collector row |
+
+Apple-silicon benchmark numbers live in
+[BENCHMARKS.md](BENCHMARKS.md) and are outside this matrix's tests
+column.
+
+## Add a row
+
+Ran the kit on hardware that is not here? Open an issue with the
+outputs listed in [ANY-GPU.md](ANY-GPU.md), or submit with the
+collector. `./scripts/run-on-your-hardware.sh` produces both in one
+command. Rows are added from real outputs only.

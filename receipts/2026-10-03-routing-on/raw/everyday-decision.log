@@ -1,0 +1,23 @@
+laya: watching parent lifetime fd 6
+laya: claimed laya-mlx (1515781644 bytes) from pair everyday
+laya: watching parent lifetime fd 6
+laya: claimed laya-mlx (1515781644 bytes) from pair everyday
+mlx-omarchy-laya: serving laya-mlx on http://127.0.0.1:53445 (device=Device(gpu, 0), dtype=float16, max_len=512)
+127.0.0.1 - "GET /health HTTP/1.1" 200 -
+127.0.0.1 - "POST /v1/decisions HTTP/1.1" 200 -
+127.0.0.1 - "POST /v1/decisions HTTP/1.1" 200 -
+laya: watching parent lifetime fd 6
+laya: claimed laya-mlx (1515781644 bytes) from pair everyday
+mlx-omarchy-laya: serving laya-mlx on http://127.0.0.1:41895 (device=Device(gpu, 0), dtype=float16, max_len=512)
+127.0.0.1 - "GET /health HTTP/1.1" 200 -
+laya: watching parent lifetime fd 6
+laya: claimed laya-mlx (1515781644 bytes) from pair everyday
+mlx-omarchy-laya: serving laya-mlx on http://127.0.0.1:43231 (device=Device(gpu, 0), dtype=float16, max_len=512)
+127.0.0.1 - "GET /health HTTP/1.1" 200 -
+127.0.0.1 - "POST /v1/decisions HTTP/1.1" 200 -
+127.0.0.1 - "POST /v1/decisions HTTP/1.1" 200 -
+127.0.0.1 - "POST /v1/decisions HTTP/1.1" 200 -
+laya: watching parent lifetime fd 7
+laya: claimed laya-mlx (1515781644 bytes) from pair everyday
+mlx-omarchy-laya: serving laya-mlx on http://127.0.0.1:52495 (device=Device(gpu, 0), dtype=float16, max_len=512)
+127.0.0.1 - "GET /health HTTP/1.1" 200 -

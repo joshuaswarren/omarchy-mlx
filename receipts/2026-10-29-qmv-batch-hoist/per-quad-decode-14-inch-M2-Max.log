@@ -1,0 +1,83 @@
+bgdecode3 14-inch M2 Max 20261029T2123Z load 0.31 kernel 7.2.11-lab
+-- B=2 triple 1 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [27.04, 27.486, 28.382, 28.472, 27.547], "median_ms_per_step": 27.547, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 triple 1 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.44, 28.781, 29.166, 28.782, 28.928], "median_ms_per_step": 28.782, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 triple 1 arm C
+PROVENANCE mlx_omarchy 0.32.4.dev202610292108+38ce0a37 {'libmlx.so': 'f39e0ac4a99db7c6'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.312, 28.168, 28.952, 28.814, 28.903], "median_ms_per_step": 28.814, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 triple 2 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.869, 29.552, 29.324, 28.489, 29.32], "median_ms_per_step": 29.32, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 triple 2 arm C
+PROVENANCE mlx_omarchy 0.32.4.dev202610292108+38ce0a37 {'libmlx.so': 'f39e0ac4a99db7c6'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [29.103, 28.762, 28.577, 29.183, 29.034], "median_ms_per_step": 29.034, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 triple 2 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.151, 27.828, 27.834, 27.945, 28.699], "median_ms_per_step": 27.945, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 triple 3 arm C
+PROVENANCE mlx_omarchy 0.32.4.dev202610292108+38ce0a37 {'libmlx.so': 'f39e0ac4a99db7c6'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.599, 28.763, 28.387, 28.638, 28.949], "median_ms_per_step": 28.638, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 triple 3 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [28.026, 29.156, 29.148, 28.633, 29.071], "median_ms_per_step": 29.071, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=2 triple 3 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 2, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [29.368, 27.072, 28.408, 28.606, 28.883], "median_ms_per_step": 28.606, "ids_sha": "14e55e5f88bb975a", "row_lengths": [64, 64]}
+-- B=3 triple 1 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [17.394, 17.411, 17.406, 17.367, 17.397], "median_ms_per_step": 17.397, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 triple 1 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [15.78, 15.759, 15.796, 15.836, 15.806], "median_ms_per_step": 15.796, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 triple 1 arm C
+PROVENANCE mlx_omarchy 0.32.4.dev202610292108+38ce0a37 {'libmlx.so': 'f39e0ac4a99db7c6'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [17.714, 17.741, 17.63, 17.579, 17.618], "median_ms_per_step": 17.63, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 triple 2 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [15.783, 15.779, 15.751, 15.738, 15.785], "median_ms_per_step": 15.779, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 triple 2 arm C
+PROVENANCE mlx_omarchy 0.32.4.dev202610292108+38ce0a37 {'libmlx.so': 'f39e0ac4a99db7c6'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [17.53, 17.622, 17.699, 17.582, 17.65], "median_ms_per_step": 17.622, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 triple 2 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [17.337, 17.343, 17.428, 17.377, 17.255], "median_ms_per_step": 17.343, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 triple 3 arm C
+PROVENANCE mlx_omarchy 0.32.4.dev202610292108+38ce0a37 {'libmlx.so': 'f39e0ac4a99db7c6'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [17.516, 17.662, 17.588, 17.598, 17.604], "median_ms_per_step": 17.598, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 triple 3 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [17.358, 17.427, 17.398, 17.4, 17.394], "median_ms_per_step": 17.398, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=3 triple 3 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 3, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [15.795, 15.83, 15.816, 15.83, 15.798], "median_ms_per_step": 15.816, "ids_sha": "d02eb182bb95ef5b", "row_lengths": [64, 64, 64]}
+-- B=4 triple 1 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [19.887, 19.954, 19.989, 20.001, 19.962], "median_ms_per_step": 19.962, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 triple 1 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [17.411, 17.437, 17.402, 17.402, 17.406], "median_ms_per_step": 17.406, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 triple 1 arm C
+PROVENANCE mlx_omarchy 0.32.4.dev202610292108+38ce0a37 {'libmlx.so': 'f39e0ac4a99db7c6'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [18.636, 18.675, 18.648, 18.671, 18.767], "median_ms_per_step": 18.671, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 triple 2 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [17.28, 17.369, 17.398, 17.456, 17.532], "median_ms_per_step": 17.398, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 triple 2 arm C
+PROVENANCE mlx_omarchy 0.32.4.dev202610292108+38ce0a37 {'libmlx.so': 'f39e0ac4a99db7c6'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [18.708, 18.759, 18.633, 18.636, 18.547], "median_ms_per_step": 18.636, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 triple 2 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [20.058, 20.047, 20.095, 20.093, 20.059], "median_ms_per_step": 20.059, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 triple 3 arm C
+PROVENANCE mlx_omarchy 0.32.4.dev202610292108+38ce0a37 {'libmlx.so': 'f39e0ac4a99db7c6'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [18.661, 18.614, 18.589, 18.596, 18.545], "median_ms_per_step": 18.596, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 triple 3 arm A
+PROVENANCE mlx_omarchy 0.32.4.dev202610291548+f91094a1 {'libmlx.so': '643de0c236051e4b'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [20.189, 20.093, 20.186, 20.135, 19.98], "median_ms_per_step": 20.135, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+-- B=4 triple 3 arm B
+PROVENANCE mlx_omarchy 0.32.4.dev202610291842+c1422078 {'libmlx.so': '31eaa5049bbafd03'} device Device(gpu, 0)
+BGDECODE {"B": 4, "tokens": 64, "steps_timed": 62, "ms_per_step_reps": [17.265, 17.271, 17.208, 17.31, 17.262], "median_ms_per_step": 17.265, "ids_sha": "87366d53d3d009e8", "row_lengths": [64, 64, 64, 64]}
+done 21:28:41

@@ -1,0 +1,23 @@
+#version 460
+// Streaming read peak probe: each invocation reads one uvec4 and folds
+// it into a data-dependent discriminator the compiler cannot fold away
+// (the store target is only reached on a bit pattern random data never
+// produces). Bandwidth = bytes / time (read only), the same access
+// shape the Q4 GEMV weight stream has.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, std430) readonly buffer Src {
+  uvec4 values[];
+}
+src;
+layout(set = 0, binding = 1, std430) writeonly buffer Sink {
+  uint values[];
+}
+sink;
+void main() {
+  uint idx = gl_GlobalInvocationID.x;
+  uvec4 v = src.values[idx];
+  uint s = v.x ^ v.y ^ v.z ^ v.w;
+  if (s == 0xdeadbeefu) {
+    sink.values[idx & 1023u] = s;
+  }
+}

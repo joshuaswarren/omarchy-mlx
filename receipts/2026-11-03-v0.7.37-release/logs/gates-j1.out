@@ -1,0 +1,14 @@
+IDLE-GUARD-JOB-START 20261103T105111Z lane=w72 class=validation release v0.7.37 gate batch j1 g1-clean-install g3-online-4b-card cleanup:hf pin=06d1038d draft-assets longcap=30 host-13in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261013.18-sep-ARCH
+PREFLIGHT-RUN
+SETTLE load1=0.37 SETTLE-SKIPPED
+GPU-TIMEOUTS before=37 boot=6cb62736-5e56-47f4-b8a5-244b1eab9252
+=== g1-clean-install  10:51:12 free   25G ===
+BEGIN 2026-11-03T10:51:12Z tag=v0.7.37 boot_id=6cb62736-5e56-47f4-b8a5-244b1eab9252 uname=7.1.12-2-20261013.18-sep-ARCH host_marker=unset
+REFUSING non-fresh path $HOME/scratch/w72/rel-0737-host-13in/gates/v0.7.37-gate-home
+g1-clean-install_RC=2 10:51:12
+STOPPING: g1-clean-install failed with rc 2
+GPU-TIMEOUTS after=37 delta=0
+737-host-13in/gates/v0.7.37-gate-home
+g1-clean-install_RC=2 10:51:12
+STOPPING: g1-clean-install failed with rc 2

@@ -1,0 +1,41 @@
+IDLE-GUARD-JOB-START 20261010T203553Z lane=matmul-gap w7Q H69 Qwen3-30B-A3B pf512 NATURAL text, gather_qmm tile route ON vs OFF x2 + last-position logits parity, G13C, pre-registered; load1 recorded, no quiet window set
+SETTLE load1=0.14
+start 2026-10-10T20:35:53Z wheel 0.32.4.dev202610100224+4797d4f7 load 0.14 kernel 7.1.12-2-12.6-sep-ARCH
+icd lib sha256 3546bcafe8ed3995
+driver sha256 defa58e5a32d1829
+--- arm on load 0.09
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 1 libs {"libmlx.so": "618081da593418fe"} load1 0.08544921875
+PROMPT tokens 512 distinct token ids 324 sha 538cd9fca32d25f5
+REP 0 tok_s 95.26
+REP 1 tok_s 94.64
+REP 2 tok_s 94.57
+TOP5 [49978, 6985, 5800, 49891, 29699] argmax_logit 21.125 nonfinite 0
+DONE
+--- arm off load 0.16
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 0 libs {"libmlx.so": "618081da593418fe"} load1 0.15771484375
+PROMPT tokens 512 distinct token ids 324 sha 538cd9fca32d25f5
+REP 0 tok_s 24.08
+REP 1 tok_s 24.11
+REP 2 tok_s 24.14
+TOP5 [49978, 6985, 5800, 49891, 29699] argmax_logit 21.0 nonfinite 0
+DONE
+--- arm on load 0.13
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 1 libs {"libmlx.so": "618081da593418fe"} load1 0.13330078125
+PROMPT tokens 512 distinct token ids 324 sha 538cd9fca32d25f5
+REP 0 tok_s 95.89
+REP 1 tok_s 95.23
+REP 2 tok_s 94.95
+TOP5 [49978, 6985, 5800, 49891, 29699] argmax_logit 21.125 nonfinite 0
+DONE
+--- arm off load 5.07
+PROVENANCE mlx-omarchy 0.32.4.dev202610100224+4797d4f7 tile_flag 0 libs {"libmlx.so": "618081da593418fe"} load1 5.70166015625
+PROMPT tokens 512 distinct token ids 324 sha 538cd9fca32d25f5
+REP 0 tok_s 24.16
+REP 1 tok_s 24.15
+REP 2 tok_s 24.15
+TOP5 [49978, 6985, 5800, 49891, 29699] argmax_logit 21.0 nonfinite 0
+DONE
+== logits parity (first ON vs first OFF)
+PARITY max_abs 0.3125 argmax_equal True top5_set_equal True logit_absmax 21.0
+PARITY max_abs 0.3125 argmax_equal True top5_set_equal True logit_absmax 21.0
+end 2026-10-10T20:42:59Z

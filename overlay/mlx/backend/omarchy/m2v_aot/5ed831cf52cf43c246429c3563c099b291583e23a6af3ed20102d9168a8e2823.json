@@ -1,0 +1,64 @@
+{
+ "module": "custom_kernel_qwen3_5_ragged_sdpa_2p2_bf16_v256_b4__bfloat16_t_256_4_bfloat16_t_float_float_bfloat16_t.spv",
+ "capabilities": [
+  "GroupNonUniform",
+  "GroupNonUniformArithmetic",
+  "Int16",
+  "Shader"
+ ],
+ "extensions": [
+  "SPV_KHR_non_semantic_info"
+ ],
+ "uses_cooperative_matrix": false,
+ "workgroup_size_spec_constant_ids": [
+  0,
+  1,
+  2
+ ],
+ "push_constant_regions": {
+  "PushConstantRegionGroupOffset": {
+   "offset": 0,
+   "size": 12
+  }
+ },
+ "kernels": [
+  {
+   "name": "custom_kernel_qwen3_5_ragged_sdpa_2p2_bf16_v256_b4__bfloat16_t_256_4_bfloat16_t_float_float_bfloat16_t",
+   "args": [
+    {
+     "ordinal": 3,
+     "kind": "storage_buffer",
+     "set": 0,
+     "binding": 0,
+     "metal_name": "out",
+     "metal_type": "device bfloat16_t*"
+    }
+   ],
+   "workgroup_size": null
+  }
+ ],
+ "name": "custom_kernel_qwen3_5_ragged_sdpa_2p2_bf16_v256_b4__bfloat16_t_256_4_bfloat16_t_float_float_bfloat16_t",
+ "kernel": {
+  "name": "custom_kernel_qwen3_5_ragged_sdpa_2p2_bf16_v256_b4__bfloat16_t_256_4_bfloat16_t_float_float_bfloat16_t",
+  "args": [
+   {
+    "ordinal": 3,
+    "kind": "storage_buffer",
+    "set": 0,
+    "binding": 0,
+    "metal_name": "out",
+    "metal_type": "device bfloat16_t*"
+   }
+  ],
+  "workgroup_size": null
+ },
+ "toolchain": {
+  "clang": "clang version 23.1.1 (https://github.com/llvm/llvm-project 6dfe1677ab8dffbc6ec13d53a1e0215d75147689)",
+  "opt": "LLVM (http://llvm.org/):",
+  "clspv": "LLVM (http://llvm.org/):",
+  "clspv_sha256": "10f47f7b9bd7eed0b9c532b92eb65a195058cacf12d879eda6f4f9b520a015d7",
+  "include_sha256": "fb278607df8e5be9db881389d67237ed9c30f823f523e8520cd0aa82533acada",
+  "clspv_patches_sha256": "224de5809aeb6cf36f4a08fa5c9de72136bf91ee8a320f5b9f190c546351b3ef",
+  "sources_sha256": "1e62b783e105de760d9a101a918b25e25c0820b05c2927f50ba16b4ca9839d34"
+ }
+}

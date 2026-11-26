@@ -1,0 +1,30 @@
+start 2026-10-06T23:51:18Z boot 79dec028 7.1.12-2-11.38-sep-ARCH load 1.29
+prov base }
+prov cand }
+r1 base gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":5.663
+r1 base gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.691
+r1 base gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.788
+r1 base lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/base.icd.json
+r1 cand gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":4.718
+r1 cand gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.523
+r1 cand gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.709
+r1 cand lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/cand.icd.json
+r2 base gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":5.586
+r2 base gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.467
+r2 base gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.706
+r2 base lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/base.icd.json
+r2 cand gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":4.687
+r2 cand gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.491
+r2 cand gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.727
+r2 cand lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/cand.icd.json
+r3 base gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":5.706
+r3 base gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.537
+r3 base gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.539
+r3 base lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/base.icd.json
+r3 cand gemm nn4096 "out_fnv":"6a7d8ec7703f6a36" "tflops":4.716
+r3 cand gemm nt4096 "out_fnv":"4ad92df0d8a37d87" "tflops":2.498
+r3 cand gemm nt512 "out_fnv":"1c4025366fdc06a4" "tflops":2.649
+r3 cand lm RuntimeError: Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: /var/tmp/w7q-mesa-build/cand.icd.json
+mlxcheck2 base 
+mlxcheck2 cand 
+end 2026-10-06T23:51:55Z

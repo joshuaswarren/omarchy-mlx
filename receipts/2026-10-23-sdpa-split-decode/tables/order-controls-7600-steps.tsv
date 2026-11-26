@@ -1,0 +1,6 @@
+Arm	NLL	Gap to the reference	Against the old route (paired)
+old route (and plain float32 arm)	1.39821	+0.00350	
+blk: the split-K algorithm (blocks of 128 keys, block maximum, exp, block sum, weighted values, global-maximum rescale, fold) in float32 stock ops	1.39807	+0.00336	-0.00014 [-0.00229, +0.00201]
+perm: the keys in a random permutation seeded by the cache length (new at every step)	1.39845	+0.00373	+0.00024
+split kernel	1.40089	+0.00617	+0.00268 [+0.00055, +0.00486]
+rev: the key axis reversed	1.40152	+0.00681	+0.00331 [+0.00107, +0.00540]

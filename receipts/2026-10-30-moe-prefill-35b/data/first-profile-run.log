@@ -1,0 +1,26 @@
+moeprof hostB 20261030T221754Z load 0.59 kernel 7.1.12-2-20261029.2-lab-ARCH free   87G mem Mem: 62 5 33 0 27 57
+model 38740b847e4cb78f352aba30aa41c76e08e6eb46
+wheel 0.32.4.dev202610292207+diag.42b30a2d
+-- P 22:17:54
+prefill 2048 tokens in 77.878 s over 4 chunks = 26.30 tok/s
+steps 3 wall 19468.580 gpu 3227.133 batch_kernel 0.000 other 3227.133 gap 16257.546 disp 250867 batch_disp 0
+  ElementwiseLiteF32                             1286.478 ms  107640.0 disp
+  CastBF16F32                                    1073.366 ms  77311.0 disp
+  ReduceF32                                       347.499 ms  30720.0 disp
+  CopyGeneralBF16                                 263.852 ms  15680.0 disp
+  CastF32BF16                                     163.038 ms  15390.0 disp
+  ArgSortMergeU32                                  20.300 ms   1840.0 disp
+  ArangeU32                                        18.175 ms    120.0 disp
+  CopyGeneralU32                                   10.530 ms    240.0 disp
+  QmmPrefillCoopmatBF16X32FullNLdsPad               6.691 ms    251.0 disp
+  GatherQmmTileBF16                                 5.262 ms    120.0 disp
+  FastRmsNormBF16                                   3.921 ms    171.0 disp
+  ElementwiseLiteBF16                               3.699 ms    180.0 disp
+profile bytes 307211606
+-- U 22:19:46
+prefill 2048 tokens in 46.188 s over 4 chunks = 44.34 tok/s
+-- T0 22:20:50
+prefill 2048 tokens in 56.268 s over 4 chunks = 36.40 tok/s
+U unprofiled wall median 11576.933 ms over 3 steps
+T0 unprofiled wall median 14086.726 ms over 3 steps
+done 22:22:06

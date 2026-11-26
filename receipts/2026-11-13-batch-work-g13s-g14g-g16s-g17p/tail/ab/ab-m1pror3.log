@@ -1,0 +1,10 @@
+MLXCHECK 0.32.4.dev202611111431+8380f002 Device(gpu, 0)
+m1pror3 arm=default Qwen3.8-2B-mlx-4Bit load 0.44 temp 48198 17:47:51
+DECODE 61.02 tok/s  PREFILL 280.77 tok/s  digest 8134db97b141f1be
+m1pror3 arm=default Qwen3-4B-Instruct-2507-4bit load 0.38 temp 55932 17:48:22
+DECODE 31.14 tok/s  PREFILL 133.97 tok/s  digest ee93832054590f55
+m1pror3 arm=10000 Qwen3.8-2B-mlx-4Bit load 0.73 temp 65401 17:49:16
+DECODE 71.66 tok/s  PREFILL 281.49 tok/s  digest 8134db97b141f1be
+m1pror3 arm=10000 Qwen3-4B-Instruct-2507-4bit load 0.68 temp 66166 17:49:44
+DECODE 37.55 tok/s  PREFILL 134.32 tok/s  digest ee93832054590f55
+ALL DONE 17:50:34

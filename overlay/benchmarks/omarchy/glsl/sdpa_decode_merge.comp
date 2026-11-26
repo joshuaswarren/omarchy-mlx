@@ -1,0 +1,62 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+// Split-K decode merge with the pinned ggml scratch layout.
+// Requires a 32-lane subgroup for register-only reductions.
+#version 450
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(constant_id = 1) const uint HD = 256;
+layout(constant_id = 2) const uint H = 1;
+layout(constant_id = 5) const uint SPLITS = 1;
+
+layout(set = 0, binding = 0) readonly buffer ScratchBuf { float16_t scratch[]; };
+layout(set = 0, binding = 1) writeonly buffer OBuf { float o[]; };
+
+
+void main() {
+  const float FLT_MAX = uintBitsToFloat(0x7F7FFFFF);
+  uint tid = gl_LocalInvocationID.x;
+  uint head = gl_WorkGroupID.x;
+  uint d = tid + gl_WorkGroupID.y * 32u;
+  uint lm_base = SPLITS * H * HD;
+  uint lm_stride = 2u * H;
+
+  float m_max = -1.0 / 0.0;
+  for (uint split = 0u; split + tid < SPLITS; split += 32u) {
+    m_max = max(m_max, float(scratch[lm_base + (split + tid) * lm_stride + H + head]));
+  }
+  m_max = max(m_max, subgroupShuffleXor(m_max, 16u));
+  m_max = max(m_max, subgroupShuffleXor(m_max, 8u));
+  m_max = max(m_max, subgroupShuffleXor(m_max, 4u));
+  m_max = max(m_max, subgroupShuffleXor(m_max, 2u));
+  m_max = max(m_max, subgroupShuffleXor(m_max, 1u));
+
+  float lsum = 0.0;
+  for (uint split = 0u; split + tid < SPLITS; split += 32u) {
+    float l = float(scratch[lm_base + (split + tid) * lm_stride + head]);
+    float m = float(scratch[lm_base + (split + tid) * lm_stride + H + head]);
+    lsum += exp(m - m_max) * l;
+  }
+  lsum += subgroupShuffleXor(lsum, 16u);
+  lsum += subgroupShuffleXor(lsum, 8u);
+  lsum += subgroupShuffleXor(lsum, 4u);
+  lsum += subgroupShuffleXor(lsum, 2u);
+  lsum += subgroupShuffleXor(lsum, 1u);
+
+  lsum = (lsum == 0.0) ? 0.0 : 1.0 / lsum;
+
+  if (d < HD) {
+    float acc = 0.0;
+    for (uint split = 0u; split < SPLITS; ++split) {
+      uint oi = (split * H + head) * HD + d;
+      float m = float(scratch[lm_base + split * lm_stride + H + head]);
+      acc += exp(m - m_max) * float(scratch[oi]);
+    }
+    acc *= lsum;
+    acc = clamp(acc, -FLT_MAX, FLT_MAX);
+    o[head * HD + d] = acc;
+  }
+}

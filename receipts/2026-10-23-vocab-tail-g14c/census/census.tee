@@ -1,0 +1,18 @@
+CENS start 2026-10-23T00:25:26Z boot=<id> kernel=7.1.12-2-20261013.18-egpu-ARCH load1=2.27 census-tail 0d5598e2cc807b65 model index dd023913fb87cfda libmlx 60c698ba4827a2a4
+CENS arm base dispatches 8 tokens 6416, 12 tokens 7636, per decode token 305.00
+CENS arm argc dispatches 8 tokens 6428, 12 tokens 7652, per decode token 306.00
+CENS hist argc kernel 66 per token -1.00
+CENS hist argc kernel 627 per token 1.00
+CENS hist argc kernel 628 per token 1.00
+CENS arm lsec dispatches 8 tokens 6428, 12 tokens 7652, per decode token 306.00
+CENS hist lsec kernel 38 per token -1.00
+CENS hist lsec kernel 631 per token 1.00
+CENS hist lsec kernel 634 per token 1.00
+CENS arm both dispatches 8 tokens 6440, 12 tokens 7668, per decode token 307.00
+CENS hist both kernel 38 per token -1.00
+CENS hist both kernel 66 per token -1.00
+CENS hist both kernel 627 per token 1.00
+CENS hist both kernel 628 per token 1.00
+CENS hist both kernel 631 per token 1.00
+CENS hist both kernel 634 per token 1.00
+CENS end 2026-10-23T00:27:28Z

@@ -1,0 +1,130 @@
+#version 460
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Q4 decode access-pattern roof probe. Streams the exact byte layout the
+// decode GEMV reads - packed uint32 weight words row after row, one f16
+// scale and one f16 bias per 64-element group, one x uvec4 per consumed
+// word - with a near-empty ALU body, so the measured GB/s is what the
+// memory system delivers for the pattern, independent of the real
+// kernel's arithmetic. Compile-time knobs:
+//   ROWS_PER_WG     subgroups per workgroup, one weight row each
+//                   (production kernel: 8)
+//   WORDS_PER_LANE  weight words one lane consumes per loop step
+//                   (production generic loop: 1, fast path: 2)
+//   LOAD_WIDTH      1 = scalar uint weight loads, 2 = uvec2 view,
+//                   4 = uvec4 view of the same weight bytes
+// Row pitch comes from push constants, so stride/alignment arms reuse
+// one pipeline. Grid is 2D because rows/ROWS_PER_WG exceeds the 65535
+// x-dimension limit; row = (y * 32768 + x) * ROWS_PER_WG + slot.
+#ifndef ROWS_PER_WG
+#define ROWS_PER_WG 8u
+#endif
+#ifndef WORDS_PER_LANE
+#define WORDS_PER_LANE 1u
+#endif
+#ifndef LOAD_WIDTH
+#define LOAD_WIDTH 1u
+#endif
+#if LOAD_WIDTH > 1 && WORDS_PER_LANE != LOAD_WIDTH
+#error "wide loads own LOAD_WIDTH consecutive words per lane per step"
+#endif
+
+layout(local_size_x = (32u * ROWS_PER_WG)) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer XW {
+  uvec4 values[];
+}
+xw;
+layout(set = 0, binding = 1, std430) readonly buffer WW {
+  uint values[];
+}
+ww;
+layout(set = 0, binding = 2, std430) readonly buffer SW {
+  float16_t values[];
+}
+sw;
+layout(set = 0, binding = 3, std430) readonly buffer BW {
+  float16_t values[];
+}
+bw;
+layout(set = 0, binding = 4, std430) writeonly buffer OW {
+  uint values[];
+}
+ow;
+// Alias views of the weight words for the wide-load arms; the host binds
+// the same buffer. Row bases stay 16-byte aligned in every timed arm
+// (pitch 112 words = 448 B), so the vector indices are in range.
+layout(set = 0, binding = 5, std430) readonly buffer WW2 {
+  uvec2 values[];
+}
+ww2;
+layout(set = 0, binding = 6, std430) readonly buffer WW4 {
+  uvec4 values[];
+}
+ww4;
+
+layout(push_constant) uniform PC {
+  uint rows;
+  uint words_per_row;
+  uint pitch;
+  uint groups_per_row;
+}
+pc;
+
+void main() {
+  uint lane = gl_LocalInvocationID.x % 32u;
+  uint row_in_wg = gl_LocalInvocationID.x / 32u;
+  uint row =
+      (gl_WorkGroupID.y * 32768u + gl_WorkGroupID.x) * ROWS_PER_WG +
+      row_in_wg;
+  float acc = 0.0;
+  if (row < pc.rows) {
+    uint wbase = row * pc.pitch;
+#if LOAD_WIDTH == 1
+    for (uint w = lane; w < pc.words_per_row; w += 32u * WORDS_PER_LANE) {
+      uint w0 = wbase + w;
+      acc += float(ww.values[w0] & 0xFFFFu);
+      acc += float(xw.values[w].x & 1u);
+      uint g = w >> 3u;
+      acc += float(sw.values[row * pc.groups_per_row + g]);
+      acc += float(bw.values[row * pc.groups_per_row + g]);
+#if WORDS_PER_LANE == 2
+      acc += float(ww.values[w0 + 1u] & 0xFFFFu);
+      acc += float(xw.values[w + 1u].x & 1u);
+#endif
+    }
+#elif LOAD_WIDTH == 2
+    // Non-overlapping pairs, the production fast-path lane map: lane
+    // owns words 2l and 2l+1 of each 64-word chunk.
+    for (uint w = lane * 2u; w + 1u < pc.words_per_row; w += 64u) {
+      uvec2 pair = ww2.values[(wbase + w) / 2u];
+      acc += float(pair.x & 0xFFFFu);
+      acc += float(xw.values[w].x & 1u);
+      acc += float(sw.values[row * pc.groups_per_row + (w >> 3u)]);
+      acc += float(bw.values[row * pc.groups_per_row + (w >> 3u)]);
+      acc += float(pair.y & 0xFFFFu);
+      acc += float(xw.values[w + 1u].x & 1u);
+      acc += float(sw.values[row * pc.groups_per_row + ((w + 1u) >> 3u)]);
+      acc += float(bw.values[row * pc.groups_per_row + ((w + 1u) >> 3u)]);
+    }
+#else
+    // Non-overlapping quads: lane owns words 4l..4l+3 of each 128-word
+    // chunk. A 4-word quad never straddles an 8-word group, so one
+    // scale/bias pair covers it.
+    for (uint w = lane * 4u; w + 3u < pc.words_per_row; w += 128u) {
+      uvec4 quad = ww4.values[(wbase + w) / 4u];
+      acc += float(quad.x & 0xFFFFu);
+      acc += float(quad.y & 0xFFFFu);
+      acc += float(quad.z & 0xFFFFu);
+      acc += float(quad.w & 0xFFFFu);
+      acc += float(xw.values[w].x & 1u) + float(xw.values[w + 1u].x & 1u) +
+          float(xw.values[w + 2u].x & 1u) + float(xw.values[w + 3u].x & 1u);
+      uint g = w >> 3u;
+      acc += float(sw.values[row * pc.groups_per_row + g]);
+      acc += float(bw.values[row * pc.groups_per_row + g]);
+    }
+#endif
+  }
+  ow.values[row] = floatBitsToUint(acc);
+}

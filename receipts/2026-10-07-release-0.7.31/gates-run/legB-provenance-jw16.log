@@ -1,0 +1,38 @@
+== g16/g16b leg B 2026-10-07T15:07:35Z ==
+asset_wheel: mlx_omarchy-0.32.4.dev202610071347+9b5c938-cp314-cp314-linux_aarch64.whl
+asset_wheel_sha256: a2f8c83e5c5f635d00702565a8557d87c40a9eccac885329dcec4692d85d300d
+icd_json: ~/.local/share/coreglass/vulkan-4b-bbbfa36dce/honeykrisp_icd.aarch64.json
+libvulkan_sha256: cb2a1bcf4c1b10cf587a36f6acf59a74604a2c1537be2dc5fbcda6bcfef316e7
+uname -r: 7.1.12-2-12.2-sep-ARCH
+-- mlx-omarchy-info (VK_DRIVER_FILES=~/.local/share/coreglass/vulkan-4b-bbbfa36dce/honeykrisp_icd.aarch64.json) --
+mlx-omarchy-info
+  device:            Apple M1 Max (G13C C0)
+  driver:            Honeykrisp
+  driver info:       Mesa 26.3.0-devel (git-bbbfa36dce)
+  driver SHA:        bbbfa36dce
+  ICD:               ~/.local/share/coreglass/vulkan-4b-bbbfa36dce/honeykrisp_icd.aarch64.json
+  ICD source:        override
+  expected SHA:      
+  expected SHA from: none (record only)
+  api version:       1.4.362
+  vendor:device id:  0x10005:0x0
+  queue family:      0 (1 queues)
+  total memory:      47480 MiB (device-local heap)
+  unified memory:    yes
+  host coherent:     yes
+  timeline semaphore:yes
+  shader float16:    yes
+  shader int16:      yes
+  16-bit storage:    yes
+  max compute shm:   32768 B
+  max wg invocations:1024
+  storage buffer bindings (per stage / per set): 1048576 / 1048576
+  ane fdt node:      yes
+  ane compatible:    apple,t6000-ane
+  ane accel0:        yes
+  ane module:        yes
+  ane available:     yes
+  coreml frontend:   no
+  coreml command:    no
+  coreml cache:      ~/.cache/mlx-omarchy/coreml
+  coreml cache ents: 0 (absent)

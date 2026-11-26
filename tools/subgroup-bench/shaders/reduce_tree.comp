@@ -1,0 +1,46 @@
+#version 460
+
+// Reduce-floats-over-32-lane-workgroup-shared-tree benchmark kernel.
+// Mirror of reduce_subgroup.comp: same input layout, same dispatch shape,
+// same single output per workgroup. The reduction is the five-round
+// log2(32) barrier-synchronized shared-memory tree the qmm_vec.comp and
+// matmul_vec.comp production paths use. Keeping the two kernels'
+// surrounding code byte-for-byte identical (input binding, output binding,
+// dispatch shape, push-constant layout, only the reduction body differs)
+// is the whole point of this benchmark: any time difference is the
+// subgroup vs. tree difference, not dispatch or memory difference.
+
+layout(local_size_x = 32) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  float values[];
+} input_data;
+
+layout(set = 0, binding = 1, std430) writeonly buffer Output {
+  float values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint n_groups;
+} params;
+
+shared float scratch[32];
+
+void main() {
+  uint gid = gl_WorkGroupID.x;
+  uint lane = gl_LocalInvocationID.x;
+  if (gid >= params.n_groups) {
+    return;
+  }
+  scratch[lane] = input_data.values[gid * 32u + lane];
+  barrier();
+  for (uint offset = 16u; offset > 0u; offset >>= 1u) {
+    if (lane < offset) {
+      scratch[lane] += scratch[lane + offset];
+    }
+    barrier();
+  }
+  if (lane == 0u) {
+    output_data.values[gid] = scratch[0];
+  }
+}

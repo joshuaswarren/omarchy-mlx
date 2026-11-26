@@ -1,0 +1,279 @@
+{
+ "kind": "decode",
+ "cells": 27,
+ "cells_cand_no_worse": 27,
+ "worst_ratio": 1.0,
+ "check1_per_op": true,
+ "table": [
+  {
+   "cell": "layer0/hn",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0002103860621688945,
+   "cand_rel_l2_mean": 0.0002103860621688945,
+   "base_max_abs": 0.0036558835760232,
+   "cand_max_abs": 0.0036558835760232,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/k",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.00020203118356799485,
+   "cand_rel_l2_mean": 0.00020203118356799485,
+   "base_max_abs": 0.0616578905166989,
+   "cand_max_abs": 0.0616578905166989,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/k_rope",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.000253508386692487,
+   "cand_rel_l2_mean": 0.000253508386692487,
+   "base_max_abs": 0.06311541132095044,
+   "cand_max_abs": 0.06311541132095044,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/mlp",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0011126317717548855,
+   "cand_rel_l2_mean": 0.0011126317717548855,
+   "base_max_abs": 0.0018712258663716175,
+   "cand_max_abs": 0.0018712258663716175,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/o_res",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0004270855903245299,
+   "cand_rel_l2_mean": 0.0004270855903245299,
+   "base_max_abs": 0.0003015082656929735,
+   "cand_max_abs": 0.0003015082656929735,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/q",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.00022001206992819928,
+   "cand_rel_l2_mean": 0.00022001206992819928,
+   "base_max_abs": 0.02809045860749393,
+   "cand_max_abs": 0.02809045860749393,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/q_rope",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0002961199184589508,
+   "cand_rel_l2_mean": 0.0002961199184589508,
+   "base_max_abs": 0.042253640326009645,
+   "cand_max_abs": 0.042253640326009645,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/v",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0014464141227810473,
+   "cand_rel_l2_mean": 0.0014464141227810473,
+   "base_max_abs": 0.00018047702307513735,
+   "cand_max_abs": 0.00018047702307513735,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer0/xn",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.00020873863718004146,
+   "cand_rel_l2_mean": 0.00020873863718004146,
+   "base_max_abs": 0.0008633222485601166,
+   "cand_max_abs": 0.0008633222485601166,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer12/hn",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0001984934069635334,
+   "cand_rel_l2_mean": 0.0001984934069635334,
+   "base_max_abs": 0.0024970765861969113,
+   "cand_max_abs": 0.0024970765861969113,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer12/k",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0004709701810173221,
+   "cand_rel_l2_mean": 0.0004709701810173221,
+   "base_max_abs": 0.0044308632840808215,
+   "cand_max_abs": 0.0044308632840808215,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer12/k_rope",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0005077551463471111,
+   "cand_rel_l2_mean": 0.0005077551463471111,
+   "base_max_abs": 0.004789092878405121,
+   "cand_max_abs": 0.004789092878405121,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer12/mlp",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0016284758604402138,
+   "cand_rel_l2_mean": 0.0016284758604402138,
+   "base_max_abs": 0.0012377092146254043,
+   "cand_max_abs": 0.0012377092146254043,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer12/o_res",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.00032382134524164025,
+   "cand_rel_l2_mean": 0.00032382134524164025,
+   "base_max_abs": 0.00204723393835593,
+   "cand_max_abs": 0.00204723393835593,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer12/q",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0003922583605228353,
+   "cand_rel_l2_mean": 0.0003922583605228353,
+   "base_max_abs": 0.008154820159155918,
+   "cand_max_abs": 0.008154820159155918,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer12/q_rope",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0004138126354300501,
+   "cand_rel_l2_mean": 0.0004138125868881346,
+   "base_max_abs": 0.00980621522445091,
+   "cand_max_abs": 0.00980621522445091,
+   "outputs_identical": 11,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer12/v",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.001165335176296754,
+   "cand_rel_l2_mean": 0.001165335176296754,
+   "base_max_abs": 0.002597033855338049,
+   "cand_max_abs": 0.002597033855338049,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer12/xn",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.00020486894971066222,
+   "cand_rel_l2_mean": 0.00020486894971066222,
+   "base_max_abs": 0.007023565136830001,
+   "cand_max_abs": 0.007023565136830001,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer23/hn",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.00020674803518849,
+   "cand_rel_l2_mean": 0.00020674803518849,
+   "base_max_abs": 0.01134790689057752,
+   "cand_max_abs": 0.01134790689057752,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer23/k",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0005913263342043953,
+   "cand_rel_l2_mean": 0.0005913263342043953,
+   "base_max_abs": 0.007003864490579659,
+   "cand_max_abs": 0.007003864490579659,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer23/k_rope",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0006157498471955643,
+   "cand_rel_l2_mean": 0.0006157498471955643,
+   "base_max_abs": 0.007925490461559548,
+   "cand_max_abs": 0.007925490461559548,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer23/mlp",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0010561175457389378,
+   "cand_rel_l2_mean": 0.0010561175457389378,
+   "base_max_abs": 0.025060943656193047,
+   "cand_max_abs": 0.025060943656193047,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer23/o_res",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0002711611152042048,
+   "cand_rel_l2_mean": 0.0002711611152042048,
+   "base_max_abs": 0.01178832954610698,
+   "cand_max_abs": 0.01178832954610698,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer23/q",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0007475013089122895,
+   "cand_rel_l2_mean": 0.0007475013089122895,
+   "base_max_abs": 0.0086888536822749,
+   "cand_max_abs": 0.0086888536822749,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer23/q_rope",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.0007630381366956332,
+   "cand_rel_l2_mean": 0.0007630381366956332,
+   "base_max_abs": 0.010209555580455554,
+   "cand_max_abs": 0.010209555580455554,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer23/v",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.001224897084934815,
+   "cand_rel_l2_mean": 0.001224897084934815,
+   "base_max_abs": 0.0069014040454747905,
+   "cand_max_abs": 0.0069014040454747905,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  },
+  {
+   "cell": "layer23/xn",
+   "datasets": 12,
+   "base_rel_l2_mean": 0.00020823499400808004,
+   "cand_rel_l2_mean": 0.00020823499400808004,
+   "base_max_abs": 0.007627611979255988,
+   "cand_max_abs": 0.007627611979255988,
+   "outputs_identical": 12,
+   "cand_no_worse": true
+  }
+ ]
+}

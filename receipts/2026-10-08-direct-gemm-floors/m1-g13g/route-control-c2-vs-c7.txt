@@ -1,0 +1,16 @@
+cells: C2 54 C7 54; empty traces C2 0 C7 0
+differs ('bf16', 'tn', 512) [542] -> [544]
+differs ('bf16', 'tn', 1024) [542] -> [544]
+differs ('bf16', 'tn', 2048) [542] -> [544]
+differs ('f16', 'tn', 1024) [529] -> [536]
+differs ('f16', 'tn', 2048) [529] -> [536]
+differs ('f32', 'nn', 2048) [531] -> [538]
+differs ('f32', 'nt', 512) [532] -> [537]
+differs ('f32', 'nt', 1024) [532] -> [537]
+differs ('f32', 'nt', 2048) [532] -> [537]
+differs ('f32', 'tn', 512) [533] -> [539]
+differs ('f32', 'tn', 1024) [533] -> [539]
+differs ('f32', 'tn', 2048) [533] -> [539]
+expected-different cells that match: none
+unexpected differences: none
+VERDICT PASS

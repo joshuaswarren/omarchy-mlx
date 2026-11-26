@@ -1,0 +1,39 @@
+R3 numP2 start 2026-10-20T05:17:24Z boot=2abdc10a kernel=7.1.12-2-12.6-sep-ARCH governor=performance load1=0.25
+R3 numP2 env GDN/MLX/HK/AGX present: 0
+R3 numP2 N wheel mlx_omarchy-0.32.4.dev202610200429+2939e78-cp314-cp314-linux_aarch64.whl sha256 567c99392954092f308cbd546968a6bb09b193d8def5be2de62260155bceeb06 libmlx 451ccdea64b12f54
+R3 numP2 O wheel mlx_omarchy-0.32.4.dev202610200425+657582a-cp314-cp314-linux_aarch64.whl sha256 f047c15b6dddb64daa6f56cb468f41c894ec69df09963bb136a240615453288c libmlx 55bd83b2450afce8
+R3 numP2 test binary sha256 dfcd4b86a7f16b662f09c062d2f0ce5e39ca324557fe885879819eea32fc186a driver 40282811c6e14ef9
+R3 numP2 scripts bench_decode 8220064c5ea3aaaf logits 055a90bd58ad9c3a numcmp 3861d97963fd3100
+R3 numP2 numerics P2 Ndef rc=0 logits-run ids_sha256_16 1df2f5ce7f6a6596 n=128 prompt_tokens=62 vocab=248320 full_steps=8 verified=match
+R3 numP2 numerics P2 Ounti rc=0 logits-run ids_sha256_16 1df2f5ce7f6a6596 n=128 prompt_tokens=62 vocab=248320 full_steps=8 verified=match
+R3 numP2 numerics P2 Ntile rc=0 logits-run ids_sha256_16 1df2f5ce7f6a6596 n=128 prompt_tokens=62 vocab=248320 full_steps=8 verified=match
+R3 numP2 numerics P2 Odef rc=0 logits-run ids_sha256_16 1df2f5ce7f6a6596 n=128 prompt_tokens=62 vocab=248320 full_steps=8 verified=match
+R3 numP2 compare P2 Ndef vs Ounti
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 8
+  max_abs_dlogprob_full: 0.0
+  n_elements_differ_full: 0
+  max_kl_x_to_y: 0.0
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.125
+  median_top1_top2_gap_x: 2.5
+  steps_with_gap_below_2x_maxdiff: 0
+R3 numP2 compare P2 Ntile vs Odef
+  n: 128
+  ids_equal: True
+  first_divergence: None
+  full_steps_compared: 8
+  max_abs_dlogprob_full: 0.0
+  n_elements_differ_full: 0
+  max_kl_x_to_y: 0.0
+  top1_equal_steps: 128/128
+  top5_set_equal_steps: 128/128
+  max_abs_dlogprob_top20_all_steps: 0.0
+  min_top1_top2_gap_x: 0.0
+  median_top1_top2_gap_x: 2.4375
+  steps_with_gap_below_2x_maxdiff: 0
+R3 numP2 end 2026-10-20T05:18:32Z

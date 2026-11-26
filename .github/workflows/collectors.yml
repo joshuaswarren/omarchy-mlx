@@ -1,0 +1,55 @@
+name: Community collectors
+
+on:
+  pull_request:
+    paths:
+      - 'install.sh'
+      - 'scripts/apply-mlx-lm-patches.sh'
+      - 'scripts/patch-mlx-lm-*.py'
+      - 'scripts/collect*.py'
+      - 'scripts/test_collect*.py'
+      - 'scripts/mlx_provenance.py'
+      - 'scripts/bench_matrix.py'
+      - 'tests/**'
+      - 'services/community-data/schema/**'
+      - '.github/workflows/collectors.yml'
+  push:
+    paths:
+      - 'install.sh'
+      - 'scripts/apply-mlx-lm-patches.sh'
+      - 'scripts/patch-mlx-lm-*.py'
+      - 'scripts/collect*.py'
+      - 'scripts/test_collect*.py'
+      - 'scripts/mlx_provenance.py'
+      - 'scripts/bench_matrix.py'
+      - 'tests/**'
+      - 'services/community-data/schema/**'
+      - '.github/workflows/collectors.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+        python: ['3.11', '3.14']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements-dev.txt
+      - run: python scripts/test_collect.py
+      - run: python scripts/test_collect_macos.py
+      - run: python -m unittest discover -s tests -p test_mlx_provenance.py
+      - run: python scripts/bench_matrix.py --self-test
+      # tests/ covers the serve, assistant and ANE stack, which runs on Linux
+      # only (/proc, /usr/bin/bash, process start times). The macOS legs keep
+      # the collector steps above.
+      - run: pytest tests -q
+        if: runner.os == 'Linux'

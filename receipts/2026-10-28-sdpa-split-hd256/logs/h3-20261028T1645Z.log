@@ -1,0 +1,9 @@
+H3 short-context check 20261028T1645Z load 0.25
+== SiddhJagani/Qwen3.8-2B-mlx-4Bit rep 1 arm A
+== SiddhJagani/Qwen3.8-2B-mlx-4Bit rep 1 arm B
+== SiddhJagani/Qwen3.8-2B-mlx-4Bit rep 2 arm A
+== SiddhJagani/Qwen3.8-2B-mlx-4Bit rep 2 arm B
+== mlx-community/Qwen3.5-9B-4bit rep 1 arm A
+== mlx-community/Qwen3.5-9B-4bit rep 1 arm B
+== mlx-community/Qwen3.5-9B-4bit rep 2 arm A
+== mlx-community/Qwen3.5-9B-4bit rep 2 arm B

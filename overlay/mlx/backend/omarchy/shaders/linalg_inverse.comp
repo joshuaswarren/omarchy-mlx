@@ -1,0 +1,191 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Wave 7: matrix inverse. One workgroup per batch matrix, two modes.
+// General mode runs Gauss-Jordan elimination with partial pivoting: the
+// work buffer starts as a dense copy of A and is consumed, while the
+// accumulator starts at identity and ends as A^-1. Triangular mode gives
+// each thread whole columns of the inverse, solved by forward or backward
+// substitution against independent rows, so threads never share data. A
+// zero pivot pins status 2 for the host, which raises a named error
+// instead of returning inf-filled garbage.
+//
+// Push-constant routing: matrix_n is N, output_size the batch matrix
+// count, operation 0 general / 1 triangular, and flags bit 0 the upper
+// convention (triangular mode only).
+#version 460
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) coherent buffer Work {
+  float values[];
+} work;
+layout(set = 0, binding = 1, std430) coherent buffer Acc {
+  float values[];
+} acc;
+layout(set = 0, binding = 2, std430) buffer Status {
+  uint values[];
+} status;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+shared float red[256];
+shared uint redi[256];
+
+void inverse_triangular(uint tid, uint n, uint base, bool upper) {
+  // Thread t owns columns t, t+256, ... Each column solves T x = e_j with
+  // a plain substitution walk; reads stay inside the work buffer and
+  // writes inside the accumulator, so no synchronization is needed.
+  for (uint j = tid; j < n; j += 256u) {
+    if (upper) {
+      // Back-substitution over every row; entries below row j come out
+      // exactly zero through the recurrence.
+      for (uint i = n; i-- > 0u;) {
+        float s = (i == j) ? 1.0 : 0.0;
+        for (uint k = i + 1u; k < n; ++k) {
+          s -= work.values[base + i * n + k] *
+              acc.values[base + k * n + j];
+        }
+        float d = work.values[base + i * n + i];
+        if (d == 0.0) {
+          status.values[gl_WorkGroupID.x] = 2u;
+          acc.values[base + i * n + j] = 0.0;
+        } else {
+          acc.values[base + i * n + j] = s / d;
+        }
+      }
+    } else {
+      // Forward-substitution over every row; entries above row j come
+      // out exactly zero through the recurrence.
+      for (uint i = 0u; i < n; ++i) {
+        float s = (i == j) ? 1.0 : 0.0;
+        for (uint k = 0u; k < i; ++k) {
+          s -= work.values[base + i * n + k] *
+              acc.values[base + k * n + j];
+        }
+        float d = work.values[base + i * n + i];
+        if (d == 0.0) {
+          status.values[gl_WorkGroupID.x] = 2u;
+          acc.values[base + i * n + j] = 0.0;
+        } else {
+          acc.values[base + i * n + j] = s / d;
+        }
+      }
+    }
+  }
+}
+
+void inverse_general(uint tid, uint n, uint base) {
+  for (uint k = 0u; k < n; ++k) {
+    // Partial pivot: largest |A[i][k]| for i in [k, n), reduced as
+    // (value, index) pairs with a strictly-greater compare so the winner
+    // is deterministic.
+    float best = 0.0;
+    uint best_i = k;
+    for (uint i = k + tid; i < n; i += 256u) {
+      float v = abs(work.values[base + i * n + k]);
+      if (best_i == k || v > best) {
+        best = v;
+        best_i = i;
+      }
+    }
+    red[tid] = best;
+    redi[tid] = best_i;
+      memoryBarrierBuffer();
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (tid < stride && red[tid + stride] > red[tid]) {
+        red[tid] = red[tid + stride];
+        redi[tid] = redi[tid + stride];
+      }
+      memoryBarrierBuffer();
+      barrier();
+    }
+    // The reduce leaves the winner in slot 0; republish so every phase
+    // below reads one synchronized copy.
+    if (tid == 0u) {
+      red[255] = red[0];
+      redi[255] = redi[0];
+      if (red[0] == 0.0) {
+        status.values[gl_WorkGroupID.x] = 2u;
+      }
+    }
+      memoryBarrierBuffer();
+    barrier();
+    uint pivot_row = redi[255];
+    for (uint c = tid; c < n; c += 256u) {
+      float t = work.values[base + k * n + c];
+      work.values[base + k * n + c] = work.values[base + pivot_row * n + c];
+      work.values[base + pivot_row * n + c] = t;
+      t = acc.values[base + k * n + c];
+      acc.values[base + k * n + c] = acc.values[base + pivot_row * n + c];
+      acc.values[base + pivot_row * n + c] = t;
+    }
+      memoryBarrierBuffer();
+    barrier();
+    if (tid == 0u) {
+      red[254] = 1.0 / work.values[base + k * n + k];
+    }
+      memoryBarrierBuffer();
+    barrier();
+    float pinv = red[254];
+    for (uint c = tid; c < n; c += 256u) {
+      work.values[base + k * n + c] *= pinv;
+      acc.values[base + k * n + c] *= pinv;
+    }
+      memoryBarrierBuffer();
+    barrier();
+    for (uint i = tid; i < n; i += 256u) {
+      if (i != k) {
+        float f = work.values[base + i * n + k];
+        for (uint c = 0u; c < n; ++c) {
+          work.values[base + i * n + c] -= f * work.values[base + k * n + c];
+          acc.values[base + i * n + c] -= f * acc.values[base + k * n + c];
+        }
+      }
+    }
+      memoryBarrierBuffer();
+    barrier();
+  }
+}
+
+void main() {
+  uint tid = gl_LocalInvocationID.x;
+  uint n = params.matrix_n;
+  uint base = gl_WorkGroupID.x * n * n;
+
+  for (uint idx = tid; idx < n * n; idx += 256u) {
+    uint r = idx / n;
+    acc.values[base + idx] = (r == idx % n) ? 1.0 : 0.0;
+  }
+  memoryBarrierBuffer();
+  barrier();
+
+  if (params.operation == 1u) {
+    inverse_triangular(tid, n, base, (params.flags & 1u) != 0u);
+  } else {
+    inverse_general(tid, n, base);
+  }
+}

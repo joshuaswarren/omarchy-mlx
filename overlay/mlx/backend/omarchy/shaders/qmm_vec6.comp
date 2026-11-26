@@ -1,0 +1,236 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Streaming decode for transposed 6-bit affine weights (the Muse Spark lm_head
+// shape: N = 202048, K = 8192, group 64) at a few activation rows.
+//
+// qmm_vec.comp serves bits 6 through its generic byte-pack path: per k step
+// a lane issues three u32 loads (one per byte, each through a select chain),
+// plus a scale load and a bias load, so one 16-code span costs about 100
+// loads. Here a lane owns one 16-code chunk: three consecutive u32 words
+// (12 bytes, four 24-bit packs of four codes), one scale and one bias per
+// group, and 16 activation values read as two (f16, bf16) or four (f32)
+// uvec4 loads. The group's contribution is
+//   sum_j x_j * (s * q_j + b) = s * (sum_j x_j * q_j) + b * (sum_j x_j)
+// accumulated in f32 per lane, then one subgroupAdd per output.
+//
+// Geometry: one 32-lane subgroup (slot) owns COLS consecutive output columns
+// and the workgroup (8 slots) owns 8 * COLS columns; workgroup row index y
+// owns ROWS activation rows. Lanes stride 32 chunks along K. Out-of-range
+// columns and rows are clamped for the loads (uniform control flow) and
+// skipped at the store. The host guarantees subgroupSize == 32, a single
+// weight matrix (no batch), group size in {32, 64, 128}, K a multiple of the
+// group size, and 16-byte-aligned x rows. Instantiated as COLS 4 x ROWS 1 (one
+// activation row) and COLS 1 x ROWS 8 (2 to 32 rows), f16 and bf16.
+
+#version 460
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_EXT_control_flow_attributes : require
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define STORAGE_TYPE float16_t
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#define X_PER_VEC 8u
+vec2 unpack_pair(uint word) {
+  return unpackHalf2x16(word);
+}
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VALUE(f) bf16_store(f)
+#define X_PER_VEC 8u
+vec2 unpack_pair(uint word) {
+  return vec2(uintBitsToFloat(word << 16u), uintBitsToFloat(word & 0xFFFF0000u));
+}
+#else
+#define STORAGE_TYPE float
+#define LOAD_VALUE(x) float(x)
+#define STORE_VALUE(f) STORAGE_TYPE(f)
+#define X_PER_VEC 4u
+#endif
+
+#ifndef COLS
+#define COLS 4
+#endif
+#ifndef ROWS
+#define ROWS 1
+#endif
+const uint LANES = 32u;
+const uint SLOTS = 8u;
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputX {
+  uvec4 values[];
+} input_x;
+layout(set = 0, binding = 1, std430) readonly buffer InputW {
+  uint values[];
+} input_w;
+layout(set = 0, binding = 2, std430) readonly buffer Scales {
+  STORAGE_TYPE values[];
+} scales;
+layout(set = 0, binding = 3, std430) readonly buffer Biases {
+  STORAGE_TYPE values[];
+} biases;
+layout(set = 0, binding = 4, std430) writeonly buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+// 16 activation values starting at element x_elem (a multiple of X_PER_VEC).
+void load_x16(uint x_elem, out float xv[16]) {
+#if defined(USE_FP16) || defined(USE_BF16)
+  uint base = x_elem / X_PER_VEC;
+  [[unroll]] for (uint h = 0u; h < 2u; ++h) {
+    uvec4 u = input_x.values[base + h];
+    vec2 p0 = unpack_pair(u.x);
+    vec2 p1 = unpack_pair(u.y);
+    vec2 p2 = unpack_pair(u.z);
+    vec2 p3 = unpack_pair(u.w);
+    xv[8u * h + 0u] = p0.x;
+    xv[8u * h + 1u] = p0.y;
+    xv[8u * h + 2u] = p1.x;
+    xv[8u * h + 3u] = p1.y;
+    xv[8u * h + 4u] = p2.x;
+    xv[8u * h + 5u] = p2.y;
+    xv[8u * h + 6u] = p3.x;
+    xv[8u * h + 7u] = p3.y;
+  }
+#else
+  uint base = x_elem / X_PER_VEC;
+  [[unroll]] for (uint h = 0u; h < 4u; ++h) {
+    uvec4 u = input_x.values[base + h];
+    xv[4u * h + 0u] = uintBitsToFloat(u.x);
+    xv[4u * h + 1u] = uintBitsToFloat(u.y);
+    xv[4u * h + 2u] = uintBitsToFloat(u.z);
+    xv[4u * h + 3u] = uintBitsToFloat(u.w);
+  }
+#endif
+}
+
+// Codes of one chunk: element 4p + j of the chunk is bits [6j, 6j + 6) of the
+// 24-bit pack p, packs being bytes 3p .. 3p + 2 of the 12-byte chunk.
+void decode16(uint w0, uint w1, uint w2, out float q[16]) {
+  uint v0 = w0 & 0xFFFFFFu;
+  uint v1 = (w0 >> 24u) | ((w1 & 0xFFFFu) << 8u);
+  uint v2 = (w1 >> 16u) | ((w2 & 0xFFu) << 16u);
+  uint v3 = w2 >> 8u;
+  [[unroll]] for (uint j = 0u; j < 4u; ++j) {
+    q[0u + j] = float(bitfieldExtract(v0, int(6u * j), 6));
+    q[4u + j] = float(bitfieldExtract(v1, int(6u * j), 6));
+    q[8u + j] = float(bitfieldExtract(v2, int(6u * j), 6));
+    q[12u + j] = float(bitfieldExtract(v3, int(6u * j), 6));
+  }
+}
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint n = params.matrix_n;
+  uint k = params.matrix_k;
+  uint col0 = (gl_WorkGroupID.x * SLOTS + slot) * uint(COLS);
+  uint row0 = gl_WorkGroupID.y * uint(ROWS);
+  uint chunks_per_row = k / 16u;
+  uint words_per_row = chunks_per_row * 3u;
+  uint groups_per_row = k / params.reduce_size;
+  uint chunk_shift = uint(findLSB(params.reduce_size)) - 4u;
+
+  uint w_row[COLS];
+  uint p_row[COLS];
+  uint b_row[COLS];
+  [[unroll]] for (uint c = 0u; c < uint(COLS); ++c) {
+    uint col = min(col0 + c, n - 1u);
+    w_row[c] = params.rhs_offset + col * words_per_row;
+    p_row[c] = params.aux_offset + col * groups_per_row;
+    b_row[c] = params.aux_size + col * groups_per_row;
+  }
+  uint x_row[ROWS];
+  [[unroll]] for (uint r = 0u; r < uint(ROWS); ++r) {
+    x_row[r] = params.lhs_offset + min(row0 + r, params.matrix_m - 1u) * k;
+  }
+
+  float acc[ROWS][COLS];
+  [[unroll]] for (uint r = 0u; r < uint(ROWS); ++r) {
+    [[unroll]] for (uint c = 0u; c < uint(COLS); ++c) {
+      acc[r][c] = 0.0;
+    }
+  }
+
+  for (uint chunk = lane_in_slot; chunk < chunks_per_row; chunk += LANES) {
+    uint group = chunk >> chunk_shift;
+    float q[COLS][16];
+    float s[COLS];
+    float b[COLS];
+    [[unroll]] for (uint c = 0u; c < uint(COLS); ++c) {
+      uint wi = w_row[c] + chunk * 3u;
+      decode16(input_w.values[wi], input_w.values[wi + 1u],
+          input_w.values[wi + 2u], q[c]);
+      s[c] = LOAD_VALUE(scales.values[p_row[c] + group]);
+      b[c] = LOAD_VALUE(biases.values[b_row[c] + group]);
+    }
+    [[unroll]] for (uint r = 0u; r < uint(ROWS); ++r) {
+      float xv[16];
+      load_x16(x_row[r] + chunk * 16u, xv);
+      float sx = 0.0;
+      [[unroll]] for (uint j = 0u; j < 16u; ++j) {
+        sx += xv[j];
+      }
+      [[unroll]] for (uint c = 0u; c < uint(COLS); ++c) {
+        float sxq = 0.0;
+        [[unroll]] for (uint j = 0u; j < 16u; ++j) {
+          sxq = fma(xv[j], q[c][j], sxq);
+        }
+        acc[r][c] += s[c] * sxq + b[c] * sx;
+      }
+    }
+  }
+
+  [[unroll]] for (uint r = 0u; r < uint(ROWS); ++r) {
+    [[unroll]] for (uint c = 0u; c < uint(COLS); ++c) {
+      float total = subgroupAdd(acc[r][c]);
+      uint col = col0 + c;
+      uint row = row0 + r;
+      if (lane_in_slot == 0u && col < n && row < params.matrix_m) {
+        output_data.values[params.output_offset + row * n + col] =
+            STORE_VALUE(total);
+      }
+    }
+  }
+}

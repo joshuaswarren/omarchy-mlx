@@ -1,0 +1,10 @@
+GDIV start 2026-10-23T14:42:47Z boot=1ccc1761 kernel=7.1.12-2-20261013.18-sep-ARCH load1=1.38 prompt 2000
+GDIV tree libmlx 8533393455ca0f8c gen_tokens 9f3adc4def3b3a72 gencmp 7ac986bb26249e70 driver vulkan-f144c7949b
+GDIV arm default rc=0 GEN done 1888 128
+GDIV arm split0 rc=0 GEN done 1888 128
+GDIV arm ref32 rc=0 GEN done 1888 128
+prompt tokens 1888 generated 128 128 128
+GENCMP first divergence at generated token 17 default 220 split0 8162 ref32 8162
+GENCMP top1-top2 gap at that step: default arm 0.0 split0 arm 0.125 ref32 arm 0.0259 (ref32 gap valid only if its prefix equals split0: True )
+GENCMP first divergence from ref32: default 17 split0 None
+GDIV end 2026-10-23T14:43:39Z

@@ -1,0 +1,172 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Wave 7: QR factorization via Householder reflectors, LAPACK geqrf +
+// orgqr semantics with the reduced (economical) shapes upstream returns:
+// Q is M x K and R is K x N for K = min(M, N). One workgroup per batch
+// matrix. Phase 1 applies the reflectors to the work copy in place,
+// leaving each reflector's vector in the column it annihilated; phase 2
+// replays them in reverse onto an identity to form Q; phase 3 copies the
+// upper trapezoid out as R. Householder construction is deterministic and
+// non-iterative, so there is no convergence gate.
+//
+// Push-constant routing: matrix_m is M, matrix_n is N, matrix_k is
+// min(M, N), and output_size the batch matrix count.
+#version 460
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) coherent buffer Work {
+  float values[];
+} work;
+layout(set = 0, binding = 1, std430) coherent buffer QOut {
+  float values[];
+} q_out;
+layout(set = 0, binding = 2, std430) writeonly buffer ROut {
+  float values[];
+} r_out;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+shared float red[256];
+
+void main() {
+  uint tid = gl_LocalInvocationID.x;
+  uint matrix = gl_WorkGroupID.x;
+  uint m = params.matrix_m;
+  uint n = params.matrix_n;
+  uint k = params.matrix_k;
+  uint base = matrix * m * n;
+
+  // Phase 1: Householder QR in place. After step j, column j holds the
+  // reflector vector v (v0 on the diagonal, original entries below) and
+  // the trailing columns have been updated.
+  for (uint j = 0u; j < k; ++j) {
+    float part = 0.0;
+    for (uint i = j + tid; i < m; i += 256u) {
+      float x = work.values[base + i * n + j];
+      part += x * x;
+    }
+    red[tid] = part;
+      memoryBarrierBuffer();
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (tid < stride) {
+        red[tid] += red[tid + stride];
+      }
+      memoryBarrierBuffer();
+      barrier();
+    }
+    if (tid == 0u) {
+      float x0 = work.values[base + j * n + j];
+      float nx = sqrt(red[0]);
+      // a = -sign(x0) * ||x|| keeps v0 away from cancellation. a is the
+      // final R diagonal, so it lands directly in the R output; the work
+      // diagonal keeps v0 for the phase-2 replay.
+      float a = (x0 >= 0.0) ? -nx : nx;
+      float v0 = x0 - a;
+      work.values[base + j * n + j] = v0;
+      r_out.values[matrix * k * n + j * n + j] = a;
+      // v^T v = v0^2 + (||x||^2 - x0^2); zero means a zero column and an
+      // identity reflector, so the apply step below skips it.
+      red[255] = v0 * v0 + (red[0] - x0 * x0);
+    }
+      memoryBarrierBuffer();
+    barrier();
+    float vtv = red[255];
+    if (vtv > 0.0) {
+      for (uint c = j + 1u + tid; c < n; c += 256u) {
+        float w = 0.0;
+        for (uint i = j; i < m; ++i) {
+          w += work.values[base + i * n + c] *
+              work.values[base + i * n + j];
+        }
+        float scale = 2.0 * w / vtv;
+        for (uint i = j; i < m; ++i) {
+          work.values[base + i * n + c] -=
+              scale * work.values[base + i * n + j];
+        }
+      }
+    }
+      memoryBarrierBuffer();
+    barrier();
+  }
+
+  // Phase 2: Q = H_0 H_1 ... H_{k-1} built by replaying the reflectors in
+  // reverse onto an identity.
+  for (uint idx = tid; idx < m * k; idx += 256u) {
+    uint r = idx / k;
+    uint c = idx % k;
+    q_out.values[matrix * m * k + idx] = (r == c) ? 1.0 : 0.0;
+  }
+  memoryBarrierBuffer();
+  barrier();
+  for (uint j = k; j-- > 0u;) {
+    float part = 0.0;
+    for (uint i = j + tid; i < m; i += 256u) {
+      float v = work.values[base + i * n + j];
+      part += v * v;
+    }
+    red[tid] = part;
+      memoryBarrierBuffer();
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (tid < stride) {
+        red[tid] += red[tid + stride];
+      }
+      memoryBarrierBuffer();
+      barrier();
+    }
+    float vtv = red[0];
+    if (vtv > 0.0) {
+      for (uint c = tid; c < k; c += 256u) {
+        float w = 0.0;
+        for (uint i = j; i < m; ++i) {
+          w += work.values[base + i * n + j] *
+              q_out.values[matrix * m * k + i * k + c];
+        }
+        float scale = 2.0 * w / vtv;
+        for (uint i = j; i < m; ++i) {
+          q_out.values[matrix * m * k + i * k + c] -=
+              scale * work.values[base + i * n + j];
+        }
+      }
+    }
+      memoryBarrierBuffer();
+    barrier();
+  }
+
+  // Phase 3: R is the upper trapezoid of the factored work copy. The
+  // diagonal cells already hold the values stored during phase 1.
+  for (uint idx = tid; idx < k * n; idx += 256u) {
+    uint r = idx / n;
+    uint c = idx % n;
+    if (c == r) {
+      continue;
+    }
+    r_out.values[matrix * k * n + idx] =
+        (c > r) ? work.values[base + r * n + c] : 0.0;
+  }
+}

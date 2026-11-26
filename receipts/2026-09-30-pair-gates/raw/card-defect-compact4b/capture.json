@@ -1,0 +1,90 @@
+{
+  "label": "compact4b-card-defect",
+  "pair_id": "compact",
+  "prompt": "Show a chart of population for: Paris 2.1M, Tokyo 13.9M, Lagos 21.0M.",
+  "wall_s": 22.06,
+  "final_message": {
+    "role": "assistant",
+    "content": "",
+    "turn_id": "449ae3197cb84baa8d60b2b3c34960c7",
+    "status": "stopped",
+    "components": []
+  },
+  "record": {
+    "id": "4d06cc54f5fb40bab41b09f8e27e8ef8",
+    "save": false,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Show a chart of population for: Paris 2.1M, Tokyo 13.9M, Lagos 21.0M.",
+        "turn_id": "449ae3197cb84baa8d60b2b3c34960c7",
+        "status": "complete"
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "turn_id": "449ae3197cb84baa8d60b2b3c34960c7",
+        "status": "stopped",
+        "components": []
+      }
+    ],
+    "active_turn": null,
+    "sequence": 3,
+    "created_at": 1790875728.7690072,
+    "title": "Show a chart of population for: Paris 2.1M, Tokyo 13.9M, Lagos 21.0M.",
+    "context": {
+      "selected_turn_ids": null,
+      "pinned_constraints": ""
+    },
+    "updated_at": 1790875750.133194
+  },
+  "events": [
+    {
+      "seq": 1,
+      "type": "status",
+      "turn_id": "449ae3197cb84baa8d60b2b3c34960c7",
+      "data": {
+        "state": "working"
+      }
+    },
+    {
+      "seq": 2,
+      "type": "status",
+      "turn_id": "449ae3197cb84baa8d60b2b3c34960c7",
+      "data": {
+        "state": "generating",
+        "context_tokens": 258,
+        "context_limit": 262144,
+        "output_tokens": 256
+      }
+    },
+    {
+      "seq": 1,
+      "type": "status",
+      "turn_id": "449ae3197cb84baa8d60b2b3c34960c7",
+      "data": {
+        "state": "working"
+      }
+    },
+    {
+      "seq": 2,
+      "type": "status",
+      "turn_id": "449ae3197cb84baa8d60b2b3c34960c7",
+      "data": {
+        "state": "generating",
+        "context_tokens": 258,
+        "context_limit": 262144,
+        "output_tokens": 256
+      }
+    },
+    {
+      "seq": 3,
+      "type": "done",
+      "turn_id": "449ae3197cb84baa8d60b2b3c34960c7",
+      "data": {
+        "stopped": true
+      }
+    }
+  ],
+  "event_count": 5
+}

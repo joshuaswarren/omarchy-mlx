@@ -1,0 +1,242 @@
+--- a/mlx/fast.h	2026-10-04 13:30:47.287060914 -0500
++++ b/mlx/fast.h	2026-10-04 13:05:57.409799657 -0500
+@@ -186,6 +186,25 @@
+     int bits,
+     StreamOrDevice s = {});
+ 
++// Symmetric-int8 projection with runtime-quantized activations, matching the
++// reference W8A8 scheme: weights carry one float32 scale per output channel,
++// activations one float32 scale per ``group`` channels of every row.
++// Y[m, n] = bf16(bias[n] + sum_g xscale[m, g] * wscale[n] *
++//                sum_{k in g} int(x[m, k]) * int(w[n, k])),
++// where the inner sum is exact in int32 and the group terms accumulate in
++// float32. ``swiglu`` expects w of shape [2N, K] with gate rows first and
++// returns silu(gate) * value in float32 before the single bfloat16 round.
++// Reference: TensorFold MiniMax-H3 kernels (Apache-2.0), re-implemented.
++MLX_API array int8_matmul(
++    const array& x,
++    const array& xscale,
++    const array& w,
++    const array& wscale,
++    const array& bias,
++    int group,
++    bool swiglu,
++    StreamOrDevice s = {});
++
+ using TemplateArg = std::variant<int, bool, Dtype>;
+ using ScalarArg = std::variant<bool, int, float>;
+ 
+--- a/mlx/fast.cpp	2026-10-04 13:30:47.288060904 -0500
++++ b/mlx/fast.cpp	2026-10-04 13:26:25.207703720 -0500
+@@ -1763,6 +1763,107 @@
+   return p.group_size_ == group_size_ && p.bits_ == bits_;
+ }
+ 
++bool Int8Matmul::is_equivalent(const Primitive& other) const {
++  const auto& p = static_cast<const Int8Matmul&>(other);
++  return p.group_ == group_ && p.swiglu_ == swiglu_;
++}
++
++array int8_matmul(
++    const array& x,
++    const array& xscale,
++    const array& w,
++    const array& wscale,
++    const array& bias,
++    int group,
++    bool swiglu,
++    StreamOrDevice s_) {
++  auto s = to_stream(s_);
++  if (x.ndim() < 2 || w.ndim() != 2) {
++    throw std::invalid_argument(
++        "[int8_matmul] x must be at least 2D and w must be 2D.");
++  }
++  int k = x.shape(-1);
++  int n_out = w.shape(0);
++  if (w.shape(1) != k) {
++    throw std::invalid_argument(
++        "[int8_matmul] w's second dimension must equal x's last dimension.");
++  }
++  if (swiglu && (n_out % 2 != 0)) {
++    throw std::invalid_argument(
++        "[int8_matmul] swiglu needs an even output dimension for the fused "
++        "[gate; value] weight.");
++  }
++  int n = swiglu ? n_out / 2 : n_out;
++  if (k % group != 0) {
++    throw std::invalid_argument(
++        "[int8_matmul] the group size must divide the reduction dimension.");
++  }
++  if (x.dtype() != int8 || w.dtype() != int8) {
++    throw std::invalid_argument(
++        "[int8_matmul] x and w must be int8 arrays.");
++  }
++  if (xscale.dtype() != float32 || wscale.dtype() != float32 ||
++      bias.dtype() != float32) {
++    throw std::invalid_argument(
++        "[int8_matmul] xscale, wscale and bias must be float32.");
++  }
++  Shape lead(x.shape().begin(), x.shape().end() - 1);
++  Shape xscale_shape = xscale.shape();
++  Shape expected_scale(lead);
++  expected_scale.push_back(k / group);
++  if (xscale_shape != expected_scale) {
++    throw std::invalid_argument(
++        "[int8_matmul] xscale must have shape [..., K / group].");
++  }
++  if (wscale.shape() != Shape{n_out} || bias.shape() != Shape{n_out}) {
++    throw std::invalid_argument(
++        "[int8_matmul] wscale and bias must be [N] (swiglu: [2N], one per "
++        "packed weight row).");
++  }
++  auto fallback = [group, swiglu, n, s](const std::vector<array>& in) {
++    // Exact per group: int8 values cast to float32, an in-group dot of
++    // integers with magnitude at most 127*127*group, which float32
++    // represents exactly for group <= 131072, and float32 group sums
++    // exactly as the reference kernel's per-group fp32 accumulation.
++    array xf = astype(in[0], float32, s);
++    array wf = astype(in[2], float32, s);
++    int rows = xf.shape(0);
++    int k_dim = xf.shape(1);
++    int groups = k_dim / group;
++    array acc = zeros({rows, n}, float32, s);
++    for (int g = 0; g < groups; g++) {
++      array xg = slice(xf, {0, g * group}, {rows, (g + 1) * group}, s);
++      array wg = slice(wf, {0, g * group}, {static_cast<int>(wf.shape(0)), (g + 1) * group}, s);
++      array partial = matmul(xg, transpose(wg, {1, 0}, s), s);
++      array scale = multiply(
++          slice(in[1], {0, g}, {rows, g + 1}, s),
++          reshape(in[3], {1, n}, s),
++          s);
++      acc = add(acc, multiply(partial, scale, s), s);
++    }
++    acc = add(acc, reshape(in[4], {1, in[4].shape(0)}, s), s);
++    if (swiglu) {
++      array gate = slice(acc, {0, 0}, {rows, n}, s);
++      array value = slice(acc, {0, n}, {rows, 2 * n}, s);
++      acc = multiply(gate, multiply(sigmoid(gate, s), value, s), s);
++    }
++    return std::vector<array>{astype(acc, bfloat16, s)};
++  };
++  bool routed = !Int8Matmul::use_fallback(s);
++  std::vector<array> inputs{x, xscale, w, wscale, bias};
++  if (!routed) {
++    return fallback(inputs)[0];
++  }
++  Shape out_shape(lead);
++  out_shape.push_back(swiglu ? n : n_out);
++  auto outputs = array::make_arrays(
++      {std::move(out_shape)},
++      {bfloat16},
++      std::make_shared<Int8Matmul>(s, fallback, group, swiglu),
++      std::move(inputs));
++  return std::move(outputs[0]);
++}
++
+ bool Quantize::is_equivalent(const Primitive& other) const {
+   const Quantize& p_other = static_cast<const Quantize&>(other);
+   return (
+--- a/mlx/fast_primitives.h	2026-10-04 13:30:47.288060904 -0500
++++ b/mlx/fast_primitives.h	2026-10-04 13:17:59.700715318 -0500
+@@ -499,6 +499,50 @@
+   int bits_;
+ };
+ 
++// Inputs (x, xscale, w, wscale, bias); single bfloat16 output. See
++// fast::int8_matmul. The composed fallback runs the same math through
++// per-group float32 matmuls; the Omarchy GPU route runs the fused int8
++// shader.
++class Int8Matmul : public Custom {
++ public:
++  Int8Matmul(
++      Stream stream,
++      std::function<std::vector<array>(std::vector<array>)> fallback,
++      int group,
++      bool swiglu)
++      : Custom(stream, std::move(fallback)),
++        group_(group),
++        swiglu_(swiglu) {}
++
++  static bool use_fallback(Stream s);
++
++  int group() const {
++    return group_;
++  }
++
++  bool swiglu() const {
++    return swiglu_;
++  }
++
++  void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override {
++    throw std::runtime_error("NYI");
++  }
++
++  void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs)
++      override;
++
++  DEFINE_NAME(Int8Matmul);
++  bool is_equivalent(const Primitive& other) const override;
++  auto state() const {
++    return std::make_tuple(nullptr, group_, swiglu_);
++  }
++
++ private:
++  int group_;
++  bool swiglu_;
++};
++
+ class GatedDeltaUpdate : public Custom {
+  public:
+   GatedDeltaUpdate(
+--- a/mlx/backend/no_gpu/primitives.cpp	2026-10-04 13:30:47.289060894 -0500
++++ b/mlx/backend/no_gpu/primitives.cpp	2026-10-04 13:12:24.683005862 -0500
+@@ -191,6 +191,7 @@
+ 
+ namespace fast {
+ NO_GPU_USE_FALLBACK(GreedyQuantizedArgmax)
++NO_GPU_USE_FALLBACK(Int8Matmul)
+ NO_GPU_USE_FALLBACK(CrossEntropy)
+ NO_GPU_MULTI(CrossEntropyVJP)
+ NO_GPU_USE_FALLBACK(LayerNorm)
+--- a/python/src/fast.cpp	2026-10-04 13:30:47.289060894 -0500
++++ b/python/src/fast.cpp	2026-10-04 13:12:37.413881087 -0500
+@@ -583,6 +583,38 @@
+         )");
+ 
+   m.def(
++      "int8_matmul",
++      &mlx::core::fast::int8_matmul,
++      "x"_a,
++      "xscale"_a,
++      "w"_a,
++      "wscale"_a,
++      "bias"_a,
++      nb::kw_only(),
++      "group"_a,
++      "swiglu"_a = false,
++      "stream"_a = nb::none(),
++      R"(
++            Symmetric-int8 projection with runtime-quantized activations.
++            Weights carry one float32 scale per output channel, activations
++            one float32 scale per ``group`` channels of every row. The
++            in-group integer dot is exact in int32; group terms accumulate
++            in float32, then the bias adds and one bfloat16 round applies.
++            With ``swiglu`` the weight packs [gate; value] rows of a fused
++            fc1 and the result is ``silu(gate) * value``.
++            Args:
++                x: int8 activations [..., K]
++                xscale: float32 activation scales [..., K / group]
++                w: int8 weight [N, K] (swiglu: [2N, K], gate rows first)
++                wscale: float32 weight scales [N]
++                bias: float32 bias [N] (swiglu: [2N])
++                group: activation quantization group size dividing K
++                swiglu: apply the fused SwiGLU epilogue
++            Returns:
++                bfloat16 [..., N] (swiglu: [..., N])
++        )");
++
++  m.def(
+       "gdn_conv_update",
+       &mlx::core::fast::gdn_conv_update,
+       "state"_a,

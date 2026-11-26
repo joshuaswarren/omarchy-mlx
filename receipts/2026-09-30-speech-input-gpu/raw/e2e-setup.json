@@ -1,0 +1,10 @@
+{
+ "setup": {
+  "state": "complete",
+  "ready_offline": false
+ },
+ "seconds": 3.5,
+ "recognition_state": "ready",
+ "recognition_reasons": [],
+ "synthesis_state": "unqualified"
+}

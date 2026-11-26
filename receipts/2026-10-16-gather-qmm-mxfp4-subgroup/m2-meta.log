@@ -1,0 +1,13 @@
+FPMETA start 2026-10-17T00:59:00Z kernel=7.1.12-2-20261013.18-sep-ARCH boot=7dcada54 governor=performance load1=1.13
+FPMETA wheel mlx_omarchy-0.32.4.dev202610162253+2f8fc403-cp314-cp314-linux_aarch64.whl sha256 1d77ffcd8f85d648406902cccb0ca999ac4c6a2e3b3a4f85d955f16e8c9ab9e8
+FPMETA packages: mesa 1:26.2.4-1;vulkan-asahi-omarchy 1:26.2.4.git69bde15340-2;linux-aurora 7.1.12.aurora2-20261013.18;asahi-fwextract 0.8.4-1;
+FPMETA vulkaninfo: 	apiVersion         = 1.4.362
+FPMETA vulkaninfo: 	driverVersion      = 26.2.99
+FPMETA vulkaninfo: 	deviceName         = Apple M2 Max (G14C B1)
+FPMETA vulkaninfo: 	driverName         = Honeykrisp
+FPMETA vulkaninfo: 	driverInfo         = Mesa 26.3.0-devel (git-69bde15340)
+FPMETA provenance script sha256 21337ddd29e792911e1c2cbbdd17836c0b16925f556b57dd37355607ee83b8b3
+FPMETA provenance rc=0
+FPMETA provenance: {'dist': 'mlx-omarchy', 'verified': 'match', 'mismatch': None, 'dist_version': '0.32.4.dev202610162253+2f8fc403', 'mx_version': '0.32.4.dev202610162253+2f8fc403', 'version_match': True, 'expect_wheel': None}
+FPMETA device reopen rc=0 reopen Device(gpu, 0) [2.0, 2.0, 2.0, 2.0]
+FPMETA DONE out=$WORK/fpsub-meta-m2-1

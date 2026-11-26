@@ -1,0 +1,126 @@
+{
+  "date": "2026-09-27",
+  "status": "incomplete-not-qualified",
+  "source_base_commit": "024d4fe608d1e16dfcd84420126cfbe8ca1b8cb2",
+  "source_changes": "Uncommitted assistant implementation. Hardware ran an earlier working-tree snapshot, not the final integrated source.",
+  "host": "<project-m1>",
+  "chip": "Apple M1 T8103",
+  "kernel": "7.1.13-3-2-ARCH",
+  "mesa": null,
+  "vulkan_firmware_identity": null,
+  "ane_driver_identity": null,
+  "compiler_identity": null,
+  "runtime": {
+    "distribution": "mlx-omarchy",
+    "version": "0.32.3.dev202609260251+42fbbc5",
+    "core_sha256": "0b720eb9dcbe78dfd35e3c8fec3113ba46c4c7c83b3590c91d8920ec1d282621",
+    "libmlx_sha256": "4ac8dda334f4362ae36639613c4be40a4605d268db0fe5cd8ea35544cf106893",
+    "both_record_hashes_match": true,
+    "built_from_integration_source": false
+  },
+  "tts": {
+    "repository": "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit",
+    "revision": "08c72cad5e2fd0f41730c8bd1f28149585e46361",
+    "weights_sha256": "4ab02a20be381700f6e73dbb5efdc424cadf9f1d0652cbffd662872ea41e296a",
+    "speech_tokenizer_weights_sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258",
+    "voice": "serena",
+    "text": "The local assistant is ready to help.",
+    "command": "MLX_OMARCHY_TRACE_DISPATCH=1 timeout 650 \"$python\" mlx-assistant-tts-stream-probe.py 2>tts-dispatch.log",
+    "probe_sha256": "b5c754659a6b78be94936e9e7d6b29806f0ae2527d2b50223ccb9f1b722cdb73",
+    "wrapper_sha256": "6561b6ad93c8391fba72bd1b750168726cc5487c1f7d668740b218000c5c6abf",
+    "procedure": "Two consecutive requests through one persistent worker, exclusive project GPU lock, offline loader flags. No thermal sampling and no 30-turn qualification run.",
+    "samples": [
+      {
+        "index": 0,
+        "first_chunk_seconds": 8.550737205000019,
+        "total_seconds": 51.360781341999996,
+        "bytes": 172800,
+        "chunks": 12,
+        "audio_seconds": 3.6
+      },
+      {
+        "index": 1,
+        "first_chunk_seconds": 4.216844812999966,
+        "total_seconds": 63.03192113099999,
+        "bytes": 230400,
+        "chunks": 15,
+        "audio_seconds": 4.8
+      }
+    ],
+    "worker_after_close": {
+      "alive": false,
+      "pid": null
+    },
+    "listened": false,
+    "dispatch_trace_audited": false,
+    "zero_cpu_tensor_dispatch_proven": false,
+    "device_reopen_proven": false,
+    "latency_qualification": "Not passed. Neither sample meets the 1.5-second target; two samples cannot establish p95."
+  },
+  "pair": {
+    "id": "everyday",
+    "result": "Decision worker failed to become healthy; no paired completion succeeded.",
+    "stop": {
+      "stopped": true,
+      "children": {},
+      "cleared": [],
+      "retained": []
+    },
+    "follow_up": "Converter catalog ID corrected from laya to laya-mlx in source; hardware retest remains outstanding."
+  },
+  "release_build": {
+    "command": "scripts/build-wheel.sh",
+    "exit_code": 1,
+    "blocker": "MLX_OMARCHY_WHOLE_BUNDLE_DIR is unset; required manifest.json and program-0.anec unavailable."
+  },
+  "software_verification": {
+    "environment": "x86_64 Linux development host, no mlx/mlx-lm installed; every item below is software-level evidence, not hardware qualification.",
+    "python_assistant_suite": "PYTHONPATH=serve python3 -m unittest discover -s tests -p 'test_assistant_*.py' -> Ran 342 tests, OK (includes 13 speech-yield scheduling tests: hold/park/release ordering, KV-cache identity across park, no decode step inside a synthesis window, queue bound 2, honest refusal when pause unprovable).",
+    "python_transfer_suite": "test_assistant_transfer -> Ran 72 tests, OK (runtime closure via packaging.Requirement: extras, markers, missing-dep refusal, default-environment path).",
+    "python_serving_suite": "test_serve_* -> Ran 210 tests, OK (1 skipped).",
+    "js_suites": "bun tests/js/*.test.mjs -> 4/4 green (cards regression, ui, transfer, util).",
+    "lint": "oxlint (anti-slop config) over static/ and tests/js exits 0.",
+    "browser": "Real loopback app + Chromium: setup screen renders actual pair chat/decision models and qualification status; Transfer dialog export plan now fails with the named refusal 'runtime roots not installed: mlx-lm, mlx-omarchy' (defect fixed: importlib.metadata.distributions(path=None) crashed; also default-env closure was wrong) and the Inspect button stays enabled for retry; a11y audit violations 0. Setup screenshots at 375/768/1024/1440 in this directory.",
+    "ui_fixture_pass": "receipts/2026-09-27-assistant-ui-fixture/: 11 screenshots, labeled fixture input only, 11 defects fixed (typed-card crash, component render boundary, cancel stuck busy, event-gap composer loss, refused-send panel loss, panel toggle desync, and more).",
+    "integration_fixes": "Two merge regressions caught by re-running the serving suite and fixed: (1) install.sh staging list gained speech_yield.py (transfer wheel derives from the same list); (2) the yield gate now installs only when the pinned server exposes the batched surface \u2014 stub/non-batched servers previously crashed the shim at AttributeError before serving, which surfaced as a missing launch reservation in test_serve_sigterm. Gate absence degrades speaks to the honest busy refusal.",
+    "post_fix_reruns": "After both fixes: test_serve_* 210 OK (1 skipped); test_assistant_speech_yield 13 OK; full test_assistant_* and JS suites re-run in this final integrated tree (results above reflect the same tree plus these two fixes).",
+    "t6021_everyday_smoke": "2026-09-27 19:26 CT. Chip apple,t6021. Kernel 7.1.13-ARCH-polltx. Installed wheel mlx 0.32.3.dev202609232032+4fd2130ed, not a release build of this source. Mesa Honeykrisp, device Apple M2 Max (G14C B1). Explicit developer qualification (MLX_OMARCHY_PAIR_DEV_QUALIFICATION=1), Everyday pair, one prompt 'Reply with the single word ready.', no max-token override. Chat worker POST /v1/chat/completions HTTP 200. Decision worker GET /health HTTP 200. Terminal text event was 'ready'. Process exit 0. Workers not left running. This is not pair qualification, not a disconnected restart, and not an M1 result.",
+    "t6021_contention": "After the 19:26 Everyday chat smoke, the T6021 host rebooted at 19:29, 19:38, 19:44, and 19:52 CT. Previous-boot journals show ane_t6021_rtclient pinning until reboot, then Shutdown. The 16-inch host GPU lock is held by a live llama-server. Decision and disconnected-restart runs were not completed in that window.",
+    "t6021_everyday_decision": "2026-09-27 20:22 CT. Same chip, kernel, and installed wheel as the chat smoke. Compare turn: criteria lower response latency, options short answer and long answer. Decision worker POST /v1/decisions HTTP 200. Validated choice short, abstained false. Explanation stayed in the opening system message. Chat worker POST /v1/chat/completions HTTP 200. Terminal text event: **short answer**. Turn stopped false. Process exit 0. Not a disconnected restart and not pair qualification.",
+    "t6021_offline_env_restart": "2026-09-27 20:23 CT. Same prepared Everyday home restarted with MLX_OMARCHY_OFFLINE=1, HF_HUB_OFFLINE=1, and TRANSFORMERS_OFFLINE=1. No --yes download approval. Prompt reply was ready. Process exit 0. unshare -n failed: Operation not permitted. This is not a socket-denied cold restart.",
+    "t6021_quality_smoke": "2026-09-27 20:23-20:25 CT. Quality pair lock names chat qwen3.8-27b-4bit and decision laya-mlx. Chat worker POST /v1/chat/completions HTTP 200 at 20:24:10. Terminal text event was ready. Process exit 0. Not a decision turn and not pair qualification.",
+    "t6021_quality_decision": "2026-09-27 20:29-20:32 CT. Same Quality pair. A driver without heartbeats was cancelled at 20 seconds after Laya chose short. The retry sent heartbeats. Decision worker POST /v1/decisions HTTP 200. Validated choice short, abstained false. Turn stopped false. Explanation text began: The Laya model selected the short answer option. It did not abstain. Process exit 0. Not pair qualification and not a socket-denied restart.",
+    "t6021_yield_park": "2026-09-27 20:49 CT. Prepared Everyday chat worker on apple,t6021. Yield gate hold acknowledged in 0.017 s after the first tokens. Tokens during the 1.5 s hold: 0. Tokens after release: 32. First token 1.49 s. Worker stop verified. This proves a real decode-boundary park, not TTS synthesis, not pacing qualification, and not an M1 result."
+  },
+  "missing_evidence": [
+    "Final-source release-equivalent wheel and standing M1 battery",
+    "Memory and latency qualification for both pairs. T6021 Everyday and Quality each completed one chat and one decision; that is not a qualification curve.",
+    "Arbitrary speech transcription and independently scored corpus",
+    "Audible intelligibility assessment and zero-CPU dispatch audit",
+    "On-hardware TTS pacing. T6021 decode-boundary park is recorded. Synthesis was not run; mlx_audio is not installed there.",
+    "Network-denied cold restart and device recovery",
+    "Mesa, firmware, driver, compiler, and thermal provenance"
+  ],
+  "m1_everyday_health_retest": {
+    "date": "2026-09-27",
+    "host": "<project-m1>",
+    "kernel": "7.1.13-3-2-ARCH",
+    "source": "uncommitted feat/offline-assistant tree, PYTHONPATH=serve, installed venv mlx (not a release wheel of this source)",
+    "command": "python -m mlx_omarchy_assistant --no-browser --terminal --once --pair everyday --yes --prompt 'Reply with the single word ready.'",
+    "gpu_lock": "flock /tmp/m1-gpu.lock, released when the process exited",
+    "decision_worker": "GET /health 200; serving laya-mlx device=gpu dtype=float16 max_len=512",
+    "chat_worker": "POST /v1/chat/completions 200; terminal text ready",
+    "decision_revision": "1c5edc17a7acd8701df6fc341c0d179f1c62c982",
+    "decision_weights_sha256": "891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c",
+    "chat_revision": "0867d98bfb174b042d88461c0e7c97b86b34b381",
+    "qualification": "Not pair qualification. Not a decision turn. Not a disconnected restart. Not a release build.",
+    "follow_up_closed": "The earlier decision-worker health failure did not recur on this M1 run after the laya-mlx catalog ID correction."
+  },
+  "compare_disagreement": {
+    "date": "2026-09-27",
+    "kind": "software",
+    "behavior": "A compare explanation that claims one other option and omits the Laya choice emits status disagreement. The stored Laya choice is not rewritten.",
+    "tests": "tests.test_assistant_coordinator.DisagreementTests and GenerationTests.test_compare_explanation_that_drops_the_laya_choice_is_marked: 3 tests OK with the existing decide batch test.",
+    "hardware": "none"
+  }
+}

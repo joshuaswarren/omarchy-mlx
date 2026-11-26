@@ -1,0 +1,15 @@
+baseline sys_used=7153.9 MiB
+do_setup=True
+setup complete
+chat port: 58077
+plain_chat: status=complete text_len=22 components=[] valid=True wall=5.0s
+long_context: status=complete text_len=111 components=[] valid=True wall=5.0s
+compare: status=complete text_len=737 components=['decision'] valid=True wall=53.1s
+card: status=stopped text_len=109 components=[] valid=False wall=31.1s
+WARNING: INVALID TURNS: ['after_card']
+wrote <home>/.local/share/apple-silicon-lab/artifacts/PairGates/v2-everyday9b-run1/measure.json
+baseline_MiB=7153.9
+pair_resident_MiB=1189.6
+peak_over_baseline_MiB=9037.1
+backend_peak_MiB=5632.5
+run_valid=False

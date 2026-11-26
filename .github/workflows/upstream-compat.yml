@@ -1,0 +1,42 @@
+name: Upstream mlx compatibility watch
+
+# Weekly, read-only drift check of the mlx.lock pin against ml-explore/mlx
+# main. Silent when the pin is current or only informational files changed.
+# Otherwise it applies our patch series to a throwaway copy of upstream tip
+# and files/updates ONE rolling issue. It never edits mlx.lock and never
+# builds; the deep gate (prepare-mlx.sh + run-upstream-suite.sh) stays a
+# manual step on a Linux host. Reads no secret beyond the default token.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays, UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare pin to upstream and probe the patch series
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          tools/upstream-compat-check.sh api --out drift.md
+          rc=$?
+          [ "$rc" = 0 ] && exit 0
+          [ "$rc" = 1 ] || exit "$rc"
+          tip=$(sed -n 's/.*main (\([0-9a-f]*\)).*/\1/p;q' drift.md)
+          {
+            echo; echo '## Patch series on upstream tip'; echo '```'
+            tools/upstream-compat-check.sh probe "$tip" 2>&1
+            echo '```'
+          } >> drift.md
+          title="mlx upstream drift"
+          n=$(gh issue list --state open --search "$title in:title" --json number -q '.[0].number')
+          if [ -n "$n" ]; then gh issue edit "$n" --body-file drift.md
+          else gh issue create --title "$title" --body-file drift.md; fi

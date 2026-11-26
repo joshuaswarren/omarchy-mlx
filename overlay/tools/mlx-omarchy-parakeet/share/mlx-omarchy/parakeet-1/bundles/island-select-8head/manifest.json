@@ -1,0 +1,215 @@
+{
+  "compiler": {
+    "host_build": "Linux 6.17.2-1-pve x86_64",
+    "target": "h13",
+    "toolchain": "mil-hwxc b61de468d1ca37b687d5fa371e489be16cd84ed1 sha256:42120c27ddfa2bf2c7c2582edcc311f385ec7328f29ddb0e2803685d5d6caaeb"
+  },
+  "dispatch_plan": [
+    0
+  ],
+  "driver_abi_major": 1,
+  "graph_hash": "fd9e6c5b64f8b2c58fa2067799589ba0d32dfc24361b6612c9ef94d9e1a6422e",
+  "inputs": [
+    {
+      "byte_size": 1125000,
+      "dtype": "bool",
+      "index": 0,
+      "name": "cond",
+      "shape": [
+        1,
+        8,
+        375,
+        375
+      ],
+      "stride": 1163264
+    },
+    {
+      "byte_size": 2250000,
+      "dtype": "float16",
+      "index": 1,
+      "name": "matrix_bd_5",
+      "shape": [
+        1,
+        8,
+        375,
+        375
+      ],
+      "stride": 2310144
+    },
+    {
+      "byte_size": 2250000,
+      "dtype": "float16",
+      "index": 2,
+      "name": "ninf_rt",
+      "shape": [
+        1,
+        8,
+        375,
+        375
+      ],
+      "stride": 2310144
+    }
+  ],
+  "intermediates": [],
+  "logical_results": [
+    {
+      "conversion": "identity",
+      "dtype": "float16",
+      "element_count": 1125000,
+      "element_offset": 0,
+      "name": "attention_mask_9",
+      "shape": [
+        1,
+        8,
+        375,
+        375
+      ],
+      "tensor": "attention_mask_9"
+    }
+  ],
+  "manifest_version": 4,
+  "name": "parakeet-encoder-island-select-8head",
+  "outputs": [
+    {
+      "byte_size": 2250000,
+      "dtype": "float16",
+      "index": 0,
+      "name": "attention_mask_9",
+      "shape": [
+        1,
+        8,
+        375,
+        375
+      ],
+      "stride": 2310144
+    }
+  ],
+  "payloads": [
+    {
+      "byte_size": 9216,
+      "path": "program-0.anec",
+      "role": "anec",
+      "sha256": "0879c6277cf3d89888735ea69ef96d29fb492d43eacfe42a0f154f8f0f91c8eb"
+    }
+  ],
+  "programs": [
+    {
+      "encoder": "apple-parity-boolean",
+      "inputs": [
+        {
+          "allocation_bytes": 2310144,
+          "channel": 5,
+          "dtype": "float16",
+          "element_count": 1125000,
+          "element_offset": 0,
+          "logical_bytes": 2250000,
+          "nchw": [
+            1,
+            8,
+            375,
+            375,
+            288000,
+            768
+          ],
+          "physical_elements": 1125000,
+          "shape": [
+            1,
+            8,
+            375,
+            375
+          ],
+          "tensor": "ninf_rt"
+        },
+        {
+          "allocation_bytes": 2310144,
+          "channel": 6,
+          "dtype": "float16",
+          "element_count": 1125000,
+          "element_offset": 0,
+          "logical_bytes": 2250000,
+          "nchw": [
+            1,
+            8,
+            375,
+            375,
+            288000,
+            768
+          ],
+          "physical_elements": 1125000,
+          "shape": [
+            1,
+            8,
+            375,
+            375
+          ],
+          "tensor": "matrix_bd_5"
+        },
+        {
+          "allocation_bytes": 1163264,
+          "channel": 7,
+          "dtype": "bool",
+          "element_count": 1125000,
+          "element_offset": 0,
+          "logical_bytes": 1125000,
+          "nchw": [
+            1,
+            8,
+            375,
+            375,
+            144000,
+            384
+          ],
+          "physical_elements": 1125000,
+          "shape": [
+            1,
+            8,
+            375,
+            375
+          ],
+          "tensor": "cond"
+        }
+      ],
+      "operation": "select",
+      "outputs": [
+        {
+          "allocation_bytes": 2310144,
+          "channel": 4,
+          "dtype": "float16",
+          "element_count": 1125000,
+          "element_offset": 0,
+          "logical_bytes": 2250000,
+          "nchw": [
+            1,
+            8,
+            375,
+            375,
+            288000,
+            768
+          ],
+          "physical_elements": 1125000,
+          "shape": [
+            1,
+            8,
+            375,
+            375
+          ],
+          "tensor": "attention_mask_9"
+        }
+      ],
+      "payload": "program-0.anec",
+      "scratch_bytes": 6832128,
+      "task_descriptors": 5
+    }
+  ],
+  "provenance": {
+    "exported_at": "2026-09-15",
+    "source_commit": "b61de468d1ca37b687d5fa371e489be16cd84ed1",
+    "source_repo": "mil-hwxc"
+  },
+  "release_asset": {
+    "model": "/tmp/split-islands/mil/island-select-8head.mil",
+    "model_sha256": "737eb5e1bb6a3936f0f337838b5514f828a8f64e05c4dc64271fd00c47673221"
+  },
+  "state": [],
+  "task_descriptors": 5
+}

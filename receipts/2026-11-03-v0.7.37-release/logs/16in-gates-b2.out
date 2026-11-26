@@ -1,0 +1,61 @@
+IDLE-GUARD-JOB-START 20261103T130445Z lane=w72 class=validation release v0.7.37 gate batch b2 g3-online-4b-card g4-offline g5-laya pin=06d1038d draft-assets longcap=30 host-16in
+KERNEL-CMDLINE a[redacted]-words:  kernel=7.1.12-2-20261103.2-lab-ARCH
+PREFLIGHT-RUN
+SETTLE load1=1.82 SETTLE-SKIPPED
+GPU-TIMEOUTS before=23 boot=9de8ae34-9ba5-4817-88c2-c550a9df82dd
+=== g3-online-4b-card  13:04:46 free   41G ===
+BEGIN 2026-11-03T13:04:46Z tag=v0.7.37 boot_id=9de8ae34-9ba5-4817-88c2-c550a9df82dd uname=7.1.12-2-20261103.2-lab-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+df_before 41G
+OUTBOUND_DENIED False
+SETUP_COMPLETE 16.1s pair=compact
+CHAT status=complete 2.01s text='ready'
+CARD status=complete wall_s=44.09 text_len=0 components=1 component_types=['chart'] sse_component_types=['chart', 'chart'] first_visible_text_s=None first_visible_component_s=44.022 notices=['working', 'generating', 'working', 'generating', 'working', 'generating', 'working', 'generating']
+CARD_CHECK PASS
+GATE PASS
+SSE_EVENT_COUNT 11
+SSE {"type": "status", "data": {"state": "working"}, "at_s": 0.004}
+SSE {"type": "status", "data": {"state": "generating", "context_tokens": 1667, "context_limit": 4096, "output_tokens": 700}, "at_s": 0.004}
+SSE {"type": "status", "data": {"state": "working"}, "at_s": 15.008}
+SSE {"type": "status", "data": {"state": "generating", "context_tokens": 1667, "context_limit": 4096, "output_tokens": 700}, "at_s": 15.008}
+SSE {"type": "status", "data": {"state": "working"}, "at_s": 30.011}
+SSE {"type": "status", "data": {"state": "generating", "context_tokens": 1667, "context_limit": 4096, "output_tokens": 700}, "at_s": 30.011}
+SSE {"type": "component", "data": {"type": "chart", "kind": "bar", "series": [{"id": "paris", "label": "Paris", "unit": "M", "source": "user input", "estimate": false, "values": [{"label": "2020", "value": 2.1}, {"label": "2030", "value": 2.4}]}, {"id": "tokyo", "label": "Tokyo", "unit": "M", "source": "user input", "estimate": false, "values": [{"label": "2020", "value": 13.9}, {"label": "2030", "value": 14.5}]}, {"id": "lagos", "label": "Lagos", "unit": "M", "source": "user input", "estimate": false, "values": [{"label": "2020", "value": 21.0}, {"label": "2030", "value": 24.5}]}], "id": "6e8b3a100aa9405da111a1f195de881a", "turn_id": "574330171a0f450fb1a3f7a9f79c5b39", "revision": 1}, "at_s": 44.022}
+SSE {"type": "status", "data": {"state": "working"}, "at_s": 44.023}
+SSE {"type": "status", "data": {"state": "generating", "context_tokens": 1667, "context_limit": 4096, "output_tokens": 700}, "at_s": 44.023}
+SSE {"type": "component", "data": {"type": "chart", "kind": "bar", "series": [{"id": "paris", "label": "Paris", "unit": "M", "source": "user input", "estimate": false, "values": [{"label": "2020", "value": 2.1}, {"label": "2030", "value": 2.4}]}, {"id": "tokyo", "label": "Tokyo", "unit": "M", "source": "user input", "estimate": false, "values": [{"label": "2020", "value": 13.9}, {"label": "2030", "value": 14.5}]}, {"id": "lagos", "label": "Lagos", "unit": "M", "source": "user input", "estimate": false, "values": [{"label": "2020", "value": 21.0}, {"label": "2030", "value": 24.5}]}], "id": "6e8b3a100aa9405da111a1f195de881a", "turn_id": "574330171a0f450fb1a3f7a9f79c5b39", "revision": 1}, "at_s": 44.023}
+SSE {"type": "done", "data": {"stopped": false}, "at_s": 44.023}
+fuser_port=44045 exit=1 output=
+GATE3_ONLINE_EXIT 0
+hf_bytes_after 9103631410
+g3-online-4b-card_RC=0 13:05:54
+=== g4-offline  13:05:54 free   38G ===
+BEGIN 2026-11-03T13:05:54Z tag=v0.7.37 boot_id=9de8ae34-9ba5-4817-88c2-c550a9df82dd uname=7.1.12-2-20261103.2-lab-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+OUTBOUND_DENIED True
+SETUP_COMPLETE 2.6s pair=everyday
+CHAT status=complete 4.71s text='Ready'
+COMPARE status=complete 5.06s choice=cat p={'cat': 0.7192, 'elephant': 0.2808} model=laya-mlx
+GATE PASS
+GATE4_OFFLINE_EXIT 0
+g4-offline_RC=0 13:06:08
+=== g5-laya  13:06:08 free   38G ===
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+GATE5_EXIT 0
+g5-laya_RC=0 13:06:08
+BATCH_OK g3-online-4b-card g4-offline g5-laya
+GPU-TIMEOUTS after=23 delta=0
+a9df82dd uname=7.1.12-2-20261103.2-lab-ARCH host_marker=unset
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+OUTBOUND_DENIED True
+SETUP_COMPLETE 2.6s pair=everyday
+CHAT status=complete 4.71s text='Ready'
+COMPARE status=complete 5.06s choice=cat p={'cat': 0.7192, 'elephant': 0.2808} model=laya-mlx
+GATE PASS
+GATE4_OFFLINE_EXIT 0
+g4-offline_RC=0 13:06:08
+=== g5-laya  13:06:08 free   38G ===
+WHEEL_IDENTITY installed=0.32.4.dev202611031039+06d1038d (sha=a12c588e9e720b18ea76e007d526f8cc7abf1a162a0d7ad16a4c229b164229d8)
+GATE5_EXIT 0
+g5-laya_RC=0 13:06:08
+BATCH_OK g3-online-4b-card g4-offline g5-laya

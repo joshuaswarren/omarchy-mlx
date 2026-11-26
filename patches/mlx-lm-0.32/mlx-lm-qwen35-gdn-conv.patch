@@ -1,0 +1,43 @@
+--- a/mlx_lm/models/qwen3_5.py
++++ b/mlx_lm/models/qwen3_5.py
+@@ -156,16 +156,30 @@
+ 
+         if mask is not None:
+             qkv = mx.where(mask[..., None], qkv, 0)
+-        conv_input = mx.concatenate([conv_state, qkv], axis=1)
+-        if cache is not None:
+-            n_keep = self.conv_kernel_size - 1
+-            if cache.lengths is not None:
+-                ends = mx.clip(cache.lengths, 0, S)
+-                positions = (ends[:, None] + mx.arange(n_keep))[..., None]
+-                cache[0] = mx.take_along_axis(conv_input, positions, axis=1)
+-            else:
+-                cache[0] = mx.contiguous(conv_input[:, -n_keep:, :])
+-        conv_out = nn.silu(self.conv1d(conv_input))
++        if (
++            qkv.dtype == mx.bfloat16
++            and qkv.shape[1] == 1
++            and cache is not None
++            and cache.lengths is None
++            and mx.default_device() == mx.gpu
++            and hasattr(mx.fast, "gdn_conv_update")
++        ):
++            conv_out, new_state = mx.fast.gdn_conv_update(
++                conv_state, qkv, self.conv1d.weight
++            )
++            cache[0] = new_state
++            conv_out = nn.silu(conv_out)
++        else:
++            conv_input = mx.concatenate([conv_state, qkv], axis=1)
++            if cache is not None:
++                n_keep = self.conv_kernel_size - 1
++                if cache.lengths is not None:
++                    ends = mx.clip(cache.lengths, 0, S)
++                    positions = (ends[:, None] + mx.arange(n_keep))[..., None]
++                    cache[0] = mx.take_along_axis(conv_input, positions, axis=1)
++                else:
++                    cache[0] = mx.contiguous(conv_input[:, -n_keep:, :])
++            conv_out = nn.silu(self.conv1d(conv_input))
+ 
+         q, k, v = [
+             t.reshape(B, S, h, d)

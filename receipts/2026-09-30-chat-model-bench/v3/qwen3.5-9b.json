@@ -1,0 +1,534 @@
+{
+ "model_id": "mlx-community/Qwen3.5-9B-MLX-4bit",
+ "revision": "938d8919941c6e7efd3c7150eff7fe9d12afa631",
+ "label": "qwen3.5-9b",
+ "harness_version": 2,
+ "turns": [
+  {
+   "boot_id": "2a4f18f7-c9cb-4358-8573-1082ad33823b",
+   "loadavg_start": "0.37 0.54 0.77 1/576 65402",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 87805,
+   "page_cache": "cold or unknown: first load recorded in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T03:53:46Z",
+   "load_s": 1.90303723299985,
+   "peak_mem_gb_after_load": 5.0383872
+  },
+  {
+   "boot_id": "2a4f18f7-c9cb-4358-8573-1082ad33823b",
+   "loadavg_start": "0.50 0.57 0.69 1/601 72233",
+   "other_gpu_processes": 0,
+   "mem_available_mib_before_load": 87378,
+   "page_cache": "warm: loaded earlier in this boot",
+   "provenance": "provenance: mlx-omarchy 0.32.3.dev202609291615+06711ad mx=0.32.3.dev202609291615+06711ad verified=match harness=d95e883-dirty core.cpython-314-aarch64-linux-gnu.so=sha256:0b720eb9dcbe78df libmlx.so=sha256:004d24b6c951a253",
+   "started": "2026-09-30T04:02:08Z",
+   "load_s": 2.077383122000356,
+   "peak_mem_gb_after_load": 5.0383872,
+   "peak_mem_gb_turn": 5.172752384,
+   "finished": "2026-09-30T04:05:42Z"
+  }
+ ],
+ "perf": {
+  "ttft_card_prompt_s": {
+   "median": 0.7790906919999543,
+   "max": 0.7844042109991278,
+   "min": 0.7768089339997459,
+   "n": 5
+  },
+  "ttft_prompt_tokens": 244,
+  "prefill_512_s": {
+   "median": 1.4891385049995733,
+   "max": 1.5017796769998313,
+   "min": 1.3558494340004472,
+   "n": 5
+  },
+  "prefill_512_tok_s": 343.82295419870746,
+  "prefill_2048_s": {
+   "median": 5.110111875000257,
+   "max": 5.379680364000706,
+   "min": 5.097901997000008,
+   "n": 5
+  },
+  "prefill_2048_tok_s": 400.77400458084827,
+  "decode_after_512_tok_s": {
+   "median": 25.968149418189313,
+   "max": 26.068783563078927,
+   "min": 25.90143630749394,
+   "n": 5
+  },
+  "decode_after_2048_tok_s": {
+   "median": 21.666029806514295,
+   "max": 21.70750567195887,
+   "min": 21.497018326658182,
+   "n": 5
+  },
+  "decode_tokens": 128,
+  "peak_mem_gb_mx": 6.466760704,
+  "rss_mib_after_perf": 440,
+  "mem_available_mib_before_load": 87805,
+  "mem_available_min_mib": 72502,
+  "mem_available_delta_mib": 15303,
+  "gpu_shared_during_turn": false
+ },
+ "cards": {
+  "1": {
+   "expect": "card",
+   "category": "checklist",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "valid-card",
+   "types": [
+    "checklist"
+   ],
+   "promotable": "checklist",
+   "tokens": 404,
+   "truncated": false,
+   "seconds": 15.35700472299959,
+   "text": "Here is a packing checklist for your weekend camping trip:\n\n- **Shelter & Sleep**: Tent, sleeping bag, sleeping pad/air mattress.\n- **Cooking**: Camp stove, fuel canisters, lighter/matches, pot/pan set, eating utensils, mug/cup.\n- **Food & Water**: Pre-planned meals/snacks, water bottles or hydration bladder, water filter/purification tablets.\n- **Clothing**: Layers for weather changes, rain jacket, warm hat/gloves (if needed), camp shoes/sandals.\n- **Hygiene**: Biodegradable soap, toothbrush/toothpaste, hand sanitizer, toilet paper (in a bag), trowel for digging cat holes.\n- **Tools & Gear**: Headlamp or flashlight with extra batteries, multi-tool/knife, first aid kit.\n- **Miscellaneous**: Camp chair/table (if not provided), bug spray, sunscreen, trash bags for waste.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"checklist\", \"items\": [{\"id\": \"s1\", \"text\": \"Tent, sleeping bag, and sleeping pad\", \"done\": false}, {\"id\": \"s2\", \"text\": \"Camp stove, fuel, and cooking utensils\", \"done\": false}, {\"id\": \"s3\", \"text\": \"Food, snacks, and water supply\", \"done\": false}, {\"id\": \"s4\", \"text\": \"Appropriate clothing for the weather\", \"done\": false}, {\"id\": \"s5\", \"text\": \"Hygiene supplies (soap, sanitizer, TP)\", \"done\": false}, {\"id\": \"s6\", \"text\": \"Light source (headlamp/flashlight) and batteries\", \"done\": false}, {\"id\": \"s7\", \"text\": \"First aid kit and multi-tool\", \"done\": false}]}]}\n```"
+  },
+  "2": {
+   "expect": "card",
+   "category": "timeline",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "valid-card",
+   "types": [
+    "timeline"
+   ],
+   "promotable": "timeline",
+   "tokens": 185,
+   "truncated": false,
+   "seconds": 7.6047826949998125,
+   "text": "Here is your planned Monday schedule based on the details you provided:\n\n*   **9:00 AM**: Standup\n*   **11:00 AM**: Code review\n*   **12:00 PM**: Lunch\n*   **2:00 PM**: Planning\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"timeline\", \"entries\": [{\"id\": \"e1\", \"when\": \"9:00 AM\", \"text\": \"Standup\"}, {\"id\": \"e2\", \"when\": \"11:00 AM\", \"text\": \"Code review\"}, {\"id\": \"e3\", \"when\": \"12:00 PM\", \"text\": \"Lunch\"}, {\"id\": \"e4\", \"when\": \"2:00 PM\", \"text\": \"Planning\"}]}]}\n```"
+  },
+  "3": {
+   "expect": "card",
+   "category": "comparison",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "valid-card",
+   "types": [
+    "comparison",
+    "checklist"
+   ],
+   "promotable": "checklist",
+   "tokens": 574,
+   "truncated": false,
+   "seconds": 21.63295083399953,
+   "text": "Here is a comparison of cats and dogs as pets based on cost, space, and noise:\n\n**Cost**\n*   **Dogs:** Generally more expensive. Costs include higher food prices, mandatory walking gear (leashes, collars), and significantly more frequent veterinary visits. Large breeds require even more food and often need professional grooming or boarding due to size.\n*   **Cats:** Generally more affordable. They are self-cleaning, require less food than dogs of similar weight, and usually have lower veterinary costs unless they develop specific chronic issues.\n\n**Space**\n*   **Dogs:** Require significantly more space. They need room to move around indoors and, crucially, require access to a yard or daily outdoor walks for exercise. Small apartments can work with small breeds, but large dogs often struggle in confined spaces without a dedicated walker.\n*   **Cats:** Require less physical space. They are content in smaller apartments or even single rooms as long as they have vertical climbing structures (cat trees, shelves) and a litter box. They do not require outdoor access for exercise in the same way dogs do.\n\n**Noise**\n*   **Dogs:** Can be noisy depending on the breed and individual personality. Barking, whining, or howling can disturb neighbors, especially if the dog is not well-trained or exercised.\n*   **Cats:** Generally quieter. While they may meow, hiss, or yowl (especially at night), their vocalizations are usually short and less disruptive than a dog's barking. However, some cats can be very vocal if they are demanding attention or stressed.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"comparison\", \"columns\": [{\"id\": \"cost\", \"label\": \"Cost\"}, {\"id\": \"space\", \"label\": \"Space\"}, {\"id\": \"noise\", \"label\": \"Noise\"}], \"rows\": [{\"id\": \"dog_row\", \"label\": \"Dogs\", \"values\": [\"Higher (food, vet, gear)\", \"High (needs yard/walks)\", \"Variable (barking)\"]}, {\"id\": \"cat_row\", \"label\": \"Cats\", \"values\": [\"Lower (self-cleaning, less food)\", \"Low (vertical space ok)\", \"Generally quiet (meowing)\"]}]}, {\"type\": \"checklist\", \"items\": [{\"id\": \"t1\", \"text\": \"Consider lifestyle and activity level before choosing.\", \"done\": false}, {\"id\": \"t2\", \"text\": \"Assess budget for long-term care (food, vet).\", \"done\": false}, {\"id\": \"t3\", \"text\": \"Evaluate living space and time availability.\", \"done\": false}]}]}\n```"
+  },
+  "4": {
+   "expect": "card",
+   "category": "timeline",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "leaked-fence",
+   "tokens": 700,
+   "truncated": true,
+   "seconds": 26.129581332999805,
+   "text": "Here is a timeline of the major milestones in the Apollo program, ordered chronologically:\n\n*   **January 1961**: President Kennedy announces the goal of landing a man on the Moon before the end of the decade.\n*   **May 1961**: NASA selects the initial group of seven astronauts, known as \"The Mercury Seven.\"\n*   **December 1962**: NASA selects the second group of astronauts, including those who would later fly on Apollo missions.\n*   **January 1963**: NASA selects the third group of astronauts, including Neil Armstrong and Michael Collins.\n*   **May 1963**: NASA selects the fourth group of astronauts, including Buzz Aldrin.\n*   **July 1965**: The Apollo Guidance Computer (AGC) is completed.\n*   **July 1965**: The Lunar Module (LM) design is finalized.\n*   **December 1965**: The Saturn V rocket, the most powerful rocket ever built, is completed.\n*   **January 1967**: The Apollo 1 launch pad fire kills three astronauts (Gus Grissom, Ed White, Roger Chaffee), leading to a redesign of the cabin.\n*   **May 1967**: The redesigned Apollo spacecraft successfully completes a test flight (Apollo 4).\n*   **July 1968**: Apollo 8 becomes the first crewed mission to leave Earth's orbit and orbit the Moon.\n*   **December 1968**: Apollo 8 returns to Earth, proving the capability of a lunar mission.\n*   **July 1969**: Apollo 10 conducts a \"dress rehearsal\" in lunar orbit, testing the Lunar Module.\n*   **July 1969**: Apollo 11 launches, carrying Neil Armstrong, Buzz Aldrin, and Michael Collins.\n*   **July 20, 1969**: Neil Armstrong becomes the first human to walk on the Moon.\n*   **July 24, 1969**: Apollo 11 splashes down in the Pacific Ocean.\n*   **November 1969**: Apollo 12 lands on the Moon, becoming the second successful lunar landing.\n*   **May 1969**: Apollo 13 is launched but suffers an oxygen tank explosion, forcing the crew to abort their lunar landing.\n*   **July 1969**: Apollo 14 lands on the Moon, becoming the third successful lunar landing.\n*   **December 1972**: Apollo 17 lands on the Moon, becoming the last and final lunar landing.\n*   **December 1972**: The Apollo program is officially concluded.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"timeline\", \"entries\": [{\"id\": \"e1\", \"when\": \"Jan 1961\", \"text\": \"Kennedy announces goal of landing man on Moon\"}, {\"id\": \"e2\", \"when\": \"May 1961\", \"text\": \"NASA selects Mercury Seven astronauts\"}, {\"id\": \"e3\", \"when\": \"Dec 1962\", \"text\": \"NASA selects"
+  },
+  "5": {
+   "expect": "card",
+   "category": "chart",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "valid-card",
+   "types": [
+    "chart"
+   ],
+   "tokens": 130,
+   "truncated": false,
+   "seconds": 7.7432682029993884,
+   "text": "Here is a chart of your monthly sales data:\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"chart\", \"kind\": \"bar\", \"series\": [{\"id\": \"sales-data\", \"label\": \"Monthly Sales\", \"unit\": \"$\", \"source\": \"User message: Jan 10, Feb 14, Mar 9\", \"estimate\": false, \"values\": [{\"label\": \"Jan\", \"value\": 10}, {\"label\": \"Feb\", \"value\": 14}, {\"label\": \"Mar\", \"value\": 9}]}]}]}\n```"
+  },
+  "6": {
+   "expect": "card",
+   "category": "facts",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": true,
+   "outcome": "valid-card",
+   "types": [
+    "facts"
+   ],
+   "promotable": "facts",
+   "tokens": 334,
+   "truncated": false,
+   "seconds": 15.47476415500023,
+   "text": "Here are three facts about the moon based on your message:\n\n1.  **No Atmosphere**: The moon has no atmosphere, meaning it lacks the air layer that protects Earth and retains heat.\n2.  **Orbital Period**: The moon orbits the Earth approximately every 27 days (specifically about 27.3 days for a sidereal orbit).\n3.  **Distance**: The average distance from the Earth to the moon is about 384,000 kilometers.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"facts\", \"cards\": [{\"id\": \"f1\", \"heading\": \"No Atmosphere\", \"text\": \"The moon has no atmosphere, meaning it lacks the air layer that protects Earth and retains heat.\", \"sources\": [{\"ref\": \"user msg\", \"text\": \"the moon has no atmosphere\"}]}, {\"id\": \"f2\", \"heading\": \"Orbital Period\", \"text\": \"The moon orbits the Earth approximately every 27 days (specifically about 27.3 days for a sidereal orbit).\", \"sources\": [{\"ref\": \"user msg\", \"text\": \"the moon orbits Earth every 27 days\"}]}, {\"id\": \"f3\", \"heading\": \"Distance from Earth\", \"text\": \"The average distance from the Earth to the moon is about 384,000 kilometers.\", \"sources\": [{\"ref\": \"user msg\", \"text\": \"the moon is about 384,000 km away\"}]}]}]}\n```"
+  },
+  "7": {
+   "expect": "card",
+   "category": "decision",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 57,
+   "truncated": false,
+   "seconds": 3.421038218999456,
+   "text": "Since it is raining, walking 30 minutes would likely be uncomfortable and could lead to getting wet. Taking the bus for 15 minutes offers a sheltered way to get to work, saving you time and keeping you dry.\n\n**Recommendation:** Take the bus today."
+  },
+  "8": {
+   "expect": "card",
+   "category": "form",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "valid-card",
+   "types": [
+    "form"
+   ],
+   "tokens": 271,
+   "truncated": false,
+   "seconds": 12.861587024000073,
+   "text": "Here is a form to collect the details for a new supplier. It includes fields for name, contact email, country, and payment terms as requested.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"form\", \"title\": \"New Supplier Registration Form\", \"fields\": [{\"id\": \"f1\", \"label\": \"Supplier Name\", \"kind\": \"text\", \"required\": true, \"placeholder\": \"e.g., Acme Supplies Ltd.\"}, {\"id\": \"f2\", \"label\": \"Contact Email\", \"kind\": \"text\", \"required\": true, \"placeholder\": \"contact@supplier.com\"}, {\"id\": \"f3\", \"label\": \"Country\", \"kind\": \"text\", \"required\": true, \"placeholder\": \"e.g., United States\"}, {\"id\": \"f4\", \"label\": \"Payment Terms\", \"kind\": \"choice\", \"required\": true, \"placeholder\": \"Select terms\", \"choices\": [{\"id\": \"a1\", \"label\": \"Net 30\"}, {\"id\": \"a2\", \"label\": \"Net 60\"}, {\"id\": \"a3\", \"label\": \"Net 90\"}, {\"id\": \"a4\", \"label\": \"Due on Receipt\"}]}]}]}\n```"
+  },
+  "9": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 7,
+   "truncated": false,
+   "seconds": 1.149317092000274,
+   "text": "The capital of France is Paris."
+  },
+  "10": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 29,
+   "truncated": false,
+   "seconds": 1.758379910000258,
+   "text": "I'm doing well, thanks for asking! How about you? Is there anything specific you'd like to chat about or need help with today?"
+  },
+  "11": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 55,
+   "truncated": false,
+   "seconds": 2.843978977000006,
+   "text": "The sky appears blue because sunlight is scattered by the Earth's atmosphere, with shorter blue wavelengths being deflected more strongly than other colors. This phenomenon, known as Rayleigh scattering, causes the blue light to reach our eyes from all directions when we look up at the sky."
+  },
+  "12": {
+   "expect": "prose",
+   "category": "plain",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 23,
+   "truncated": false,
+   "seconds": 1.6053736410003694,
+   "text": "Programmers are the only people who think \"I'll just fix it later\" is a valid plan for today."
+  },
+  "13": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 20,
+   "truncated": false,
+   "seconds": 1.5805457989999923,
+   "text": "A checklist is a list of items used to ensure that specific tasks or steps are completed in order."
+  },
+  "14": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": true,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 16,
+   "truncated": false,
+   "seconds": 2.9541777980002735,
+   "text": "You have the power to create new opportunities by taking small, brave steps today."
+  },
+  "15": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "valid-card",
+   "types": [
+    "checklist"
+   ],
+   "tokens": 192,
+   "truncated": false,
+   "seconds": 8.02618315700056,
+   "text": "People like making lists because they provide a tangible way to organize thoughts, break down complex tasks into manageable steps, and track progress toward goals. The act of checking off items offers a psychological boost of accomplishment, reducing anxiety about unfinished business and creating a clear roadmap for the future. Ultimately, lists transform overwhelming chaos into structured order, giving individuals a sense of control and clarity over their daily lives.\n\n```assistant-ui\n{\"version\": 1, \"components\": [{\"type\": \"checklist\", \"items\": [{\"id\": \"org\", \"text\": \"Organizes thoughts and tasks\", \"done\": false}, {\"id\": \"break\", \"text\": \"Breaks complex goals into steps\", \"done\": false}, {\"id\": \"track\", \"text\": \"Tracks progress and boosts motivation\", \"done\": false}, {\"id\": \"control\", \"text\": \"Reduces anxiety and creates clarity\", \"done\": false}]}]}\n```"
+  },
+  "16": {
+   "expect": "prose",
+   "category": "list-word-prose",
+   "full_schema": false,
+   "md_checklist": false,
+   "md_pipe_table": false,
+   "md_numbered_or_bullets": false,
+   "outcome": "prose-only",
+   "tokens": 52,
+   "truncated": false,
+   "seconds": 2.7550735670001814,
+   "text": "A timeline is generally better for showing history because it naturally emphasizes the chronological order of events, making it easier to visualize how things unfolded over time. A table is more suitable for comparing specific attributes of different historical entries side-by-side rather than following a narrative sequence."
+  }
+ },
+ "gsm": {
+  "0": {
+   "gold": 18,
+   "pass": true,
+   "truncated": false,
+   "text": "To find out how much Janet makes at the farmers' market, we need to determine how many eggs are left after she uses some for herself and her friends.\n\n**Step 1: Determine the total number of eggs laid per day.**\nThe problem states that Janet's ducks lay 16 eggs per day.\nTotal eggs = 16\n\n**Step 2: Calculate the number of eggs used for breakfast.**\nJanet eats three eggs for breakfast every morning.\nEggs for breakfast = 3\n\n**Step 3: Calculate the number of eggs used to bake muffins.**\nShe uses four eggs to bake muffins for her friends.\nEggs for muffins = 4\n\n**Step 4: Calculate the number of eggs remaining to sell.**\nWe subtract the eggs used for breakfast and muffins from the total number of eggs.\nRemaining eggs = Total eggs - (Eggs for breakfast + Eggs for muffins)\nRemaining eggs = 16 - (3 + 4)\nRemaining eggs = 16 - 7\nRemaining eggs = 9\n\n**Step 5: Calculate the total earnings from selling the remaining eggs.**\nJanet sells each fresh duck egg for $2. We multiply the number of remaining eggs by the price per egg.\nTotal earnings = Remaining eggs \u00d7 Price per egg\nTotal earnings = 9 \u00d7 $2\nTotal earnings = $18\n\nJanet makes $18 every day at the farmers' market.\n\nFinal answer: 18"
+  },
+  "1": {
+   "gold": 3,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the total number of bolts needed for the robe, let's break down the requirements step by step:\n\n1.  **Identify the amount of blue fiber:**\n    The problem states that a robe takes **2 bolts** of blue fiber.\n\n2.  **Calculate the amount of white fiber:**\n    The problem states that it takes \"half that much\" white fiber.\n    Calculation: $2 \\text{ bolts} / 2 = 1 \\text{ bolt}$.\n    So, the robe takes **1 bolt** of white fiber.\n\n3.  **Calculate the total bolts:**\n    Add the amount of blue fiber and white fiber together.\n    Calculation: $2 \\text{ bolts (blue)} + 1 \\text{ bolt (white)} = 3 \\text{ bolts}$.\n\nFinal answer: 3"
+  },
+  "2": {
+   "gold": 70000,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the profit Josh made, we need to determine the total cost of the house and compare it to the final selling price (or value) after the repairs.\n\n**Step 1: Calculate the total cost of the house.**\nJosh bought the house for $\\$80,000$ and spent an additional $\\$50,000$ on repairs.\n$$ \\text{Total Cost} = \\text{Purchase Price} + \\text{Repair Costs} $$\n$$ \\text{Total Cost} = \\$80,000 + \\$50,000 = \\$130,000 $$\n\n**Step 2: Calculate the increase in value.**\nThe problem states that the repairs increased the *value* of the house by $150\\%$. This means we need to calculate $150\\%$ of the original purchase price ($\\$80,000$).\n$$ \\text{Value Increase} = 150\\% \\times \\$80,000 $$\n$$ \\text{Value Increase} = 1.50 \\times 80,000 $$\n$$ \\text{Value Increase} = \\$120,000 $$\n\n**Step 3: Calculate the final value of the house.**\nThe new value is the original purchase price plus the increase in value.\n$$ \\text{Final Value} = \\text{Original Price} + \\text{Value Increase} $$\n$$ \\text{Final Value} = \\$80,000 + \\$120,000 = \\$200,000 $$\n\n**Step 4: Calculate the profit.**\nProfit is defined as the Final Value minus the Total Cost (what he spent).\n$$ \\text{Profit} = \\text{Final Value} - \\text{Total Cost} $$\n$$ \\text{Profit} = \\$200,000 - \\$130,000 $$\n$$ \\text{Profit} = \\$70,000 $$\n\nAlternatively, we can look at the components:\n- He spent $\\$50,000$ on repairs.\n- The value increased by $\\$120,000$.\n- Since the increase in value ($\\$120,000$) is greater than the cost of repairs ($\\$50,000$), the profit from the repair portion is $\\$120,000 - \\$50,000 = \\$70,000$. The original $\\$80,000$ cost is broken even (he gets his money back), so the total profit is just the net gain from the repairs.\n\nFinal answer: 70000"
+  },
+  "3": {
+   "gold": 540,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the total number of meters James runs in a week, we can break this down into two steps: first calculating the total distance for one week based on the number of sprints, and then multiplying by the frequency per week.\n\n**Step 1: Calculate the total distance run in a single session.**\nJames runs 3 sprints, and each sprint is 60 meters long.\n$$ \\text{Distance per session} = 3 \\text{ sprints} \\times 60 \\text{ meters/sprint} $$\n$$ \\text{Distance per session} = 180 \\text{ meters} $$\n\n**Step 2: Calculate the total distance run in a week.**\nJames runs this session 3 times a week. So, we multiply the distance per session by the number of weeks' worth of sessions (which is 3).\n$$ \\text{Total weekly distance} = 180 \\text{ meters/session} \\times 3 \\text{ sessions/week} $$\n$$ \\text{Total weekly distance} = 540 \\text{ meters} $$\n\nAlternatively, you can calculate the total number of sprints first:\n$$ \\text{Total sprints} = 3 \\text{ sprints/session} \\times 3 \\text{ sessions/week} = 9 \\text{ sprints/week} $$\nThen multiply by the distance per sprint:\n$$ \\text{Total distance} = 9 \\text{ sprints} \\times 60 \\text{ meters/sprint} = 540 \\text{ meters} $$\n\nBoth methods yield the same result.\n\nFinal answer: 540"
+  },
+  "4": {
+   "gold": 20,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the number of cups of feed needed for the final meal, we need to determine the total daily requirement for the flock and subtract the amounts already fed.\n\n**Step 1: Calculate the total daily feed requirement for one chicken.**\nThe problem states that every day, Wendi feeds each chicken 3 cups of mixed feed.\n$$ \\text{Total per chicken} = 3 \\text{ cups} $$\n\n**Step 2: Calculate the total daily feed requirement for the entire flock.**\nWendi has a flock of 20 chickens. Since each chicken needs 3 cups, we multiply the number of chickens by the daily requirement per chicken.\n$$ \\text{Total Daily Feed} = 20 \\text{ chickens} \\times 3 \\text{ cups/chicken} = 60 \\text{ cups} $$\n\n**Step 3: Calculate the total amount of feed already given.**\nWendi gives feed in three separate meals. We know the amounts for the morning and afternoon:\n*   Morning feed: 15 cups\n*   Afternoon feed: 25 cups\n\n$$ \\text{Feed Given So Far} = 15 + 25 = 40 \\text{ cups} $$\n\n**Step 4: Calculate the feed needed for the final meal.**\nThe final meal is the third and last meal of the day. The amount needed for this meal is the total daily requirement minus the feed already given in the first two meals.\n$$ \\text{Final Meal Feed} = \\text{Total Daily Feed} - \\text{Feed Given So Far} $$\n$$ \\text{Final Meal Feed} = 60 - 40 = 20 \\text{ cups} $$\n\nAlternatively, we could calculate the amount per meal first. Since the total daily feed is 60 cups and it is split into 3 equal meals:\n$$ \\text{Feed per meal} = \\frac{60}{3} = 20 \\text{ cups} $$\nSince the morning and afternoon meals are already accounted for, the final meal must also be 20 cups.\n\nFinal answer: 20"
+  },
+  "5": {
+   "gold": 64,
+   "pass": true,
+   "truncated": false,
+   "text": "To solve this problem, we need to calculate the cost of the glasses based on the alternating pricing scheme.\n\n**Step 1: Understand the pricing pattern.**\n- The first glass costs $\\$5$.\n- Every second glass (the 2nd, 4th, 6th, etc.) costs $60\\%$ of the price of a regular glass.\n- Calculation for the discounted price: $5 \\times 0.60 = \\$3$.\n\nSo, the pattern of prices for consecutive glasses is:\n- Glass 1: $\\$5$\n- Glass 2: $\\$3$\n- Glass 3: $\\$5$\n- Glass 4: $\\$3$\n... and so on.\n\n**Step 2: Determine the cost of a pair of glasses.**\nSince the prices alternate, we can group the glasses into pairs (one full price, one discounted).\n- Cost of 1 pair = Price of Glass 1 + Price of Glass 2\n- Cost of 1 pair = $\\$5 + \\$3 = \\$8$.\n\n**Step 3: Calculate how many pairs are in the total order.**\nKylar wants to buy a total of 16 glasses. Since there are 2 glasses in each pair:\n- Number of pairs = $\\frac{16}{2} = 8$ pairs.\n\n**Step 4: Calculate the total cost.**\nSince there are exactly 8 complete pairs, we simply multiply the number of pairs by the cost per pair.\n- Total Cost = Number of pairs $\\times$ Cost per pair\n- Total Cost = $8 \\times \\$8$\n- Total Cost = $\\$64$.\n\nAlternatively, we could calculate it by summing the individual groups:\n- There are 8 glasses at $\\$5$: $8 \\times 5 = \\$40$.\n- There are 8 glasses at $\\$3$: $8 \\times 3 = \\$24$.\n- Total: $40 + 24 = \\$64$.\n\nBoth methods yield the same result.\n\nFinal answer: 64"
+  },
+  "6": {
+   "gold": 260,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the total number of sheep, we need to determine the number of sheep for each city step by step based on the relationships provided.\n\n**Step 1: Determine the number of sheep in Seattle.**\nThe problem states directly that Seattle has **20** sheep.\n\n**Step 2: Determine the number of sheep in Charleston.**\nThe problem states that Charleston has 4 times as many sheep as Seattle.\n$$ \\text{Charleston} = 4 \\times \\text{Seattle} $$\n$$ \\text{Charleston} = 4 \\times 20 = 80 $$\nSo, Charleston has **80** sheep.\n\n**Step 3: Determine the number of sheep in Toulouse.**\nThe problem states that Toulouse has twice as many sheep as Charleston.\n$$ \\text{Toulouse} = 2 \\times \\text{Charleston} $$\n$$ \\text{Toulouse} = 2 \\times 80 = 160 $$\nSo, Toulouse has **160** sheep.\n\n**Step 4: Calculate the total number of sheep.**\nWe need to sum the sheep from all three cities (Toulouse, Charleston, and Seattle).\n$$ \\text{Total} = \\text{Toulouse} + \\text{Charleston} + \\text{Seattle} $$\n$$ \\text{Total} = 160 + 80 + 20 $$\n$$ \\text{Total} = 240 + 20 $$\n$$ \\text{Total} = 260 $$\n\nFinal answer: 260"
+  },
+  "7": {
+   "gold": 160,
+   "pass": false,
+   "truncated": false,
+   "text": "To find the total time it takes for Carla to download the file, let's break down the process step by step.\n\n**Step 1: Calculate the time required for a normal, uninterrupted download.**\n*   Total file size = 200 GB\n*   Download speed = 2 GB/minute\n*   Time for normal download = $\\frac{\\text{Total Size}}{\\text{Speed}}$\n*   Time = $\\frac{200 \\text{ GB}}{2 \\text{ GB/min}} = 100$ minutes.\n\n**Step 2: Determine the progress made before the interruption.**\n*   The problem states that Windows forces a restart 40% of the way through.\n*   Progress completed = $40\\%$ of 100 minutes.\n*   Time spent downloading before the crash = $0.40 \\times 100 \\text{ minutes} = 40$ minutes.\n*   Amount of data downloaded = $40\\% \\text{ of } 200 \\text{ GB} = 80$ GB.\n\n**Step 3: Calculate the time lost due to the restart.**\n*   The computer is forced to restart, which takes 20 minutes.\n*   During this time, no downloading occurs.\n*   Time lost = 20 minutes.\n\n**Step 4: Determine the remaining data to download.**\n*   Since Carla has to restart from the beginning, she must re-download the entire 200 GB file.\n*   However, she already has the first 80 GB saved on her computer (from the initial attempt).\n*   Remaining data to download = $\\text{Total Size} - \\text{Data already downloaded}$\n*   Remaining data = $200 \\text{ GB} - 80 \\text{ GB} = 120$ GB.\n\n**Step 5: Calculate the time required for the second download attempt.**\n*   Carla downloads the remaining 120 GB at her normal speed of 2 GB/minute.\n*   Time for second attempt = $\\frac{120 \\text{ GB}}{2 \\text{ GB/min}} = 60$ minutes.\n\n**Step 6: Calculate the total time.**\nThe total time includes:\n1.  The initial download progress (40 minutes).\n2.  The time spent restarting the computer (20 minutes).\n3.  The time to download the remaining portion of the file (60 minutes).\n\nTotal Time = $40 + 20 + 60$\nTotal Time = 120 minutes.\n\nFinal answer: 120"
+  },
+  "8": {
+   "gold": 45,
+   "pass": true,
+   "truncated": true,
+   "text": "To find how far John is from home at the end of the 4 hours, we need to calculate his net displacement. We will break this down into two phases: the trip away from home and the trip back towards home.\n\n**Step 1: Calculate the distance John drove away from home.**\n*   **Time:** 3 hours\n*   **Speed:** 60 mph\n*   **Distance Away ($d_{away}$):** $3 \\text{ hours} \\times 60 \\text{ mph} = 180 \\text{ miles}$.\nAt this point, John is 180 miles away from home.\n\n**Step 2: Analyze the return trip.**\nJohn attempts to drive back for a total of 4 hours. We need to calculate the net change in position during this return trip by looking at each segment of time. Let's define \"away from home\" as positive distance and \"towards home\" (negative displacement) or simply calculate the net reduction in distance.\n\n*   **Segment 1:**\n    *   **Duration:** 2 hours\n    *   **Speed:** 0 mph (standstill traffic)\n    *   **Distance Covered:** $2 \\text{ hours} \\times 0 \\text{ mph} = 0 \\text{ miles}$.\n    *   *Current Distance from Home:* Still 180 miles.\n\n*   **Segment 2:**\n    *   **Duration:** Half-hour (0.5 hours)\n    *   **Speed:** 30 mph\n    *   Since he is trying to get home, this movement reduces the distance.\n    *   **Distance Covered:** $0.5 \\text{ hours} \\times 30 \\text{ mph} = 15 \\text{ miles}$.\n    *   *Current Distance from Home:* $180 - 15 = 165 \\text{ miles}$.\n\n*   **Segment 3:**\n    *   **Duration:** The remaining time of the 4 hours.\n        *   Total return time = 4 hours.\n        *   Time used so far = 2 hours + 0.5 hours = 2.5 hours.\n        *   Remaining time = $4 - 2.5 = 1.5 \\text{ hours}$.\n    *   **Speed:** 80 mph\n    *   This movement also reduces the distance.\n    *   **Distance Covered:** $1.5 \\text{ hours} \\times 80 \\text{ mph} = 120 \\text{ miles}$.\n    *   *Current Distance from Home:* $165 - 120 = 45 \\text{ miles}$.\n\n**Step 3: Calculate the final distance.**\nAlternatively, we can sum up all the displacements relative to his starting point (Home = 0).\n*   Leg 1: $+180$ miles.\n*   Leg 2 (Standstill): $+0$ miles.\n*   Leg 3 (First part of return): $-15$ miles.\n*   Leg 4 (Second part of return): $-120$ miles.\n\nTotal Position = $180 + 0 - 15 - 120$\nTotal Position = $180 - 135$\nTotal Position = $45$ miles.\n\nSince the result is positive, he has not yet reached home (which would be 0), and he is still 45 miles away.\n\n"
+  },
+  "9": {
+   "gold": 460,
+   "pass": true,
+   "truncated": false,
+   "text": "To find Eliza's total earnings for the week, we need to calculate her regular pay and her overtime pay separately, then sum them up.\n\n**Step 1: Calculate the regular hours and overtime hours.**\nEliza works a total of 45 hours. The standard work week is defined as the first 40 hours at the regular rate.\n*   Regular hours = 40 hours\n*   Overtime hours = Total hours - Regular hours\n*   Overtime hours = $45 - 40 = 5$ hours\n\n**Step 2: Calculate the regular hourly pay.**\nThe problem states her rate per hour for the first 40 hours is $10.\n*   Regular hourly rate = $10\n\n**Step 3: Calculate the overtime hourly rate.**\nEliza receives an overtime pay of 1.2 times her regular hourly rate.\n*   Overtime hourly rate = $10 \\times 1.2$\n*   Overtime hourly rate = $12$\n\n**Step 4: Calculate the earnings for regular hours.**\n*   Regular Earnings = Regular hours $\\times$ Regular hourly rate\n*   Regular Earnings = $40 \\text{ hours} \\times \\$10/\\text{hour}$\n*   Regular Earnings = $400$\n\n**Step 5: Calculate the earnings for overtime hours.**\n*   Overtime Earnings = Overtime hours $\\times$ Overtime hourly rate\n*   Overtime Earnings = $5 \\text{ hours} \\times \\$12/\\text{hour}$\n*   Overtime Earnings = $60$\n\n**Step 6: Calculate total earnings.**\n*   Total Earnings = Regular Earnings + Overtime Earnings\n*   Total Earnings = $400 + 60$\n*   Total Earnings = $460$\n\nEliza's total earnings for the week are $460.\n\nFinal answer: 460"
+  },
+  "10": {
+   "gold": 366,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the total number of downloads over the three months, we need to calculate the downloads for each month step by step.\n\n**Step 1: Determine the number of downloads in the first month.**\nThe problem states that there were 60 downloads in the first month.\n$$ \\text{Month 1} = 60 $$\n\n**Step 2: Determine the number of downloads in the second month.**\nThe problem states that the number of downloads in the second month was three times as many as the first month.\n$$ \\text{Month 2} = 60 \\times 3 = 180 $$\n\n**Step 3: Determine the number of downloads in the third month.**\nThe problem states that the downloads were reduced by 30% from the second month's total. This means we need to calculate 70% of the second month's value (since $100\\% - 30\\% = 70\\%$).\n\nFirst, calculate the reduction amount:\n$$ \\text{Reduction} = 180 \\times 0.30 = 54 $$\n\nNow, subtract the reduction from the second month's total to get the third month's total:\n$$ \\text{Month 3} = 180 - 54 = 126 $$\n\nAlternatively, you can calculate it directly as 70% of the second month:\n$$ \\text{Month 3} = 180 \\times (1 - 0.30) = 180 \\times 0.70 = 126 $$\n\n**Step 4: Calculate the total downloads over the three months.**\nAdd the number of downloads from all three months together:\n$$ \\text{Total} = \\text{Month 1} + \\text{Month 2} + \\text{Month 3} $$\n$$ \\text{Total} = 60 + 180 + 126 $$\n\nPerforming the addition:\n$$ 60 + 180 = 240 $$\n$$ 240 + 126 = 366 $$\n\nThe total number of downloads over the three months is 366.\n\nFinal answer: 366"
+  },
+  "11": {
+   "gold": 694,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the total cost, we need to calculate the cost for each type of pastry separately and then add them together.\n\n**Step 1: Calculate the cost of the donuts.**\nToula bought 3 dozen donuts at $68 per dozen.\n$$ \\text{Cost of donuts} = 3 \\times 68 $$\n$$ 3 \\times 60 = 180 $$\n$$ 3 \\times 8 = 24 $$\n$$ 180 + 24 = 204 $$\nThe cost of the donuts is **$204**.\n\n**Step 2: Calculate the cost of the mini cupcakes.**\nToula bought 2 dozen mini cupcakes at $80 per dozen.\n$$ \\text{Cost of mini cupcakes} = 2 \\times 80 $$\n$$ 2 \\times 80 = 160 $$\nThe cost of the mini cupcakes is **$160**.\n\n**Step 3: Calculate the cost of the mini cheesecakes.**\nToula bought 6 dozen mini cheesecakes at $55 per dozen.\n$$ \\text{Cost of mini cheesecakes} = 6 \\times 55 $$\nWe can break this down: $6 \\times 50 = 300$ and $6 \\times 5 = 30$.\n$$ 300 + 30 = 330 $$\nThe cost of the mini cheesecakes is **$330**.\n\n**Step 4: Calculate the total cost.**\nNow, we sum the costs of all three items:\n$$ \\text{Total Cost} = (\\text{Cost of donuts}) + (\\text{Cost of mini cupcakes}) + (\\text{Cost of mini cheesecakes}) $$\n$$ \\text{Total Cost} = 204 + 160 + 330 $$\n\nFirst, add the cost of donuts and mini cupcakes:\n$$ 204 + 160 = 364 $$\n\nNext, add the cost of the mini cheesecakes:\n$$ 364 + 330 = 694 $$\n\nThe total cost is $694.\n\nFinal answer: 694"
+  },
+  "12": {
+   "gold": 13,
+   "pass": false,
+   "truncated": true,
+   "text": "To determine how many years it will take for Carlos to start earning money on the lemon tree, we need to calculate when his total revenue exceeds his total costs.\n\n**Step 1: Calculate the annual net profit.**\nFirst, we determine how much money Carlos makes in a single year from selling lemons and subtract the cost of maintaining the tree.\n*   **Revenue per lemon:** $1.50\n*   **Lemons per year:** 7\n*   **Total Revenue per year:** $1.50 \\times 7 = \\$10.50$\n*   **Cost per year (water and feed):** $3.00\n\nNow, we calculate the net profit for one year:\n$$ \\text{Net Profit} = \\text{Total Revenue} - \\text{Annual Cost} $$\n$$ \\text{Net Profit} = \\$10.50 - \\$3.00 = \\$7.50 $$\n\nSo, every year after the tree is planted, Carlos earns a net profit of $7.50.\n\n**Step 2: Determine the total initial investment.**\n*   **Planting cost:** $90.00\n\n**Step 3: Calculate the number of years required to break even.**\nCarlos needs to accumulate enough net profit over several years to cover the initial $90 planting cost. We divide the total cost by the annual net profit:\n$$ \\text{Years} = \\frac{\\text{Total Cost}}{\\text{Net Profit per Year}} $$\n$$ \\text{Years} = \\frac{90}{7.50} $$\n\nLet's perform the division:\n$$ 90 \\div 7.5 = 12 $$\n\n**Step 4: Verify the result.**\nLet's check the cumulative earnings year by year to ensure he starts earning *money* (positive cash flow relative to the initial investment) at that specific point.\n\n*   **Year 1:** Profit = $7.50. Total accumulated profit = $7.50. (Still owes $82.50 of the initial cost).\n*   **Year 2:** Profit = $7.50 + $7.50 = $15.00.\n*   ...\n*   **Year 12:** Total accumulated profit = $12 \\times 7.50 = \\$90.00$.\n\nAt the end of Year 12, Carlos has earned exactly $90.00 in net profit, which covers the entire planting cost.\n*   If he stops after 11 years: Total profit = $11 \\times 7.50 = \\$82.50$. He has not yet recovered his $90 investment; he is still \"in the red\" by $7.50.\n*   If he continues into Year 12: He recovers the full $90. From that point forward (Year 13), any additional profit is pure earnings.\n\nThe question asks when he *starts* earning money on the tree (implying breaking even and moving into profit). Since he recovers his costs exactly at the end of year 12, it is during the **13th year** that he begins to have positive net earnings (profit > 0).\n\nHowever, in standard financial word problems of this type, the answer usually refers to the duration required to break even (recover the initial investment).\n*   If the question implies \"How many full years must pass before he has recovered his investment?\", the answer is 12.\n*   If the"
+  },
+  "13": {
+   "gold": 18,
+   "pass": true,
+   "truncated": false,
+   "text": "To find out how many vacuum cleaners Melanie started with, we will work backward from the final number of items she has left.\n\n**Step 1: Determine the number of vacuum cleaners before visiting the orange house.**\nWe know that after visiting the green and red houses, Melanie had some number of vacuum cleaners left. At the orange house, she sold half of what was remaining. After this sale, she has 5 vacuum cleaners left.\nLet $x$ be the number of vacuum cleaners before visiting the orange house.\nSince she sold half, the other half remains:\n$$ \\frac{1}{2}x = 5 $$\nMultiplying both sides by 2:\n$$ x = 10 $$\nSo, Melanie had **10** vacuum cleaners before visiting the orange house.\n\n**Step 2: Determine the number of vacuum cleaners before visiting the red house.**\nBefore visiting the orange house, she had 10. We know that at the red house, she sold 2 vacuum cleaners to get down to that number.\nLet $y$ be the number of vacuum cleaners before visiting the red house.\n$$ y - 2 = 10 $$\nAdding 2 to both sides:\n$$ y = 12 $$\nSo, Melanie had **12** vacuum cleaners before visiting the red house.\n\n**Step 3: Determine the total number of vacuum cleaners at the start.**\nBefore visiting the red house, she had 12. We know that at the green house, she sold a third of her total starting stock. Let $z$ be the starting number.\nThe amount sold at the green house is $\\frac{1}{3}z$.\nThe amount remaining after the green house (which becomes the starting amount for the red house) is:\n$$ z - \\frac{1}{3}z = \\frac{2}{3}z $$\nWe know this remaining amount equals the 12 vacuum cleaners calculated in Step 2.\n$$ \\frac{2}{3}z = 12 $$\nTo solve for $z$, multiply both sides by $\\frac{3}{2}$:\n$$ z = 12 \\times \\frac{3}{2} $$\n$$ z = \\frac{36}{2} $$\n$$ z = 18 $$\n\n**Verification:**\n*   Start with **18**.\n*   Sell $\\frac{1}{3}$ of 18 at the green house: $18 / 3 = 6$. Remaining: $18 - 6 = 12$.\n*   Sell **2** more at the red house: $12 - 2 = 10$.\n*   Sell half of what is left (half of 10) at the orange house: $10 / 2 = 5$.\n*   Remaining: **5**.\nThis matches the problem statement.\n\nFinal answer: 18"
+  },
+  "14": {
+   "gold": 60,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the percentage of students who enrolled in hip-hop dance, let's break down the problem step by step using the total number of students and the given percentages.\n\n**Step 1: Determine the total number of students.**\nThe problem states there are 20 students in the dance class.\n\n**Step 2: Calculate the number of students who enrolled in contemporary dance.**\nWe are told that 20% of the total students enrolled in contemporary dance.\n$$ \\text{Contemporary Students} = 20\\% \\times 20 $$\n$$ \\text{Contemporary Students} = 0.20 \\times 20 = 4 $$\n\n**Step 3: Calculate the number of remaining students.**\nSubtract the contemporary dance students from the total to find how many are left for the next category.\n$$ \\text{Remaining Students} = \\text{Total Students} - \\text{Contemporary Students} $$\n$$ \\text{Remaining Students} = 20 - 4 = 16 $$\n\n**Step 4: Calculate the number of students who enrolled in jazz dance.**\nWe are told that 25% of the *remaining* students enrolled in jazz dance. Note that we apply this percentage to the 16 remaining students, not the original total.\n$$ \\text{Jazz Students} = 25\\% \\times 16 $$\n$$ \\text{Jazz Students} = 0.25 \\times 16 = 4 $$\n\n**Step 5: Calculate the number of students who enrolled in hip-hop dance.**\nThe problem states that \"the rest\" enrolled in hip-hop dance. We subtract the jazz students from the remaining students calculated in Step 3.\n$$ \\text{Hip-Hop Students} = \\text{Remaining Students} - \\text{Jazz Students} $$\n$$ \\text{Hip-Hop Students} = 16 - 4 = 12 $$\n\n**Step 6: Calculate the percentage of the entire class that enrolled in hip-hop dance.**\nNow we compare the number of hip-hop students (12) to the total number of students in the class (20).\n$$ \\text{Percentage} = \\left( \\frac{\\text{Hip-Hop Students}}{\\text{Total Students}} \\right) \\times 100\\% $$\n$$ \\text{Percentage} = \\left( \\frac{12}{20} \\right) \\times 100\\% $$\n$$ \\text{Percentage} = 0.60 \\times 100\\% = 60\\% $$\n\nAlternatively, we could have solved this using percentages directly:\n1. Contemporary = 20%. Remaining = $100\\% - 20\\% = 80\\%$.\n2. Jazz = 25% of the remaining (80%). $0.25 \\times 80\\% = 20\\%$.\n3. Hip-Hop = Remaining - Jazz = $80\\% - 20\\% = 60\\%$.\n\nBoth methods yield the same result.\n\nFinal answer: 60"
+  },
+  "15": {
+   "gold": 125,
+   "pass": true,
+   "truncated": false,
+   "text": "To determine the maximum profit, we need to calculate the potential gain for both purchase plans based on their respective market growth rates and then compare them.\n\n**Step 1: Calculate the profit for the Jewelry Plan.**\n*   Initial Investment (Jewelry): $\\$5,000$\n*   Market Growth Rate: $2.5\\%$ (or $0.025$)\n*   Profit Formula: $\\text{Profit} = \\text{Initial Investment} \\times \\text{Growth Rate}$\n*   Calculation:\n    $$5,000 \\times 0.025 = 125$$\n*   The profit from investing in jewelry is **$\\$125$**.\n\n**Step 2: Calculate the profit for the Electronic Gadgets Plan.**\n*   Initial Investment (Electronic Gadgets): $\\$8,000$\n*   Market Growth Rate: $1.2\\%$ (or $0.012$)\n*   Profit Formula: $\\text{Profit} = \\text{Initial Investment} \\times \\text{Growth Rate}$\n*   Calculation:\n    $$8,000 \\times 0.012 = 96$$\n*   The profit from investing in electronic gadgets is **$\\$96$**.\n\n**Step 3: Compare the profits to find the maximum.**\n*   Jewelry Profit: $\\$125$\n*   Gadgets Profit: $\\$96$\n\nSince $125 > 96$, the merchant should choose the jewelry plan to maximize profit. The maximum achievable profit is $\\$125$.\n\nFinal answer: 125"
+  },
+  "16": {
+   "gold": 230,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the total distance covered by each train, we need to sum the distances traveled on both days.\n\n**Step 1: Identify the distance traveled on Day 1.**\nThe problem states that both trains travel westward for **80 miles**.\n\n**Step 2: Identify the distance traveled on Day 2.**\nThe problem states that the next day, they travel northward for **150 miles**.\n\n**Step 3: Calculate the total distance.**\nSince the question asks for the \"distance covered\" (which refers to the total path length traveled, not displacement), we simply add the distance from Day 1 and Day 2 together.\n\n$$ \\text{Total Distance} = \\text{Distance}_{\\text{Day 1}} + \\text{Distance}_{\\text{Day 2}} $$\n$$ \\text{Total Distance} = 80 \\text{ miles} + 150 \\text{ miles} $$\n$$ \\text{Total Distance} = 230 \\text{ miles} $$\n\nBoth trains cover the same total distance because they travel for the same duration and distances each day.\n\nFinal answer: 230"
+  },
+  "17": {
+   "gold": 57500,
+   "pass": true,
+   "truncated": false,
+   "text": "To find Jill's annual salary, we need to calculate her earnings from each job separately and then add them together.\n\n**Step 1: Calculate annual earnings as a teacher.**\n*   Hourly rate for teaching: $20 per hour.\n*   Hours worked per week as a teacher: 35 hours.\n*   Weeks worked per year: 50 weeks.\n\nFirst, find the weekly earnings for teaching:\n$$35 \\text{ hours/week} \\times \\$20/\\text{hour} = \\$700/\\text{week}$$\n\nNext, find the annual earnings for teaching:\n$$\\$700/\\text{week} \\times 50 \\text{ weeks/year} = \\$35,000$$\n\n**Step 2: Calculate annual earnings as a cheerleading coach.**\n*   Hourly rate for coaching: $30 per hour.\n*   Hours worked per week as a coach: 15 hours.\n*   Weeks worked per year: 50 weeks.\n\nFirst, find the weekly earnings for coaching:\n$$15 \\text{ hours/week} \\times \\$30/\\text{hour} = \\$450/\\text{week}$$\n\nNext, find the annual earnings for coaching:\n$$\\$450/\\text{week} \\times 50 \\text{ weeks/year} = \\$22,500$$\n\n**Step 3: Calculate the total annual salary.**\nAdd the annual earnings from teaching and coaching:\n$$\\$35,000 + \\$22,500 = \\$57,500$$\n\nFinal answer: 57500"
+  },
+  "18": {
+   "gold": 7,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the total number of dozens of eggs Claire will eat, we need to break down the problem into smaller steps: calculating the total number of eggs eaten per week, then for 4 weeks, and finally converting that total into dozens.\n\n**Step 1: Calculate the number of eggs eaten per day.**\nThe problem states that Claire makes a 3 egg omelet every morning.\nEggs per day = 3\n\n**Step 2: Calculate the number of days in 4 weeks.**\nThere are 7 days in one week.\nTotal days = 4 weeks $\\times$ 7 days/week = 28 days.\n\n**Step 3: Calculate the total number of eggs eaten in 4 weeks.**\nTotal eggs = (Eggs per day) $\\times$ (Total days)\nTotal eggs = 3 eggs/day $\\times$ 28 days\nTotal eggs = $3 \\times 20 + 3 \\times 8$\nTotal eggs = $60 + 24$\nTotal eggs = 84 eggs.\n\n**Step 4: Convert the total number of eggs to dozens.**\nOne dozen is equal to 12 items. To find the number of dozens, we divide the total number of eggs by 12.\nNumber of dozens = Total eggs / 12\nNumber of dozens = $84 / 12$\n\nLet's do the division:\n$12 \\times 7 = 84$\nSo, $84 / 12 = 7$.\n\nAlternatively, we could have converted the daily rate to dozens first:\n3 eggs per day is $3/12$ of a dozen, or $0.25$ dozens per day.\nTotal dozens = $0.25 \\text{ dozens/day} \\times 28 \\text{ days} = 7$ dozens.\n\nBoth methods yield the same result.\n\nFinal answer: 7"
+  },
+  "19": {
+   "gold": 6,
+   "pass": true,
+   "truncated": false,
+   "text": "To find the speed Marissa needs to walk the remaining distance, we will break the problem down into logical steps involving total distance, time already spent, and the required average speed.\n\n**Step 1: Determine the total distance Marissa needs to cover.**\nThe problem states that the trail is 12 miles long.\nTotal Distance = $12$ miles.\n\n**Step 2: Calculate the total time required to achieve the target average speed.**\nThe formula for average speed is:\n$$ \\text{Average Speed} = \\frac{\\text{Total Distance}}{\\text{Total Time}} $$\n\nWe are given:\n*   Target Average Speed = $4$ miles per hour.\n*   Total Distance = $12$ miles.\n\nWe can rearrange the formula to solve for Total Time:\n$$ \\text{Total Time} = \\frac{\\text{Total Distance}}{\\text{Average Speed}} $$\n$$ \\text{Total Time} = \\frac{12}{4} = 3 \\text{ hours} $$\n\nSo, Marissa must complete the entire hike in exactly 3 hours to maintain an average speed of 4 mph.\n\n**Step 3: Calculate the distance already walked.**\n*   First segment: 4 miles.\n*   Second segment: 2 miles.\nDistance Walked = $4 + 2 = 6$ miles.\n\n**Step 4: Calculate the remaining distance.**\nRemaining Distance = Total Distance - Distance Walked\nRemaining Distance = $12 - 6 = 6$ miles.\n\n**Step 5: Calculate the time already spent.**\n*   Time for first segment: 1 hour.\n*   Time for second segment: 1 hour.\nTime Spent = $1 + 1 = 2$ hours.\n\n**Step 6: Calculate the time remaining.**\nTime Remaining = Total Time Required - Time Spent\nTime Remaining = $3 \\text{ hours} - 2 \\text{ hours} = 1$ hour.\n\n**Step 7: Calculate the required speed for the remaining distance.**\nNow we need to cover the remaining 6 miles in the remaining 1 hour.\n$$ \\text{Required Speed} = \\frac{\\text{Remaining Distance}}{\\text{Time Remaining}} $$\n$$ \\text{Required Speed} = \\frac{6 \\text{ miles}}{1 \\text{ hour}} = 6 \\text{ miles per hour} $$\n\n**Verification:**\nIf she walks the first 4 miles in 1 hr, next 2 miles in 1 hr (total 6 miles in 2 hrs), and the final 6 miles in 1 hr at 6 mph:\nTotal Distance = $4 + 2 + 6 = 12$ miles.\nTotal Time = $1 + 1 + 1 = 3$ hours.\nAverage Speed = $12 / 3 = 4$ mph. This matches the requirement.\n\nFinal answer: 6"
+  }
+ },
+ "ife": {
+  "1": {
+   "pass": true,
+   "truncated": false,
+   "text": "OK"
+  },
+  "2": {
+   "pass": true,
+   "truncated": false,
+   "text": "42"
+  },
+  "3": {
+   "pass": true,
+   "truncated": false,
+   "text": "Red\nBlue\nGreen"
+  },
+  "4": {
+   "pass": true,
+   "truncated": false,
+   "text": "{\"name\": \"Alice\", \"age\": 30}"
+  },
+  "5": {
+   "pass": true,
+   "truncated": false,
+   "text": "YES"
+  },
+  "6": {
+   "pass": true,
+   "truncated": false,
+   "text": "The ocean covers most of the Earth's surface. It is home to countless diverse marine life forms."
+  },
+  "7": {
+   "pass": true,
+   "truncated": false,
+   "text": "DONE"
+  },
+  "8": {
+   "pass": true,
+   "truncated": false,
+   "text": "apple, banana, cherry, date, elderberry"
+  },
+  "9": {
+   "pass": true,
+   "truncated": false,
+   "text": "PING PING PING"
+  },
+  "10": {
+   "pass": true,
+   "truncated": false,
+   "text": "{\"answer\": 7}"
+  },
+  "11": {
+   "pass": true,
+   "truncated": false,
+   "text": "100"
+  },
+  "12": {
+   "pass": true,
+   "truncated": false,
+   "text": "a,b,c"
+  },
+  "13": {
+   "pass": true,
+   "truncated": false,
+   "text": "END"
+  },
+  "14": {
+   "pass": true,
+   "truncated": false,
+   "text": "- Item one\n- Item two"
+  },
+  "15": {
+   "pass": true,
+   "truncated": false,
+   "text": "X"
+  },
+  "16": {
+   "pass": true,
+   "truncated": false,
+   "text": "OLLEH"
+  },
+  "17": {
+   "pass": true,
+   "truncated": false,
+   "text": "1\n2\n3\n4"
+  },
+  "18": {
+   "pass": true,
+   "truncated": false,
+   "text": "yes"
+  },
+  "19": {
+   "pass": true,
+   "truncated": false,
+   "text": "Blue"
+  },
+  "20": {
+   "pass": true,
+   "truncated": false,
+   "text": "[1, 2, 3]"
+  }
+ }
+}

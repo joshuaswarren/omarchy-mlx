@@ -1,0 +1,9 @@
+@@pg qbase rc=0
+@@pg qbase PFBG {"mlx": "0.32.4.dev202610081002+145886c", "lengths": [454, 417, 363, 304], "seq_s": 1.4934, "batched_s": 10.7428, "ratio": 7.1934, "first_tokens_equal": true}
+@@pg qgpr rc=0
+@@pg qgpr PFBG {"mlx": "0.32.4.dev202610081925+qgpr.390f8a4", "lengths": [454, 417, 363, 304], "seq_s": 1.4897, "batched_s": 2.4393, "ratio": 1.6375, "first_tokens_equal": true}
+@@pg qgpr rc=0
+@@pg qgpr PFBG {"mlx": "0.32.4.dev202610081925+qgpr.390f8a4", "lengths": [454, 417, 363, 304], "seq_s": 1.4801, "batched_s": 2.393, "ratio": 1.6167, "first_tokens_equal": true}
+@@pg qbase rc=0
+@@pg qbase PFBG {"mlx": "0.32.4.dev202610081002+145886c", "lengths": [454, 417, 363, 304], "seq_s": 1.4807, "batched_s": 10.7658, "ratio": 7.2709, "first_tokens_equal": true}
+@@pg done 21:22:24

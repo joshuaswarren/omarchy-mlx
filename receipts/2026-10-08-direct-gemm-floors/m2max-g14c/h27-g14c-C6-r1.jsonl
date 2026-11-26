@@ -1,0 +1,25 @@
+{"k": "host", "arm": "C6", "mlx": "0.32.4.dev202610080329+8235d7c6", "device": "Apple M2 Max (G14C B1)"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "nt", "m": 512, "median_us": 2561.7, "tflops": 6.707, "sha": "cdcf4f99593e9872"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "nt", "m": 1024, "median_us": 4443.7, "tflops": 7.732, "sha": "569b2240de86e28b"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "nt", "m": 2048, "median_us": 8459.4, "tflops": 8.123, "sha": "1692a677aba4fd10"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "nt", "m": 4096, "median_us": 16484.0, "tflops": 8.338, "sha": "edc2693d92d2cb41"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "nn", "m": 512, "median_us": 2558.2, "tflops": 6.716, "sha": "ce068f54cf36a809"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "nn", "m": 1024, "median_us": 4245.1, "tflops": 8.094, "sha": "49492d561c9fb0bc"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "nn", "m": 2048, "median_us": 8233.8, "tflops": 8.346, "sha": "934355af61cdfeef"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "nn", "m": 4096, "median_us": 16064.9, "tflops": 8.555, "sha": "4b6c01c874eaec34"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "tn", "m": 512, "median_us": 2603.1, "tflops": 6.6, "sha": "9eb21dadd9167550"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "tn", "m": 1024, "median_us": 4268.5, "tflops": 8.05, "sha": "0e49fb5306db9f64"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "tn", "m": 2048, "median_us": 8176.1, "tflops": 8.405, "sha": "0dab83194d5d19f1"}
+{"k": "cell", "arm": "C6", "dtype": "f16", "ori": "tn", "m": 4096, "median_us": 16031.4, "tflops": 8.573, "sha": "818cfc8817b514d2"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "nt", "m": 512, "median_us": 2689.0, "tflops": 6.389, "sha": "e789c96293fd1e25"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "nt", "m": 1024, "median_us": 4912.9, "tflops": 6.994, "sha": "a1268f01fa66d171"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "nt", "m": 2048, "median_us": 9331.0, "tflops": 7.365, "sha": "4a4fcd69b1098a3f"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "nt", "m": 4096, "median_us": 18173.0, "tflops": 7.563, "sha": "300098c2464611a5"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "nn", "m": 512, "median_us": 2825.7, "tflops": 6.08, "sha": "d0472071ab202562"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "nn", "m": 1024, "median_us": 4684.6, "tflops": 7.335, "sha": "44f46c9578f1745a"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "nn", "m": 2048, "median_us": 9091.0, "tflops": 7.559, "sha": "5f70f172fbf26105"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "nn", "m": 4096, "median_us": 17804.4, "tflops": 7.719, "sha": "8915a46181fd8301"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "tn", "m": 512, "median_us": 2812.6, "tflops": 6.108, "sha": "7cc5450c48829004"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "tn", "m": 1024, "median_us": 4598.3, "tflops": 7.472, "sha": "d2b15b2761d8b56c"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "tn", "m": 2048, "median_us": 8866.6, "tflops": 7.75, "sha": "b7266fca9a5ed258"}
+{"k": "cell", "arm": "C6", "dtype": "bf16", "ori": "tn", "m": 4096, "median_us": 16338.4, "tflops": 8.412, "sha": "aa6919cc1570934c"}

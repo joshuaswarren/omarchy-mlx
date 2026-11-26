@@ -1,0 +1,25 @@
+RESULT {"op": "env", "compile_off": "1", "device": "Device(gpu, 0)", "mx": "<scratch>/tree-1860679/mlx/core.cpython-314-aarch64-linux-gnu.so"}
+RESULT {"op": "elementwise bf16 mul (8192)", "us_per_call": 5.2, "min_us": 5.0, "max_us": 32.2, "note": "", "blocks_us": [32.2, 5.1, 5.8, 5.2, 5.3, 5.0, 5.0]}
+RESULT {"op": "cast bf16->f32 (8192)", "us_per_call": 8.3, "min_us": 8.0, "max_us": 26.7, "note": "", "blocks_us": [26.7, 8.2, 8.3, 8.6, 8.5, 8.3, 8.0]}
+RESULT {"op": "cast f32->bf16 (8192)", "us_per_call": 8.5, "min_us": 8.0, "max_us": 9.0, "note": "", "blocks_us": [8.1, 8.0, 9.0, 8.4, 8.3, 8.6, 8.5]}
+RESULT {"op": "elementwise f32 mul (8192)", "us_per_call": 4.9, "min_us": 4.8, "max_us": 5.1, "note": "", "blocks_us": [4.9, 5.1, 4.8, 5.0, 5.0, 4.9, 4.8]}
+RESULT {"op": "square f32 (8192)", "us_per_call": 3.6, "min_us": 3.5, "max_us": 8.1, "note": "", "blocks_us": [3.6, 3.6, 3.5, 3.6, 3.5, 4.8, 8.1]}
+RESULT {"op": "mean last axis f32 (1,1,8192)", "us_per_call": 904.6, "min_us": 904.5, "max_us": 956.5, "note": "", "blocks_us": [956.5, 905.0, 904.8, 904.5, 904.5, 904.6, 905.0]}
+RESULT {"op": "rsqrt f32 (1,1,1)", "us_per_call": 8.0, "min_us": 7.9, "max_us": 9.5, "note": "", "blocks_us": [8.6, 9.5, 8.3, 8.2, 8.0, 7.9, 7.9]}
+RESULT {"op": "sigmoid f32 (1,1,256)", "us_per_call": 3.2, "min_us": 3.1, "max_us": 3.7, "note": "", "blocks_us": [3.7, 3.2, 3.2, 3.2, 3.1, 3.2, 3.1]}
+RESULT {"op": "argpartition (1,1,256) k=8", "us_per_call": 5.8, "min_us": 5.7, "max_us": 6.0, "note": "", "blocks_us": [5.8, 6.0, 5.8, 5.7, 5.8, 5.8, 6.0]}
+RESULT {"op": "take_along_axis (1,1,256)->(1,1,8)", "us_per_call": 3.2, "min_us": 3.1, "max_us": 3.3, "note": "", "blocks_us": [3.3, 3.2, 3.2, 3.3, 3.1, 3.2, 3.2]}
+RESULT {"op": "router matmul f32 (1,1,8192)@(8192,256)", "us_per_call": 74.5, "min_us": 73.9, "max_us": 75.9, "note": "", "blocks_us": [74.2, 74.2, 74.3, 75.0, 74.5, 73.9, 75.9]}
+RESULT {"op": "weighted expert sum f32 (1,1,8,4096)", "us_per_call": 12.6, "min_us": 12.5, "max_us": 63.9, "note": "", "blocks_us": [63.9, 12.9, 12.8, 12.5, 12.6, 12.5, 12.7]}
+RESULT {"op": "fast.rms_norm bf16 (1,1,8192) weight", "us_per_call": 41.7, "min_us": 41.5, "max_us": 42.1, "note": "", "blocks_us": [41.5, 41.7, 41.7, 41.8, 41.5, 41.6, 42.1]}
+RESULT {"op": "fast.rms_norm head bf16 (1,128,1,64)", "us_per_call": 5.9, "min_us": 5.6, "max_us": 5.9, "note": "", "blocks_us": [5.9, 5.9, 5.9, 5.9, 5.6, 5.7, 5.9]}
+RESULT {"op": "_scaled_rms_norm uncompiled", "us_per_call": 944.6, "min_us": 943.8, "max_us": 1035.2, "note": "", "blocks_us": [1035.2, 944.1, 945.3, 943.8, 945.1, 943.8, 944.6]}
+RESULT {"op": "_input_scaled_rms_norm uncompiled", "us_per_call": 23.7, "min_us": 23.6, "max_us": 30.4, "note": "", "blocks_us": [24.6, 29.5, 23.7, 30.4, 23.6, 24.2, 23.7]}
+RESULT {"op": "_residual_gate uncompiled", "us_per_call": 58.7, "min_us": 58.4, "max_us": 60.1, "note": "", "blocks_us": [60.1, 59.3, 59.3, 58.4, 59.0, 58.4, 58.7]}
+RESULT {"op": "sdpa q(1,128,1,64) kv(1,16,160,64)", "us_per_call": 184.1, "min_us": 184.1, "max_us": 184.8, "note": "", "blocks_us": [184.7, 184.8, 184.6, 184.1, 184.3, 184.1, 184.1]}
+RESULT {"op": "rope (1,128,1,64)", "us_per_call": 19.6, "min_us": 19.5, "max_us": 19.7, "note": "", "blocks_us": [19.6, 19.5, 19.6, 19.5, 19.6, 19.6, 19.7]}
+RESULT {"op": "quantized_matmul 4bit g64 (1,1,8192)x(8192,8192)", "us_per_call": 107.6, "min_us": 107.4, "max_us": 109.4, "note": "", "blocks_us": [108.6, 108.4, 109.4, 108.0, 107.6, 107.4, 107.6]}
+RESULT {"op": "gather_qmm 2bit g128 top8 (4096x4096, 16 experts)", "us_per_call": 293.1, "min_us": 291.5, "max_us": 294.8, "note": "37.7 MB of weights read per call", "blocks_us": [294.8, 293.9, 293.5, 293.1, 293.5, 292.4, 291.5]}
+RESULT {"op": "gather_qmm 2bit g128 top8 with MLX_OMARCHY_GATHER_QMM_WORD2=0 (old route)", "us_per_call": 1221.6, "min_us": 1218.4, "max_us": 1224.8, "note": "", "blocks_us": [1222.0, 1221.6, 1224.8, 1221.6, 1221.7, 1220.0, 1218.4]}
+RESULT {"op": "gather_qmm scalar route (SUB=0)", "us_per_call": 13977.4, "min_us": 13976.6, "max_us": 14697.5, "note": "", "blocks_us": [14697.5, 13988.9, 13976.6, 13992.2, 13977.4]}
+RESULT {"op": "dependent chain floor (bf16 mul)", "us_per_call": 11.1}

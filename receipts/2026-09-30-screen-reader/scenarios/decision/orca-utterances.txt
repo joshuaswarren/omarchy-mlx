@@ -1,0 +1,47 @@
+# scenario: decision (decision: card reading order)
+# total utterances: 44
+
+[21:08:54.324428] tab 
+[21:08:54.353695] Compare options toggle button not pressed.
+[21:08:54.561146] tab 
+[21:08:54.583788] Classify or score toggle button not pressed.
+[21:08:54.790020] tab 
+[21:08:54.814138] Conversation mode check box not checked.
+[21:08:55.020206] tab 
+[21:08:55.043292] History & constraints push button.
+[21:08:55.243716] tab 
+[21:08:55.269797] Output allowance in tokens combo box.
+[21:08:55.269845] Answer length: automatic.
+[21:08:55.269859] opens menu
+[21:08:55.472630] tab 
+[21:08:55.497371] Send push button.
+[21:08:55.694357] tab 
+[21:08:55.713931] Skip to message box link.
+[21:08:55.714938] Browse mode
+[21:08:55.928741] tab 
+[21:08:55.949393] banner
+[21:08:55.949444] Start a new conversation push button.
+[21:08:56.155433] tab 
+[21:08:56.178725] Open conversation history push button.
+[21:08:56.178786] opens dialog
+[21:08:56.179498] Focus mode
+[21:08:56.383804] tab 
+[21:08:56.406282] Prepare another computer or install an offline bundle push button.
+[21:08:56.406323] opens dialog
+[21:08:56.608397] tab 
+[21:08:56.628009] Open model and memory details push button.
+[21:08:56.628054] opens dialog
+[21:08:56.837555] tab 
+[21:08:56.866397] leaving banner.
+[21:08:56.866452] main content
+[21:08:56.866468] Show as text push button.
+[21:08:56.867147] Browse mode
+[21:08:57.066529] tab 
+[21:08:57.084929] How this was decided push button.
+[21:08:57.294649] tab 
+[21:08:57.324397] information
+[21:08:57.324452] Message entry Type a message. Enter sends, Shift+Enter adds a newline.
+[21:08:57.325209] Focus mode
+[21:08:57.526201] tab 
+[21:08:57.547819] Composer controls tool bar
+[21:08:57.547875] Compare options toggle button not pressed.

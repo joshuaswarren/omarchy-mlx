@@ -1,0 +1,41 @@
+G3DGPU wheel mlx_omarchy-0.32.4.dev202610160214+39f00215-cp314-cp314-linux_aarch64.whl sha256 e14d0a5f8a70255204ceae2ca8b872b029cb09aa211de0e113d50eb5f2f18cba
+G3DGPU kernel=7.1.12-2-20261013.18-sep-ARCH boot=b02ba9f6 governor=performance load1=2.08
+G3DGPU ane-run processes: 1 (the idle background load; command line removed)
+G3DGPU tree libmlx sha256 80107e18113638e220dbd391cbe95a967f3bcb26a646a7dbe86992c1f1acf0ef script 9ea770093802ab4a
+G3DGPU bits_group 3 64 rc=0 load1_after=2.06
+G3DGPU 3_64: libmlx loaded: ['$HOME/scratch/w71/g3d/g3d-tree/mlx/lib/libmlx.so']
+G3DGPU 3_64: default device: Device(gpu, 0) mlx 0.32.4.dev202610160214+39f00215 bits 3 group 64
+G3DGPU 3_64: T=1 k=8 E=16 K=2048 N=1024: cpu-ref 1.951e-03 scale 8.36 | default gpu-ref 1.951e-03 | scalar gpu-ref 1.951e-03 | default-vs-scalar 1.953e-03 OK
+G3DGPU 3_64: T=1 k=8 E=64 K=4096 N=512: cpu-ref 3.774e-03 scale 12.04 | default gpu-ref 3.774e-03 | scalar gpu-ref 3.774e-03 | default-vs-scalar 3.906e-03 OK
+G3DGPU 3_64: T=32 k=8 E=16 K=2048 N=1024: cpu-ref 3.907e-03 scale 10.94 | default gpu-ref 3.907e-03 | scalar gpu-ref 3.907e-03 | default-vs-scalar 3.906e-03 OK
+G3DGPU 3_64: T=3 k=2 E=4 K=192 N=40: cpu-ref 4.719e-04 scale 1.86 | default gpu-ref 4.719e-04 | scalar gpu-ref 4.719e-04 | default-vs-scalar 2.441e-04 OK
+G3DGPU 3_64: T=1 k=8 E=24 K=4096 N=4096: cpu-ref 3.893e-03 scale 14.52 | default gpu-ref 3.893e-03 ms/call 2.36 | scalar gpu-ref 3.893e-03 ms/call 69.25 | default-vs-scalar 3.906e-03 OK
+G3DGPU 3_64: peak memory GiB 2.41
+G3DGPU 3_64: RESULT PASS
+G3DGPU 3_64 stderr lines: 0
+G3DGPU bits_group 2 64 rc=0 load1_after=2.05
+G3DGPU 2_64: libmlx loaded: ['$HOME/scratch/w71/g3d/g3d-tree/mlx/lib/libmlx.so']
+G3DGPU 2_64: default device: Device(gpu, 0) mlx 0.32.4.dev202610160214+39f00215 bits 2 group 64
+G3DGPU 2_64: T=1 k=8 E=16 K=2048 N=1024: cpu-ref 3.096e-03 scale 8.10 | default gpu-ref 3.096e-03 | scalar gpu-ref 3.096e-03 | default-vs-scalar 1.953e-03 OK
+G3DGPU 2_64: T=1 k=8 E=64 K=4096 N=512: cpu-ref 3.815e-03 scale 12.95 | default gpu-ref 3.815e-03 | scalar gpu-ref 3.815e-03 | default-vs-scalar 3.906e-03 OK
+G3DGPU 2_64: T=32 k=8 E=16 K=2048 N=1024: cpu-ref 3.901e-03 scale 10.94 | default gpu-ref 3.901e-03 | scalar gpu-ref 3.901e-03 | default-vs-scalar 3.906e-03 OK
+G3DGPU 2_64: T=3 k=2 E=4 K=192 N=40: cpu-ref 4.841e-04 scale 1.81 | default gpu-ref 4.841e-04 | scalar gpu-ref 4.841e-04 | default-vs-scalar 9.537e-07 OK
+G3DGPU 2_64: T=1 k=8 E=24 K=4096 N=4096: cpu-ref 3.903e-03 scale 13.64 | default gpu-ref 3.903e-03 ms/call 1.91 | scalar gpu-ref 3.903e-03 ms/call 70.73 | default-vs-scalar 3.906e-03 OK
+G3DGPU 2_64: peak memory GiB 2.37
+G3DGPU 2_64: RESULT PASS
+G3DGPU 2_64 stderr lines: 0
+G3DGPU bits_group 2 128 rc=0 load1_after=2.04
+G3DGPU 2_128: libmlx loaded: ['$HOME/scratch/w71/g3d/g3d-tree/mlx/lib/libmlx.so']
+G3DGPU 2_128: default device: Device(gpu, 0) mlx 0.32.4.dev202610160214+39f00215 bits 2 group 128
+G3DGPU 2_128: T=1 k=8 E=16 K=2048 N=1024: cpu-ref 3.046e-03 scale 8.68 | default gpu-ref 3.046e-03 | scalar gpu-ref 3.046e-03 | default-vs-scalar 1.953e-03 OK
+G3DGPU 2_128: T=1 k=8 E=64 K=4096 N=512: cpu-ref 3.904e-03 scale 12.69 | default gpu-ref 3.904e-03 | scalar gpu-ref 3.904e-03 | default-vs-scalar 9.766e-04 OK
+G3DGPU 2_128: T=32 k=8 E=16 K=2048 N=1024: cpu-ref 3.894e-03 scale 10.68 | default gpu-ref 3.894e-03 | scalar gpu-ref 3.894e-03 | default-vs-scalar 3.906e-03 OK
+G3DGPU 2_128: T=3 k=2 E=4 K=256 N=40: cpu-ref 7.563e-04 scale 2.16 | default gpu-ref 7.563e-04 | scalar gpu-ref 7.563e-04 | default-vs-scalar 0.000e+00 OK
+G3DGPU 2_128: T=1 k=8 E=24 K=4096 N=4096: cpu-ref 3.894e-03 scale 13.35 | default gpu-ref 3.894e-03 ms/call 1.83 | scalar gpu-ref 3.894e-03 ms/call 71.04 | default-vs-scalar 3.906e-03 OK
+G3DGPU 2_128: peak memory GiB 2.36
+G3DGPU 2_128: RESULT PASS
+G3DGPU 2_128 stderr lines: 0
+G3DGPU trace 3 64 rc=0 stderr lines 139
+G3DGPU trace 2 64 rc=0 stderr lines 154
+G3DGPU trace 2 128 rc=0 stderr lines 156
+G3DGPU DONE out=$HOME/scratch/w71/g3d/g3d-gpu-jw16-1

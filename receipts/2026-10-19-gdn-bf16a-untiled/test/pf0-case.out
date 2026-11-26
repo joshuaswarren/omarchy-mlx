@@ -1,0 +1,9 @@
+[provenance] gdn_bf16a_pf_off mlx=0.32.4 device="Apple M1 Max (G13C C0)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+[gdn_bf16a_pf_off] device "Apple M1 Max (G13C C0)" legacy 0: default kernel 455, TILE=0 kernel 479
+[doctest] doctest version is "2.4.12"
+[doctest] run with "--help" for options
+[provenance] gdn_bf16a_pf_off mlx=0.32.4 device="Apple M1 Max (G13C C0)" driver="Mesa 26.3.0-devel (git-69bde15340)" subgroup_size=32
+===============================================================================
+[doctest] test cases: 1 | 1 passed | 0 failed | 7 skipped
+[doctest] assertions: 2 | 2 passed | 0 failed |
+[doctest] Status: SUCCESS!

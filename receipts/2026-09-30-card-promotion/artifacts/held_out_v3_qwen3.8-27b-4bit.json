@@ -1,0 +1,781 @@
+{
+  "suite_sha256": "5cce5bb75b02b3c7815c5e7ecc48212e51ffc5168af17d099f95fa51985a6ebb",
+  "chat_model": "qwen3.8-27b-4bit",
+  "prompts": [
+    {
+      "id": "v3-01",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 165.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.02,
+      "pass": true,
+      "reply": "Here is a comprehensive checklist for closing up your lake cabin for the winter, organized by category to help you stay on track.\n\n### **1. Plumbing & Water System (Most Critical)**\n*   [ ] **Shut off the main water supply** to the cabin.\n*   [ ] **Drain all pipes:** Open all faucets (hot and cold) to let water drain out.\n*   [ ] **Drain the water heater:** Open the drain valve at the bottom of the tank.\n*   [ ] **Drain sump pumps:** Remove water from the pit and ensure the pump is dry.\n*   [ ] **Drain toilets:** Flush to remove water, then pour a cup of RV antifreeze (pink) into the tank.\n*   [ ] **Drain sinks and tubs:** Pour a cup of RV antifreeze into each drain.\n*   [ ] **Disconnect hoses** from washing machines, dishwashers, and ice makers.\n*   [ ] **Check for leaks:** Ensure all drains are dry before leaving.\n\n### **2. Heating & Cooling**\n*   [ ] **Turn off the furnace/boiler:** Set to \"off\" or winter mode.\n*   [ ] **Drain the heating system** (if applicable): If you have a hot water or steam heat system, drain it to prevent freezing damage.\n*   [ ] **Turn off the AC:** Set thermostat to \"off\" or lowest setting.\n*   [ ] **Clean/replace HVAC filters** before closing up.\n*   [ ] **Check wood stove:** Ensure it’s clean, the damper is closed, and the chimney cap is in place.\n\n### **3. Electrical & Appliances**\n*   [ ] **Unplug all appliances:** Toaster, coffee maker, lamps, etc. (Do not unplug the refrigerator if you plan to keep it running for a short period, but most recommend unplugging).\n*   [ ] **Empty and clean the refrigerator/freezer:** Wipe down shelves, leave doors slightly ajar to prevent mold.\n*   [ ] **Turn off the main breaker** (optional but recommended for long-term closure to prevent electrical fires).\n*   [ ] **Check GFCI outlets:** Test and reset if needed.\n\n### **4. Exterior & Structure**\n*   [ ] **Clean gutters and downspouts:** Ensure they are clear of leaves/debris to prevent ice dams.\n*   [ ] **Inspect the roof:** Look for missing shingles or leaks; repair before winter.\n*   [ ] **Check the chimney:** Ensure it’s clean and capped to keep out animals.\n*   [ ] **Seal gaps:** Check for drafts around windows, doors, and vents. Use caulk or weatherstripping as needed.\n*   [ ] **Clean windows:** Inside and out, to avoid streaks under snow/ice.\n*   [ ] **Inspect the deck/dock:** Remove furniture, cushions, and plants. Check for rot or loose boards.\n*   [ ] **Drain outdoor spigots:** Open them to let water drain, then close.\n*   [ ] **Disconnect and store garden hoses:** Coil and store indoors to prevent freezing.\n\n### **5. Interior & Furnishings**\n*   [ ] **Clean all"
+    },
+    {
+      "id": "v3-02",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 167.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": true,
+      "reply": "Hosting a Thanksgiving dinner for twelve is a significant undertaking, but with the right plan, it can be smooth and enjoyable. Here is a comprehensive to-do list broken down by timeline:\n\n### **4–6 Weeks Before**\n*   [ ] **Confirm the guest list:** Send out invitations and confirm who is coming. Ask about dietary restrictions, allergies, or preferences (e.g., vegetarian, gluten-free).\n*   [ ] **Set a budget:** Determine how much you’re willing to spend on food, drinks, decorations, and gifts.\n*   [ ] **Plan the menu:** Decide on main dishes, sides, desserts, and drinks. For 12 people, you’ll need roughly:\n    *   1 whole turkey (14–16 lbs) or equivalent protein.\n    *   2–3 lbs of potatoes (for mashed/pureed).\n    *   1–2 cans of cranberry sauce or fresh cranberries.\n    *   Enough vegetables for 12 servings (green beans, corn, stuffing, etc.).\n    *   Desserts: 1–2 pies or a cake.\n*   [ ] **Check your kitchen equipment:** Ensure you have enough plates, glasses, cutlery, serving dishes, and utensils. Borrow or buy what’s missing.\n*   [ ] **Plan seating:** Arrange your dining table to comfortably fit 12 people. If needed, set up a buffet or additional seating area.\n\n### **3–4 Weeks Before**\n*   [ ] **Order or reserve the turkey:** If you’re buying a fresh turkey, order it now. If frozen, ensure your freezer has space.\n*   [ ] **Shop for non-perishables:** Buy wine, beer, soda, spices, canned goods, and other items that don’t spoil.\n*   [ ] **Plan decorations:** Choose a theme or color scheme. Buy or make centerpieces, candles, and table linens.\n*   [ ] **Assign tasks:** If you have help, assign specific roles (e.g., one person handles sides, another drinks, another cleanup).\n\n### **1–2 Weeks Before**\n*   [ ] **Thaw the turkey:** If frozen, move it to the refrigerator 3–4 days before cooking. (Rule of thumb: 1 day per 4–5 lbs in the fridge).\n*   [ ] **Prep non-perishable sides:** Make stuffing, cranberry sauce, or other items that can be made ahead and stored.\n*   [ ] **Confirm final menu details:** Finalize recipes and quantities for 12 people.\n*   [ ] **Plan the day-of schedule:** Write down a timeline for when each dish needs to go in the oven, be prepped, or served.\n\n### **3–5 Days Before**\n*   [ ] **Shop for fresh produce:** Buy vegetables, herbs, fruits, and dairy.\n*   [ ] **Prep make-ahead dishes:** Make mashed potatoes (can be frozen), gravy base, or desserts that can be stored.\n*   [ ] **Clean the house:** Do a deep clean of the kitchen, dining area, and bathrooms.\n*   [ ] **Set up decorations:** Put out table settings, centerpieces, and holiday decor.\n\n### **1–2 Days Before**"
+    },
+    {
+      "id": "v3-03",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 216.9,
+      "status": "complete",
+      "max_heartbeat_s": 0.01,
+      "pass": true,
+      "reply": "Replacing a bike inner tube is a straightforward repair that can be done with basic tools. Here are the steps you should follow:\n\n### **Tools You’ll Need:**\n- Tire levers (plastic or metal)\n- A new inner tube of the correct size and valve type\n- Pump (with appropriate nozzle)\n- Optional: Patch kit (in case you want to repair the old tube for future use)\n\n---\n\n### **Step-by-Step Instructions:**\n\n#### **1. Remove the Wheel from the Bike**\n- Shift your bike into a gear that makes it easier to remove the wheel (usually the smallest cog for rear wheels).\n- Open the quick-release lever or loosen the axle nuts.\n- For **rear wheels**: Shift to the smallest cog and gently pull the wheel out of the dropouts.\n- For **front wheels**: Simply lift the front of the bike and pull the wheel straight out.\n\n#### **2. Deflate the Tire Completely**\n- Even if you think it’s empty, press down on the tire to ensure all air is out. This makes removing the tire much easier and safer.\n\n#### **3. Remove One Tire Bead**\n- Insert a tire lever under the bead (the edge of the tire that sits in the rim) and pry it out.\n- Use a second lever to help pull the rest of that bead over the rim edge.\n- Once one side is free, you can usually pull the other side out by hand.\n\n#### **4. Remove the Inner Tube**\n- Pull one valve stem out of the rim hole first.\n- Gently pull the tube out, being careful not to pinch it against the tire or rim.\n- **Inspect the tire and rim** for any sharp objects (thorns, glass, spikes) that caused the puncture. Remove them to prevent re-puncturing.\n\n#### **5. Install the New Inner Tube**\n- Inflate the new tube slightly (just enough to give it shape) so it doesn’t get pinched.\n- Insert the valve stem into the rim hole first.\n- Tuck the tube evenly inside the tire, making sure it’s not twisted or folded.\n\n#### **6. Re-seat the Tire Bead**\n- Start at the valve and work your way around, pushing the tire bead back into the rim.\n- Use your hands to push the bead in until you reach the spot where it’s still out.\n- Use a tire lever to pop the last section of the bead into place. **Be careful not to pinch the tube.**\n- Once both beads are seated, check that the tire is evenly mounted on the rim.\n\n#### **7. Reinstall the Wheel**\n- Place the wheel back into the dropouts (front or rear).\n- Close the quick-release lever or tighten the axle nuts securely.\n\n#### **8. Inflate the Tire**\n- Attach your pump and inflate to the recommended pressure (printed on the tire sidewall).\n- Check that the tire is fully seated and not bulging or misaligned.\n\n#### **9. Test Ride**\n- Give the bike a gentle shake to ensure everything is secure.\n- Take it for a short test ride, checking that the tire holds air and rides smoothly.\n\n---\n\n### **Pro Tips:**\n- Always carry a spare tube, tire levers, and"
+    },
+    {
+      "id": "v3-04",
+      "category": "card-worthy",
+      "kind": "checklist",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 435.6,
+      "status": "complete",
+      "max_heartbeat_s": 0.01,
+      "pass": true,
+      "reply": "Here is a comprehensive packing list for a three-day business trip to Chicago. Since Chicago weather can be unpredictable, I have included options based on the season, but focused primarily on a **standard business casual/professional** wardrobe that is versatile and easy to pack.\n\n### 🧳 Clothing (The \"Capsule Wardrobe\" Approach)\n*Goal: Mix and match to create 3 distinct outfits without overpacking.*\n\n**Tops (4-5 items)**\n*   2x Button-down shirts (e.g., one white, one light blue or patterned)\n*   1x High-quality T-shirt or polo (for casual evenings or travel days)\n*   1x Blazer or Sport Coat (wear on the plane to save space)\n*   1x Sweater, cardigan, or lightweight jacket (for layering; Chicago can be chilly even in summer)\n\n**Bottoms (2-3 items)**\n*   1x Pair of dress trousers or chinos (wear on the plane)\n*   1x Pair of dark jeans or casual slacks (for evenings/weekends)\n*   *Optional:* 1x Pair of dress shorts or skirt (if applicable and season permits)\n\n**Undergarments & Socks**\n*   3x Pairs of underwear (one per day + spare)\n*   4-5 pairs of socks (include one pair for travel, one for each day, and a spare)\n\n**Footwear (2 pairs max)**\n*   1x Pair of professional dress shoes or loafers (wear on the plane)\n*   1x Pair of comfortable walking shoes, clean sneakers, or casual boots (for evenings/commuting)\n\n**Outerwear & Accessories**\n*   1x Weather-appropriate jacket or coat (packable if possible)\n*   1x Belt (match your shoes)\n*   1x Tie or pocket square (if required by dress code)\n\n---\n\n### 💼 Work Essentials\n*   Laptop + charger\n*   Phone + charger (and portable power bank if needed)\n*   Business cards (if you plan to network)\n*   Notepad and pen\n*   Any specific presentation materials or documents (print backups just in case)\n*   Headphones/earbuds\n\n---\n\n### 🧴 Toiletries & Personal Care\n*   Toothbrush, toothpaste, dental floss\n*   Deodorant (travel size)\n*   Shaving kit (if applicable)\n*   Hairbrush/comb and basic hair products\n*   Skincare: Face wash, moisturizer, sunscreen (SPF is important year-round)\n*   Medications (prescription and OTC pain relievers, cold medicine)\n*   Contact lenses + solution (if applicable)\n\n---\n\n### ✈️ Travel Comfort & Miscellaneous\n*   **For the plane/train:**\n    *   Neck pillow or travel pillow\n    *   Eye mask and earplugs (for sleeping)\n    *   Reusable water bottle (fill after security)\n    *   Snacks (if you have dietary preferences or to avoid airport prices)\n*   **Documents:**\n    *   ID/Passport (if international, but likely not needed for domestic US)\n    *"
+    },
+    {
+      "id": "v3-05",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 170.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": false,
+      "reply": "Here is a comparison of electric and gas stoves based on cost, cooking speed, and maintenance:\n\n### 1. Cost\n*   **Upfront Purchase Price:** Gas stoves are generally more expensive to buy than electric ones. A basic gas range typically costs $500–$1,000+, while a comparable electric range often ranges from $300–$800. However, high-end models of both types can exceed $2,000–$5,000+.\n*   **Installation Cost:** Gas stoves require a gas line connection, which can add $100–$500+ to installation if one isn’t already present. Electric stoves usually only require a 240-volt outlet, which is often already installed in most homes.\n*   **Operating Cost:** This depends heavily on your local utility rates and energy efficiency. In many regions, gas is cheaper per unit of energy than electricity, making gas stoves less expensive to run for high-heat cooking. However, electric induction cooktops (a type of electric stove) are highly efficient and can be cheaper to operate than gas because they transfer heat directly to the pan with minimal loss.\n\n### 2. Cooking Speed\n*   **Heating Up:** Gas burners heat up almost instantly when ignited, allowing for immediate high-heat searing or boiling. Electric coil and radiant elements take several minutes to reach full temperature, making them slower for tasks that require rapid heat changes.\n*   **Temperature Control:** Gas offers precise, real-time control; you can adjust the flame height instantly to lower or raise heat. Electric coils and radiant elements have thermal mass, meaning they retain heat even after the setting is lowered, which can lead to overcooking if not managed carefully. Induction electric stoves are an exception—they heat and cool down quickly, rivaling or exceeding gas in speed and control.\n*   **Boiling Water:** Gas stoves typically boil water faster than standard electric coils or radiant elements due to direct flame contact and higher peak temperatures. Induction stoves are the fastest at boiling water, often outperforming gas by 10–20%.\n\n### 3. Maintenance\n*   **Cleaning:** Electric stoves (especially smooth-top glass/ceramic models) are generally easier to clean. Spills can be wiped away once the surface cools, and there are no grates or burners to remove. Gas stoves require more effort: you must lift out grates, clean around burners, and scrub the drip pans. Grease and food particles can get trapped in gas burner ports, requiring periodic deep cleaning to prevent clogs.\n*   **Durability and Repairs:** Electric coils can be replaced individually if they burn out, which is a low-cost repair. Glass-top electric stoves are fragile and can crack if heavy pots are dropped or if thermal shock occurs (e.g., pouring cold water on a hot surface). Gas stoves have more moving parts (igniters, valves, burners) that can wear out over time. Igniter failures are a common repair issue with gas stoves, though parts are usually inexpensive and easy to replace.\n*   **Lifespan:** Both types can last 10–20 years with proper care. Gas stoves may have a slightly longer average lifespan due to fewer electronic"
+    },
+    {
+      "id": "v3-06",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 170.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "pass": false,
+      "reply": "Choosing between a Kindle (e-reader) and a paperback book often comes down to balancing cost, convenience, and physical comfort. Here is a breakdown of how they compare across your three specific criteria:\n\n### 1. Price\n*   **Kindle:**\n    *   **Upfront Cost:** High. You need to buy the device (typically $100–$350+ depending on model).\n    *   **Per-Book Cost:** Generally lower. E-books are often 20–50% cheaper than their print counterparts, especially for bestsellers and new releases. Used e-books are rare/non-existent, but digital discounts are frequent.\n    *   **Long-Term:** If you read more than 10–15 books a year, the per-book savings usually offset the initial device cost within 2–3 years.\n*   **Paperback:**\n    *   **Upfront Cost:** Low to moderate. No device needed; you just buy the book.\n    *   **Per-Book Cost:** Higher per unit, but no fixed overhead. You only pay for what you read.\n    *   **Long-Term:** More expensive if you read frequently, as there are no bulk discounts. However, used paperbacks can be very cheap ($1–$5), which is a significant advantage for budget readers.\n\n**Winner:** **Kindle** for heavy readers (volume discounts); **Paperback** for casual readers or those who buy used books.\n\n### 2. Portability\n*   **Kindle:**\n    *   **Weight/Size:** Extremely lightweight (4–8 oz) and thin. A single device can hold thousands of books, making it ideal for travel, commuting, or reading in bed.\n    *   **Convenience:** No need to carry multiple books; you can switch titles instantly.\n*   **Paperback:**\n    *   **Weight/Size:** Heavier and bulkier. Carrying multiple books becomes impractical quickly (e.g., 5 paperbacks can weigh over 2 lbs).\n    *   **Convenience:** You must physically carry each book. If you want to read three different books on a trip, you need space for all three.\n\n**Winner:** **Kindle**, decisively. It is the superior choice for travel and minimalism.\n\n### 3. Eye Strain\n*   **Kindle:**\n    *   **Technology:** Most Kindles use **E Ink** display technology, which reflects light like paper rather than emitting it (like an LCD/LED screen). This significantly reduces blue light exposure and glare.\n    *   **Adjustability:** You can adjust font size, line spacing, and brightness (if the model has a front light) to suit your vision.\n    *   **Caveat:** Some users still report dry eyes or fatigue after long sessions, especially in low-light conditions if the front light is too bright.\n*   **Paperback:**\n    *   **Technology:** No screen, no blue light, no glare. It is the most natural reading experience for human eyes.\n    *   **Adjustability:** Font size and spacing are fixed. If you have poor vision, you may need a magnifying glass or better lighting.\n    *   **Caveat:** Requires adequate ambient light; reading in the"
+    },
+    {
+      "id": "v3-07",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 177.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a comparison of the three biggest US mobile carriers (Verizon, AT&T, and T-Mobile) based on general market data.\n\n**Note:** Specific prices and perks change frequently due to promotions, regional variations, and contract terms. The data below reflects typical standard plans as of 2024–2025. Always verify current offers on each carrier’s website before making a decision.\n\n| Feature | **Verizon** | **AT&T** | **T-Mobile** |\n| :--- | :--- | :--- | :--- |\n| **Coverage** | • Widest 5G network (especially in rural areas).<br>• Strong LTE fallback.<br>• Best for nationwide reach, including remote locations. | • Second-largest 5G network.<br>• Strong urban and suburban coverage.<br>• Good rural coverage, but slightly less extensive than Verizon. | • Largest 5G network by subscriber count.<br>• Strong urban coverage with high speeds (5G Ultra Capacity).<br>• Rural 5G is expanding but may be less consistent than Verizon/AT&T in very remote areas. |\n| **Typical Price**<br>(Unlimited Data, 1 line) | • **$85–$90/mo**<br>• Often includes premium perks (e.g., Disney+, Apple TV+).<br>• Price increases with more lines. | • **$85–$90/mo**<br>• Similar structure to Verizon.<br>• Often includes perks like Disney+, Apple TV+. | • **$65–$80/mo**<br>• Generally the most affordable of the Big 3.<br>• “Magenta” plan is a popular mid-tier option. |\n| **Key Perks** | • **Premium Streaming:** Disney+, Apple TV+ (often included).<br>• **5G UW Access:** Priority access to fastest 5G speeds.<br>• **Customer Service:** Often rated highly for in-store support.<br>• **International Roaming:** Competitive day passes. | • **Premium Streaming:** Disney+, Apple TV+ (often included).<br>• **5G Access:** Broad 5G coverage.<br>• **AT&T TV Now/Streaming Bundles:** Flexible add-ons.<br>• **International Roaming:** Good day-pass options. | • **5G Speeds:** Often fastest in urban areas (5G Ultra Capacity).<br>• **T-Mobile Tuesdays:** Exclusive discounts on food, travel, and entertainment.<br>• **International Roaming:** Free data in 215+ countries (with Magenta Max).<br>• **No Contract:** All plans are month-to-month. |\n\n### Key Takeaways:\n- **Choose Verizon** if you prioritize the most extensive nationwide coverage, especially in rural areas, and want premium streaming perks.\n- **Choose AT&T** if you want a balance of strong coverage, competitive pricing, and similar perks to Verizon.\n- **Choose T-Mobile** if you want the lowest price, fastest urban 5G speeds, and value perks like T-Mobile Tuesdays and international roaming.\n\n*Always check each carrier’s current website for the latest plan details, promotions, and coverage maps in your specific area.*"
+    },
+    {
+      "id": "v3-08",
+      "category": "card-worthy",
+      "kind": "comparison",
+      "expect": "card",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 161.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": false,
+      "reply": "Here is a side-by-side comparison of renting versus buying a home over a five-year period. This breakdown assumes a standard scenario where the buyer makes a 20% down payment and holds the property for exactly five years before selling.\n\n### **Key Assumptions for Comparison**\n*   **Home Price:** $300,000\n*   **Rent (Monthly):** $1,500 (approx. 6% of home value annually)\n*   **Down Payment:** $60,000 (20%)\n*   **Mortgage Rate:** 7% fixed, 30-year term\n*   **Property Taxes & Insurance:** $250/month (varies by location)\n*   **Maintenance/Repairs:** 1% of home value annually ($2,500/year)\n*   **Home Appreciation:** 3% per year (conservative average)\n*   **Closing Costs (Buy):** $6,000 (2% of price)\n*   **Closing Costs (Sell):** $6,000 (2% of price)\n*   **Opportunity Cost:** Money not spent on housing is invested at 5% annual return.\n\n---\n\n### **Side-by-Side Financial Breakdown (5-Year Horizon)**\n\n| Category | **Renting** | **Buying** |\n| :--- | :--- | :--- |\n| **Initial Cash Outlay** | $0 (or 1 month rent + deposit = ~$3,000) | **$66,000** ($60k down + $6k closing) |\n| **Monthly Housing Cost** | $1,500 (Rent only) | ~$2,300* ($1,985 mortgage + $250 tax/ins + ~$67 maint) |\n| **Total Housing Payments (5 yrs)** | $90,000 ($1,500 × 60) | **$138,000** ($2,300 × 60) |\n| **Equity Built (Principal Paid)** | $0 | ~$15,000* (approx. 10% of loan paid off) |\n| **Home Value Change** | N/A | +$45,000 (3% appreciation × 5 yrs) |\n| **Sale Proceeds** | N/A | ~$345,000 (New value) – $6,000 (closing costs) = **$339,000** |\n| **Remaining Mortgage Balance** | N/A | ~$235,000 (approx. 78% of original loan) |\n| **Net Equity at Sale** | N/A | $339,000 – $235,000 = **$104,000** |\n| **Opportunity Cost (Invested Cash)** | $90,000 invested at 5% → **$114,678** | $66,000 invested at 5% → **$84,372** |\n| **"
+    },
+    {
+      "id": "v3-09",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 171.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a structured, efficient schedule for your Saturday garage cleanout, starting at 8:00 AM. This plan is designed to keep you moving and prevent decision fatigue by breaking the work into manageable blocks.\n\n### **Pre-8:00 AM (Optional Prep)**\n*   Gather supplies: Heavy-duty trash bags, boxes, labels/markers, a broom/mop, and a cart or dolly.\n*   Put on comfortable clothes and closed-toe shoes.\n\n---\n\n### **8:00 AM – 9:30 AM: The \"Quick Wins\" & Sorting Setup**\n*   **8:00 – 8:15:** Clear the floor. Move all items off the concrete to create a central workspace.\n*   **8:15 – 9:30:** Sort items into four piles/zones:\n    1.  **Keep** (Items you actively use or need)\n    2.  **Donate/Sell** (Good condition, but you don’t use)\n    3.  **Trash/Recycle** (Broken, expired, or useless)\n    4.  **Relocate** (Items that belong in the house, shed, or another room)\n*   *Tip:* Don’t overthink this. If you haven’t used it in 6–12 months, it likely goes to Donate or Trash.\n\n### **9:30 AM – 10:00 AM: Break**\n*   Step outside for fresh air. Hydrate and have a snack. This is crucial to maintain energy.\n\n### **10:00 AM – 11:30 AM: Deep Clean & Organization**\n*   **10:00 – 10:30:** Sweep/vacuum the floor. Wipe down walls, shelves, and windows if needed.\n*   **10:30 – 11:30:** Put away the **\"Keep\"** pile.\n    *   Group similar items together (e.g., tools, sports gear, seasonal decor).\n    *   Use bins or shelves to store them. Label everything clearly so you can find it later.\n\n### **11:30 AM – 12:30 PM: Disposal & Donation Run**\n*   **11:30 – 12:00:** Load up the trash/recycle bags and take them to your curb or dumpster.\n*   **12:00 – 12:30:** Load the **\"Donate/Sell\"** items into your car.\n    *   If selling, take photos now for online listings (Facebook Marketplace, eBay, etc.).\n    *   If donating, drop off at a local charity (Goodwill, Salvation Army, etc.) or schedule a pickup.\n\n### **12:30 PM – 1:30 PM: Lunch Break**\n*   Take a full hour off. Eat, relax, and reset. Do not work during this time.\n\n### **1:30 PM – 2:30 PM: Final Touches & Relocation**\n*   **1:30 – 2:00:** Move the **\"Relocate\"** pile to their proper spots in your home (e.g., extra"
+    },
+    {
+      "id": "v3-10",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 163.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a structured, realistic 6-month roadmap to take you from zero to intermediate proficiency (A2/B1 level) in Spanish. This plan assumes **30–45 minutes of focused study per day**, plus passive exposure.\n\n### **Core Principles**\n1. **Consistency > Intensity**: 30 minutes daily is better than 4 hours once a week.\n2. **Input + Output**: You need to listen/read (input) and speak/write (output).\n3. **Context over Rote Memorization**: Learn phrases, not isolated words.\n\n---\n\n### **Month 1: Foundations & Survival**\n*Goal: Understand basic greetings, introduce yourself, and handle simple transactions.*\n\n- **Grammar Focus**:\n  - Present tense of *ser* (to be) and *estar* (to be).\n  - Pronouns: Yo, tú, él/ella, nosotros, vosotros, ellos.\n  - Basic sentence structure (Subject-Verb-Object).\n  - Gender of nouns (el/la) and basic plurals.\n- **Vocabulary**: 300–500 words (numbers, colors, family, food, time).\n- **Actions**:\n  - Use a structured app (Duolingo, Babbel) or textbook for daily drills.\n  - Listen to beginner podcasts (e.g., *Coffee Break Spanish*, *Notes in Spanish*).\n  - **Output**: Record yourself introducing your family and daily routine. Listen back to correct pronunciation.\n- **Milestone**: You can order food, ask for directions, and introduce yourself confidently.\n\n---\n\n### **Month 2: Building Blocks & Daily Life**\n*Goal: Describe your day, talk about preferences, and navigate daily situations.*\n\n- **Grammar Focus**:\n  - Present tense of regular verbs (-ar, -er, -ir).\n  - Common irregular verbs: *tener* (to have), *hacer* (to do/make), *ir* (to go).\n  - Direct object pronouns (*me, te, lo, la*).\n  - Basic prepositions (en, a, de, con).\n- **Vocabulary**: Add 500–1,000 words (hobbies, weather, body parts, clothing).\n- **Actions**:\n  - Start shadowing: Listen to a native speaker and repeat immediately after them.\n  - Watch children’s shows or simple YouTube vlogs with Spanish subtitles (e.g., *Dreaming in Spanish*).\n  - **Output**: Write a short paragraph about your last weekend. Use a language exchange app (HelloTalk, Tandem) to get feedback.\n- **Milestone**: You can describe your daily routine and express likes/dislikes in detail.\n\n---\n\n### **Month 3: Past Tenses & Narration**\n*Goal: Tell stories about what you did yesterday or last year.*\n\n- **Grammar Focus**:\n  - Preterite tense (completed actions in the past).\n  - Imperfect tense (ongoing/habitual actions in the past).\n  - *Por* vs. *Para*.\n- **Vocabulary**: Add 1,000–2,000 words (travel, work, emotions).\n- **Actions**:\n  - Read graded readers"
+    },
+    {
+      "id": "v3-11",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 206.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "While every wedding is unique, a \"typical\" timeline for a traditional daytime or early-evening ceremony (e.g., 4:00 PM) follows a logical flow to ensure the couple and their teams are relaxed, on time, and ready for photos.\n\nHere is a standard **Wedding-Day Timeline** (assuming a 4:00 PM ceremony):\n\n### 🌅 Morning: Prep & Breakfast\n*   **6:30–7:30 AM:** Wake up, hydrate, and have a light breakfast.\n*   **7:30–8:30 AM:** Hair and makeup begins for the bride (and wedding party, if applicable). *Tip: Book hair/makeup to start 2–3 hours before the ceremony.*\n*   **8:00–9:00 AM:** Groom and groomsmen get ready.\n*   **9:30–10:30 AM:** Family photos (bride with parents, groom with parents).\n*   **10:30–11:30 AM:** Couple’s first look (optional but recommended for calming nerves and extra photos).\n*   **11:30 AM–12:30 PM:** Lunch for the couple and wedding party.\n\n### 📸 Midday: Photos & Details\n*   **12:30–1:30 PM:** Wedding party photos (bridesmaids, groomsmen, full group).\n*   **1:30–2:30 PM:** Detail shots (rings, invitations, shoes, bouquet) and candid couple photos.\n*   **2:30–3:00 PM:** Final touch-ups, hair/makeup check.\n*   **3:00–3:15 PM:** Couple gets into cars/transportation.\n*   **3:15–3:45 PM:** Travel to ceremony venue.\n\n### 💍 Afternoon: Ceremony\n*   **3:45–4:00 PM:** Guests arrive and are seated.\n*   **4:00–4:30 PM:** **Ceremony** (typically 20–30 minutes).\n*   **4:30–5:00 PM:** Post-ceremony couple photos (if not done earlier) and guest mingling begins.\n\n### 🥂 Evening: Reception\n*   **5:00–6:30 PM:** Cocktail Hour.\n    *   Couple takes final photos (if not done).\n    *   Guests enjoy drinks and appetizers.\n*   **6:30–7:00 PM:** Guests are seated for dinner.\n*   **7:00–8:30 PM:** Dinner service (typically 1.5 hours).\n*   **8:30–9:00 PM:** Toasts (best man, maid of honor, parents).\n*   **9:00–10:30 PM:** Dancing!\n    *   First dance.\n    *   Parent dances (optional).\n    *   Open dancing.\n*   **10:30–11:00 PM:** Cake cutting (symbolic; often served later or as dessert).\n*  "
+    },
+    {
+      "id": "v3-12",
+      "category": "card-worthy",
+      "kind": "timeline",
+      "expect": "card",
+      "components": [
+        "timeline"
+      ],
+      "titles": [
+        "Timeline (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 139.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a structured plan for your Friday, incorporating all your scheduled events with suggested buffer times to ensure you stay on track.\n\n### **Friday Schedule**\n\n*   **8:30 AM – 9:15 AM**: 🦷 **Dentist Appointment**\n    *   *Tip:* Arrive 10–15 minutes early to check in.\n*   **9:15 AM – 9:45 AM**: 🚗 **Travel/Buffer Time**\n    *   Use this time to commute or transition from the dentist to your work location.\n*   **9:45 AM – 10:00 AM**: ☕ **Pre-Sync Prep**\n    *   Review agenda items or get coffee before the meeting starts.\n*   **10:00 AM – 11:00 AM**: 💻 **Team Sync**\n    *   *(Assuming a standard 1-hour meeting; adjust if yours is shorter/longer.)*\n*   **11:00 AM – 12:00 PM**: 🏃‍♂️ **Travel to Gym**\n    *   Head straight to the gym after your sync.\n*   **12:00 PM – 1:30 PM**: 🏋️‍♂️ **Gym Session**\n    *   Work out, shower, and change.\n*   **1:30 PM – 2:00 PM**: 🍽️ **Lunch**\n    *   Grab a healthy post-workout meal.\n*   **2:00 PM – 6:30 PM**: 💼 **Work/Free Time**\n    *   Focus on deep work, emails, or any remaining tasks.\n*   **6:30 PM – 7:00 PM**: 🚗 **Travel to Dinner**\n    *   Leave work/home early enough to arrive on time.\n*   **7:00 PM – 9:00 PM**: 🍽️ **Dinner with Sam**\n    *   Enjoy your evening!\n\n### **Key Tips for Success:**\n1.  **Morning Rush:** Since the dentist is at 8:30, aim to leave home by **7:45–8:00 AM** (depending on your distance) to avoid stress.\n2.  **Gym Transition:** If the gym is far from your office, consider packing a change of clothes and toiletries in your bag before the 10 AM sync so you can head straight there.\n3.  **Dinner Prep:** Confirm the restaurant location with Sam in advance so you know exactly where to go after work.\n\nLet me know if you’d like help adjusting any of the buffer times or adding reminders!"
+    },
+    {
+      "id": "v3-13",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 57.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Based on the details you provided, here are the key facts about your vehicle:\n\n*   **Model Year:** 2019\n*   **Make/Model:** Honda Civic\n*   **Current Mileage:** 48,000 miles\n*   **Last Oil Change:** June (of the current year)\n\n"
+    },
+    {
+      "id": "v3-14",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        "Facts (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 14.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here are the key points from your statement:\n\n*   **Schedule Change:** The meeting has been rescheduled to Thursday.\n*   **Financial Status:** The budget is currently frozen.\n*   **Leadership:** Dana is leading the redesign effort."
+    },
+    {
+      "id": "v3-15",
+      "category": "card-worthy",
+      "kind": "facts",
+      "expect": "card",
+      "components": [
+        "facts"
+      ],
+      "titles": [
+        ""
+      ],
+      "promoted": [
+        false
+      ],
+      "elapsed_s": 122.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here are three quick facts about the Eiffel Tower:\n\n1. **It was originally meant to be temporary.** Built for the 1889 World's Fair, it was only supposed to stand for 20 years before being dismantled. It survived because engineers realized its value as a radio transmission tower.\n2. **It grows in the summer.** Due to thermal expansion, the iron structure can grow by up to 15 centimeters (about 6 inches) when temperatures rise.\n3. **It was the world's tallest structure for 41 years.** Standing at 300 meters (984 feet) plus its antenna, it held the record until the Chrysler Building in New York surpassed it in 1930.\n\n"
+    },
+    {
+      "id": "v3-16",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "comparison"
+      ],
+      "titles": [
+        "Comparison (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 169.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a comparison of Zoom and Google Meet, followed by a suggested agenda for your first call.\n\n### **Zoom vs. Google Meet: Key Differences**\n\n| Feature | Zoom | Google Meet |\n| :--- | :--- | :--- |\n| **Best For** | Large webinars, external clients, feature-rich meetings. | Teams already using Google Workspace (Gmail, Calendar, Docs). |\n| **Ease of Use** | Slightly more complex setup; many features to learn. | Very simple, intuitive interface; integrates seamlessly with Gmail/Calendar. |\n| **Integration** | Integrates with many third-party apps (Slack, Teams, etc.). | Deeply integrated with Google Workspace (Docs, Drive, Calendar). |\n| **Recording** | Cloud recording available on paid plans; local recording free. | Cloud recording requires a Google Workspace Business or Enterprise plan. |\n| **Security** | Strong encryption; end-to-end encryption available on paid plans. | End-to-end encryption for all meetings (even free tier). |\n| **Cost** | Free plan has a 40-minute limit for group meetings. Paid plans start at ~$13/user/month. | Free plan has a 60-minute limit for group meetings. Included in most Google Workspace paid plans. |\n| **Unique Features** | Breakout rooms, polls, whiteboard, advanced analytics. | Live captions in 40+ languages, noise cancellation, direct link to Google Docs/Slides. |\n\n**Recommendation:**\n- Choose **Google Meet** if your team is already using Google Workspace and you want simplicity, security, and seamless document sharing.\n- Choose **Zoom** if you need advanced features like breakout rooms, webinars, or frequent meetings with external parties who may not be in the Google ecosystem.\n\n---\n\n### **Suggested Agenda for Your First Call**\n\nSince this is your first call, the goal should be to establish rapport, clarify objectives, and set expectations. Here’s a concise 30–45 minute agenda:\n\n#### **1. Introductions & Icebreaker (5 mins)**\n- Brief introductions of all participants (name, role, key responsibilities).\n- Light icebreaker question to build rapport (e.g., “What’s one thing you’re looking forward to this quarter?”).\n\n#### **2. Purpose of the Call (5 mins)**\n- Clearly state why this call is happening.\n- Confirm that all attendees are the right people for this discussion.\n\n#### **3. Key Discussion Points (20 mins)**\n- **Project/Goal Overview:** Briefly outline the main objective or project scope.\n- **Current Status:** Share any relevant background information or recent updates.\n- **Open Questions/Concerns:** Invite participants to share their initial thoughts, concerns, or questions.\n- **Roles & Responsibilities:** Clarify who is responsible for what (RACI model if applicable).\n\n#### **4. Next Steps & Action Items (5 mins)**\n- Summarize key decisions made during the call.\n- Assign specific action items to individuals with deadlines.\n- Confirm the date/time for the next check-in or follow-up meeting.\n\n#### **5. Q&A & Wrap-Up (5 mins)**\n- Open floor for any final questions.\n- Thank participants for their time and contributions.\n\n---\n\n**Pro"
+    },
+    {
+      "id": "v3-17",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 166.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a comprehensive checklist to prepare your garden for spring, followed by a month-by-month planting timeline.\n\n### Part 1: Spring Garden Prep Checklist\n\n**Weeks Before the Last Frost (Late Winter/Early Spring)**\n- [ ] **Review Your Garden Plan:** Decide what you want to grow this year. Consider space, sun exposure, and previous successes/failures.\n- [ ] **Order Seeds & Bulbs:** Place orders for seeds, bulbs, and any new plants.\n- [ ] **Clean Up Debris:** Remove dead leaves, twigs, and plant debris from last fall to reduce overwintering pests and diseases.\n- [ ] **Sharpen Tools:** Clean, oil, and sharpen pruners, spades, and rakes.\n- [ ] **Check Soil Health:** If you haven’t done a soil test recently, send one in now to determine if you need lime, sulfur, or specific amendments.\n\n**2–4 Weeks Before the Last Frost (Early Spring)**\n- [ ] **Prune Perennials & Shrubs:** Cut back dormant perennials to 2–4 inches above the ground. Prune shrubs and roses (if in your zone) before new growth starts.\n- [ ] **Amend Soil:** Work compost, aged manure, or balanced fertilizer into garden beds. Add lime or sulfur if your soil test indicated pH adjustments were needed.\n- [ ] **Repair Beds & Borders:** Fix broken edging, replace mulch that has thinned or blown away, and level uneven areas.\n- [ ] **Start Seeds Indoors:** Begin starting long-maturing crops (tomatoes, peppers, eggplants) indoors under grow lights.\n- [ ] **Check Irrigation:** Turn on sprinklers, check hoses for leaks, and ensure drip lines are clear.\n\n**1–2 Weeks Before the Last Frost (Mid-Spring)**\n- [ ] **Direct Sow Cold-Hardy Crops:** Plant seeds that tolerate light frost (e.g., peas, spinach, radishes, lettuce, kale) directly in the garden.\n- [ ] **Transplant Hardy Seedlings:** Move frost-tolerant seedlings (like brassicas) into the garden if nights are consistently above 20°F (-6°C).\n- [ ] **Mulch Beds:** Apply a fresh layer of mulch (2–3 inches) around established perennials and shrubs to retain moisture and suppress weeds.\n- [ ] **Set Up Trellises & Supports:** Install stakes, cages, and trellises for climbing plants (beans, cucumbers, tomatoes) before they get too large.\n- [ ] **Monitor Weather:** Keep an eye on forecasts for late frosts; have row covers or cloths ready to protect tender transplants.\n\n**After the Last Frost (Late Spring)**\n- [ ] **Transplant Tender Crops:** Move tomatoes, peppers, basil, and other heat-loving plants into the garden.\n- [ ] **Direct Sow Warm-Season Crops:** Plant seeds that need warm soil (e.g., corn, squash, pumpkins, cucumbers, beans).\n- [ ] **Water Deeply:** Give all new transplants a thorough watering to help them establish.\n- [ ] **Mulch New Plantings:** Apply mulch around tender transplants to conserve moisture and regulate soil"
+    },
+    {
+      "id": "v3-18",
+      "category": "card-worthy",
+      "kind": "mixed",
+      "expect": "card",
+      "components": [
+        "checklist"
+      ],
+      "titles": [
+        "Checklist (from reply)"
+      ],
+      "promoted": [
+        true
+      ],
+      "elapsed_s": 18.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here are the action items from today's standup:\n\n*   **Priya**: Fix the login bug\n*   **Omar**: Update the docs\n*   **You**: Review the PR"
+    },
+    {
+      "id": "v3-19",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 58.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Cats purr for a variety of reasons, and while the exact mechanism is still being studied by scientists, it is generally understood that purring serves several different functions:\n\n1.  **Contentment and Comfort**: This is the most common association. Cats often purr when they are relaxed, happy, or being petted.\n2.  **Self-Soothing and Healing**: Cats also purr when they are stressed, in pain, or sick. The vibrations produced by purring (typically between 25 and 150 Hz) may help reduce inflammation, promote bone healing, and alleviate pain. This is sometimes referred to as a \"self-healing\" mechanism.\n3.  **Communication**: Kittens purr to communicate with their mothers, signaling that they are healthy and content. Adult cats may also use purring to communicate with humans or other cats, often as a way to say \"I am friendly\" or \"I want something.\"\n4.  **Anxiety or Fear**: Some cats purr when they are frightened or anxious, using the sound as a calming mechanism for themselves.\n\nIn short, purring is not just a sign of happiness; it’s a complex behavior that can indicate comfort, stress, pain, or communication."
+    },
+    {
+      "id": "v3-20",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 116.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Inflation is primarily caused by an increase in the general price level of goods and services over time. Economists generally identify two main types of causes: **demand-pull inflation** and **cost-push inflation**.\n\n### 1. Demand-Pull Inflation\nThis occurs when the demand for goods and services exceeds their supply. It is often summarized by the phrase: *\"Too much money chasing too few goods.\"*\n\nKey drivers include:\n- **Increased Consumer Spending:** When people have more disposable income or confidence, they buy more.\n- **Government Spending:** Large fiscal stimulus packages can increase aggregate demand.\n- **Monetary Policy:** If a central bank increases the money supply (e.g., through low interest rates or quantitative easing), more money circulates in the economy, driving up prices.\n- **Investment Boom:** High levels of business investment can increase demand for labor and materials, pushing up prices.\n\n### 2. Cost-Push Inflation\nThis occurs when the costs of production increase, leading producers to raise prices to maintain profit margins.\n\nKey drivers include:\n- **Rising Input Costs:** Increases in the price of raw materials (e.g., oil, metals, agricultural products) or energy.\n- **Wage Increases:** If workers demand higher wages (often due to labor shortages or strong unions), businesses may pass these costs on to consumers.\n- **Supply Shocks:** Disruptions in supply chains (e.g., due to pandemics, wars, or natural disasters) can reduce the availability of goods and drive up prices.\n- **Taxes and Regulations:** Higher taxes on businesses or stricter environmental regulations can increase production costs.\n\n### Other Contributing Factors\n- **Expectations:** If people expect prices to rise, they may spend more now and workers may demand higher wages preemptively, creating a self-fulfilling prophecy.\n- **Currency Depreciation:** A weaker domestic currency makes imported goods more expensive, contributing to inflation (often called \"imported inflation\").\n- **Structural Factors:** In some economies, inefficiencies in markets or lack of competition can also contribute to persistent inflation.\n\n### Summary\nInflation is rarely caused by a single factor. It usually results from a combination of monetary policy, fiscal policy, supply-side shocks, and economic expectations. Central banks (like the Federal Reserve in the U.S.) typically aim to keep inflation low and stable (often around 2% per year) by adjusting interest rates and managing the money supply."
+    },
+    {
+      "id": "v3-21",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 146.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "A heat pump works in winter by **reversing the standard refrigeration cycle** to move thermal energy from the outside air (or ground/water) into your home. Even when outdoor temperatures are below freezing, there is still heat energy present in the air; a heat pump extracts this low-level thermal energy and concentrates it to warm your interior.\n\nHere is the step-by-step process of how a heat pump operates in winter mode:\n\n### 1. **Evaporation (Heat Absorption)**\n   - A liquid refrigerant with a very low boiling point flows through the **outdoor coil** (evaporator).\n   - Even in cold winter air, the refrigerant is colder than the outside environment. As a result, it absorbs heat from the outdoor air and **boils**, turning into a low-pressure gas.\n   - *Note:* This is why heat pumps can still function in cold weather, though efficiency decreases as temperatures drop.\n\n### 2. **Compression (Heat Concentration)**\n   - The low-pressure gas is drawn into the **compressor** (located in the outdoor unit).\n   - The compressor squeezes the gas, which dramatically increases its **pressure and temperature**.\n   - This step is crucial: it raises the heat energy to a level high enough to be useful for heating your home.\n\n### 3. **Condensation (Heat Release)**\n   - The hot, high-pressure gas flows into the **indoor coil** (condenser).\n   - As it passes through this coil, it releases its heat into the indoor air. The refrigerant **condenses** back into a high-pressure liquid.\n   - A fan blows the warmed air across this coil and distributes it throughout your home via ducts or vents.\n\n### 4. **Expansion (Cooling the Refrigerant)**\n   - The high-pressure liquid passes through an **expansion valve**.\n   - This valve rapidly reduces the pressure, causing the refrigerant to cool down significantly.\n   - The now-cold, low-pressure liquid returns to the outdoor coil to repeat the cycle.\n\n### Key Points for Winter Operation:\n- **Energy Efficiency:** Heat pumps are highly efficient because they *move* heat rather than *generate* it (like a furnace burning gas or an electric resistance heater). For every 1 unit of electricity used, they can deliver 2–4 units of heat.\n- **Cold Weather Limitations:** As outdoor temperatures drop, the amount of available heat in the air decreases. Modern **cold-climate heat pumps** are designed to operate efficiently even at temperatures as low as -13°F (-25°C) or lower.\n- **Backup Heat:** In extremely cold conditions, a heat pump may be paired with an auxiliary electric heater or gas furnace to supplement heating when the heat pump alone cannot meet demand.\n\nIn summary, a winter heat pump acts like an \"air conditioner in reverse,\" extracting latent heat from the cold outside air and upgrading it to a higher temperature for indoor comfort."
+    },
+    {
+      "id": "v3-22",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 60.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "No, it is generally **not safe** to eat raw cookie dough.\n\nHere’s why:\n\n1.  **Raw Eggs**: Traditional cookie dough recipes contain raw eggs, which can harbor *Salmonella* bacteria. Eating them poses a risk of food poisoning, especially for young children, pregnant women, the elderly, and people with weakened immune systems.\n2.  **Raw Flour**: Raw flour is not sterile. It can contain *E. coli* or other bacteria from the wheat field. The heat of baking kills these pathogens, but eating raw flour does not.\n\n**Safer Alternatives:**\n*   **Commercial \"Edible\" Cookie Dough**: Many brands now sell cookie dough specifically made to be eaten raw. These use pasteurized eggs and heat-treated flour, making them safe for consumption without baking.\n*   **Homemade Safe Version**: You can make your own edible cookie dough by using pasteurized eggs and heat-treating the flour (e.g., baking it in a low oven for 5–10 minutes) before mixing.\n\nIn summary, while the risk from a small amount may be low for healthy adults, it is best to avoid eating traditional raw cookie dough or choose a specifically designed edible version."
+    },
+    {
+      "id": "v3-23",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 77.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Elias had kept the light at Point Serenity for forty years. To him, the lighthouse wasn’t just a building; it was a heartbeat. *Thump-thump* went the old diesel generator, and *whoosh-whoosh* went the wind against the salt-crusted glass.\n\nOne stormy night, a young fisherman named Leo stumbled up the cliff path, soaked to the bone and shivering. He didn’t speak at first, just stared at the massive beam sweeping across the black water.\n\n\"Is it working?\" Leo asked, his voice cracking.\n\nElias nodded, pouring two mugs of hot cocoa from the kettle on the stove. \"It’s always working, son. Even when you can’t see it.\"\n\nLeo sat by the fire, watching the light cut through the rain. \"My boat is out there,\" he whispered. \"I lost sight of it in the fog.\"\n\nElias didn’t offer empty promises. He simply walked to the window, adjusted the lens with a gentle twist of his hand, and increased the intensity. The beam grew brighter, piercing the mist with a new, sharp clarity.\n\n\"Look,\" Elias said softly.\n\nLeo squinted. Through the swirling white, a small silhouette emerged—a boat, rocking but steady, guided by the very light Elias had just strengthened.\n\nAs Leo rushed back down to his vessel, Elias watched from the gallery. He didn’t feel like a hero. He just felt the familiar comfort of the routine, knowing that as long as he was there, the light would hold. And in the dark, holding on is enough."
+    },
+    {
+      "id": "v3-24",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 111.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "The primary difference between baking soda and baking powder lies in their chemical composition and how they react to create leavening (the process that makes baked goods rise).\n\n**1. Baking Soda (Sodium Bicarbonate)**\n*   **Composition:** It is a pure leavening agent consisting only of sodium bicarbonate ($NaHCO_3$).\n*   **How it works:** It requires an **acid** and a **liquid** to activate. When mixed with an acidic ingredient (like buttermilk, yogurt, lemon juice, vinegar, or brown sugar) and a liquid, it releases carbon dioxide gas immediately.\n*   **Usage:** Use baking soda when your recipe already contains an acidic ingredient. If you use it without an acid, the baked good will taste bitter and may not rise properly.\n\n**2. Baking Powder**\n*   **Composition:** It is a combination of baking soda, an acid (usually cream of tartar or sodium aluminum sulfate), and a starch (like cornstarch) to prevent premature reaction.\n*   **How it works:** It is a \"complete\" leavening agent that only needs a **liquid** to activate.\n    *   **Single-acting:** Reacts immediately when mixed with liquid.\n    *   **Double-acting (most common):** Reacts once when mixed with liquid and again when exposed to heat in the oven. This provides a second rise during baking.\n*   **Usage:** Use baking powder when your recipe does not contain a significant acidic ingredient (e.g., recipes with neutral ingredients like milk, eggs, and sugar).\n\n**Key Takeaways:**\n*   **Strength:** Baking soda is about 3–4 times stronger than baking powder. You cannot substitute them one-for-one without adjusting the recipe’s acidity and quantity.\n*   **Flavor:** Baking soda can leave a soapy or bitter taste if not neutralized by acid. Baking powder is designed to be flavor-neutral when used correctly.\n*   **Substitution:**\n    *   To substitute baking powder for baking soda: Use 3 times as much baking powder.\n    *   To substitute baking soda for baking powder: Use 1/3 as much baking soda **and** add an acid (like cream of tartar or lemon juice) to the recipe.\n\nIn short: **Baking soda needs acid; baking powder has its own built-in acid.**"
+    },
+    {
+      "id": "v3-25",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 156.3,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "**Compound interest** is the process of calculating a return on an initial amount of money and on the accumulated interest from previous periods. It is often described as \"interest on top of interest.\"\n\nHere is a step-by-step explanation of how it works, including the formula and an example.\n\n### 1. The Core Concept\nUnlike **simple interest**, which is calculated only on the original principal, compound interest is calculated on:\n1. The **original principal**.\n2. All the **accumulated interest** from previous periods.\n\nThis means that as time passes, your money grows faster because you are earning interest on the interest you have already earned.\n\n### 2. The Formula\nThe standard formula for compound interest is:\n\n$$A = P \\left(1 + \\frac{r}{n}\\right)^{nt}$$\n\nWhere:\n*   **A** = The future value of the investment/loan, including interest.\n*   **P** = The principal investment amount (the starting balance).\n*   **r** = The annual interest rate (decimal) (e.g., 5% = 0.05).\n*   **n** = The number of times that interest is compounded per year (e.g., monthly = 12, quarterly = 4).\n*   **t** = The number of years the money is invested or borrowed for.\n\n### 3. Step-by-Step Example\nImagine you invest **$1,000** at an annual interest rate of **5%**, compounded annually (once per year) for **3 years**.\n\n*   **Year 1:**\n    *   Interest earned: $1,000 \\times 0.05 = \\$50$\n    *   New Balance: $1,000 + 50 = \\$1,050$\n    *   *(You earned $50 on the original $1,000.)*\n\n*   **Year 2:**\n    *   Interest earned: $1,050 \\times 0.05 = \\$52.50$\n    *   New Balance: $1,050 + 52.50 = \\$1,102.50$\n    *   *(You earned $52.50, which is more than Year 1 because you are earning interest on the $50 from Year 1.)*\n\n*   **Year 3:**\n    *   Interest earned: $1,102.50 \\times 0.05 = \\$55.13$ (rounded)\n    *   New Balance: $1,102.50 + 55.13 = \\$1,157.63$\n\n**Total Interest Earned:** $157.63\n**Final Amount (A):** $1,157.63\n\n### 4. Why Frequency Matters\nThe more frequently interest is compounded, the faster your money grows. This is because the \"interest on interest\" starts accruing sooner.\n\n*   **Annually (n=1):** $1,000 \\times (1 + 0.05/1)^{1\\times3} = \\$1,1"
+    },
+    {
+      "id": "v3-26",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 12.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Gray skies weep softly,\nLeaves drift on the wet cobble,\nChill seeps into bone."
+    },
+    {
+      "id": "v3-27",
+      "category": "plain",
+      "kind": "none",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 151.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Apologizing to a coworker can feel awkward, but doing it well is crucial for maintaining professional relationships and trust. Here’s a step-by-step guide to making a sincere and effective apology:\n\n### 1. **Acknowledge the Specific Mistake**\n   - Be clear about what you did wrong. Avoid vague statements like “I’m sorry if I offended you.”\n   - **Example:** “I realize that in yesterday’s meeting, I interrupted you multiple times and didn’t let you finish your point.”\n\n### 2. **Take Full Responsibility**\n   - Own your actions without making excuses or shifting blame. Even if there were contributing factors, focus on your part.\n   - **Avoid:** “I’m sorry I was late, but the traffic was terrible.”\n   - **Try:** “I apologize for being unprepared for the client presentation. I should have reviewed the materials more thoroughly.”\n\n### 3. **Express Genuine Regret**\n   - Show that you understand how your actions affected them or the team.\n   - **Example:** “I know my comments made you feel undervalued, and I’m truly sorry for that.”\n\n### 4. **Make Amends (If Appropriate)**\n   - Offer a concrete way to fix the situation or prevent it from happening again.\n   - **Example:** “I’d like to schedule a time to go over the project details so we’re both on the same page.”\n   - Or: “I’ll make sure to send you a copy of all relevant documents in the future.”\n\n### 5. **Keep It Professional and Concise**\n   - Don’t over-explain or dwell on the issue. A brief, sincere apology is often more powerful than a long speech.\n   - Choose the right medium: A face-to-face conversation is usually best for significant issues, but a quick email or chat message may suffice for minor misunderstandings.\n\n### 6. **Follow Through**\n   - The most important part of an apology is changing your behavior. Ensure you don’t repeat the same mistake.\n   - If you promised to do something (e.g., send documents, listen more actively), make sure you actually do it.\n\n### Example Script:\n> “Hi [Name], I wanted to apologize for my tone during our discussion earlier. I was frustrated with the deadline, but that’s no excuse for speaking to you disrespectfully. I value our collaboration and am sorry for making things tense. Let’s reset and focus on getting this project across the finish line.”\n\n### Key Tips:\n- **Timing matters:** Apologize as soon as you realize your mistake, but give yourself a moment to cool down if emotions are high.\n- **Don’t expect an immediate response:** Give your coworker space to process the apology.\n- **Move forward:** Once you’ve apologized and made amends, don’t keep bringing it up. Let the relationship heal naturally through positive interactions.\n\nA sincere apology can actually strengthen a working relationship by showing maturity, accountability, and respect."
+    },
+    {
+      "id": "v3-28",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 40.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Photosynthesis is a complex biological process that occurs primarily in the chloroplasts of plant cells, beginning with the light-dependent reactions where chlorophyll absorbs sunlight to split water molecules into oxygen and hydrogen ions, while generating energy carriers like ATP and NADPH. These high-energy molecules then fuel the light-independent reactions, also known as the Calvin cycle, which take place in the stroma of the chloroplast. During this phase, carbon dioxide from the atmosphere is fixed and reduced using the energy stored in ATP and NADPH to synthesize glucose, a stable form of chemical energy that the plant uses for growth and metabolism. The net result of these interconnected steps is the conversion of light energy into chemical energy, releasing oxygen as a byproduct and providing the foundational organic compounds necessary for life on Earth."
+    },
+    {
+      "id": "v3-29",
+      "category": "near-miss",
+      "kind": "list-in-prose",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 49.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "The lunar cycle begins with the New Moon, a phase where the moon is positioned between the Earth and the Sun, rendering it invisible from our perspective as its illuminated side faces away from us. As the moon moves along its orbit, a thin sliver of light appears on the right side, marking the Waxing Crescent phase. This illuminated portion grows larger each night until it reaches the First Quarter, where exactly half of the moon’s face is lit.\n\nContinuing its journey, the moon becomes a Gibbous shape as more than half of its surface is illuminated, eventually reaching the Full Moon. At this peak, the Earth sits between the Sun and the moon, allowing us to see the entire lit face. After this point, the cycle reverses; the illuminated area begins to shrink on the right side, transitioning into a Waning Gibbous phase. The moon then returns to a half-lit state known as the Last Quarter, before finally fading into a Waning Crescent until it disappears again at the New Moon, completing the cycle."
+    },
+    {
+      "id": "v3-30",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 12.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here are four planets in our solar system:\n\n1. **Mercury**\n2. **Venus**\n3. **Earth**\n4. **Mars**"
+    },
+    {
+      "id": "v3-31",
+      "category": "near-miss",
+      "kind": "short-list",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 35.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Two excellent houseplants that thrive in low-light conditions are:\n\n1.  **Snake Plant (Sansevieria/Dracaena trifasciata)**: This plant is incredibly hardy and tolerant of neglect. It can survive in very low light, requires minimal watering, and is known for its air-purifying qualities.\n2.  **Pothos (Epipremnum aureum)**: A fast-growing, trailing vine that adapts well to low light. While it grows more slowly in dim conditions, it remains healthy and is very forgiving of inconsistent care.\n\nBoth plants are beginner-friendly and can tolerate a variety of indoor environments with limited natural light."
+    },
+    {
+      "id": "v3-32",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 38.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here is a bash one-liner to count lines in all `.txt` files:\n\n```bash\nwc -l *.txt\n```\n\n### Explanation:\n- `wc -l`: Counts the number of lines (`-l` flag).\n- `*.txt`: Expands to all files in the current directory with a `.txt` extension.\n\n### If you want only the total count (not per file):\n```bash\ncat *.txt | wc -l\n```\n\n### If you want to include subdirectories:\n```bash\nfind . -name \"*.txt\" -exec wc -l {} +\n```\n\nOr for a clean total across all subdirectories:\n```bash\nfind . -name \"*.txt\" -exec cat {} + | wc -l\n```"
+    },
+    {
+      "id": "v3-33",
+      "category": "near-miss",
+      "kind": "code-only",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 7.0,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "```sql\nSELECT * FROM orders ORDER BY order_date DESC LIMIT 10;\n```"
+    },
+    {
+      "id": "v3-34",
+      "category": "near-miss",
+      "kind": "table-noun",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 121.2,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "A **lookup table** (also known as a reference table or dimension table) in a database is a specialized type of table used to store a predefined, relatively static list of values that are frequently referenced by other tables.\n\n### Key Characteristics:\n1. **Static or Slowly Changing Data**: The data in a lookup table changes infrequently (e.g., country names, product categories, status codes).\n2. **Small Size**: It typically contains a limited number of rows compared to transactional tables.\n3. **Referential Integrity**: Other tables (often called fact or transaction tables) reference the lookup table via a foreign key.\n\n### Purpose:\n- **Normalization**: Instead of storing redundant text values (e.g., \"Active,\" \"Inactive\") in every row of a large table, you store a small code (e.g., 1 for Active, 2 for Inactive) and link it to the lookup table.\n- **Data Consistency**: Ensures that only valid, predefined values are used across the database.\n- **Efficiency**: Reduces storage space and can improve query performance when properly indexed.\n\n### Example:\nConsider an `Orders` table with a `Status` column. Instead of storing the text \"Shipped\" in every row, you might have:\n\n**Lookup Table: `OrderStatus`**\n| StatusID | StatusName   |\n|----------|--------------|\n| 1        | Pending      |\n| 2        | Shipped      |\n| 3        | Delivered    |\n\n**Transaction Table: `Orders`**\n| OrderID | CustomerID | StatusID |\n|---------|------------|----------|\n| 101     | 5          | 2        |\n\nHere, `StatusID` in the `Orders` table is a foreign key referencing `StatusID` in the `OrderStatus` lookup table.\n\n### Common Use Cases:\n- Country/State/City codes\n- Product categories or types\n- Employee job titles or departments\n- Order statuses (e.g., New, Processing, Shipped)\n- Currency codes\n\n### Benefits:\n- **Maintainability**: To change a status name, you only update one row in the lookup table instead of thousands of rows in transactional tables.\n- **Data Integrity**: Prevents invalid or misspelled values (e.g., \"Shiped\" vs. \"Shipped\").\n- **Scalability**: Keeps large transactional tables lean and efficient.\n\nIn summary, a lookup table acts as a dictionary or code list that provides meaning to numeric or short codes used in other parts of the database."
+    },
+    {
+      "id": "v3-35",
+      "category": "near-miss",
+      "kind": "explanation-with-bullets",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 45.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "Here is how vaccines train the immune system:\n\n*   **Exposure without Illness:** Vaccines introduce a harmless version of a pathogen (such as an inactivated virus, a piece of its protein, or genetic instructions) to the body. This triggers an immune response without causing the actual disease.\n*   **Antibody Production:** The immune system identifies the vaccine component as a threat and produces specific antibodies designed to neutralize that particular pathogen.\n*   **Memory Cell Creation:** The process creates \"memory\" B and T cells that persist in the body long after the initial response.\n*   **Rapid Future Response:** If the real pathogen enters the body later, these memory cells recognize it immediately and launch a faster, stronger attack to prevent infection or severe symptoms."
+    },
+    {
+      "id": "v3-36",
+      "category": "near-miss",
+      "kind": "history",
+      "expect": "none",
+      "components": [],
+      "titles": [],
+      "promoted": [],
+      "elapsed_s": 65.1,
+      "status": "complete",
+      "max_heartbeat_s": 0.0,
+      "events": [
+        {
+          "type": "error",
+          "message": "events unavailable: Expecting value: line 1 column 1 (char 0)"
+        }
+      ],
+      "pass": true,
+      "reply": "The French Revolution (1789–1799) was a period of radical social and political upheaval in France that dismantled the absolute monarchy and established a republic. Key events include:\n\n*   **Causes:** Severe financial crisis, social inequality between the three estates (clergy, nobility, and commoners), and Enlightenment ideas promoting liberty and equality.\n*   **1789:** The Estates-General convened, leading to the formation of the National Assembly. The storming of the Bastille on July 14, 1789, became a symbol of popular revolt.\n*   **Abolition of Feudalism:** The Declaration of the Rights of Man and of the Citizen was adopted, establishing principles of liberty, equality, and sovereignty.\n*   **Reign of Terror (1793–1794):** Led by Maximilien Robespierre and the Committee of Public Safety, this period saw mass executions via guillotine to eliminate perceived enemies of the revolution.\n*   **End:** The Thermidorian Reaction ended the Terror, and in 1799, Napoleon Bonaparte seized power in a coup d'état, marking the end of the revolutionary era and the beginning of his rise to power.\n\nThe Revolution profoundly influenced modern concepts of democracy, human rights, and secular governance."
+    }
+  ],
+  "_path": "<home>/agents/MarkdownCards/results/held_out_v3_qwen3.8-27b-4bit.json"
+}

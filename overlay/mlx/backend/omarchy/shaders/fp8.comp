@@ -1,0 +1,170 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// FP8 (E4M3) conversion, matching fast::ConvertFP8 in
+// mlx/backend/cpu/unary_ops.h bit for bit: the same round-to-nearest-even
+// encode with saturation to +/-448 (0x7E), and the decode through fp16 bits
+// scaled by 256 (which maps the reserved 0x7F/0xFF patterns to +/-256, the
+// upstream behavior).
+//
+// MLX stores fp8 arrays as dense uint8 bytes. This backend has no 8-bit
+// storage-buffer path, so byte payloads travel as little-endian uint32 words:
+// to_fp8 packs four encoded bytes per output word (a trailing partial word
+// writes into the page-rounded buffer slack past the element count), and
+// from_fp8 unpacks four bytes per input word. Byte-side offsets must be
+// 4-byte aligned, which every freshly allocated conversion array is.
+
+#version 460
+
+#ifdef USE_FP16
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#elif defined(USE_BF16)
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+#endif
+
+layout(local_size_x = 256) in;
+
+#ifdef FP8_TO_FLOAT
+layout(set = 0, binding = 0, std430) readonly buffer Bytes {
+  uint values[];
+} byte_data;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+#ifdef USE_FP16
+  float16_t values[];
+#elif defined(USE_BF16)
+  uint16_t values[];
+#else
+  float values[];
+#endif
+} output_data;
+#else
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+#ifdef USE_FP16
+  float16_t values[];
+#elif defined(USE_BF16)
+  uint16_t values[];
+#else
+  float values[];
+#endif
+} input_data;
+layout(set = 0, binding = 3, std430) writeonly buffer Bytes {
+  uint values[];
+} byte_data;
+#endif
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+} params;
+
+#ifndef FP8_TO_FLOAT
+float load_element(uint index) {
+#ifdef USE_FP16
+  return float(input_data.values[params.lhs_offset + index]);
+#elif defined(USE_BF16)
+  return bf16_load(input_data.values[params.lhs_offset + index]);
+#else
+  return input_data.values[params.lhs_offset + index];
+#endif
+}
+#else
+void store_element(uint index, float value) {
+#ifdef USE_FP16
+  output_data.values[params.output_offset + index] = float16_t(value);
+#elif defined(USE_BF16)
+  output_data.values[params.output_offset + index] = bf16_store(value);
+#else
+  output_data.values[params.output_offset + index] = value;
+#endif
+}
+#endif
+
+
+#ifdef FP8_TO_FLOAT
+float fp8_decode(uint bits) {
+  // (bits & 127) << 7 reinterprets the E4M3 exponent and mantissa as fp16
+  // bits; the missing 2^8 exponent bias lands in the scale factor.
+  float magnitude = unpackHalf2x16((bits & 127u) << 7u).x * 256.0;
+  return ((bits & 128u) != 0u) ? -magnitude : magnitude;
+}
+#else
+uint fp8_encode(float value) {
+  uint fp8_max = 543u << 21u;
+  uint denorm_mask = 141u << 23u;
+  uint f_bits = floatBitsToUint(value);
+  uint sign = f_bits & 0x80000000u;
+  f_bits ^= sign;
+
+  // Denormal range: add the denormal alignment bias and read the byte off
+  // the biased exponent field.
+  uint f_bits_low =
+      floatBitsToUint(uintBitsToFloat(f_bits) + uintBitsToFloat(denorm_mask));
+  uint result_low = (f_bits_low - denorm_mask) & 0xFFu;
+
+  // Normal range: round-to-nearest-even at the 3-bit mantissa boundary.
+  uint mant_odd = (f_bits >> 20u) & 1u;
+  uint f_bits_high = f_bits + (((7u - 127u) << 23u) + 0x7FFFFu);
+  f_bits_high += mant_odd;
+  uint result_high = (f_bits_high >> 20u) & 0xFFu;
+
+  uint result = (f_bits < (121u << 23u)) ? result_low : result_high;
+  result = (f_bits >= fp8_max) ? 0x7Eu : result;
+  return result | (sign >> 24u);
+}
+#endif
+
+void main() {
+  uint thread = gl_GlobalInvocationID.x;
+#ifdef FP8_TO_FLOAT
+  uint words = (params.count + 3u) / 4u;
+  for (uint word = thread; word < words; word += gl_NumWorkGroups.x) {
+    uint bits = byte_data.values[params.lhs_offset / 4u + word];
+    uint base = word * 4u;
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      uint index = base + lane;
+      if (index < params.count) {
+        store_element(index, fp8_decode((bits >> (lane * 8u)) & 0xFFu));
+      }
+    }
+  }
+#else
+  uint words = (params.count + 3u) / 4u;
+  for (uint word = thread; word < words; word += gl_NumWorkGroups.x) {
+    uint packed = 0u;
+    uint base = word * 4u;
+    for (uint lane = 0u; lane < 4u; ++lane) {
+      uint index = base + lane;
+      if (index < params.count) {
+        packed |= fp8_encode(load_element(index)) << (lane * 8u);
+      }
+    }
+    byte_data.values[params.output_offset / 4u + word] = packed;
+  }
+#endif
+}

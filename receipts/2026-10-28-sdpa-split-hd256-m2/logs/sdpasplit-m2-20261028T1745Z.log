@@ -1,0 +1,5 @@
+sdpa split tests (hd256) real GPU M2 20261028T1745Z load 2.58 tree ff4b52aca2021c6be9874ca9f349935c98b082f7
+      1 [doctest] Status: SUCCESS!
+      1 [doctest] assertions: 791 | 791 passed | 0 failed |
+      1 [doctest] test cases:  11 |  11 passed | 0 failed | 0 skipped
+rc=0

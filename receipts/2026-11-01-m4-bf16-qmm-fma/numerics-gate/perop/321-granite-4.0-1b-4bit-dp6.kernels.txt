@@ -1,0 +1,4 @@
+end: {"k": "end", "t": 2552042251718, "dispatches": 150, "dropped": 0, "submissions": 126, "joins": 1, "barriers": 276, "barriers_skipped": 0}
+     84 CastBF16F32
+     42 QmmPrefillFmaBF16
+     24 CastF32BF16
