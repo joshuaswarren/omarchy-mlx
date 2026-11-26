@@ -29,14 +29,17 @@ D_CASES = [128, 256]  # 128 -> W128 builds; 256 -> the 256-thread builds
 
 
 def _composed(a, dims, weight, eps, base, scale, offset):
+    # mx.fast.rope(a, dims, *, traditional, base, scale, offset): dims is
+    # positional; the old call passed offset positionally and never ran
+    # (w8E d-review follow-up: a third defect the fixed test exposed)
     normed = rms_norm(a, weight, eps)
     return rope(
         normed,
-        offset,
+        dims,
         traditional=False,
         base=base,
         scale=scale,
-        dims=dims,
+        offset=offset,
     )
 
 
@@ -64,17 +67,15 @@ def test_w128_fused_bit_equal_composed(D, heads, passthrough):
     )
     composed = _composed(a_bf, full, w_bf, eps, base, scale, offset)
 
-    # the bf16 pattern of the float32 upcast: the high half of each 32-bit word
-    # (d-review w8E: uint16 >> 16 shifts each 16-bit word past its width, all
-    # zeros, so the comparison could never fail)
-    fused_bits = np.frombuffer(
-        np.asarray(fused).astype(np.float32).tobytes(), dtype=np.uint32
-    ) >> 16
-    composed_bits = np.frombuffer(
-        np.asarray(composed).astype(np.float32).tobytes(), dtype=np.uint32
-    ) >> 16
-    fa = np.asarray(fused).astype(np.float32)
-    ca = np.asarray(composed).astype(np.float32)
+    # the bf16 pattern of the float32 upcast: the high half of each 32-bit
+    # word. Cast to float32 inside mx first - numpy cannot consume a bf16
+    # buffer ("Unknown PEP 3118 data type specifier 'oat16'") - then view the
+    # 32-bit words (w8E d-review: uint16 >> 16 shifted each word past its own
+    # width, all zeros, so the comparison could never fail)
+    fused_bits = np.asarray(fused.astype(mx.float32)).view(np.uint32) >> 16
+    composed_bits = np.asarray(composed.astype(mx.float32)).view(np.uint32) >> 16
+    fa = np.asarray(fused.astype(mx.float32))
+    ca = np.asarray(composed.astype(mx.float32))
     assert fa.shape == ca.shape
     assert (fused_bits == composed_bits).all(), (
         f"D={D} heads={heads} passthrough={passthrough}: "
