@@ -2463,13 +2463,14 @@ bool qmm_residual_norm_enabled(
     return std::strcmp(env, "0") != 0;
   }
   // Width allowlist: {256, 2048, 4096} on every part that passed the
-  // subgroup-32 probe above. 2560 stays a measured exception: G14C (the
-  // original carve-in) plus non-unified-memory devices. G13G measured
+  // subgroup-32 probe above. 2560 stays a measured exception: G13C,
+  // G14C, plus non-unified-memory devices. G13G measured
   // ResNorm(2560)+2x8w2 at -2.2% (M1D-1c #947, 2x2 factorial: geom-only
-  // +0.5%, fold-only +0.4%, both -2.2%), so the G13 family keeps the
-  // pre-DEC-18 exclusion rather than inheriting the uniform admit.
+  // +0.5%, fold-only +0.4%, both -2.2%), so G13G keeps the exclusion
+  // while G13C opts in with measured zero-env decode gains.
   if (norm_cols == 2560) {
-    return caps.device_name.find("G14C") != std::string::npos ||
+    return caps.device_name.find("G13C") != std::string::npos ||
+        caps.device_name.find("G14C") != std::string::npos ||
         !caps.unified_memory;
   }
   return norm_cols == 256 || norm_cols == 2048 || norm_cols == 4096;
