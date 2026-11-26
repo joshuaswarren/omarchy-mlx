@@ -1291,6 +1291,12 @@ enum class ComputeKernel : uint16_t {
   // Per-member twin of the rope epilogue above: the same tail on the
   // single-weight Rows8 column, one dispatch per group member.
   QmmVecQ4WordSubgroupRows8RopeEpiBF16,
+  // Per-shape 4x4w2 single-matrix decode QMV builds (4 rows/slot x 4 slots =
+  // 128 threads/WG, 16 cols/WG, hoisted uvec2 loads) for single-matrix high-K
+  // projections (down_proj, o_proj, lm_head) while SwiGLU and QKV stay on
+  // 2x8w2. Appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R4S4W2,
+  QmmVecQ4ResNormBF16R4S4W2,
   Count,
 };
 

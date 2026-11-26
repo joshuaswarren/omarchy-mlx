@@ -164,7 +164,8 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // other discrete parts that pass the 512-thread probe with VRAM activations
 // (BMG takes its 2x16kcont/kcs16 variants), and 2x4 on every other chip
 // until its paired A/B lands.
-// The accepted overrides are 2x4, 2x4w2, 2x16, 2x16w2, and 2x16kcont.
+// The accepted overrides are 2x4, 2x4w2, 2x8w2, 2x8w2+4x4w2, 2x16, 2x16w2,
+// 2x16kcont, and 2x16kcs16.
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
@@ -198,6 +199,21 @@ const QmmGeometry& qmm_geometry() {
           16u,
           K::QmmVecQ4OutgateResNormBF16R2S8W2};
     };
+    auto make_2x8w2_r4s4 = [] {
+      return QmmGeometry{
+          16u,
+          K::QmmVecQ4WordSubgroupBF16R4S4W2,
+          K::QmmVecQ4MultiSubgroupBF16R2S8W2,
+          "2x8w2+4x4w2",
+          true,
+          true,
+          16u,
+          K::QmmVecQ4SwigluBF16R2S8W2,
+          16u,
+          K::QmmVecQ4ResNormBF16R4S4W2,
+          16u,
+          K::QmmVecQ4OutgateResNormBF16R2S8W2};
+    };
     const char* env = omarchy::env_str("MLX_OMARCHY_QMM_GEOM");
     const std::string v = env == nullptr ? std::string() : std::string(env);
     if (v.empty()) {
@@ -213,6 +229,9 @@ const QmmGeometry& qmm_geometry() {
               dev.physical_type(),
               wide_caps,
               omarchy::device_local_activations_enabled())) {
+        if (omarchy::select_qmm_apple_r4s4w2_single_matrix(caps.device_name)) {
+          return make_2x8w2_r4s4();
+        }
         return make_2x8w2();
       }
       if (omarchy::select_qmm_wide_2x16(
@@ -246,6 +265,9 @@ const QmmGeometry& qmm_geometry() {
     }
     if (v == "2x8w2") {
       return make_2x8w2();
+    }
+    if (v == "2x8w2+4x4w2") {
+      return make_2x8w2_r4s4();
     }
     if (v == "2x16") {
       return QmmGeometry{
@@ -290,7 +312,7 @@ const QmmGeometry& qmm_geometry() {
           K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
     }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x8w2 2x16 2x16w2 2x16kcont 2x16kcs16");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x8w2 2x8w2+4x4w2 2x16 2x16w2 2x16kcont 2x16kcs16");
   }();
   return geometry;
 }

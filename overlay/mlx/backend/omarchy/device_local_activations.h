@@ -179,6 +179,14 @@ inline bool select_qmm_apple_2x8w2(std::string_view device_name) {
       device_name.find("G14C") != std::string_view::npos;
 }
 
+// G13C (16-inch M1 Max) per-shape 4x4w2 override for single-matrix QMV
+// (Word + ResNorm: down_proj, o_proj, lm_head) while SwiGLU and multi-member
+// QKV stay on 2x8w2. Other parts wait for their own paired A/B.
+inline bool select_qmm_apple_r4s4w2_single_matrix(
+    std::string_view device_name) {
+  return device_name.find("G13C") != std::string_view::npos;
+}
+
 // Default 2x8w2 selection when MLX_OMARCHY_QMM_GEOM is unset. The capability
 // probe gates every part; the Apple list stays as the measured exception
 // table for integrated parts (any other integrated part waits for its own

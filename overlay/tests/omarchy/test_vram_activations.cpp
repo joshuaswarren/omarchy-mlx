@@ -170,6 +170,18 @@ int main() {
   fails += check(
       !select_qmm_wide_2x16("Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, true),
       "Apple G14C does not select 2x16 even when opt-in env is set");
+  fails += check(
+      select_qmm_apple_r4s4w2_single_matrix("Apple M1 Max (G13C C0)"),
+      "Apple G13C selects per-shape 4x4w2 single-matrix QMV");
+  fails += check(
+      !select_qmm_apple_r4s4w2_single_matrix("Apple M1 (G13G B1)"),
+      "Apple G13G stays on 2x8w2");
+  fails += check(
+      !select_qmm_apple_r4s4w2_single_matrix("Apple M2 Max (G14C C0)"),
+      "Apple G14C stays on 2x8w2 until its own paired A/B");
+  fails += check(
+      !select_qmm_apple_r4s4w2_single_matrix("NVIDIA GeForce RTX 5060 Ti"),
+      "discrete GPU stays on 2x8w2");
 
   // 4. Host/device coherence state machine.
   {

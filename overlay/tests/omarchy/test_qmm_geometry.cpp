@@ -31,6 +31,7 @@
 #include "mlx/backend/omarchy/device_local_activations.h"
 #include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/fast.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
@@ -120,6 +121,20 @@ int scenario(const std::string& name, const std::string& out) {
     eval(act, d);
     outs.push_back(act);
     outs.push_back(d);
+  } else if (name == "resnorm") {
+    for (int h : {2560, 4096}) {
+      auto x = make_x(4096, rng);
+      auto proj = make_lin(h, 4096, rng);
+      auto resid = make_x(h, rng);
+      auto nw = make_x(h, rng);
+      auto nw1d = reshape(nw, {h});
+      eval(x, proj.w, proj.s, proj.b, resid, nw1d);
+      auto s = add(qmm(x, proj), resid);
+      auto rn = fast::rms_norm(s, nw1d, 1e-6f);
+      eval(s, rn);
+      outs.push_back(s);
+      outs.push_back(rn);
+    }
   } else if (name == "name") {
     std::ofstream f(out);
     f << mlx::core::omarchy::qmm_geometry_name();
@@ -224,7 +239,9 @@ int main(int argc, char** argv) {
     std::string want = "2x4";
     if (mlx::core::omarchy::select_qmm_2x8w2(
             dev, dev_obj.physical_type(), probe_caps, vram)) {
-      want = "2x8w2";
+      want = mlx::core::omarchy::select_qmm_apple_r4s4w2_single_matrix(dev)
+          ? "2x8w2+4x4w2"
+          : "2x8w2";
     } else if (mlx::core::omarchy::select_qmm_wide_2x16(
                    dev, dev_obj.physical_type(), probe_caps, vram)) {
       if (dev.find("BMG") != std::string::npos) {
@@ -246,8 +263,8 @@ int main(int argc, char** argv) {
     }
   }
   // Every accepted geometry produces the base bytes.
-  for (const char* geometry : {"2x8w2", "2x16", "2x4w2", "2x4"}) {
-    for (const char* name : {"single", "group", "swiglu"}) {
+  for (const char* geometry : {"2x8w2+4x4w2", "2x8w2", "2x16", "2x4w2", "2x4"}) {
+    for (const char* name : {"single", "group", "swiglu", "resnorm"}) {
       std::string base = "/tmp/w7p-geom-base.bin";
       std::string other = "/tmp/w7p-geom-other.bin";
       setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
