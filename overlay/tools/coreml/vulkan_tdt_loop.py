@@ -75,10 +75,13 @@ _CTL_RUN = 8
 _CTL_SYM = 9
 
 _LT = _LOOP_THREADS
+_LSTM_LANES = 640
 
 
-def _loop_glsl() -> str:
+def _loop_glsl(threads: int = _LOOP_THREADS) -> str:
     """Build the fused loop kernel source (f-string interpolation only)."""
+    lt = threads
+    carrier_slots = max(lt, _LSTM_LANES)
     return f"""
     uint t = thread_index_in_threadgroup.x;
 
@@ -88,14 +91,16 @@ def _loop_glsl() -> str:
     threadgroup float16_t s_a[1280];
     threadgroup float16_t s_pj[640];
     threadgroup float16_t s_relu[640];
-    threadgroup float s_bval[{_LT}];
-    threadgroup uint s_bidx[{_LT}];
+    threadgroup float s_bval[{carrier_slots}];
+    threadgroup uint s_bidx[{carrier_slots}];
     threadgroup float s_dval[8];
     threadgroup int s_ctl[16];
 
-    for (uint i = t; i < 1280u; i += {_LT}u) {{
+    for (uint i = t; i < 1280u; i += {lt}u) {{
         s_hidden[i] = hidden_in[i];
         s_cell[i] = cell_in[i];
+    }}
+    for (uint i = t; i < 640u; i += {lt}u) {{
         s_pj[i] = float16_t(dec_in[i]);
     }}
     if (t == 0u) {{
@@ -121,7 +126,7 @@ def _loop_glsl() -> str:
             if (need) {{
                 int tok = s_ctl[{_CTL_INPUT}];
                 for (uint layer = 0u; layer < 2u; ++layer) {{
-                    for (uint k = t; k < 640u; k += {_LT}u) {{
+                    for (uint k = t; k < 640u; k += {lt}u) {{
                         if (layer == 0u) {{
                             uint tbase = uint(tok);
                             if (tok < 0) {{ tbase = uint(tok + 8193); }}
@@ -133,7 +138,7 @@ def _loop_glsl() -> str:
                             float16_t(s_hidden[layer * 640u + k]);
                     }}
                     threadgroup_barrier(mem_flags::mem_threadgroup);
-                    for (uint p = t; p < 2560u; p += {_LT}u) {{
+                    for (uint p = t; p < 2560u; p += {lt}u) {{
                         uint gate = p / 640u;
                         uint lane = p % 640u;
                         uint n = gate * 640u + lane;
@@ -167,7 +172,7 @@ def _loop_glsl() -> str:
                         }}
                     }}
                     threadgroup_barrier(mem_flags::mem_threadgroup);
-                    for (uint lane = t; lane < 640u; lane += {_LT}u) {{
+                    for (uint lane = t; lane < 640u; lane += {lt}u) {{
                         float16_t pr0 = s_relu[lane];
                         float16_t pr1 = float16_t(s_bval[lane]);
                         float16_t pr2 = float16_t(
@@ -199,11 +204,11 @@ def _loop_glsl() -> str:
                     }}
                     threadgroup_barrier(mem_flags::mem_threadgroup);
                 }}
-                for (uint k = t; k < 640u; k += {_LT}u) {{
+                for (uint k = t; k < 640u; k += {lt}u) {{
                     s_pj[k] = float16_t(s_h1[k]);
                 }}
                 threadgroup_barrier(mem_flags::mem_threadgroup);
-                for (uint lane = t; lane < 640u; lane += {_LT}u) {{
+                for (uint lane = t; lane < 640u; lane += {lt}u) {{
                     precise float acc = 0.0f;
                     for (uint k = 0u; k < 640u; ++k) {{
                         acc = acc + float(s_pj[k])
@@ -213,7 +218,7 @@ def _loop_glsl() -> str:
                         float16_t(acc) + projector[640u * 640u + lane]);
                 }}
                 threadgroup_barrier(mem_flags::mem_threadgroup);
-                for (uint i = t; i < 640u; i += {_LT}u) {{
+                for (uint i = t; i < 640u; i += {lt}u) {{
                     s_pj[i] = s_relu[i];
                 }}
                 if (t == 0u) {{ s_ctl[{_CTL_VALID}] = 1; }}
@@ -221,7 +226,7 @@ def _loop_glsl() -> str:
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
             uint frame = uint(s_ctl[{_CTL_FRAME}]);
-            for (uint i = t; i < 640u; i += {_LT}u) {{
+            for (uint i = t; i < 640u; i += {lt}u) {{
                 float16_t rlv = float16_t(encoder[frame * 640u + i])
                                 + s_pj[i];
                 s_relu[i] = (rlv > float16_t(0.0f)) ? rlv : float16_t(0.0f);
@@ -230,7 +235,7 @@ def _loop_glsl() -> str:
 
             float best_v = 0.0f;
             uint best_i = 0u;
-            for (uint j = t; j < 8198u; j += {_LT}u) {{
+            for (uint j = t; j < 8198u; j += {lt}u) {{
                 precise float acc = 0.0f;
                 for (uint k = 0u; k < 640u; ++k) {{
                     acc = acc + float(s_relu[k])
@@ -255,7 +260,7 @@ def _loop_glsl() -> str:
             if (t == 0u) {{
                 float bv = s_bval[0];
                 uint bix = s_bidx[0];
-                for (uint i = 1u; i < {_LT}u; ++i) {{
+                for (uint i = 1u; i < {lt}u; ++i) {{
                     float v = s_bval[i];
                     uint ix = s_bidx[i];
                     bool take;
@@ -336,11 +341,11 @@ def _loop_glsl() -> str:
         if (s_ctl[{_CTL_RUN}] == 0) {{ break; }}
     }}
 
-    for (uint i = t; i < 1280u; i += {_LT}u) {{
+    for (uint i = t; i < 1280u; i += {lt}u) {{
         state[640u + i] = s_hidden[i];
         state[1920u + i] = s_cell[i];
     }}
-    for (uint i = t; i < 640u; i += {_LT}u) {{
+    for (uint i = t; i < 640u; i += {lt}u) {{
         state[i] = float(s_pj[i]);
     }}
     if (t == 0u) {{

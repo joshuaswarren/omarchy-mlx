@@ -139,6 +139,34 @@ class RenderedShaderGuard(unittest.TestCase):
         self.assertLessEqual(total, LOOP_WORKGROUP_MEMORY_BYTES)
         self.assertLessEqual(LOOP_WORKGROUP_MEMORY_BYTES, 32768)
 
+    def test_dec_in_and_s_pj_init_stays_within_640(self):
+        """s_pj[640] / dec_in[640] must not be initialized in the 1280-entry loop."""
+        src = re.sub(r"\s+", " ", _rendered_shader())
+        self.assertIn(
+            "for (uint i = t; i < 640u; i += 1024u) { s_pj[i] = float16_t(dec_in[i]); }",
+            src,
+        )
+        m1280 = re.search(
+            r"for \(uint i = t; i < 1280u; i \+= 1024u\) \{([^}]*)\}", src
+        )
+        self.assertIsNotNone(m1280)
+        self.assertNotIn("s_pj", m1280.group(1))
+        self.assertNotIn("dec_in", m1280.group(1))
+
+    def test_carrier_arrays_cover_all_640_lanes_below_640_threads(self):
+        """s_bval/s_bidx carry lanes 0..639 and must be >= 640 even when threads < 640."""
+        for threads in (128, 256, 512, 1024):
+            with self.subTest(threads=threads):
+                arrays = _declared_arrays(_loop_glsl(threads=threads))
+                for carrier in ("s_relu", "s_bval", "s_bidx", "s_h1"):
+                    self.assertGreaterEqual(
+                        arrays[carrier][1],
+                        _LANES,
+                        f"{carrier}[{arrays[carrier][1]}] < {_LANES} at threads={threads}",
+                    )
+                self.assertGreaterEqual(arrays["s_bval"][1], threads)
+                self.assertGreaterEqual(arrays["s_bidx"][1], threads)
+
 
 class LstmRebalanceTest(unittest.TestCase):
     def test_item_mapping_covers_every_lane_gate_exactly_once(self):
