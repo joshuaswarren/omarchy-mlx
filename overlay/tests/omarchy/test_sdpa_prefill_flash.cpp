@@ -817,10 +817,21 @@ TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal ro
   // checks below hold on either part.
   const bool cf8 = cf_caps.cooperative_matrix_bf16_8 &&
       cf_caps.subgroup_size == 32u;
-  const bool cf16 = cf_caps.subgroup_size == 64u &&
+  // Mirror the runtime's rule in primitives.cpp: the 16x16x16 route
+  // engages on the advertised shape AND cf16_wave64 (native-or-pinnable
+  // 64-lane subgroup with 64-invocation workgroups) AND >=6144 B of
+  // shared memory — not bare subgroup_size == 64.
+  const bool cf16 =
       omarchy::cooperative_matrix_advertises(
           cf_caps.cooperative_matrix_shapes,
-          omarchy::sdpa_causal_flash_coopmat16_bf16_shape());
+          omarchy::sdpa_causal_flash_coopmat16_bf16_shape()) &&
+      (cf_caps.subgroup_size_64_admitted ||
+       (cf_caps.subgroup_size == 64u &&
+        (cf_caps.required_subgroup_size == 0u ||
+         cf_caps.required_subgroup_size == 64u))) &&
+      cf_caps.max_compute_work_group_invocations >= 64u &&
+      cf_caps.max_compute_work_group_size[0] >= 64u &&
+      cf_caps.max_compute_shared_memory_size >= 6144u;
   const bool flash_engages = cf8 || cf16;
   struct Case {
     int heads;
