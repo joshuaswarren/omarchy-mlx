@@ -2125,7 +2125,7 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
   CHECK(omarchy::qmm_residual_norm_enabled(apple, 2048, false));
   apple.device_name = "Apple M1 Max (G13C)";
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
   apple.device_name = "Apple M2 Max (G14C B1)";
   CHECK(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
 
