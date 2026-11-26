@@ -394,3 +394,40 @@ TEST_CASE("the 16:32 GDN path preserves bytes with nonzero input offsets") {
     CHECK_MESSAGE(got.dispatches == 1, "16:32 offset case must engage the fused kernel");
   }
 }
+
+TEST_CASE("GdnConvUpdate reads offset-carrying inputs, not flat bindings") {
+  // gdn_conv_decode.comp declares per-binding offsets; a nonzero-offset
+  // view (split, slice) must be read through them, not from the buffer
+  // head. eval_gpu keeps row-contiguous offset views unmaterialized, so
+  // this case exercises the kernel's offset reads directly.
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  const int PAD = 8;
+  auto offset_view = [&](const array& a) {
+    const int n = static_cast<int>(a.size());
+    auto flat = reshape(a, {n}, s);
+    auto padded =
+        concatenate({full({PAD}, array(-123.0f), a.dtype(), s), flat}, 0, s);
+    auto v = reshape(
+        slice(padded, {PAD}, {n + PAD}, s), a.shape(), s);
+    v.eval();
+    REQUIRE(v.offset() != 0);
+    REQUIRE(v.flags().row_contiguous);
+    return v;
+  };
+  for (uint32_t seed : {10u, 20u}) {
+    Inputs in = make_inputs(seed, 0.05f, s);
+    auto want = fast::gdn_conv_update(
+        in.conv_state, in.qkv, in.weight, true, KEY_DIM, INV * INV, INV, EPS, s);
+    eval({want[0], want[1]});
+    auto got = fast::gdn_conv_update(
+        offset_view(in.conv_state), offset_view(in.qkv), offset_view(in.weight),
+        true, KEY_DIM, INV * INV, INV, EPS, s);
+    eval({got[0], got[1]});
+    for (int i : {0, 1}) {
+      CHECK_MESSAGE(
+          array_equal(got[i], want[i], s).item<bool>(),
+          "GdnConvUpdate output ", i, " read a flat binding instead of the offset view (seed ", seed, ")");
+    }
+  }
+}
