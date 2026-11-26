@@ -114,6 +114,7 @@ class PatchedServerModuleImportsAndBuildsDefaultArgs(unittest.TestCase):
     NameError: name 'os' is not defined at startup."""
 
     def test_the_patched_0_31_server_imports_and_survives_help(self):
+        import importlib.util
         import os
         import shutil
         import subprocess
