@@ -825,6 +825,18 @@ struct SliceUpdatePair {
   bool values_committed{false};
 };
 
+struct GdnInProjBaFold {
+  enum class State : uint8_t { pending, done, failed };
+  GdnInProjBaPlan plan;
+  array a_node;
+  std::shared_ptr<Primitive> a_prim;
+  std::vector<array> a_inputs;
+  array b_node;
+  std::shared_ptr<Primitive> b_prim;
+  std::vector<array> b_inputs;
+  State state{State::pending};
+};
+
 struct EagerFusionState {
   std::unordered_map<std::uintptr_t, EagerRole> roles;
   std::unordered_map<std::uintptr_t, FusedChain> chains;
@@ -845,6 +857,9 @@ struct EagerFusionState {
   TapeIndex<size_t> prologue_skip_roles;
   TapeIndex<size_t> prologue_fold_roles;
   std::vector<PrologueFold> prologue_folds;
+  TapeIndex<size_t> gdn_ba_skip_roles;
+  TapeIndex<size_t> gdn_ba_roles;
+  std::vector<GdnInProjBaFold> gdn_ba_folds;
 
   void prepare(std::size_t tape_size) {
     gemv_roles.prepare(tape_size);
@@ -858,6 +873,8 @@ struct EagerFusionState {
     rope_norm_roles.prepare(tape_size);
     prologue_skip_roles.prepare(tape_size);
     prologue_fold_roles.prepare(tape_size);
+    gdn_ba_skip_roles.prepare(tape_size);
+    gdn_ba_roles.prepare(tape_size);
   }
 
   // Called when the scope ends and the state returns to the pool: drops
@@ -872,6 +889,7 @@ struct EagerFusionState {
     rope_pairs.clear();
     rope_norms.clear();
     prologue_folds.clear();
+    gdn_ba_folds.clear();
   }
 };
 
@@ -1481,6 +1499,94 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     claimed.put_if_absent(first.id(), 1);
     claimed.put_if_absent(second.id(), 1);
     ++i;
+  }
+
+  // GDN decode in_proj_a/b prologue fold (MLX_OMARCHY_GDN_INPROJ_BA_FOLD=1):
+  // claim single-consumer Q4/g64 affine QuantizedMatmul nodes producing a and b
+  // for fast::GdnConvDeltaUpdate before GEMV grouping so the 2-WG [Hv, Hv]
+  // split-pair dispatch disappears and runs in the GDN gate preamble instead.
+  if (gdn_inproj_ba_fold_enabled()) {
+    for (const auto& gdn : tape) {
+      if (!is_op(&gdn, typeid(fast::GdnConvDeltaUpdate)) ||
+          gdn.inputs().size() != 10 || claimed.count(gdn.id())) {
+        continue;
+      }
+      const Device* d = stream_device(gdn);
+      if (d == nullptr) {
+        continue;
+      }
+      const auto& caps = d->capabilities();
+      if (caps.subgroup_size != 32u ||
+          (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0 ||
+          d->compute().binding_limit() < 19u) {
+        continue;
+      }
+      const array* a_node = lookup(gdn.inputs()[3]);
+      const array* b_node = lookup(gdn.inputs()[4]);
+      if (a_node == nullptr || b_node == nullptr || a_node == b_node ||
+          !is_op(a_node, typeid(QuantizedMatmul)) ||
+          !is_op(b_node, typeid(QuantizedMatmul)) ||
+          a_node->inputs().size() != 4 || b_node->inputs().size() != 4 ||
+          claimed.count(a_node->id()) || claimed.count(b_node->id()) ||
+          uses[a_node->id()] != 1 || uses[b_node->id()] != 1 ||
+          a_node->dtype() != bfloat16 || b_node->dtype() != bfloat16 ||
+          a_node->primitive().stream() != gdn.primitive().stream() ||
+          b_node->primitive().stream() != gdn.primitive().stream()) {
+        continue;
+      }
+      auto [a_gs, a_bits, a_mode, a_tr] =
+          static_cast<const QuantizedMatmul&>(a_node->primitive()).state();
+      auto [b_gs, b_bits, b_mode, b_tr] =
+          static_cast<const QuantizedMatmul&>(b_node->primitive()).state();
+      if (a_mode != QuantizationMode::Affine || !a_tr || a_bits != 4 ||
+          a_gs != 64 || b_mode != QuantizationMode::Affine || !b_tr ||
+          b_bits != 4 || b_gs != 64) {
+        continue;
+      }
+      const array& x = a_node->inputs()[0];
+      if (b_node->inputs()[0].id() != x.id() || x.dtype() != bfloat16 ||
+          x.ndim() < 2 || x.shape(-2) != 1 ||
+          x.size() != static_cast<size_t>(x.shape(-1))) {
+        continue;
+      }
+      const int64_t k = x.shape(-1);
+      const array& w_a = a_node->inputs()[1];
+      const array& s_a = a_node->inputs()[2];
+      const array& bi_a = a_node->inputs()[3];
+      const array& w_b = b_node->inputs()[1];
+      const array& s_b = b_node->inputs()[2];
+      const array& bi_b = b_node->inputs()[3];
+      if (lookup(w_a) || lookup(s_a) || lookup(bi_a) || lookup(w_b) ||
+          lookup(s_b) || lookup(bi_b)) {
+        continue;
+      }
+      const int64_t hv = w_a.shape(0);
+      if (k <= 0 || (k % 512) != 0 || hv <= 0 || (hv % 8) != 0 ||
+          w_b.shape(0) != hv || w_a.shape(1) != k / 8 ||
+          w_b.shape(1) != k / 8 || s_a.shape(0) != hv ||
+          s_a.shape(1) != k / 64 || bi_a.shape(0) != hv ||
+          bi_a.shape(1) != k / 64 || s_b.shape(0) != hv ||
+          s_b.shape(1) != k / 64 || bi_b.shape(0) != hv ||
+          bi_b.shape(1) != k / 64 || s_a.dtype() != bfloat16 ||
+          bi_a.dtype() != bfloat16 || s_b.dtype() != bfloat16 ||
+          bi_b.dtype() != bfloat16 || a_node->size() != static_cast<size_t>(hv) ||
+          b_node->size() != static_cast<size_t>(hv)) {
+        continue;
+      }
+      const size_t idx = state->gdn_ba_folds.size();
+      state->gdn_ba_skip_roles.put_if_absent(a_node->id(), idx);
+      state->gdn_ba_skip_roles.put_if_absent(b_node->id(), idx);
+      state->gdn_ba_roles.put_if_absent(gdn.id(), idx);
+      claimed.put_if_absent(a_node->id(), 1);
+      claimed.put_if_absent(b_node->id(), 1);
+      state->gdn_ba_folds.push_back(GdnInProjBaFold{
+          GdnInProjBaPlan{
+              x, w_a, s_a, bi_a, w_b, s_b, bi_b,
+              static_cast<uint32_t>(k), static_cast<uint32_t>(hv)},
+          *a_node, a_node->primitive_ptr(), a_node->inputs(),
+          *b_node, b_node->primitive_ptr(), b_node->inputs(),
+          GdnInProjBaFold::State::pending});
+    }
   }
 
   // Decode GEMV groups (per node: MLX_OMARCHY_FUSED_GEMV for the device
@@ -2527,6 +2633,66 @@ bool rope_norm_fold_enabled() {
        env_flag("MLX_OMARCHY_ROPE_NORM_FOLD"));
 }
 
+bool gdn_inproj_ba_fold_enabled() {
+  if (!fused_chain_enabled()) {
+    return false;
+  }
+  const char* env = omarchy::env_str("MLX_OMARCHY_GDN_INPROJ_BA_FOLD");
+  return env != nullptr && env[0] == '1' && env[1] == '\0';
+}
+
+GdnInProjBaPlan* find_gdn_inproj_ba_fold(const array& gdn_out) {
+  if (!eager_state) {
+    return nullptr;
+  }
+  auto it = eager_state->gdn_ba_roles.find(gdn_out.id());
+  if (it == nullptr) {
+    return nullptr;
+  }
+  auto& fold = eager_state->gdn_ba_folds[*it];
+  if (fold.state != GdnInProjBaFold::State::pending) {
+    return nullptr;
+  }
+  return &fold.plan;
+}
+
+void commit_gdn_inproj_ba_fold(const array& gdn_out) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->gdn_ba_roles.find(gdn_out.id());
+  if (it == nullptr) {
+    return;
+  }
+  eager_state->gdn_ba_folds[*it].state = GdnInProjBaFold::State::done;
+}
+
+void replay_gdn_inproj_ba_fold(const array& gdn_out, const Stream& stream) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->gdn_ba_roles.find(gdn_out.id());
+  if (it == nullptr) {
+    return;
+  }
+  auto& fold = eager_state->gdn_ba_folds[*it];
+  if (fold.state != GdnInProjBaFold::State::pending) {
+    return;
+  }
+  fold.state = GdnInProjBaFold::State::failed;
+  auto& encoder = get_command_encoder(stream);
+  for (const auto& input : fold.a_inputs) {
+    encoder.add_temporary(input);
+  }
+  std::vector<array> a_outs{fold.a_node};
+  fold.a_prim->eval_gpu(fold.a_inputs, a_outs);
+  for (const auto& input : fold.b_inputs) {
+    encoder.add_temporary(input);
+  }
+  std::vector<array> b_outs{fold.b_node};
+  fold.b_prim->eval_gpu(fold.b_inputs, b_outs);
+}
+
 KvDirectWindow* find_rope_kv_redirect(const array& out) {
   if (!eager_state) {
     return nullptr;
@@ -2819,6 +2985,11 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (auto skip = eager_state->res_norm_skip_roles.find(node.id());
       skip != nullptr) {
     return eager_state->gemv_groups[*skip].res_norm_done;
+  }
+  if (auto skip = eager_state->gdn_ba_skip_roles.find(node.id());
+      skip != nullptr) {
+    return eager_state->gdn_ba_folds[*skip].state !=
+        GdnInProjBaFold::State::failed;
   }
   if (auto skip = eager_state->prologue_skip_roles.find(node.id());
       skip != nullptr) {

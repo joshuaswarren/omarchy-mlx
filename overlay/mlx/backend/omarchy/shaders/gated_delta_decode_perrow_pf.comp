@@ -41,6 +41,9 @@
 #if defined(QKV_BF16) || defined(STATE_BF16)
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #endif
+#ifdef GDN_INPROJ_BA_FUSED
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
 
 #if defined(GDN_CONV_FUSED) && defined(GDN_COMPOSED_ORDER)
 #error GDN_CONV_FUSED covers the default-order build only
@@ -53,8 +56,28 @@
 #if defined(GDN_NORM_FUSED) && !defined(GDN_CONV_FUSED)
 #error GDN_NORM_FUSED extends GDN_CONV_FUSED
 #endif
+#if defined(GDN_DV_SPLIT) && (!defined(GDN_CONV_FUSED) || !defined(GDN_NORM_FUSED))
+#error GDN_DV_SPLIT extends GDN_CONV_FUSED + GDN_NORM_FUSED
+#endif
+#if defined(GDN_INPROJ_BA_FUSED) && (!defined(GDN_CONV_FUSED) || !defined(GDN_NORM_FUSED))
+#error GDN_INPROJ_BA_FUSED extends GDN_CONV_FUSED + GDN_NORM_FUSED
+#endif
 
+#if defined(GDN_DV_SPLIT)
+#if GDN_DV_SPLIT == 2
+#define GDN_ROWS_PER_WG 64u
+#define GDN_CHANS_PER_THREAD 2u
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+#elif GDN_DV_SPLIT == 4
+#define GDN_ROWS_PER_WG 32u
+#define GDN_CHANS_PER_THREAD 4u
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+#else
+#error GDN_DV_SPLIT must be 2 or 4
+#endif
+#else
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+#endif
 
 #ifndef GDN_CONV_FUSED
 layout(set = 0, binding = 0, std430) readonly buffer QBuf  { uint16_t v[]; } q_buf;
@@ -73,15 +96,34 @@ layout(set = 0, binding = 10, std430) buffer ConvStateOut      { uint16_t v[]; }
 layout(set = 0, binding = 11, std430) readonly buffer NormGate   { uint16_t v[]; } norm_gate;
 layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[]; } norm_w;
 #endif /* GDN_NORM_FUSED */
+#if defined(GDN_DV_SPLIT) || defined(GDN_INPROJ_BA_FUSED)
+layout(set = 0, binding = 13, std430) coherent buffer TicketBuf { uint v[]; } ticket_buf;
+#endif
 #endif /* GDN_CONV_FUSED */
+#ifdef GDN_INPROJ_BA_FUSED
+// Folded in_proj_a / in_proj_b Q4/g64 affine projections: slots 3..4 and 14..18 carry
+// the shared normed input row x plus a/b weights, scales, and biases.
+layout(set = 0, binding = 3, std430) readonly buffer BaX   { uvec4    v[]; } ba_x;
+layout(set = 0, binding = 4, std430) readonly buffer BaWA  { uvec2    v[]; } ba_wa;
+layout(set = 0, binding = 14, std430) readonly buffer BaSA { uint16_t v[]; } ba_sa;
+layout(set = 0, binding = 15, std430) readonly buffer BaBA { uint16_t v[]; } ba_ba;
+layout(set = 0, binding = 16, std430) readonly buffer BaWB { uvec2    v[]; } ba_wb;
+layout(set = 0, binding = 17, std430) readonly buffer BaSB { uint16_t v[]; } ba_sb;
+layout(set = 0, binding = 18, std430) readonly buffer BaBB { uint16_t v[]; } ba_bb;
+#else
 layout(set = 0, binding = 3, std430) readonly buffer GBuf  { uint16_t v[]; } g_buf;
 layout(set = 0, binding = 4, std430) readonly buffer BBuf  { uint16_t v[]; } b_buf;
+#endif
 #ifdef STATE_BF16
 layout(set = 0, binding = 5, std430) readonly buffer SIn   { u16vec4  v[]; } s_in;
 #else
 layout(set = 0, binding = 5, std430) readonly buffer SIn   { vec4     v[]; } s_in;
 #endif
+#ifdef GDN_DV_SPLIT
+layout(set = 0, binding = 6, std430) coherent buffer YBuf  { uint16_t v[]; } y_buf;
+#else
 layout(set = 0, binding = 6, std430) writeonly buffer YBuf { uint16_t v[]; } y_buf;
+#endif
 #ifdef STATE_BF16
 layout(set = 0, binding = 7, std430) buffer         SOut  { u16vec4  v[]; } s_out;
 #else
@@ -603,6 +645,52 @@ void gdn_conv_state_out(uint channel) {
 // Replaces the q, k and v reads: this thread owns the q, k and v channel of its value row (head
 // dim 128). With GDN_NATIVE_GQA_INDEX the q and k channels index by the key head khead (equal
 // heads: khead = head). Fills sq[row] and sk[row]; returns the value element.
+#ifdef GDN_DV_SPLIT
+float gdn_conv_prologue(uint head, uint khead, uint tid, uint split, uint row) {
+  const uint key_dim = params.rhs_size;
+  uint16_t q_act[GDN_CHANS_PER_THREAD];
+  uint16_t k_act[GDN_CHANS_PER_THREAD];
+  for (uint m = 0u; m < GDN_CHANS_PER_THREAD; ++m) {
+    uint c = tid + m * GDN_ROWS_PER_WG;
+    uint q_channel = khead * 128u + c;
+    uint k_channel = key_dim + khead * 128u + c;
+    q_act[m] = gdn_conv_channel(q_channel);
+    k_act[m] = gdn_conv_channel(k_channel);
+    float q_value = bf16_load(q_act[m]);
+    float k_value = bf16_load(k_act[m]);
+    gdn_norm_block[c] = q_value * q_value;
+    gdn_norm_block[128u + c] = k_value * k_value;
+  }
+  barrier();
+  for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+    for (uint c = tid; c < stride; c += GDN_ROWS_PER_WG) {
+      gdn_norm_block[c] += gdn_norm_block[c + stride];
+      gdn_norm_block[128u + c] += gdn_norm_block[128u + c + stride];
+    }
+    barrier();
+  }
+  for (uint m = 0u; m < GDN_CHANS_PER_THREAD; ++m) {
+    uint c = tid + m * GDN_ROWS_PER_WG;
+    sq[c] = bf16_load(gdn_conv_qk_norm(q_act[m], gdn_norm_block[0], params.out_strides[2]));
+    sk[c] = bf16_load(gdn_conv_qk_norm(k_act[m], gdn_norm_block[128], params.out_strides[3]));
+  }
+  const uint v_channel = 2u * key_dim + head * params.matrix_n + row;
+  uint16_t v_act = gdn_conv_channel(v_channel);
+  bool lead = true;
+  if (params.in_strides[3] != 0u) {
+    lead = (head % params.in_strides[2]) % (params.in_strides[2] / params.in_strides[3]) == 0u;
+  }
+  if (lead && split == 0u) {
+    for (uint m = 0u; m < GDN_CHANS_PER_THREAD; ++m) {
+      uint c = tid + m * GDN_ROWS_PER_WG;
+      gdn_conv_state_out(khead * 128u + c);
+      gdn_conv_state_out(key_dim + khead * 128u + c);
+    }
+  }
+  gdn_conv_state_out(v_channel);
+  return bf16_load(v_act);
+}
+#else
 float gdn_conv_prologue(uint head, uint khead, uint row) {
   const uint key_dim = params.rhs_size;
   const uint q_channel = khead * 128u + row;
@@ -638,6 +726,121 @@ float gdn_conv_prologue(uint head, uint khead, uint row) {
   gdn_conv_state_out(v_channel);
   return bf16_load(v_act);
 }
+#endif
+#ifdef GDN_INPROJ_BA_FUSED
+// Exact Q4/g64 affine projection for one value head's scalar a[head] and b[head],
+// matching qmm_vec.comp QMM_W2 QGROUP=64 QMM_LANES=32 bit-for-bit (K % 512 == 0, N % 8 == 0).
+#define GDN_FIELD_UNIT(shift) uintBitsToFloat((150u - (shift)) << 23u)
+#define GDN_Q4_NIB(p, shift) \
+  (uintBitsToFloat(((p) & (0xfu << (shift))) + ((150u - (shift)) << 23u)) - \
+   GDN_FIELD_UNIT(shift))
+shared float gdn_ba_shared[2];
+
+void gdn_compute_ba_fused(uint head, uint tid) {
+  if (tid >= 32u) {
+    return;
+  }
+  const uint lane = tid;
+  const uint k = params.shape[0];
+  const uint pairs_per_row = k >> 4u;
+  const uint groups_per_row = k >> 6u;
+  const uint g0 = lane >> 2u;
+  uint wp_a = head * pairs_per_row + lane;
+  uint wp_b = head * pairs_per_row + lane;
+  uint sp = head * groups_per_row + g0;
+  uint xp = (params.aux_offset >> 3u) + (lane << 1u);
+  const uint iters = pairs_per_row >> 5u;
+  precise float acc_a = 0.0;
+  precise float acc_b = 0.0;
+  for (uint wi = 0u; wi < iters; ++wi) {
+    uvec2 wa = ba_wa.v[wp_a];
+    uvec2 wb = ba_wb.v[wp_b];
+    wp_a += 32u;
+    wp_b += 32u;
+    float sa = bf16_load(ba_sa.v[sp]);
+    float ba = bf16_load(ba_ba.v[sp]);
+    float sb = bf16_load(ba_sb.v[sp]);
+    float bb = bf16_load(ba_bb.v[sp]);
+    sp += 8u;
+    uvec4 xa = ba_x.v[xp];
+    uvec4 xb = ba_x.v[xp + 1u];
+    xp += 64u;
+    precise float input_sum = 0.0;
+    precise float dot_a = 0.0;
+    precise float dot_b = 0.0;
+    {
+      float x0 = uintBitsToFloat((xa.x & 0xFFFFu) << 16u);
+      float x1 = uintBitsToFloat(xa.x & 0xFFFF0000u);
+      float x2 = uintBitsToFloat((xa.y & 0xFFFFu) << 16u);
+      float x3 = uintBitsToFloat(xa.y & 0xFFFF0000u);
+      input_sum += ((x0 + x1) + x2) + x3;
+      uint pa = wa.x;
+      uint pb = wb.x;
+      dot_a += fma(x3, GDN_Q4_NIB(pa, 12u),
+          fma(x2, GDN_Q4_NIB(pa, 8u),
+              fma(x1, GDN_Q4_NIB(pa, 4u), x0 * GDN_Q4_NIB(pa, 0u))));
+      dot_b += fma(x3, GDN_Q4_NIB(pb, 12u),
+          fma(x2, GDN_Q4_NIB(pb, 8u),
+              fma(x1, GDN_Q4_NIB(pb, 4u), x0 * GDN_Q4_NIB(pb, 0u))));
+    }
+    {
+      float x0 = uintBitsToFloat((xa.z & 0xFFFFu) << 16u);
+      float x1 = uintBitsToFloat(xa.z & 0xFFFF0000u);
+      float x2 = uintBitsToFloat((xa.w & 0xFFFFu) << 16u);
+      float x3 = uintBitsToFloat(xa.w & 0xFFFF0000u);
+      input_sum += ((x0 + x1) + x2) + x3;
+      uint pa = wa.x >> 16u;
+      uint pb = wb.x >> 16u;
+      dot_a += fma(x3, GDN_Q4_NIB(pa, 12u),
+          fma(x2, GDN_Q4_NIB(pa, 8u),
+              fma(x1, GDN_Q4_NIB(pa, 4u), x0 * GDN_Q4_NIB(pa, 0u))));
+      dot_b += fma(x3, GDN_Q4_NIB(pb, 12u),
+          fma(x2, GDN_Q4_NIB(pb, 8u),
+              fma(x1, GDN_Q4_NIB(pb, 4u), x0 * GDN_Q4_NIB(pb, 0u))));
+    }
+    {
+      float x0 = uintBitsToFloat((xb.x & 0xFFFFu) << 16u);
+      float x1 = uintBitsToFloat(xb.x & 0xFFFF0000u);
+      float x2 = uintBitsToFloat((xb.y & 0xFFFFu) << 16u);
+      float x3 = uintBitsToFloat(xb.y & 0xFFFF0000u);
+      input_sum += ((x0 + x1) + x2) + x3;
+      uint pa = wa.y;
+      uint pb = wb.y;
+      dot_a += fma(x3, GDN_Q4_NIB(pa, 12u),
+          fma(x2, GDN_Q4_NIB(pa, 8u),
+              fma(x1, GDN_Q4_NIB(pa, 4u), x0 * GDN_Q4_NIB(pa, 0u))));
+      dot_b += fma(x3, GDN_Q4_NIB(pb, 12u),
+          fma(x2, GDN_Q4_NIB(pb, 8u),
+              fma(x1, GDN_Q4_NIB(pb, 4u), x0 * GDN_Q4_NIB(pb, 0u))));
+    }
+    {
+      float x0 = uintBitsToFloat((xb.z & 0xFFFFu) << 16u);
+      float x1 = uintBitsToFloat(xb.z & 0xFFFF0000u);
+      float x2 = uintBitsToFloat((xb.w & 0xFFFFu) << 16u);
+      float x3 = uintBitsToFloat(xb.w & 0xFFFF0000u);
+      input_sum += ((x0 + x1) + x2) + x3;
+      uint pa = wa.y >> 16u;
+      uint pb = wb.y >> 16u;
+      dot_a += fma(x3, GDN_Q4_NIB(pa, 12u),
+          fma(x2, GDN_Q4_NIB(pa, 8u),
+              fma(x1, GDN_Q4_NIB(pa, 4u), x0 * GDN_Q4_NIB(pa, 0u))));
+      dot_b += fma(x3, GDN_Q4_NIB(pb, 12u),
+          fma(x2, GDN_Q4_NIB(pb, 8u),
+              fma(x1, GDN_Q4_NIB(pb, 4u), x0 * GDN_Q4_NIB(pb, 0u))));
+    }
+    precise float bias_a = input_sum * ba;
+    precise float bias_b = input_sum * bb;
+    acc_a += fma(sa, dot_a, bias_a);
+    acc_b += fma(sb, dot_b, bias_b);
+  }
+  float tot_a = subgroupAdd(acc_a);
+  float tot_b = subgroupAdd(acc_b);
+  if (lane == 0u) {
+    gdn_ba_shared[0] = bf16_load(bf16_store(tot_a));
+    gdn_ba_shared[1] = bf16_load(bf16_store(tot_b));
+  }
+}
+#endif /* GDN_INPROJ_BA_FUSED */
 #ifdef GDN_NORM_FUSED
 // Epilogue: rms_norm_gated (fast_norm_gated.comp mode 0, the default non-APPLE row reduction, which
 // serves 128-wide rows) over this head's 128 outputs, replacing the y store. Statements are that
@@ -645,7 +848,57 @@ float gdn_conv_prologue(uint head, uint khead, uint row) {
 // params.alpha the norm eps. The reduction is the file's 256-slot tree with the stride-128 step omitted
 // (it only ever adds the +0.0 of the 128 idle slots).
 shared float gdn_out_block[128];
+#ifdef GDN_DV_SPLIT
+shared uint gdn_is_last;
 
+void gdn_norm_epilogue(uint head, uint row, uint tid, float o_acc) {
+  const uint out_base = params.output_offset + head * params.matrix_n;
+  y_buf.v[out_base + row] = bf16_store(o_acc);
+  memoryBarrierBuffer();
+  barrier();
+  if (tid == 0u) {
+    uint done = atomicAdd(ticket_buf.v[head], 1u);
+    gdn_is_last = (done == uint(GDN_DV_SPLIT) - 1u) ? 1u : 0u;
+  }
+  barrier();
+  if (gdn_is_last == 0u) {
+    return;
+  }
+  if (tid == 0u) {
+    ticket_buf.v[head] = 0u;
+  }
+  memoryBarrierBuffer();
+  float vals[GDN_CHANS_PER_THREAD];
+  for (uint m = 0u; m < GDN_CHANS_PER_THREAD; ++m) {
+    uint r = tid + m * GDN_ROWS_PER_WG;
+    float value = bf16_load(y_buf.v[out_base + r]);
+    vals[m] = value;
+    gdn_out_block[r] = value * value;
+  }
+  barrier();
+  for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+    for (uint c = tid; c < stride; c += GDN_ROWS_PER_WG) {
+      gdn_out_block[c] += gdn_out_block[c + stride];
+    }
+    barrier();
+  }
+  float mean_square = gdn_out_block[0] / 128.0;
+  barrier();
+  float norm = inversesqrt(mean_square + params.alpha);
+  for (uint m = 0u; m < GDN_CHANS_PER_THREAD; ++m) {
+    uint r = tid + m * GDN_ROWS_PER_WG;
+    float weight = bf16_load(norm_w.v[params.output_size + r]);
+    precise float norm_weight = norm * weight;
+    precise float result = vals[m] * norm_weight;
+    float normed = bf16_load(gdn_conv_bf16_store(result));
+    float gate = bf16_load(norm_gate.v[params.shape[3] + head * 128u + r]);
+    float sigmoid_value = 1.0 / (1.0 + exp(-gate));
+    precise float silu = gate * sigmoid_value;
+    precise float prod = silu * normed;
+    y_buf.v[out_base + r] = gdn_conv_bf16_store(prod);
+  }
+}
+#else
 void gdn_norm_epilogue(uint head, uint row, float o_acc) {
   // the delta kernel's own bf16 store of y, then the widen the norm kernel's input read performs
   float value = bf16_load(bf16_store(o_acc));
@@ -672,6 +925,7 @@ void gdn_norm_epilogue(uint head, uint row, float o_acc) {
   precise float prod = silu * normed;
   y_buf.v[params.output_offset + head * params.matrix_n + row] = gdn_conv_bf16_store(prod);
 }
+#endif
 #endif /* GDN_NORM_FUSED */
 #define GDN_V_ELEM gdn_v_elem
 #else /* GDN_CONV_FUSED */
@@ -682,8 +936,17 @@ void main() {
   uint dk = params.matrix_m;
   uint dv = params.matrix_n;
   uint hv = params.matrix_k;
+#ifdef GDN_DV_SPLIT
+  uint wg = gl_WorkGroupID.x;
+  uint head = wg / uint(GDN_DV_SPLIT);
+  uint split = wg % uint(GDN_DV_SPLIT);
+  uint tid = gl_LocalInvocationID.x;
+  uint row = split * GDN_ROWS_PER_WG + tid;
+#else
   uint head = gl_WorkGroupID.x;
-  uint row = gl_LocalInvocationID.x;   // one dv row per thread
+  uint tid = gl_LocalInvocationID.x;
+  uint row = tid;   // one dv row per thread
+#endif
 
   if (head >= hv) {
     return;
@@ -703,7 +966,14 @@ void main() {
   uint khead = head;
 #endif
 #ifdef GDN_CONV_FUSED
+#ifdef GDN_DV_SPLIT
+  const float gdn_v_elem = gdn_conv_prologue(head, khead, tid, split, row);
+#else
   const float gdn_v_elem = gdn_conv_prologue(head, khead, row);
+#endif
+#ifdef GDN_INPROJ_BA_FUSED
+  gdn_compute_ba_fused(head, tid);
+#endif
 #elif defined(GDN_NATIVE_GQA_INDEX)
   for (uint i = row; i < dk; i += 128u) {
     sk[i] = bf16_load(k_buf.v[params.rhs_offset + khead * dk + i]);
@@ -725,7 +995,11 @@ void main() {
     // exp(-exp(A_log_f32) * softplus(a + dt_bias)) in f32 then rounded to
     // bf16 (the same roundings the eager chain applies before the kernel
     // widened the bf16 values exactly).
+#ifdef GDN_INPROJ_BA_FUSED
+    float b_in = gdn_ba_shared[1];
+#else
     float b_in = bf16_load(b_buf.v[params.aux_offset + head]);
+#endif
 #ifndef GDN_COMPOSED_ORDER
     float beta_f = 1.0f / (1.0f + exp(-b_in));
     beta = bf16_load(bf16_store(beta_f));
@@ -737,7 +1011,11 @@ void main() {
       beta = bf16_load(bf16_store(beta_f));
     }
 #endif /* GDN_COMPOSED_ORDER */
+#ifdef GDN_INPROJ_BA_FUSED
+    float a_in = gdn_ba_shared[0];
+#else
     float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
+#endif
     // A_log: flag bit 9 selects an f32 A_log (Qwen3.5-9B conversion) read
     // as two little-endian u16 words - the same f32 word the eager chain's
     // astype(f32) leaves untouched, so no rounding difference.
@@ -798,14 +1076,25 @@ void main() {
     }
 #endif /* GDN_COMPOSED_ORDER */
   } else {
+#ifdef GDN_INPROJ_BA_FUSED
+    g = 0.0f;
+    beta = 0.0f;
+#else
     g = bf16_load(g_buf.v[params.shape[0] + head]);
     beta = bf16_load(b_buf.v[params.aux_offset + head]);
+#endif
   }
   uint head_base = head * dv * dk;
   uint row_base = head_base + row * dk;
+#ifdef GDN_DV_SPLIT
+  for (uint i = tid; i < dk; i += GDN_ROWS_PER_WG) {
+    skg[i] = sk[i] * g;
+  }
+#else
   for (uint i = row; i < dk; i += 128u) {
     skg[i] = sk[i] * g;
   }
+#endif
   barrier();
 
 #if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
@@ -1304,7 +1593,11 @@ void main() {
       o_acc = fma(n7, sq[127u], o_acc);
     }
 #ifdef GDN_NORM_FUSED
+#ifdef GDN_DV_SPLIT
+    gdn_norm_epilogue(head, row, tid, o_acc);
+#else
     gdn_norm_epilogue(head, row, o_acc);
+#endif
 #else /* GDN_NORM_FUSED */
     y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
 #endif /* GDN_NORM_FUSED */
@@ -1330,7 +1623,11 @@ void main() {
                                 (params.flags & 512u) != 0u);
 #endif /* GDN_COMPOSED_ORDER */
 #ifdef GDN_NORM_FUSED
+#ifdef GDN_DV_SPLIT
+  gdn_norm_epilogue(head, row, tid, o_acc);
+#else
   gdn_norm_epilogue(head, row, o_acc);
+#endif
 #else /* GDN_NORM_FUSED */
   y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
 #endif /* GDN_NORM_FUSED */

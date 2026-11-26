@@ -201,6 +201,32 @@ struct ResNormPlan {
   float eps;
 };
 
+// GDN decode in_proj_a/b prologue fold: the single-consumer Q4/g64 affine
+// QuantizedMatmul nodes producing a and b for fast::GdnConvDeltaUpdate fold
+// into the GDN dispatch's gate preamble (32-lane subgroup dot per head),
+// eliminating the 2-WG [Hv, Hv] split-pair dispatch and its CDM barrier.
+struct GdnInProjBaPlan {
+  array x;
+  array w_a;
+  array s_a;
+  array b_a;
+  array w_b;
+  array s_b;
+  array b_b;
+  uint32_t k;
+  uint32_t hv;
+};
+
+// MLX_OMARCHY_GDN_INPROJ_BA_FOLD=1 opts into folding in_proj_a/b into
+// fast::gdn_conv_delta_update (default OFF until hardware-proved).
+bool gdn_inproj_ba_fold_enabled();
+// Lookup, commit, or replay a planned GdnInProjBaPlan for |gdn_out| (output 0
+// of GdnConvDeltaUpdate). replay_gdn_inproj_ba_fold evaluates the skipped a/b
+// QuantizedMatmul nodes in place before a dispatch-time fallback.
+GdnInProjBaPlan* find_gdn_inproj_ba_fold(const array& gdn_out);
+void commit_gdn_inproj_ba_fold(const array& gdn_out);
+void replay_gdn_inproj_ba_fold(const array& gdn_out, const Stream& stream);
+
 
 // Validates the group against the kernel contract, allocates every
 // output, and records the dispatch. |swiglu_out| plans the SwiGLU

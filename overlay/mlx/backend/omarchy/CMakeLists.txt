@@ -542,6 +542,13 @@ omarchy_shader(gated_delta_decode_perrow_pfw_conv_norm_bf16 shaders/gated_delta_
 # ... and for unequal key/value head counts (native GQA key-head index in the conv prologue).
 omarchy_shader(gated_delta_decode_perrow_pf_conv_gqa_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NATIVE_GQA_INDEX=1)
 omarchy_shader(gated_delta_decode_perrow_pf_conv_norm_gqa_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1 -DGDN_NATIVE_GQA_INDEX=1)
+# Folded in_proj_a/b and Dv-split (2x64 / 4x32 WGs per head) GDN conv+delta+norm variants.
+omarchy_shader(gated_delta_decode_perrow_pfw_conv_norm_ba_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1 -DGDN_INPROJ_BA_FUSED=1)
+omarchy_shader(gated_delta_decode_perrow_pfw_conv_norm_dv2_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1 -DGDN_DV_SPLIT=2)
+omarchy_shader(gated_delta_decode_perrow_pfw_conv_norm_dv4_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1 -DGDN_DV_SPLIT=4)
+omarchy_shader(gated_delta_decode_perrow_pfw_conv_norm_ba_dv2_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1 -DGDN_INPROJ_BA_FUSED=1 -DGDN_DV_SPLIT=2)
+omarchy_shader(gated_delta_decode_perrow_pfw_conv_norm_ba_dv4_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1 -DGDN_INPROJ_BA_FUSED=1 -DGDN_DV_SPLIT=4)
+omarchy_shader(gated_delta_decode_perrow_pf_conv_norm_gqa_ba_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1 -DGDN_NATIVE_GQA_INDEX=1 -DGDN_INPROJ_BA_FUSED=1)
 omarchy_shader(gated_delta_decode_composed_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_COMPOSED_ORDER=1)
 omarchy_shader(gated_delta_decode_gqa_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_NATIVE_GQA_INDEX=1)
 omarchy_shader(gated_delta_decode_state_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DSTATE_BF16=1)

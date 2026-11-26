@@ -1247,6 +1247,12 @@ enum class ComputeKernel : uint16_t {
   // profile kernel ids stable.
   GatedDeltaDecodeConvBF16PfGqa,
   GatedDeltaDecodeConvNormBF16PfGqa,
+  GatedDeltaDecodeConvNormBaBF16PfWide,
+  GatedDeltaDecodeConvNormDv2BF16PfWide,
+  GatedDeltaDecodeConvNormDv4BF16PfWide,
+  GatedDeltaDecodeConvNormBaDv2BF16PfWide,
+  GatedDeltaDecodeConvNormBaDv4BF16PfWide,
+  GatedDeltaDecodeConvNormBaBF16PfGqa,
   Count,
 };
 

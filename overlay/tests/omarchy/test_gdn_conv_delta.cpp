@@ -394,3 +394,82 @@ TEST_CASE("the 16:32 GDN path preserves bytes with nonzero input offsets") {
     CHECK_MESSAGE(got.dispatches == 1, "16:32 offset case must engage the fused kernel");
   }
 }
+
+TEST_CASE("Dv-split GDN conv+delta+norm matches unsplit bytes across back-to-back steps") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  unsetenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD");
+  unsetenv("MLX_OMARCHY_GDN_DV_SPLIT");
+  Inputs in1 = make_inputs(101, 0.05f, s, H, H);
+  Inputs in2 = make_inputs(202, 0.10f, s, H, H);
+  Run ref1 = fused(in1, s, true, H);
+  Run ref2 = fused(in2, s, true, H);
+  for (const char* split_val : {"2", "4"}) {
+    INFO("MLX_OMARCHY_GDN_DV_SPLIT=" << split_val);
+    setenv("MLX_OMARCHY_GDN_DV_SPLIT", split_val, 1);
+    fused(in1, s, true, H);  // warm
+    Run got1 = fused(in1, s, true, H);
+    Run got2 = fused(in2, s, true, H);
+    for (int i = 0; i < 3; ++i) {
+      CHECK(array_equal(got1.out[i], ref1.out[i], s).item<bool>());
+      CHECK(array_equal(got2.out[i], ref2.out[i], s).item<bool>());
+    }
+    if (std::getenv("GDN_CONV_DELTA_REQUIRE_ENGAGED") != nullptr) {
+      CHECK(got1.dispatches == 1);
+      CHECK(got2.dispatches == 1);
+    }
+  }
+  unsetenv("MLX_OMARCHY_GDN_DV_SPLIT");
+}
+
+TEST_CASE("folded in_proj_a/b into GDN conv+delta+norm matches unfused bytes and drops dispatch") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  const int k = 2048;
+  Inputs base = make_inputs(303, 0.05f, s, H, H);
+  array x = bf16({1, 1, k}, 401, 0.5f, s);
+  array wa_f = bf16({H, k}, 402, 0.25f, s);
+  array wb_f = bf16({H, k}, 403, 0.25f, s);
+  auto qa = quantize(wa_f, 64, 4, "affine", s);
+  auto qb = quantize(wb_f, 64, 4, "affine", s);
+  eval({x, qa[0], qa[1], qa[2], qb[0], qb[1], qb[2]});
+
+  auto run_chain = [&]() -> Run {
+    const uint64_t before = compute_dispatches();
+    array a = quantized_matmul(x, qa[0], qa[1], qa[2], true, 64, 4, "affine", s);
+    array b = quantized_matmul(x, qb[0], qb[1], qb[2], true, 64, 4, "affine", s);
+    auto out = fast::gdn_conv_delta_update(
+        base.conv_state, base.qkv, base.weight, a, b, base.a_log, base.dt_bias,
+        base.delta_state, KEY_DIM, INV * INV, INV, EPS, base.gate, base.norm_w,
+        EPS, s);
+    eval(out);
+    return Run{out, compute_dispatches() - before};
+  };
+
+  unsetenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD");
+  unsetenv("MLX_OMARCHY_GDN_DV_SPLIT");
+  run_chain();  // warm
+  Run ref = run_chain();
+
+  setenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD", "1", 1);
+  for (const char* split_val : {"1", "2", "4"}) {
+    INFO("BA_FOLD=1 DV_SPLIT=" << split_val);
+    if (std::string(split_val) == "1") {
+      unsetenv("MLX_OMARCHY_GDN_DV_SPLIT");
+    } else {
+      setenv("MLX_OMARCHY_GDN_DV_SPLIT", split_val, 1);
+    }
+    run_chain();  // warm
+    Run got = run_chain();
+    for (int i = 0; i < 3; ++i) {
+      CHECK(array_equal(got.out[i], ref.out[i], s).item<bool>());
+    }
+    if (std::getenv("GDN_CONV_DELTA_REQUIRE_ENGAGED") != nullptr) {
+      CHECK(got.dispatches == 1);
+      CHECK(ref.dispatches >= 2);
+    }
+  }
+  unsetenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD");
+  unsetenv("MLX_OMARCHY_GDN_DV_SPLIT");
+}
