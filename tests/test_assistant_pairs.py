@@ -366,6 +366,41 @@ class CatalogPairSchemaTests(unittest.TestCase):
                 receipt = extension.get("backend_context_receipt")
                 self.assertTrue(receipt)
                 self.assertTrue((Path(__file__).resolve().parents[1] / receipt).is_file())
+            by_tokens = extension.get("backend_context_peak_bytes_by_tokens") or {}
+            receipts_by_tokens = extension.get("backend_context_receipts_by_tokens") or {}
+            for tok in by_tokens:
+                with self.subTest(model=entry["id"], tokens=tok):
+                    tier_receipt = receipts_by_tokens.get(tok)
+                    self.assertTrue(tier_receipt, f"missing receipt for tier {tok}")
+                    self.assertTrue((Path(__file__).resolve().parents[1] / tier_receipt).is_file())
+
+    def test_tiered_backend_context_peaks_select_smallest_covering_tier(self):
+        import copy
+        chat = copy.deepcopy({m["id"]: m for m in self.bundled["models"]}["qwen3-4b-instruct-2507-4bit"])
+        chat["extension"]["backend_context_peak_bytes_by_tokens"] = {
+            "8192": 7 * GiB,
+            "16384": 18123325440,
+        }
+        # Default context stays on the plain estimate (below 4096).
+        self.assertLess(pairs.chat_estimate(chat, 4096).total, 6 * GiB)
+        # 4097..8192 uses the 8192 measured peak; 8193..16384 keeps the 16384 peak.
+        self.assertEqual(pairs.chat_estimate(chat, 8192).total, 7 * GiB)
+        self.assertEqual(pairs.chat_estimate(chat, 8193).total, 18123325440)
+        self.assertEqual(pairs.chat_estimate(chat, 16384).total, 18123325440)
+        # A 16 GiB host (12 GiB available) admits 8192 but refuses 8193+.
+        ctx_16 = pairs.admissible_context(chat, other_bytes=2 * GiB, preference="balanced",
+                                          available_bytes=12 * GiB)
+        self.assertEqual(ctx_16["context_tokens"], 8192)
+        self.assertEqual(ctx_16["binding"], "memory")
+        # A 24 GiB host still admits 16384.
+        ctx_24 = pairs.admissible_context(chat, other_bytes=3 * GiB // 2, preference="balanced",
+                                          available_bytes=24 * GiB)
+        self.assertEqual(ctx_24["context_tokens"], 16384)
+        # Malformed peak tiers fail closed.
+        bad = copy.deepcopy(chat)
+        bad["extension"]["backend_context_peak_bytes_by_tokens"] = {"notanint": 7 * GiB}
+        with self.assertRaises(pairs.PairError):
+            pairs.chat_estimate(bad, 8192)
 
     def test_compact_limit_is_not_admitted_where_the_measured_peak_does_not_fit(self):
         # The qualification run measured the chat worker's peak (VmHWM 17,698,560 kB = 16.9 GiB)
@@ -393,6 +428,24 @@ class CatalogPairSchemaTests(unittest.TestCase):
         self.assertGreaterEqual(ctx["context_tokens"], 16384)
         self.assertTrue(ctx["backend_context_qualified"])
 
+    def test_compact_qwen35_4b_admits_8192_on_16gb_host(self):
+        # Hybrid Qwen3.5-4B-MLX-4bit measured 6,729,600 kB (6.42 GiB) VmHWM at
+        # 8192 on a 16 GB host, so 8192 fits alongside the 2.41 GiB decision
+        # worker and 2.00 GiB desktop reserve (~10.83 GiB total).
+        chat = {m["id"]: m for m in self.bundled["models"]}["qwen3.5-4b-mlx-4bit"]
+        decision = 2589732096
+        ctx_16 = pairs.admissible_context(chat, other_bytes=decision, preference="balanced",
+                                          available_bytes=12 * GiB)
+        self.assertEqual(ctx_16["context_tokens"], 8192)
+        self.assertEqual(ctx_16["binding"], "backend")
+        self.assertTrue(ctx_16["backend_context_qualified"])
+        self.assertEqual(pairs.chat_estimate(chat, 8192).total, 6891110400)
+        self.assertLess(pairs.chat_estimate(chat, 4096).total, 5 * GiB)
+        tight = pairs.admissible_context(chat, other_bytes=decision, preference="balanced",
+                                         available_bytes=9 * GiB)
+        self.assertLessEqual(tight["context_tokens"], budget.DEFAULT_CONTEXT_TOKENS)
+        self.assertEqual(tight["binding"], "memory")
+
     def test_bundled_chat_models_pin_revision_hashes_and_license(self):
         models = {entry["id"]: entry for entry in self.bundled["models"]}
         expected = {
@@ -400,6 +453,8 @@ class CatalogPairSchemaTests(unittest.TestCase):
                                      "mlx-community/Qwen3.5-9B-MLX-4bit", 5950221072),
             "qwen3-4b-instruct-2507-4bit": ("50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
                                              "mlx-community/Qwen3-4B-Instruct-2507-4bit", 2263022417),
+            "qwen3.5-4b-mlx-4bit": ("32f3e8ecf65426fc3306969496342d504bfa13f3",
+                                     "mlx-community/Qwen3.5-4B-MLX-4bit", 3034300695),
         }
         for model_id, (revision, repo, weights) in expected.items():
             with self.subTest(model=model_id):
@@ -430,7 +485,7 @@ class CatalogPairSchemaTests(unittest.TestCase):
         compact = pairs.select_default_pair(self.bundled["pairs"], self.bundled["models"],
                                             preference="balanced", available_bytes=10 * GiB)
         self.assertEqual(compact["id"], "compact")
-        self.assertEqual(compact["chat_model"], "qwen3-4b-instruct-2507-4bit")
+        self.assertEqual(compact["chat_model"], "qwen3.5-4b-mlx-4bit")
         with self.assertRaisesRegex(pairs.PairError, "no default pair fits"):
             pairs.select_default_pair(self.bundled["pairs"], self.bundled["models"],
                                       preference="balanced", available_bytes=2 * GiB)
@@ -1606,6 +1661,42 @@ class PairManagerTests(BasePairTest):
                        before["context_tokens"]))
         self.assertEqual(self.manager._children["decision"].popen.pid, decision_pid)
         self.assertNotEqual(self.manager._children["chat"].popen.pid, old_chat_pid)
+
+    def test_ensure_context_uses_resident_decision_contribution(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        os.environ[PAIR_DEV_QUALIFICATION_ENV] = "1"
+        self.addCleanup(lambda: os.environ.pop(PAIR_DEV_QUALIFICATION_ENV, None))
+        self.manager.setup("everyday", approve_download=True, context_tokens=4096)
+        self.manager.start()
+        self.addCleanup(self.manager.stop)
+        decision_id = self.manager._prepared["decision_id"]
+        decision_rec = budget.load_reservations(self.home)[decision_id]
+        decision_full = decision_rec["bytes"]
+        decision_floor = (decision_full * 3) // 4
+        budget.set_reservation_state(
+            decision_id, "resident", owner=decision_rec["owner"],
+            resident_floor_bytes=decision_floor, home=self.home)
+        target_tokens = 8192
+        chat = self.manager.catalog_models[CHAT_SMALL_ID]
+        chat_need = pairs.chat_estimate(chat, target_tokens, prompt_cache_size=0,
+                                        ignore_peak_override=True).total
+        # Post-start MemAvailable covers the remaining unmaterialized decision
+        # headroom + chat_need + desktop reserve, but would falsely refuse if
+        # ensure_context double-counted the full decision reservation.
+        decision_remaining = decision_full - decision_floor
+        # Solve tight_available = chat_need + decision_remaining + reserve + margin
+        # with margin < decision_floor (so full decision_full would not fit).
+        margin = max(1, decision_floor // 4)
+        base_need = chat_need + decision_remaining + margin
+        tight_available = max(base_need + budget.SAFETY_RESERVE_BYTES,
+                              int(base_need / (1.0 - pairs.DESKTOP_RESERVE_FRACTION)) + 1024 * 1024)
+        self.assertLess(tight_available,
+                        chat_need + decision_full + pairs.desktop_reserve(tight_available))
+        self.manager._available_bytes_override = tight_available
+        result = self.manager.ensure_context(target_tokens)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.manager.status()["context_tokens"], target_tokens)
 
     def test_ensure_context_short_turn_keeps_current_cap(self):
         self.manager._state = "ready"
