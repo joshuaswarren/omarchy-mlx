@@ -22,6 +22,7 @@ import sys
 import tempfile
 import threading
 import time
+import tracemalloc
 import types
 import unittest
 import urllib.request
@@ -2256,6 +2257,7 @@ class UndecodablePairFileTests(BasePairTest):
         "invalid-utf8": b'{"version": 1, "pair_id": "everyday\xff"}',
         "huge-int": b'{"version": ' + b"1" * 5000 + b"}",
         "deep-nesting": DEEP_JSON,
+        "utf-16": '{"version": 1, "pair_id": "everyday"}'.encode("utf-16"),
     }
 
     def setUp(self):
@@ -2307,6 +2309,149 @@ class UndecodablePairFileTests(BasePairTest):
             with self.subTest(name):
                 (model_dir / "manifest.json").write_bytes(data)
                 self.assertEqual(_on_pinned_stack(lambda: pairs._read_manifest(model_dir)), {})
+
+
+class BoundedPairLockReadTests(BasePairTest):
+    """A pair lock that is not a regular file, or is over the size cap, is a
+    PairError: never a blocked read, never an unbounded read into memory."""
+
+    CAP = 1 << 20  # literal, so base fails on behavior, not AttributeError
+    LOCK = json.dumps({"version": 1, "pair_id": "everyday",
+                       "models": {"chat": {"revision": "a" * 40}}}).encode()
+
+    def setUp(self):
+        super().setUp()
+        self.path = pairs.pair_lock_path(self.home, "everyday")
+        self.path.parent.mkdir(parents=True)
+
+    def _write_padded(self, size: int) -> None:
+        self.path.write_bytes(self.LOCK + b" " * (size - len(self.LOCK)))
+
+    @contextlib.contextmanager
+    def _fstat_reporting(self, size: int):
+        """fstat reports `size`; yields dups of each fstat'd fd, which share
+        its file offset and so show how far the read went."""
+        real = os.fstat
+        dups = []
+
+        def fake(fd):
+            dups.append(os.dup(fd))
+            self.addCleanup(os.close, dups[-1])
+            info = real(fd)
+            return os.stat_result(info[:6] + (size,) + info[7:10])
+        with mock.patch.object(os, "fstat", fake):
+            yield dups
+
+    def _call_on_fifo(self, fn, *, writer: bool):
+        """fn() in a bounded worker. Without a writer a blocking open never
+        returns; with one holding a valid lock, a blocking read never sees
+        EOF. The FIFO is released afterwards either way."""
+        result = {}
+
+        def run():
+            try:
+                result["value"] = fn()
+            except BaseException as exc:  # re-raised in the caller
+                result["error"] = exc
+
+        worker = threading.Thread(target=run, daemon=True)
+        wfd = os.open(self.path, os.O_RDWR | os.O_NONBLOCK) if writer else None
+        try:
+            if wfd is not None:
+                self.assertEqual(os.write(wfd, self.LOCK), len(self.LOCK))
+            worker.start()
+            worker.join(timeout=5)
+            blocked = worker.is_alive()
+        finally:
+            if wfd is not None:
+                os.close(wfd)
+            elif worker.is_alive():  # a blocked open returns once a writer opens
+                with contextlib.suppress(OSError):
+                    os.close(os.open(self.path, os.O_WRONLY | os.O_NONBLOCK))
+        worker.join(timeout=5)
+        self.assertFalse(blocked, "blocked on a FIFO pair lock")
+        if "error" in result:
+            raise result["error"]
+        return result["value"]
+
+    def test_fifo_lock_is_refused_without_blocking(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFO unavailable")
+        os.mkfifo(self.path)
+        manager = pairs.PairManager(self.home)
+        for writer in (False, True):
+            with self.subTest(writer=writer):
+                with self.assertRaisesRegex(pairs.PairError,
+                                            "is unreadable: not a regular file"):
+                    self._call_on_fifo(lambda: pairs.load_pair_lock(self.home, "everyday"),
+                                       writer=writer)
+                with self.assertRaisesRegex(pairs.PairError, "no prepared pair"):
+                    self._call_on_fifo(lambda: manager.start("everyday"), writer=writer)
+
+    def test_device_lock_is_refused(self):
+        os.symlink(os.devnull, self.path)
+        with self.assertRaisesRegex(pairs.PairError, "is unreadable: not a regular file"):
+            pairs.load_pair_lock(self.home, "everyday")
+
+    def test_missing_lock_is_none_and_symlinked_lock_loads(self):
+        self.assertIsNone(pairs.load_pair_lock(self.home, "everyday"))
+        target = self.path.parent / "elsewhere"
+        target.write_bytes(self.LOCK)
+        os.symlink(target, self.path)
+        self.assertEqual(pairs.load_pair_lock(self.home, "everyday"), json.loads(self.LOCK))
+
+    def test_lock_over_cap_is_refused(self):
+        self._write_padded(self.CAP)
+        self.assertEqual(pairs.load_pair_lock(self.home, "everyday"), json.loads(self.LOCK))
+        self._write_padded(self.CAP + 1)
+        with self.assertRaisesRegex(pairs.PairError, f"is unreadable: exceeds {self.CAP} bytes"):
+            pairs.load_pair_lock(self.home, "everyday")
+
+    def test_lock_size_is_checked_before_reading(self):
+        self.path.write_bytes(self.LOCK)
+        with self._fstat_reporting(self.CAP + 1) as dups, \
+                self.assertRaisesRegex(pairs.PairError, f"exceeds {self.CAP} bytes"):
+            pairs.load_pair_lock(self.home, "everyday")
+        self.assertEqual(os.lseek(dups[0], 0, os.SEEK_CUR), 0)
+
+    def test_lock_grown_after_size_check_is_refused_with_bounded_read(self):
+        for size in (self.CAP + 1, 64 * self.CAP):  # the larger one is sparse
+            with self.subTest(size=size):
+                self.path.write_bytes(self.LOCK)
+                os.truncate(self.path, size)
+                tracing = tracemalloc.is_tracing()
+                if not tracing:
+                    tracemalloc.start()
+                try:
+                    tracemalloc.reset_peak()
+                    before = tracemalloc.get_traced_memory()[0]
+                    with self._fstat_reporting(len(self.LOCK)) as dups, \
+                            self.assertRaisesRegex(pairs.PairError,
+                                                   f"exceeds {self.CAP} bytes"):
+                        pairs.load_pair_lock(self.home, "everyday")
+                    peak = tracemalloc.get_traced_memory()[1]
+                finally:
+                    if not tracing:
+                        tracemalloc.stop()
+                self.assertLess(peak - before, 4 * self.CAP)
+                self.assertEqual(os.lseek(dups[0], 0, os.SEEK_CUR), self.CAP + 1)
+
+    def test_short_reads_are_joined_up_to_the_cap(self):
+        real_open = open
+
+        def short_open(*args, **kwargs):  # a short read is not end of file
+            stream = real_open(*args, **kwargs)
+            read = stream.read
+            stream.read = lambda n=-1: read(min(n, 4096))
+            return stream
+
+        with mock.patch.object(pairs, "open", short_open, create=True):
+            self._write_padded(self.CAP)
+            self.assertEqual(pairs.load_pair_lock(self.home, "everyday"), json.loads(self.LOCK))
+            self._write_padded(self.CAP + 1)
+            with self._fstat_reporting(len(self.LOCK)), \
+                    self.assertRaisesRegex(pairs.PairError, f"exceeds {self.CAP} bytes"):
+                pairs.load_pair_lock(self.home, "everyday")
 
 
 class DamagedDecisionArtifactTests(BasePairTest):
