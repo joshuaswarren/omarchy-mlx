@@ -208,6 +208,9 @@ class WorkerLifetimeTests(unittest.TestCase):
             turn = app.store.begin(cid, 'hello')
             app.gpu.acquire()
             app._run(cid, turn, {}, 1, {'cancel': threading.Event()})
+            codes = [event['data']['code'] for event in app.store.events(cid, 0)
+                     if event['type'] == 'error']
+            self.assertEqual(codes, ['RuntimeError', 'WorkerShutdown'])
             self.assertIsNone(app.store.get(cid)['active_turn'])
             self.assertTrue(app.gpu.acquire(blocking=False))
             app.gpu.release()
@@ -557,6 +560,83 @@ class WorkerLifetimeTests(unittest.TestCase):
         self.assertIsNone(app.store.get(cid)["active_turn"])
         self.assertTrue(app.gpu.acquire(blocking=False))
         app.gpu.release()
+
+    def _turn_fails_in_close_gap(self, manager):
+        """Close while a turn waits at its pair start, and let the turn reach
+        the start only after `closed` is set but before close() cancels it.
+        Returns the conversation's events."""
+        app = self._make_coordinator(manager)
+        cid = app.store.create()["id"]
+        real_lifecycle = app._lifecycle
+        real_lock = app.lock
+        at_start = threading.Event()
+        go = threading.Event()
+        closer = threading.current_thread()
+        turn_threads = []
+        gap = []
+
+        class GatedLifecycle:
+            def __enter__(self):
+                at_start.set()
+                go.wait(timeout=5)
+                return real_lifecycle.__enter__()
+
+            def __exit__(self, *args):
+                return real_lifecycle.__exit__(*args)
+
+            def __getattr__(self, name):
+                return getattr(real_lifecycle, name)
+
+        class GapLock:
+            def __enter__(self):
+                if (not gap and threading.current_thread() is closer
+                        and app.closed.is_set()):
+                    gap.append(True)
+                    go.set()
+                    turn_threads[0].join(timeout=5)
+                return real_lock.__enter__()
+
+            def __exit__(self, *args):
+                return real_lock.__exit__(*args)
+
+            def __getattr__(self, name):
+                return getattr(real_lock, name)
+
+        app._lifecycle = GatedLifecycle()
+        app.lock = GapLock()
+        self.addCleanup(go.set)
+        turn = app.submit(cid, {"mode": "chat", "text": "hello"})
+        turn_threads.append(app.turns[turn]["thread"])
+        self.assertTrue(at_start.wait(timeout=5), "turn did not reach its pair start")
+
+        app.close()
+
+        self.assertEqual(gap, [True], "close() never reached the gap")
+        self.assertFalse(turn_threads[0].is_alive())
+        self.assertNotIn("start", manager.events)
+        self.assertIsNone(app.store.get(cid)["active_turn"])
+        self.assertTrue(app.gpu.acquire(blocking=False))
+        app.gpu.release()
+        events = app.store.events(cid, 0)
+        self.assertEqual([e["data"] for e in events if e["type"] == "done"], [{"stopped": True}])
+        return events
+
+    def test_turn_failing_between_closed_and_cancel_emits_no_error_event(self):
+        events = self._turn_fails_in_close_gap(self._RecordingManager())
+        event_types = [event["type"] for event in events]
+        self.assertNotIn("error", event_types, event_types)
+
+    def test_worker_shutdown_failure_in_close_gap_is_still_reported(self):
+        class FirstStopFailsManager(self._RecordingManager):
+            def stop(self):
+                report = super().stop()
+                if self.events.count("stop") == 1:
+                    return {"stopped": False, "retained": ["chat"]}
+                return report
+
+        events = self._turn_fails_in_close_gap(FirstStopFailsManager())
+        codes = [event["data"]["code"] for event in events if event["type"] == "error"]
+        self.assertEqual(codes, ["WorkerShutdown"])
 
 
 class WorkerReplyTests(unittest.TestCase):

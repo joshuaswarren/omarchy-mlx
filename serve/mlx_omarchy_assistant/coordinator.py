@@ -866,7 +866,9 @@ class Coordinator:
             self._guard_turn_end(cid, turn, setup.mode, setup.result, cancel, state)
         except Exception as error:
             failed = True
-            if not cancel.is_set():
+            # close() sets `closed` before it cancels running turns; a turn
+            # failing in that gap is being shut down, not failing.
+            if not cancel.is_set() and not self.closed.is_set():
                 self.store.emit(cid, turn, "error", {"code": type(error).__name__, "message": str(error)[:1000]})
         finally:
             self._release_turn(cid, turn, cancel, failed,
