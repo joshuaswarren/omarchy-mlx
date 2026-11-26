@@ -339,7 +339,8 @@ layout(set = 0, binding = 7, std430) writeonly buffer Output0 {
 } output0;
 #else
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
-#if defined(QMM_VEC_Q4_WORD) && !defined(QMM_VEC_GREEDY)
+#if defined(QMM_VEC_Q4_WORD) && \
+    (!defined(QMM_VEC_GREEDY) || defined(QMM_VEC_GREEDY_WORD))
   WVEC_T values[];
 #else
   uint values[];
@@ -388,6 +389,40 @@ layout(set = 0, binding = 9, std430) coherent buffer RowValues {
 layout(set = 0, binding = 10, std430) writeonly buffer Stats {
   uint values[];
 } stats;
+#elif defined(QMM_VEC_GREEDY_WORD)
+// Fused greedy head on the non-subgroup Q4 word column (DEC-46), two
+// dispatches in this shader after the host runs the picked lm_head GEMV
+// (geometry.word on subgroup parts, QmmVecQ4WordBF16 elsewhere) into a
+// bf16 scratch logits row. Op 1: one workgroup per 4096-element vocab
+// chunk reads the scratch logits and emits the logsumexp_chunk-identical
+// (m, s) partial, a per-chunk (min-index-at-max, min-NaN-index) edge
+// partial, and the rows within 0.5 of the chunk max as argmax
+// candidates. Op 2: one workgroup merges partials (logsumexp_combine
+// verbatim), forms the normalized threshold T = bf16(max - lse), and
+// takes the lowest candidate index normalizing to T — argreduce's
+// first-index rule. The logits scratch is internal only; the composed
+// tail's subtract write and argreduce read are gone.
+layout(set = 0, binding = 4, std430) buffer Partials {
+  vec2 values[];
+} partials;
+layout(set = 0, binding = 5, std430) buffer PartialExt {
+  uvec2 values[];
+} partial_ext;
+layout(set = 0, binding = 6, std430) buffer Candidates {
+  uvec2 values[];
+} candidates;
+layout(set = 0, binding = 7, std430) coherent buffer GState {
+  uint values[];
+} gstate;
+layout(set = 0, binding = 8, std430) writeonly buffer GToken {
+  uint values[];
+} gtoken;
+layout(set = 0, binding = 9, std430) writeonly buffer GStats {
+  uint values[];
+} gstats;
+layout(set = 0, binding = 10, std430) buffer Logits {
+  STORAGE_TYPE values[];
+} logits;
 #else
 layout(set = 0, binding = 4, std430) writeonly buffer Output {
   STORAGE_TYPE values[];
@@ -2815,6 +2850,208 @@ void main() {
   }
 }
 #endif
+#elif defined(QMM_VEC_GREEDY_WORD)
+// Fused greedy head on the non-subgroup Q4 word column (DEC-46). The
+// composed tail (QmmVec*Word* -> LogSumExp -> Subtract -> ArgReduce)
+// materializes a 307-496 KB logit row across four dispatches; this head
+// answers the same expression — argmax(logits - logsumexp(logits)) with
+// argreduce's first-index tie-break — in three dispatches. The host
+// first dispatches the SAME vec kernel the composed QMM picks
+// (geometry.word on subgroup parts, QmmVecQ4WordBF16 elsewhere) with the
+// output bound to a scratch bf16 logits row, so the GEMV is literally
+// bit- and speed-identical. Operation 1 (one workgroup per 4096-element
+// vocab chunk, the logsumexp_chunk partition) runs the chunk kernel
+// verbatim on the scratch row — identical (m, s) partial — and emits
+// the argmax edge partial (lowest index at the chunk maximum, lowest
+// NaN index) plus every row within 0.5 of the chunk maximum as a
+// candidate (index, f32 bits). A row qualifies for the token only when
+// bf16(x - lse) reaches T = bf16(max - lse), i.e. x >= max - ulp(T);
+// |T| <= log(n) keeps ulp(T) <= 0.125 for every vocab this gate serves,
+// so the 0.5 window covers every qualifier. Operation 2 (one workgroup)
+// merges the partials exactly as logsumexp_combine, then picks the
+// lowest candidate index whose normalized value equals T, replicating
+// argreduce's first-index rule over normalized bf16 values; NaN and
+// infinite row maxima take the composed path's edge answers. An
+// overflow of the bounded candidate buffer writes the 0xFFFFFFFF
+// sentinel so the host can fall back to the composed expression.
+shared uint g_reduce_u[256];
+
+#define GREEDY_CHUNK 4096u
+#define GREEDY_CAND_DELTA 0.5
+#define NEG_INF uintBitsToFloat(0xff800000u)
+
+float nan_max(float a, float b) {
+  return isnan(a) ? a : (isnan(b) ? b : (b > a ? b : a));
+}
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint n = params.matrix_n;
+  if (params.operation == 1u) {
+    uint chunk = gl_WorkGroupID.x;
+    uint begin = chunk * GREEDY_CHUNK;
+    uint end = min(begin + GREEDY_CHUNK, n);
+    // Phase B: logsumexp_chunk verbatim on the scratch logits.
+    float v[16];
+    float local_max = NEG_INF;
+    for (uint k = 0u; k < 16u; ++k) {
+      uint index = lane + k * 256u;
+      v[k] = (begin + index < end) ? LOAD_VALUE(logits.values[begin + index])
+                                 : NEG_INF;
+      local_max = nan_max(local_max, v[k]);
+    }
+    reduce_scratch[lane] = local_max;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (lane < stride) {
+        reduce_scratch[lane] =
+            nan_max(reduce_scratch[lane], reduce_scratch[lane + stride]);
+      }
+      barrier();
+    }
+    float chunk_max = reduce_scratch[0];
+    barrier();
+    float local_sum = 0.0;
+    for (uint k = 0u; k < 16u; ++k) {
+      local_sum += exp(v[k] - chunk_max);
+    }
+    reduce_scratch[lane] = local_sum;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (lane < stride) {
+        reduce_scratch[lane] += reduce_scratch[lane + stride];
+      }
+      barrier();
+    }
+    if (lane == 0u) {
+      partials.values[chunk] = vec2(chunk_max, reduce_scratch[0]);
+    }
+    // Phase C: the edge partial and the near-max candidates.
+    uint local_at_max = 0xFFFFFFFFu;
+    uint local_nan = 0xFFFFFFFFu;
+    for (uint k = 0u; k < 16u; ++k) {
+      uint index = lane + k * 256u;
+      if (begin + index < end) {
+        if (v[k] == chunk_max) {
+          local_at_max = min(local_at_max, begin + index);
+        }
+        if (isnan(v[k])) {
+          local_nan = min(local_nan, begin + index);
+        }
+      }
+    }
+    if (lane == 0u) {
+      g_reduce_u[0] = 0xFFFFFFFFu;
+      g_reduce_u[1] = 0xFFFFFFFFu;
+    }
+    barrier();
+    atomicMin(g_reduce_u[0], local_at_max);
+    atomicMin(g_reduce_u[1], local_nan);
+    for (uint k = 0u; k < 16u; ++k) {
+      uint index = lane + k * 256u;
+      if (begin + index < end && v[k] >= chunk_max - GREEDY_CAND_DELTA) {
+        uint pos = atomicAdd(gstate.values[0], 1u);
+        if (pos < params.output_size) {
+          candidates.values[pos] =
+              uvec2(begin + index, floatBitsToUint(v[k]));
+        } else {
+          gstate.values[1] = 1u;
+        }
+      }
+    }
+    barrier();
+    if (lane == 0u) {
+      partial_ext.values[chunk] = uvec2(g_reduce_u[0], g_reduce_u[1]);
+    }
+  } else {
+    // Operation 2: logsumexp_combine verbatim, then the argmax select.
+    uint chunks = (n + GREEDY_CHUNK - 1u) / GREEDY_CHUNK;
+    vec2 pair = vec2(NEG_INF, 0.0);
+    uvec2 ext = uvec2(0xFFFFFFFFu, 0xFFFFFFFFu);
+    if (lane < chunks) {
+      pair = partials.values[lane];
+      ext = partial_ext.values[lane];
+    }
+    reduce_scratch[lane] = pair.x;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (lane < stride) {
+        reduce_scratch[lane] =
+            nan_max(reduce_scratch[lane], reduce_scratch[lane + stride]);
+      }
+      barrier();
+    }
+    float row_max = reduce_scratch[0];
+    barrier();
+    bool finite_max = !isinf(row_max) && !isnan(row_max);
+    float term = 0.0;
+    if (finite_max && !isinf(pair.x)) {
+      term = pair.y * exp(pair.x - row_max);
+    }
+    reduce_scratch[lane] = term;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (lane < stride) {
+        reduce_scratch[lane] += reduce_scratch[lane + stride];
+      }
+      barrier();
+    }
+    float lse_value = finite_max ? row_max + log(reduce_scratch[0])
+                               : row_max;
+    float lse = uintBitsToFloat(uint(bf16_store(lse_value)) << 16u);
+    uint token_idx = 0u;
+    bool overflow = gstate.values[1] != 0u;
+    if (isnan(row_max) || row_max == NEG_INF) {
+      // All-NaN normalized row: argreduce keeps the first index.
+      token_idx = 0u;
+    } else if (isinf(row_max)) {
+      // +inf maximum: normalized is NaN at +inf rows and -inf elsewhere,
+      // so the token is the first +inf row — the first index at row_max.
+      uint at_max = (pair.x == row_max) ? ext.x : 0xFFFFFFFFu;
+      g_reduce_u[lane] = at_max;
+      barrier();
+      for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+          g_reduce_u[lane] = min(
+              g_reduce_u[lane], g_reduce_u[lane + stride]);
+        }
+        barrier();
+      }
+      token_idx = g_reduce_u[0];
+    } else {
+      float t_norm = uintBitsToFloat(
+          uint(bf16_store(row_max - lse)) << 16u);
+      uint count = min(gstate.values[0], params.output_size);
+      uint best = 0xFFFFFFFFu;
+      for (uint i = lane; i < count; i += 256u) {
+        uvec2 c = candidates.values[i];
+        float x_norm = uintBitsToFloat(
+            uint(bf16_store(uintBitsToFloat(c.y) - lse)) << 16u);
+        if (x_norm == t_norm) {
+          best = min(best, c.x);
+        }
+      }
+      g_reduce_u[lane] = best;
+      barrier();
+      for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+          g_reduce_u[lane] = min(
+              g_reduce_u[lane], g_reduce_u[lane + stride]);
+        }
+        barrier();
+      }
+      token_idx = (overflow || g_reduce_u[0] == 0xFFFFFFFFu)
+          ? 0xFFFFFFFFu
+          : g_reduce_u[0];
+    }
+    if (lane == 0u) {
+      gtoken.values[0] = token_idx;
+      gstats.values[0] = n;
+      gstats.values[1] = overflow ? 1u : 0u;
+      gstats.values[2] = floatBitsToUint(row_max);
+    }
+  }
+}
 #else
 void main() {
   uint lane = gl_LocalInvocationID.x;

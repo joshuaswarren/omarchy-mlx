@@ -192,6 +192,24 @@ const SimulationProfile kProfiles[] = {
         "NVIDIA GeForce RTX 5060 Ti",
         1,
     },
+    {
+        "min-storage-buffer-range",
+        "other",
+        "Vulkan-minimum storage-buffer binding: maxStorageBufferRange "
+        "pinned to the 128 MiB spec floor — vocab-scale greedy-head and "
+        "lm_head bindings that fit on Apple parts compose instead",
+        -1,
+        0,
+        kAllSubgroupOps,
+        -1,
+        0,
+        0,
+        0,
+        -1,
+        nullptr,
+        -1,
+        134217728ull,
+    },
 };
 
 std::string lowered(const char* v) {
@@ -351,6 +369,9 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
   }
   if (profile.device_name != nullptr) {
     caps.device_name = profile.device_name;
+  }
+  if (profile.max_storage_buffer_range != 0) {
+    caps.max_storage_buffer_range = profile.max_storage_buffer_range;
   }
   caps.simulated = true;
   caps.simulation_profile = profile.name;

@@ -1261,6 +1261,7 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectBF16C16Nt,
   MatmulDirectBF16C16Tn,
   MatmulDirectBF16C16Tt,
+  QmmVecGreedyWordBF16,
   Count,
 };
 

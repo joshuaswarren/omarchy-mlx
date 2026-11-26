@@ -15935,14 +15935,173 @@ void GreedyQuantizedArgmax::eval_gpu(
        (encoder.device().hardware_capabilities().subgroup_operations &
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
   const array& w = inputs.at(1);
+  const array& x = inputs.at(0);
   uint32_t n = static_cast<uint32_t>(w.shape(0));
-  if (!subgroup_ready || !omarchy::q4_word_enabled() ||
-      !caps.storage_buffer_16bit_access || !caps.shader_int16) {
+  uint32_t k_dim = static_cast<uint32_t>(x.shape(-1));
+  // The subgroup stage's lane-per-group mapping is K = 2048-specific;
+  // the non-subgroup word chain is K-generic over 64-wide groups, so
+  // the word route also serves K != 2048 on subgroup-capable devices.
+  // Both routes bind w and high_bits whole; where a device reports the
+  // Vulkan-minimum maxStorageBufferRange a large vocab does not fit one
+  // binding and the encoder would refuse the dispatch, so compose then
+  // (a 128 MiB range serves n <= 104857 rows at K = 2560).
+  const VkDeviceSize range_limit = caps.max_storage_buffer_range;
+  const uint64_t w_bytes = static_cast<uint64_t>(n) * k_dim / 8u * 4u;
+  const uint64_t plane_bytes = static_cast<uint64_t>(n) * k_dim * 3u / 32u * 4u;
+  const bool bindings_fit =
+      range_limit == 0u ||
+      (w_bytes <= range_limit && plane_bytes <= range_limit);
+  bool subgroup_ok = subgroup_ready && k_dim == 2048u && bindings_fit;
+  bool word_ok = omarchy::q4_word_enabled() &&
+      caps.storage_buffer_16bit_access && caps.shader_int16 &&
+      k_dim % 64u == 0u && bindings_fit &&
+      // The single-workgroup merge reads at most 256 logsumexp
+      // partials, the same bound the chunked route serves.
+      n <= 4096u * 256u;
+  if (!subgroup_ok && !word_ok) {
     auto result = fallback_(inputs);
     settle(result);
     encoder.synchronize("greedy_argmax_fallback");
     outputs.at(0).copy_shared_buffer(result.at(0));
     outputs.at(1).copy_shared_buffer(result.at(1));
+    return;
+  }
+  if (!subgroup_ok) {
+    // DEC-46: the non-subgroup word column gets the same fused answer in
+    // three dispatches (shaders/qmm_vec.comp QMM_VEC_GREEDY_WORD): op 0
+    // is the lm_head GEMV itself (one row per 32-lane slot, the exact
+    // single-row chain, bf16 logits to scratch); op 1 runs one workgroup
+    // per 4096-element vocab chunk — a logsumexp_chunk-identical (m, s)
+    // partial, an edge partial, and near-max candidates; op 2 merges the
+    // partials (logsumexp_combine verbatim) and picks the lowest index
+    // normalizing to bf16(max - lse). The 0xFFFFFFFF token sentinel is
+    // for candidate-buffer overflow; the python head composes then.
+    std::optional<array> x_temp;
+    std::optional<array> w_temp;
+    std::optional<array> scales_temp;
+    std::optional<array> biases_temp;
+    const array& x_d = ensure_dense(
+        x,
+        x.flags().row_contiguous && x.offset() % (8 * x.itemsize()) == 0,
+        x_temp,
+        encoder,
+        s);
+    const array& w_d =
+        ensure_dense(w, w.flags().row_contiguous, w_temp, encoder, s);
+    const array& scales_d = ensure_dense(
+        inputs.at(2), inputs.at(2).flags().row_contiguous, scales_temp,
+        encoder, s);
+    const array& biases_d = ensure_dense(
+        inputs.at(3), inputs.at(3).flags().row_contiguous, biases_temp,
+        encoder, s);
+    array& token = outputs.at(0);
+    array& stats = outputs.at(1);
+    token.set_data(allocate_omarchy(token.nbytes()));
+    stats.set_data(allocate_omarchy(stats.nbytes()));
+    auto scratch = [&](Dtype dtype, int size) {
+      array a({size}, dtype, nullptr, {});
+      a.set_data(allocate_omarchy(a.nbytes()));
+      encoder.add_temporary(a);
+      return a;
+    };
+    uint32_t chunks = (n + 4095u) / 4096u;
+    // Candidate capacity equals the row count: candidates are emitted
+    // per row, so the counter can never reach the cap and the 0xFFFFFFFF
+    // overflow sentinel can never fire — the python head skips its
+    // per-token device sync on that guarantee.
+    uint32_t cand_cap = n;
+    array logits = scratch(bfloat16, static_cast<int>(n));
+    array partials = scratch(float32, static_cast<int>(chunks) * 2);
+    array partial_ext = scratch(uint32, static_cast<int>(chunks) * 2);
+    array candidates = scratch(uint32, static_cast<int>(cand_cap) * 2);
+    array gstate = scratch(uint32, 4);
+    omarchy::ComputeParams params;
+    params.matrix_n = n;
+    params.matrix_k = static_cast<uint32_t>(x.shape(-1));
+    params.output_size = cand_cap;
+    params.lhs_offset = checked_item_offset(x_d, x_d.size(), tag, token);
+    params.rhs_offset = checked_item_offset(w_d, w_d.size(), tag, token);
+    params.aux_offset =
+        checked_item_offset(scales_d, scales_d.size(), tag, token);
+    params.aux_size =
+        checked_item_offset(biases_d, biases_d.size(), tag, token);
+    std::array<omarchy::ComputeBinding, 11> bindings{
+        binding(x_d),
+        binding(w_d),
+        binding(scales_d),
+        binding(biases_d),
+        binding(partials),
+        binding(partial_ext),
+        binding(candidates),
+        binding(gstate),
+        binding(token),
+        binding(stats),
+        binding(logits)};
+    encoder.fill_buffer(
+        binding(gstate).buffer, 0u, gstate.nbytes(), 0);
+    // The logits GEMV dispatches the same vec kernel the composed
+    // QuantizedMatmul picks for this contract — geometry.word on
+    // subgroup parts, the plain word column elsewhere — so the logits
+    // row is bit- and speed-identical; only the binding's output moves
+    // to the scratch.
+    omarchy::ComputeKernel gemv_kernel =
+        omarchy::ComputeKernel::QmmVecQ4WordBF16;
+    uint32_t gemv_groups = (n + 7u) / 8u;
+    if (subgroup_ready) {
+      const auto& geometry = qmm_geometry();
+      // Same fallback the QMM applies: the w2 word builds need an
+      // even rhs_offset (params.shape[1] is 0 for 2D w).
+      if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u)) {
+        gemv_kernel = geometry.word;
+        gemv_groups = (n + geometry.columns - 1u) / geometry.columns;
+      } else {
+        gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16;
+      }
+    }
+    omarchy::ComputeParams gemv_params;
+    gemv_params.count = n;
+    gemv_params.operation = 4u;    // bits: the vec kernels read it there
+    gemv_params.reduce_size = 64u; // group size
+    gemv_params.output_size = n;
+    gemv_params.lhs_offset = params.lhs_offset;
+    gemv_params.rhs_offset = params.rhs_offset;
+    gemv_params.aux_offset = params.aux_offset;
+    gemv_params.aux_size = params.aux_size;
+    gemv_params.matrix_m = 1u;
+    gemv_params.matrix_n = n;
+    gemv_params.matrix_k = params.matrix_k;
+    gemv_params.shape[0] = 1u;
+    // 2D operands broadcast across the batch: shape[1]/shape[2] stay 0;
+    // flags bit 0 stays clear for the transposed weight.
+    std::array<omarchy::ComputeBinding, 5> gemv_bindings{
+        binding(x_d),
+        binding(w_d),
+        binding(scales_d),
+        binding(biases_d),
+        binding(logits)};
+    encoder.dispatch_compute(
+        gemv_kernel,
+        gemv_bindings,
+        gemv_params,
+        gemv_groups,
+        1u,
+        1u);
+    params.operation = 1u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::QmmVecGreedyWordBF16,
+        bindings,
+        params,
+        chunks,
+        1u,
+        1u);
+    params.operation = 2u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::QmmVecGreedyWordBF16,
+        bindings,
+        params,
+        1u,
+        1u,
+        1u);
     return;
   }
   // MLX_OMARCHY_GREEDY_PRUNE_TEST (qualification only): "full" forces the
@@ -15956,7 +16115,6 @@ void GreedyQuantizedArgmax::eval_gpu(
         : std::strcmp(env, "keep") == 0  ? 2u
                                          : 0u;
   }();
-  const array& x = inputs.at(0);
   std::optional<array> x_temp;
   std::optional<array> w_temp;
   std::optional<array> scales_temp;

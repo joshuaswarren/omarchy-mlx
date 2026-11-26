@@ -91,6 +91,8 @@ struct SimulationProfile {
   // require_backed refuses a simulated dispatch on hardware lacking the
   // shape.
   int cooperative_matrix_f16_16 = -1;
+  // Axis max_storage_buffer_range_bytes. 0 = inherit.
+  uint64_t max_storage_buffer_range = 0;
 };
 
 // The registered profiles, in registry order. docs/new-chip-bringup.md
