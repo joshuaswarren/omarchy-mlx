@@ -17467,7 +17467,10 @@ omarchy::ComputeParams norm_params(
 
 } // namespace
 bool CrossEntropy::use_fallback(Stream s) {
-  return false;
+  // Issue 1023: the fused Vulkan kernel is unreachable on a CPU stream,
+  // so the old unconditional false left mlx core's bare NYI as the only
+  // outcome. The composed fallback's ingredients all run on CPU.
+  return s.device == Device::cpu;
 }
 
 void CrossEntropy::eval_gpu(
@@ -17576,7 +17579,10 @@ void RMSNorm::eval_gpu(
 }
 
 bool RMSNormGated::use_fallback(Stream s) {
-  return false;
+  // Issue 1023: the fused Vulkan kernel is unreachable on a CPU stream,
+  // so the old unconditional false left mlx core's bare NYI as the only
+  // outcome. The composed fallback's ingredients all run on CPU.
+  return s.device == Device::cpu;
 }
 
 // Fused GDN decode chain epilogue: rms_norm + silu(gate)*normed in one
@@ -17636,7 +17642,10 @@ void RMSNormGated::eval_gpu(
 }
 
 bool RMSNormScaled::use_fallback(Stream s) {
-  return false;
+  // Issue 1023: the fused Vulkan kernel is unreachable on a CPU stream,
+  // so the old unconditional false left mlx core's bare NYI as the only
+  // outcome. The composed fallback's ingredients all run on CPU.
+  return s.device == Device::cpu;
 }
 
 // Fused rms_norm + scalar multiply (mode 1): replaces
