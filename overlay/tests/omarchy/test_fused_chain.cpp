@@ -2102,6 +2102,16 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   dgpu_caps.device_name = "NVIDIA GeForce RTX 5060 Ti";
   CHECK(omarchy::qmm_residual_norm_enabled(dgpu_caps, 2560, false));
 
+  auto apple = caps;
+  apple.unified_memory = true;
+  apple.device_name = "Apple M1 (G13G)";
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2048, false));
+  apple.device_name = "Apple M1 Max (G13C)";
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+  apple.device_name = "Apple M2 Max (G14C B1)";
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+
   auto limited = caps;
   limited.device_name = "Apple M2 Max (G14C B1)";
   limited.subgroup_size = 16;
