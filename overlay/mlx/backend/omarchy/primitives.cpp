@@ -17719,23 +17719,22 @@ void ScaledDotProductAttention::eval_gpu(
         // inline and resets the slot, so the route is one dispatch per call. Prototype on the width-128 value-phase
         // route only, four query heads per key-value head.
         const int merge_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_MERGE");
-        // An explicit select beats the bk64 default (the merge prototype is its own pass 1); an unset flag keeps
-        // bk64's route because the merge's block counter only covers the 128-key value-phase shape.
         const bool split_merge = pv && !split_wide && split_group == 4u &&
             encoder.device().compute().binding_limit() >= 6 &&
-            (merge_env > 0 || (merge_env < 0 && !bk64 && omarchy::sdpa_split_merge_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
+            (merge_env > 0 || (merge_env < 0 && omarchy::sdpa_split_merge_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
         const uint32_t split_rows = split_rows_route ? static_cast<uint32_t>(q_len) : 1u;
         const omarchy::ComputeKernel split_p2 = split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
             : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
+        const omarchy::ComputeKernel split_p1m = bk64
+            ? omarchy::ComputeKernel::SdpaDecodeSplitP1MR4Bk64BF16Hd128
+            : omarchy::ComputeKernel::SdpaDecodeSplitP1MR4BF16Hd128;
         const uint32_t split_q_offset = split_params.lhs_offset;
         const uint32_t split_out_offset = split_params.output_offset;
         const uint32_t split_q_row = checked_u32(q.strides()[2], tag, out);
         const uint32_t split_out_row = checked_u32(out.strides()[2], tag, out);
         split_params.out_strides[0] = split_rows > 1u ? checked_u32(out.strides()[1], tag, out) : 0u;
-        // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
-        // The merge kernel is the 128-key pass 1 even when the bk64 default is on — its grid must count 128-key blocks
-        // or the extra workgroups write out-of-range headers into the next head's block 0.
-        const uint32_t p1_block_keys = split_merge ? 128u : split_block_keys;
+        // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs on its own scratch.
+        const uint32_t p1_block_keys = split_block_keys;
         for (uint32_t row = 0; row < split_rows; ++row) {
           const uint32_t row_k = static_cast<uint32_t>(k_len) - (split_rows - 1u - row);
           const uint32_t row_blocks = (row_k + p1_block_keys - 1u) / p1_block_keys;
@@ -17750,8 +17749,7 @@ void ScaledDotProductAttention::eval_gpu(
             std::array<omarchy::ComputeBinding, 6> merge_bindings{
                 binding(q), binding(k), binding(v), binding(scratch), binding(out),
                 encoder.sdpa_merge_counters(split_params.matrix_m)};
-            encoder.dispatch_compute(omarchy::ComputeKernel::SdpaDecodeSplitP1MR4BF16Hd128,
-                                     merge_bindings, split_params, split_params.matrix_n, row_blocks);
+            encoder.dispatch_compute(split_p1m, merge_bindings, split_params, split_params.matrix_n, row_blocks);
           } else {
             std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
             encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);

@@ -1,0 +1,351 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Single-dispatch 64-key-block split-K bf16 decode SDPA, head width 128
+// (sdpa_decode_split_p1v_bk64.comp + inline pass-2 merge in the last finishing
+// workgroup; MLX_OMARCHY_SDPA_SPLIT_MERGE + BK=64).
+//
+// Keeps the 64-key block grid (64-80 workgroups on 32-core G13C at ctx 512)
+// while eliminating the separate pass-2 dispatch and its CDM pipeline barrier.
+// Uses the same coherent-store + single per-kv-head atomicAdd ticket pattern as
+// QMM_VEC_RESNORM (qmm_vec.comp): zero per-element atomics, shared-memory
+// header broadcast in the finisher workgroup, and register reuse of the
+// finisher's own block partial.
+
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+#ifndef SPLIT_R
+#define SPLIT_R 4
+#endif
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Query {
+  uint16_t values[];
+} query_data;
+layout(set = 0, binding = 1, std430) readonly buffer Key {
+  uvec4 values[];
+} key_data;
+layout(set = 0, binding = 2, std430) readonly buffer Value {
+  uvec2 values[];
+} value_data;
+layout(set = 0, binding = 3, std430) coherent buffer Scratch {
+  float values[];
+} scratch_data;
+layout(set = 0, binding = 4, std430) writeonly buffer Output {
+  uint16_t values[];
+} output_data;
+layout(set = 0, binding = 5, std430) coherent buffer Done {
+  uint values[];
+} done_data;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+  float alpha;
+  float beta;
+  uint dims;
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+const uint D = 128u;
+const uint BK = 64u;
+const uint SUBGROUPS = 4u;
+const uint STRIDE = D + 4u;
+
+shared float s_q[SPLIT_R * D];
+shared float s_p[SPLIT_R * BK];
+shared float s_part[2u * SPLIT_R * BK];
+shared float s_max[SPLIT_R * SUBGROUPS];
+shared float s_sum[SPLIT_R * SUBGROUPS];
+shared float s_o[4u * SPLIT_R * D];
+shared uint s_is_last;
+shared float s_gmax;
+shared float s_denom;
+// s_q (512 floats) is dead after the score pass; alias it for merge block headers
+// (0..127: block max, 128..255: block sum, 256..383: block exp weight) so
+// threadgroup memory stays identical to sdpa_decode_split_p1v_bk64.comp.
+#define S_BMAX(idx) s_q[(idx)]
+#define S_BSUM(idx) s_q[128u + (idx)]
+#define S_BW(idx)   s_q[256u + (idx)]
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+void main() {
+  uint t = gl_LocalInvocationID.x;
+  uint kv_head = gl_WorkGroupID.x;
+  uint block = gl_WorkGroupID.y;
+  uint k_len = params.matrix_k;
+  uint nblocks = (k_len + BK - 1u) / BK;
+  uint sg = gl_SubgroupID;
+
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    s_q[r * D + t] = params.alpha * bf16_load(
+        query_data.values[params.lhs_offset + head * params.shape[0] + t * params.shape[3]]);
+  }
+  barrier();
+
+  uint kt = t & 63u;
+  uint half_id = t >> 6u;
+  uint key = block * BK + kt;
+  bool valid = key < k_len;
+  float score[SPLIT_R];
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    score[r] = 0.0;
+  }
+  if (valid) {
+    uint k_base = (params.rhs_offset + kv_head * params.shape[1] + key * params.shape[2]) >> 3u;
+    for (uint c = half_id * 8u; c < half_id * 8u + 8u; ++c) {
+      uvec4 w = key_data.values[k_base + c];
+      float kf[8];
+      kf[0] = uintBitsToFloat(w.x << 16u);
+      kf[1] = uintBitsToFloat(w.x & 0xffff0000u);
+      kf[2] = uintBitsToFloat(w.y << 16u);
+      kf[3] = uintBitsToFloat(w.y & 0xffff0000u);
+      kf[4] = uintBitsToFloat(w.z << 16u);
+      kf[5] = uintBitsToFloat(w.z & 0xffff0000u);
+      kf[6] = uintBitsToFloat(w.w << 16u);
+      kf[7] = uintBitsToFloat(w.w & 0xffff0000u);
+      for (uint r = 0u; r < SPLIT_R; ++r) {
+        for (uint i = 0u; i < 8u; ++i) {
+          score[r] += s_q[r * D + c * 8u + i] * kf[i];
+        }
+      }
+    }
+  }
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    s_part[(half_id * SPLIT_R + r) * BK + kt] = score[r];
+  }
+  barrier();
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    score[r] = valid ? s_part[r * BK + kt] + s_part[(SPLIT_R + r) * BK + kt]
+                     : uintBitsToFloat(0xff800000u);
+  }
+
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    float m = subgroupMax(score[r]);
+    if (gl_SubgroupInvocationID == 0u) {
+      s_max[r * SUBGROUPS + sg] = m;
+    }
+  }
+  barrier();
+  float block_max[SPLIT_R];
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    float m = max(s_max[r * SUBGROUPS], s_max[r * SUBGROUPS + 1u]);
+    block_max[r] = m;
+    float p = valid ? exp(score[r] - m) : 0.0;
+    s_p[r * BK + kt] = p;
+    float ps = subgroupAdd(p);
+    if (gl_SubgroupInvocationID == 0u) {
+      s_sum[r * SUBGROUPS + sg] = ps;
+    }
+  }
+  barrier();
+
+  uint nk = min(BK, k_len - block * BK);
+  uint v_stride = params.in_strides[2];
+  uint dg = t & 31u;
+  uint part = t >> 5u;
+  uint kstart = part * 16u;
+  uint kend = min(nk, kstart + 16u);
+  uint v_row0 = params.aux_offset + kv_head * params.in_strides[1] + block * BK * v_stride + dg * 4u;
+  float o[SPLIT_R * 4];
+  for (uint i = 0u; i < SPLIT_R * 4u; ++i) {
+    o[i] = 0.0;
+  }
+  uint key0 = kstart;
+  for (; key0 + 8u <= kend; key0 += 8u) {
+    uvec2 w[8];
+    for (uint i = 0u; i < 8u; ++i) {
+      w[i] = value_data.values[(v_row0 + (key0 + i) * v_stride) >> 2u];
+    }
+    for (uint i = 0u; i < 8u; ++i) {
+      float v0 = uintBitsToFloat(w[i].x << 16u);
+      float v1 = uintBitsToFloat(w[i].x & 0xffff0000u);
+      float v2 = uintBitsToFloat(w[i].y << 16u);
+      float v3 = uintBitsToFloat(w[i].y & 0xffff0000u);
+      for (uint r = 0u; r < SPLIT_R; ++r) {
+        float p = s_p[r * BK + key0 + i];
+        o[r * 4u + 0u] += p * v0;
+        o[r * 4u + 1u] += p * v1;
+        o[r * 4u + 2u] += p * v2;
+        o[r * 4u + 3u] += p * v3;
+      }
+    }
+  }
+  for (; key0 < kend; ++key0) {
+    uvec2 w = value_data.values[(v_row0 + key0 * v_stride) >> 2u];
+    float v0 = uintBitsToFloat(w.x << 16u);
+    float v1 = uintBitsToFloat(w.x & 0xffff0000u);
+    float v2 = uintBitsToFloat(w.y << 16u);
+    float v3 = uintBitsToFloat(w.y & 0xffff0000u);
+    for (uint r = 0u; r < SPLIT_R; ++r) {
+      float p = s_p[r * BK + key0];
+      o[r * 4u + 0u] += p * v0;
+      o[r * 4u + 1u] += p * v1;
+      o[r * 4u + 2u] += p * v2;
+      o[r * 4u + 3u] += p * v3;
+    }
+  }
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    for (uint i = 0u; i < 4u; ++i) {
+      s_o[(part * SPLIT_R + r) * D + dg * 4u + i] = o[r * 4u + i];
+    }
+  }
+  barrier();
+
+  uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
+  float my_total[SPLIT_R];
+  float block_sum[SPLIT_R];
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    block_sum[r] = s_sum[r * SUBGROUPS] + s_sum[r * SUBGROUPS + 1u];
+    my_total[r] = s_o[r * D + t] + s_o[(SPLIT_R + r) * D + t] +
+        s_o[(2u * SPLIT_R + r) * D + t] + s_o[(3u * SPLIT_R + r) * D + t];
+  }
+
+  if (nblocks == 1u) {
+    for (uint r = 0u; r < SPLIT_R; ++r) {
+      uint head = kv_head * SPLIT_R + r;
+      output_data.values[params.output_offset + head * out_head + t] =
+          bf16_store(my_total[r] / block_sum[r]);
+    }
+    return;
+  }
+
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    uint base = (head * nblocks + block) * STRIDE;
+    if (t == 0u) {
+      scratch_data.values[base + D] = block_max[r];
+      scratch_data.values[base + D + 1u] = block_sum[r];
+    }
+    scratch_data.values[base + t] = my_total[r];
+  }
+
+  barrier();
+  memoryBarrierBuffer();
+  if (t == 0u) {
+    uint prev = atomicAdd(done_data.values[kv_head], 1u);
+    s_is_last = (prev == nblocks - 1u) ? 1u : 0u;
+  }
+  barrier();
+  if (s_is_last == 0u) {
+    return;
+  }
+  if (t == 0u) {
+    done_data.values[kv_head] = 0u;
+  }
+  memoryBarrierBuffer();
+  barrier();
+
+  for (uint r = 0u; r < SPLIT_R; ++r) {
+    uint head = kv_head * SPLIT_R + r;
+    uint hbase = head * nblocks * STRIDE;
+    if (t == 0u) {
+      s_gmax = uintBitsToFloat(0xff800000u);
+      s_denom = 0.0;
+    }
+    barrier();
+    // Pass 1: find global_max across all blocks (one coherent read per block).
+    for (uint b0 = 0u; b0 < nblocks; b0 += 128u) {
+      uint cnt = min(128u, nblocks - b0);
+      if (t < cnt) {
+        uint b = b0 + t;
+        S_BMAX(t) = (b == block) ? block_max[r] : scratch_data.values[hbase + b * STRIDE + D];
+        S_BSUM(t) = (b == block) ? block_sum[r] : scratch_data.values[hbase + b * STRIDE + D + 1u];
+      }
+      barrier();
+      if (t == 0u) {
+        float gm = s_gmax;
+        for (uint i = 0u; i < cnt; ++i) {
+          float m = S_BMAX(i);
+          if (isnan(m) || m > gm) {
+            gm = m;
+          }
+        }
+        s_gmax = gm;
+      }
+      barrier();
+    }
+    // Pass 2: compute weights, denominator, and weighted sum across blocks.
+    float acc = 0.0;
+    if (nblocks <= 128u) {
+      // Single-chunk fast path: S_BMAX and S_BSUM already hold all block headers.
+      if (t == 0u) {
+        float gm = s_gmax;
+        float denom = 0.0;
+        for (uint i = 0u; i < nblocks; ++i) {
+          float w = exp(S_BMAX(i) - gm);
+          S_BW(i) = w;
+          denom += S_BSUM(i) * w;
+        }
+        s_denom = denom;
+      }
+      barrier();
+      for (uint b = 0u; b < nblocks; ++b) {
+        float val = (b == block) ? my_total[r] : scratch_data.values[hbase + b * STRIDE + t];
+        acc += val * S_BW(b);
+      }
+    } else {
+      for (uint b0 = 0u; b0 < nblocks; b0 += 128u) {
+        uint cnt = min(128u, nblocks - b0);
+        if (t < cnt) {
+          uint b = b0 + t;
+          float m = (b == block) ? block_max[r] : scratch_data.values[hbase + b * STRIDE + D];
+          float bs = (b == block) ? block_sum[r] : scratch_data.values[hbase + b * STRIDE + D + 1u];
+          S_BW(t) = exp(m - s_gmax);
+          S_BSUM(t) = bs * S_BW(t);
+        }
+        barrier();
+        if (t == 0u) {
+          float denom = s_denom;
+          for (uint i = 0u; i < cnt; ++i) {
+            denom += S_BSUM(i);
+          }
+          s_denom = denom;
+        }
+        barrier();
+        for (uint i = 0u; i < cnt; ++i) {
+          uint b = b0 + i;
+          float val = (b == block) ? my_total[r] : scratch_data.values[hbase + b * STRIDE + t];
+          acc += val * S_BW(i);
+        }
+        barrier();
+      }
+    }
+    output_data.values[params.output_offset + head * out_head + t] =
+        bf16_store(acc / s_denom);
+    barrier();
+  }
+}

@@ -235,10 +235,12 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   // route and its bits. A second call on the same stream exercises the counter pool's self-cleaning.
   const bool merge_shape = heads == 4 * kv_heads && width == 128;
   setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
+  setenv("MLX_OMARCHY_SDPA_SPLIT_BK64", "0", 1);
   setenv("MLX_OMARCHY_SDPA_SPLIT_MERGE", "1", 1);
   Run split_merge = run_attention(q.x, k, v, scale, "1", stream);
   Run split_merge_again = run_attention(q.x, k, v, scale, "1", stream);
   unsetenv("MLX_OMARCHY_SDPA_SPLIT_MERGE");
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_BK64");
   unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
   Errors e_merge = error_against(split_merge.out, ref);
   if (split_device_ready()) {
@@ -251,6 +253,27 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   CHECK(e_merge.max <= 3.0 * rounding + 1e-5);
   if (!merge_shape) {
     CHECK(split_merge.out == split_pv.out);
+  }
+  // Single-dispatch 64-key-block merge variant (sdpa_decode_split_p1m_bk64.comp).
+  setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
+  setenv("MLX_OMARCHY_SDPA_SPLIT_BK64", "1", 1);
+  setenv("MLX_OMARCHY_SDPA_SPLIT_MERGE", "1", 1);
+  Run split_merge_bk64 = run_attention(q.x, k, v, scale, "1", stream);
+  Run split_merge_bk64_again = run_attention(q.x, k, v, scale, "1", stream);
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_MERGE");
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_BK64");
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
+  Errors e_merge_bk64 = error_against(split_merge_bk64.out, ref);
+  if (split_device_ready()) {
+    CHECK(split_merge_bk64.launched == (merge_shape && split_binding_limit(stream) >= 6 ? 1 : 2));
+    CHECK(split_merge_bk64_again.launched == split_merge_bk64.launched);
+    CHECK(split_merge_bk64_again.out == split_merge_bk64.out);
+  }
+  CHECK(e_merge_bk64.max <= e_fused.max + 2.0 * rounding + 1e-6);
+  CHECK(e_merge_bk64.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
+  CHECK(e_merge_bk64.max <= 3.0 * rounding + 1e-5);
+  if (!merge_shape) {
+    CHECK(split_merge_bk64.out == split_pv.out);
   }
 }
 
