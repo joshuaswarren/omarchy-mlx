@@ -255,7 +255,33 @@ CommandEncoder::CommandEncoder(Device& device) : device_(device) {
   prof::get().attach(this, device_);
 }
 
+// Encoders that owe a deferred event signal, process-wide. get_command_
+// encoders() is thread-local, so a wait on another thread cannot reach
+// the producer's encoder through it; this set is the cross-thread route.
+namespace {
+std::mutex& deferred_signal_registry_mutex() {
+  static std::mutex m;
+  return m;
+}
+std::unordered_set<CommandEncoder*>& deferred_signal_registry() {
+  static std::unordered_set<CommandEncoder*> encoders;
+  return encoders;
+}
+} // namespace
+
+void CommandEncoder::note_deferred_signals() {
+  if (!deferred_signals_pending_) {
+    deferred_signals_pending_ = true;
+    std::lock_guard<std::mutex> lk(deferred_signal_registry_mutex());
+    deferred_signal_registry().insert(this);
+  }
+}
+
 CommandEncoder::~CommandEncoder() {
+  {
+    std::lock_guard<std::mutex> lk(deferred_signal_registry_mutex());
+    deferred_signal_registry().erase(this);
+  }
   // Drain pending work (and its temporaries) while the device is alive.
   // A wedged queue throws here; swallow so destruction can continue, the
   // bounded error already surfaced through synchronize().
@@ -295,6 +321,10 @@ void CommandEncoder::join_last_completion(const char* reason) {
   if (last_completion_ == 0) {
     return;
   }
+  // A queued deferred signal may be the only producer left that can
+  // satisfy submissions this join (or a wait inside one of them) blocks
+  // on; flush before blocking so the host wait always terminates.
+  flush_deferred_signal_encoders();
   uint64_t value = last_completion_;
   timeline::ScopedEvent tl_join(
       timeline::Kind::Readback,
@@ -1539,6 +1569,10 @@ void CommandEncoder::wait_outstanding_submissions() {
 void CommandEncoder::submit() {
   // The submitting thread may predate Runtime::init (the MLX stream thread).
   raise_cpu_clamp_this_thread();
+  // Deferred signals let another thread queue (or this flush commit) wait/
+  // signal ops against this encoder: serialize the snapshot below against
+  // add_semaphore_wait/add_semaphore_signal.
+  std::lock_guard<std::mutex> pending_lk(pending_sem_mutex_);
   auto& dt = vk::device_table();
   if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
     fprintf(stderr, "[rtmod] SUBMIT-ENTER tid=%lu\n", (unsigned long)syscall(SYS_gettid));
@@ -1623,8 +1657,24 @@ void CommandEncoder::submit() {
   signal_sems.reserve(signal_semaphores_.size() + 1);
   signal_values.reserve(signal_semaphores_.size() + 1);
   for (auto& pending : signal_semaphores_) {
-    signal_sems.push_back(pending.semaphore);
-    signal_values.push_back(pending.value);
+    // Deferred signals let several Event::signal calls on the same Event
+    // coalesce into one submission; pSignalSemaphores must not repeat a
+    // semaphore, so merge to the highest value per handle. Every pending
+    // on_submit still fires below regardless of the merge.
+    bool merged = false;
+    for (size_t i = 0; i < signal_sems.size(); ++i) {
+      if (signal_sems[i] == pending.semaphore) {
+        if (pending.value > signal_values[i]) {
+          signal_values[i] = pending.value;
+        }
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) {
+      signal_sems.push_back(pending.semaphore);
+      signal_values.push_back(pending.value);
+    }
   }
 
   // Ownership moves to the dispatcher entry: each pending-semaphore
@@ -1945,14 +1995,20 @@ void synchronize_pending_encoders() {
 }
 
 void flush_deferred_signal_encoders() {
-  for (auto& [idx, enc] : get_command_encoders()) {
-    if (enc.deferred_signals_pending()) {
-      enc.commit();
-    }
+  // Snapshot the registry, then commit outside the lock: commits re-enter
+  // note_deferred_signals() paths and must not hold it. Entries whose flag
+  // cleared in the meantime (already submitted) are skipped, not pruned;
+  // the destructor or the next flush drops them.
+  std::vector<CommandEncoder*> pending;
+  {
+    std::lock_guard<std::mutex> lk(deferred_signal_registry_mutex());
+    pending.assign(
+        deferred_signal_registry().begin(), deferred_signal_registry().end());
+    deferred_signal_registry().clear();
   }
-  for (auto& [idx, enc] : get_global_command_encoders()) {
-    if (enc.deferred_signals_pending()) {
-      enc.commit();
+  for (auto* enc : pending) {
+    if (enc->deferred_signals_pending()) {
+      enc->commit();
     }
   }
 }

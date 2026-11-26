@@ -111,6 +111,10 @@ struct EventImpl {
   uint64_t signaled_completion{0};
   uint64_t signaled_value{0};
   std::atomic<bool> queued_signal{false};
+  // Set by any wait path. A waited-on event cannot defer its signal
+  // commit: the wait may already be queued (or blocking) before signal()
+  // runs, so nothing downstream of it is guaranteed to flush the producer.
+  std::atomic<bool> has_waiters_{false};
 
   void publish_signal(uint64_t value, uint64_t completion) {
     std::lock_guard<std::mutex> lk(signal_mtx);
@@ -182,6 +186,7 @@ void Event::wait() {
   if (value() == 0) {
     return;
   }
+  event.has_waiters_.store(true, std::memory_order_release);
   // Deferred commits: a queued signal (or the completed-handler that would
   // signal a host event) may sit in an uncommitted batch. Flush the
   // encoders that owe one so this wait always has a submission to observe.
@@ -242,6 +247,7 @@ void Event::wait(Stream s) {
   if (value() == 0) {
     return;
   }
+  event.has_waiters_.store(true, std::memory_order_release);
   if (s.device == Device::gpu) {
     VkSemaphore semaphore = event.host
         ? event.bridge_host_to_gpu(s, value())
@@ -315,7 +321,8 @@ void Event::signal(Stream s) {
       encoder.add_completed_handler([impl, target_value, keepalive]() {
         impl->signal_host(target_value);
       });
-      if (omarchy::defer_commits_enabled(
+      if (!event.has_waiters_.load(std::memory_order_acquire) &&
+          omarchy::defer_commits_enabled(
               encoder.device().hardware_capabilities().device_name)) {
         encoder.note_deferred_signals();
       } else {
@@ -362,7 +369,11 @@ void Event::signal(Stream s) {
       // close instead of forcing a submission per eval boundary. Every
       // wait path flushes deferred-signal encoders before blocking, so the
       // signal always reaches the queue before a waiter can observe it.
-      if (omarchy::defer_commits_enabled(
+      // An event that already has waiters cannot defer: its wait may be
+      // queued (or blocking) before this signal runs, leaving no later
+      // point that provably flushes the producer.
+      if (!event.has_waiters_.load(std::memory_order_acquire) &&
+          omarchy::defer_commits_enabled(
               encoder.device().hardware_capabilities().device_name)) {
         encoder.note_deferred_signals();
       } else {

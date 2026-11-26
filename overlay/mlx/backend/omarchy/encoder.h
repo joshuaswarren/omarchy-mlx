@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -376,11 +377,11 @@ class MLX_API CommandEncoder {
   }
 
   // Deferred event signals (defer_commits_enabled): an Event::signal that
-  // queued onto this batch without committing. Waiters flush every encoder
-  // carrying the flag so the signal reaches the queue before they block.
-  void note_deferred_signals() {
-    deferred_signals_pending_ = true;
-  }
+  // queued onto this batch without committing. Setting the flag also
+  // registers the encoder in a process-wide set so flush_deferred_signal_
+  // encoders() can reach encoders owned by other threads; the flag clears
+  // at submit() and the entry is dropped by the flush or the destructor.
+  void note_deferred_signals();
 
   bool deferred_signals_pending() const {
     return deferred_signals_pending_;
@@ -478,6 +479,7 @@ class MLX_API CommandEncoder {
       VkSemaphore semaphore,
       uint64_t value,
       std::shared_ptr<void> keepalive) {
+    std::lock_guard<std::mutex> lk(pending_sem_mutex_);
     wait_semaphores_.push_back({semaphore, value, std::move(keepalive)});
   }
 
@@ -486,6 +488,7 @@ class MLX_API CommandEncoder {
       uint64_t value,
       std::shared_ptr<void> keepalive,
       std::function<void(uint64_t)> on_submit = {}) {
+    std::lock_guard<std::mutex> lk(pending_sem_mutex_);
     signal_semaphores_.push_back(
         {semaphore, value, std::move(keepalive), std::move(on_submit)});
   }
@@ -711,6 +714,10 @@ class MLX_API CommandEncoder {
   uint64_t last_completion_{0};
   VkDescriptorPool desc_pool_{VK_NULL_HANDLE};
   uint32_t desc_pool_remaining_{0};
+  // Guards the pending semaphore lists: deferred signals let a waiter on
+  // another thread commit this encoder, so queueing and submit()'s
+  // snapshot must serialize against each other.
+  std::mutex pending_sem_mutex_;
   std::vector<PendingSemaphore> wait_semaphores_;
   std::vector<PendingSemaphore> signal_semaphores_;
   bool deferred_signals_pending_{false};
