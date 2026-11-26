@@ -199,6 +199,55 @@ def check_backward(c, dt_name, tol):
           dy_t / torch.sqrt(rv_t.reshape(chw) + eps) * w_t.reshape(chw), tol)
 
 
+def check_backward_native(c, dt_name, tol):
+    """native_batch_norm_backward vs the real ATen op - not a manual
+    oracle. Real saved stats from a training forward; weight present and
+    absent; masked-out slots are None on both sides."""
+    bf16 = dt_name == "bf16"
+    dt = mx.bfloat16 if bf16 else mx.float32
+    tdt = torch.bfloat16 if bf16 else torch.float32
+    x_t = torch.tensor(c["x"]).to(tdt)
+    w_t = torch.tensor(c["w"]).to(tdt)
+    b_t = torch.tensor(c["b"]).to(tdt)
+    dy_t = torch.tensor(c["dy"]).to(tdt)
+    rm_t = torch.tensor(c["rm"]).to(tdt)
+    rv_t = torch.tensor(c["rv"]).to(tdt)
+    x_m = mx.array(c["x"]).astype(dt)
+    w_m = mx.array(c["w"]).astype(dt)
+    dy_m = mx.array(c["dy"]).astype(dt)
+    rm_m = mx.array(c["rm"]).astype(dt)
+    rv_m = mx.array(c["rv"]).astype(dt)
+    mom, eps = c["mom"], c["eps"]
+    name = "native_batch_norm_backward"
+    # actual saved stats from the torch training forward
+    _, sm_t, si_t = torch.ops.aten.native_batch_norm(
+        x_t, w_t, b_t, rm_t.clone(), rv_t.clone(), True, mom, eps)
+    sm_m = mx.array(sm_t.float().numpy()).astype(dt)
+    si_m = mx.array(si_t.float().numpy()).astype(dt)
+
+    for training in (False, True):
+        for wt, wm, wtag in ((w_t, w_m, "w"), (None, None, "no-w")):
+            for mask in ((True, True, True), (False, True, False)):
+                wr = torch.ops.aten.native_batch_norm_backward(
+                    dy_t, x_t, wt, rm_t, rv_t, sm_t, si_t,
+                    training, eps, list(mask))
+                r = mlx_vulkan.ATEN_TABLE[name](
+                    dy_m, x_m, wm, rm_m, rv_m, sm_m, si_m,
+                    training, eps, mask)
+                assert isinstance(r, tuple) and len(r) == 3, r
+                tag = f"{name} {dt_name} {'train' if training else 'eval'} {wtag} mask{mask}"
+                for i, onm in enumerate(("dx", "dw", "db")):
+                    if not mask[i]:
+                        assert r[i] is None, f"{tag} {onm}: masked slot not None"
+                        continue
+                    assert r[i] is not None, (
+                        f"{tag} {onm}: lowering returned None, "
+                        f"torch returned shape {tuple(wr[i].shape)}")
+                    assert tuple(r[i].shape) == tuple(wr[i].shape), (
+                        f"{tag} {onm}: shape {r[i].shape} vs {wr[i].shape}")
+                    close(f"{tag} {onm}", r[i], wr[i], tol)
+
+
 def check_no_training(c, dt_name, tol):
     """_native_batch_norm_legit_no_training: aten order (x, w, b, rm, rv,
     momentum, eps) with DISTINCT momentum and eps; torch returns
@@ -268,6 +317,7 @@ def main():
             check_legit(c, dt_name, tol)
             check_no_training(c, dt_name, tol)
             check_backward(c, dt_name, tol)
+            check_backward_native(c, dt_name, tol)
     print("ALL BN parity checks PASS (one process, in sequence)")
 
 
