@@ -17138,7 +17138,9 @@ void GreedyQuantizedArgmax::eval_gpu(
   const bool bindings_fit =
       range_limit == 0u ||
       (w_bytes <= range_limit && plane_bytes <= range_limit);
-  bool subgroup_ok = subgroup_ready && k_dim == 2048u && bindings_fit;
+  const bool prefer_word = omarchy::greedy_word_preferred(caps.device_name);
+  bool subgroup_ok =
+      !prefer_word && subgroup_ready && k_dim == 2048u && bindings_fit;
   bool word_ok = omarchy::q4_word_enabled() &&
       caps.storage_buffer_16bit_access && caps.shader_int16 &&
       k_dim % 64u == 0u && bindings_fit &&
