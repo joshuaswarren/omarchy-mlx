@@ -110,10 +110,12 @@
      else:
          response_generator.join()
  
-@@ -2039,6 +2082,18 @@
+@@ -2039,6 +2082,20 @@
          action="store_true",
          help="Use pipelining instead of tensor parallelism",
      )
++    import os as _os
++
 +    parser.add_argument(
 +        "--alias",
 +        type=str,
@@ -123,7 +125,7 @@
 +    parser.add_argument(
 +        "--api-key",
 +        type=str,
-+        default=os.environ.get("MLX_API_KEY", ""),
++        default=_os.environ.get("MLX_API_KEY", ""),
 +        help="Require this bearer key on every route but /health",
 +    )
      args = parser.parse_args()
