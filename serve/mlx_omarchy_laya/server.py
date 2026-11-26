@@ -25,10 +25,10 @@ Memory admission (Main review round 3):
     and is refused
   - under --managed every admission or relabel refusal — missing atomic
     budget API, unreadable or invalid manifest/encoder config, budget
-    refusal, or relabel mismatch — is fail-closed (exit 3); standalone
-    runs warn and continue without the budget module, its atomic API, a
-    non-empty manifest, or a verified relabel floor, and otherwise raise
-    the original error
+    refusal, unresolvable registry home, or relabel mismatch — is
+    fail-closed (exit 3); standalone runs warn and continue without the
+    budget module, its atomic API, a non-empty manifest, or a verified
+    relabel floor, and otherwise raise the original error
 """
 
 from __future__ import annotations
@@ -227,7 +227,20 @@ def _budget_or_fail(managed):
     return budget
 
 
-def _register_pending(model_dir: Path, name: str, managed: bool, dtype: str, max_questions: int):
+def _managed_registry_home(budget):
+    """Pin the budget registry home for --managed runs. default_home() raises
+    RuntimeError when MLX_OMARCHY_HOME and HOME are unset and the uid has no
+    passwd entry; refuse fail-closed (exit 3) before admission or claim."""
+    try:
+        return budget.default_home()
+    except RuntimeError as exc:
+        raise ManagedBudgetUnavailable(
+            "managed co-serving cannot locate the budget registry: %s "
+            "(set MLX_OMARCHY_HOME or HOME)" % exc) from exc
+
+
+def _register_pending(model_dir: Path, name: str, managed: bool, dtype: str, max_questions: int,
+                      home=None):
     """Dtype-aware atomic admit + pending reservation BEFORE weights load.
 
     total = parameter_bytes(run dtype) + workspace bound. Under --managed the
@@ -255,19 +268,20 @@ def _register_pending(model_dir: Path, name: str, managed: bool, dtype: str, max
         return None, None, total
     owner = budget.generate_owner()
     admission = budget.admit_and_reserve(
-        name, int(total), note=manifest.get("source_revision", "laya"), owner=owner
+        name, int(total), note=manifest.get("source_revision", "laya"), owner=owner,
+        home=home,
     )
     try:
         for line in getattr(admission, "lines", []):
             print("laya: admit | %s" % line, file=sys.stderr)
     except BaseException:
-        _clear_memory(name, managed, why="failed-startup", owner=owner)
+        _clear_memory(name, managed, why="failed-startup", owner=owner, home=home)
         raise
     return admission, owner, int(total)
 
 
 def _relabel_resident(model_dir: Path, name: str, managed: bool, registered, owner,
-                      dtype: str, admitted_total: int, max_questions: int):
+                      dtype: str, admitted_total: int, max_questions: int, home=None):
     """Flip pending -> resident once weights are materialized.
 
     The floor is the run dtype's exact parameter nbytes. The admitted total is
@@ -296,16 +310,17 @@ def _relabel_resident(model_dir: Path, name: str, managed: bool, registered, own
               file=sys.stderr)
         from mlx_omarchy_serve import budget
 
-        budget.set_reservation_state(name, "resident", owner=owner)
+        budget.set_reservation_state(name, "resident", owner=owner, home=home)
         return {"bytes": admitted_total, "state": "resident", "floor_verified": False}
     from mlx_omarchy_serve import budget
 
-    budget.set_reservation_state(name, "resident", resident_floor_bytes=floor, owner=owner)
+    budget.set_reservation_state(name, "resident", resident_floor_bytes=floor, owner=owner,
+                                 home=home)
     return {"bytes": admitted_total, "state": "resident", "floor_verified": True,
             "floor_bytes": floor}
 
 
-def _clear_memory(name: str, managed: bool, why: str, owner=None):
+def _clear_memory(name: str, managed: bool, why: str, owner=None, home=None):
     """Remove the reservation so a dead process never blocks future admissions.
 
     Ownership-scoped: clear_reservation refuses names held by another owner,
@@ -315,7 +330,7 @@ def _clear_memory(name: str, managed: bool, why: str, owner=None):
     try:
         from mlx_omarchy_serve import budget
 
-        budget.clear_reservation(name, owner=owner)
+        budget.clear_reservation(name, owner=owner, home=home)
     except Exception as exc:
         msg = "laya: could not clear %s memory reservation for %s: %s" % (why, name, exc)
         if managed:
@@ -351,7 +366,7 @@ def _read_claim_payload(budget, raw_fd: str) -> dict:
 
 
 def _claim_reserved(budget, model_dir: Path, catalog_id: str, payload: dict,
-                    dtype: str, max_questions: int):
+                    dtype: str, max_questions: int, home=None):
     """Bind this child to the parent's batch reservation instead of running
     its own admission. The claimed allocation is validated against THIS
     child's recomputed requirement (manifest + run args) — a mismatch is a
@@ -392,7 +407,7 @@ def _claim_reserved(budget, model_dir: Path, catalog_id: str, payload: dict,
     try:
         record = budget.claim_reservation(
             name, token, expected_bytes=claimed_bytes,
-            home=budget.default_home(), expected_pair=pair_id)
+            home=home, expected_pair=pair_id)
     except (budget.BudgetError, OSError) as exc:
         msg = str(exc)
         if not msg.startswith("claim refused"):
@@ -402,7 +417,7 @@ def _claim_reserved(budget, model_dir: Path, catalog_id: str, payload: dict,
         print("laya: claimed %s (%d bytes) from pair %s" % (
             name, claimed_bytes, pair_id), file=sys.stderr)
     except BaseException:
-        _clear_memory(name, True, why="failed-startup", owner=record["owner"])
+        _clear_memory(name, True, why="failed-startup", owner=record["owner"], home=home)
         raise
     return {"state": "pending", "claimed": record["claimed"]}, record["owner"], int(total)
 
@@ -419,11 +434,13 @@ class LayaState:
         self.max_questions = args.max_questions
         self.model_dir = Path(args.model).resolve()
         self.catalog_id = None
+        self.home = None
         try:
             self.manifest = _read_manifest(self.model_dir)
             self.catalog_id = str(self.manifest.get("catalog_id") or self.engine_id_fallback(args))
             claim_payload = None
             budget = _budget_or_none()
+            self.home = _managed_registry_home(budget) if self.managed and budget is not None else None
             raw_fd = os.environ.get(_CLAIM_FD_ENV)
             if raw_fd is not None:
                 if not self.managed:
@@ -441,12 +458,13 @@ class LayaState:
                 # refuses any mismatch before a single weight loads.
                 self.reservation, self.owner, self.admitted_total = _claim_reserved(
                     budget, self.model_dir, self.catalog_id, claim_payload,
-                    args.dtype, args.max_questions)
+                    args.dtype, args.max_questions, home=self.home)
             else:
                 # pending phase: dtype-aware atomic admit + reserve BEFORE any weight
                 # is resident; concurrent admissions subtract it from MemAvailable
                 self.reservation, self.owner, self.admitted_total = _register_pending(
-                    self.model_dir, self.catalog_id, self.managed, args.dtype, args.max_questions
+                    self.model_dir, self.catalog_id, self.managed, args.dtype, args.max_questions,
+                    home=self.home,
                 )
         except _ADMISSION_ERRORS as exc:
             if not self.managed:
@@ -465,16 +483,19 @@ class LayaState:
         try:
             self.engine = LayaEngine(args.model, dtype=dtype, require_gpu=not args.allow_cpu)
         except BaseException:
-            _clear_memory(self.catalog_id, self.managed, why="failed-startup", owner=self.owner)
+            _clear_memory(self.catalog_id, self.managed, why="failed-startup",
+                          owner=self.owner, home=self.home)
             raise
         try:
             # weights are now resident (LayaEngine evals them); relabel with the
             # parameter-nbytes floor — the admitted total is never grown
             self.reservation = _relabel_resident(self.model_dir, self.catalog_id, self.managed,
                                                  self.reservation, self.owner,
-                                                 args.dtype, self.admitted_total, args.max_questions)
+                                                 args.dtype, self.admitted_total, args.max_questions,
+                                                 home=self.home)
         except BaseException as exc:
-            _clear_memory(self.catalog_id, self.managed, why="failed-relabel", owner=self.owner)
+            _clear_memory(self.catalog_id, self.managed, why="failed-relabel",
+                          owner=self.owner, home=self.home)
             if self.managed and isinstance(exc, _ADMISSION_ERRORS):
                 raise ManagedBudgetUnavailable(
                     "managed relabel failed for %s: %s: %s"
@@ -678,7 +699,8 @@ def serve_main(argv):
             # future admission for as long as it exists, so a stale entry
             # permanently shrinks what later models may admit. Ownership-scoped:
             # another owner's live reservation is refused.
-            _clear_memory(state.catalog_id, state.managed, why="shutdown", owner=state.owner)
+            _clear_memory(state.catalog_id, state.managed, why="shutdown",
+                          owner=state.owner, home=state.home)
 
 
 if __name__ == "__main__":

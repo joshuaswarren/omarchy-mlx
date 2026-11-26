@@ -802,7 +802,7 @@ class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
 
     def _run_case(self, *, manifest=None, manifest_present=True, home_setup=None,
                   managed=True, expect=SystemExit, engine_ok=False, engine_exc=None,
-                  err=None):
+                  err=None, no_home=False):
         case_tmp = Path(self.enterContext(self.tempfile.TemporaryDirectory()))
         ckpt = case_tmp / "ckpt"
         (ckpt / "encoder").mkdir(parents=True)
@@ -821,11 +821,22 @@ class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
         err = err or self.io.StringIO()
         # every case must stop before serving: fail fast instead of binding a port
         with self.mock.patch.dict(os.environ, {"MLX_OMARCHY_HOME": str(home)}), \
+                self._unresolvable_home() if no_home else self.contextlib.nullcontext(), \
                 self.mock.patch.object(self.srv, "ThreadingHTTPServer",
                                        side_effect=AssertionError("server started")), \
                 self.contextlib.redirect_stderr(err), self.assertRaises(expect) as ctx:
             self.srv.serve_main(argv)
         return ctx.exception, err.getvalue(), home
+
+    def _unresolvable_home(self):
+        """MLX_OMARCHY_HOME and HOME unset, no passwd entry for the uid:
+        Path.home() raises RuntimeError inside budget.default_home()."""
+        stack = self.contextlib.ExitStack()
+        stack.enter_context(self.mock.patch.dict(os.environ))
+        os.environ.pop("MLX_OMARCHY_HOME", None)
+        os.environ.pop("HOME", None)
+        stack.enter_context(self.mock.patch("pwd.getpwuid", side_effect=KeyError("uid")))
+        return stack
 
     def _assert_preload_refused(self, outcome, *expected_substrings, check_empty_registry=True):
         exc, err, home = outcome
@@ -954,12 +965,14 @@ class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
                 self.assertEqual(why_spy.call_args.kwargs["why"], "failed-relabel")
                 self.assertEqual(self.budget.load_reservations(home), {})
 
-    def _stderr_failing_on(self, prefix):
+    def _stderr_failing_on(self, prefix, on_match=None):
         io = self.io
 
         class Stream(io.StringIO):
             def write(self, text):
                 if text.startswith(prefix):
+                    if on_match is not None:
+                        on_match()
                     raise OSError(28, "No space left on device")
                 return super().write(text)
 
@@ -984,11 +997,12 @@ class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
                 self.mock.patch.object(self.budget, "claim_reservation",
                                        return_value={"claimed": [1, 2], "owner": "tok"}), \
                 self.mock.patch.object(self.srv, "_clear_memory") as clear:
-            exc, err, _ = self._run_case(err=self._stderr_failing_on("laya: claimed"))
+            exc, err, home = self._run_case(err=self._stderr_failing_on("laya: claimed"))
         self.assertEqual(exc.code, 3, err)
         self.assertIn("managed admission failed for laya-test: OSError", err)
         self.engine.assert_not_called()
-        clear.assert_called_once_with("laya-test", True, why="failed-startup", owner="tok")
+        clear.assert_called_once_with("laya-test", True, why="failed-startup", owner="tok",
+                                      home=home)
 
     def test_multiline_refusal_is_collapsed_to_one_line(self):
         manifest = dict(self.manifest, catalog_id="laya\ntest")
@@ -1021,6 +1035,146 @@ class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
         self.assertEqual(err, "")
         self.engine.assert_not_called()
         self.assertEqual(self.budget.load_reservations(home) if home.is_dir() else {}, {})
+
+    def test_unresolvable_home_premise(self):
+        # control: the harness premise, true on base and head
+        with self._unresolvable_home():
+            with self.assertRaises(RuntimeError):
+                self.budget.default_home()
+
+    def test_managed_unresolvable_home_exits_3_before_admission(self):
+        with self.mock.patch.object(self.budget, "admit_and_reserve",
+                                    wraps=self.budget.admit_and_reserve) as admit:
+            self._assert_preload_refused(
+                self._run_case(no_home=True),
+                "managed co-serving cannot locate the budget registry",
+                "Could not determine home directory", "MLX_OMARCHY_HOME")
+        admit.assert_not_called()
+
+    def test_claim_unresolvable_home_exits_3_before_claim(self):
+        payload = {"name": "laya-test", "claim_token": "tok", "bytes": self.total,
+                   "pair_id": "pair"}
+        with self.mock.patch.dict(os.environ, {self.budget.CLAIM_FD_ENV: "3"}), \
+                self.mock.patch.object(self.srv, "_read_claim_payload", return_value=payload), \
+                self.mock.patch.object(self.budget, "claim_reservation",
+                                       wraps=self.budget.claim_reservation) as claim:
+            self._assert_preload_refused(
+                self._run_case(no_home=True),
+                "managed co-serving cannot locate the budget registry",
+                "Could not determine home directory")
+        claim.assert_not_called()
+
+    def _lose_home_after_admission(self, *args, **kwargs):
+        # the registry home vanishes after admission
+        admitted_home = Path(os.environ.pop("MLX_OMARCHY_HOME"))
+        self.assertIn("laya-test", self.budget.load_reservations(admitted_home))
+        os.environ.pop("HOME", None)
+        return self.mock.Mock(device=lambda: "Device(cpu, 0)", max_len=16)
+
+    def test_managed_pinned_home_relabels_and_clears_at_shutdown(self):
+        with self.mock.patch.object(self.budget, "mem_available", return_value=1 << 40), \
+                self.mock.patch("pwd.getpwuid", side_effect=KeyError("uid")), \
+                self.mock.patch.object(self.budget, "set_reservation_state",
+                                       wraps=self.budget.set_reservation_state) as relabel, \
+                self.mock.patch.object(self.srv, "_clear_memory",
+                                       wraps=self.srv._clear_memory) as clear:
+            exc, err, home = self._run_case(
+                engine_exc=self._lose_home_after_admission, expect=AssertionError)
+        self.assertEqual(str(exc), "server started")
+        self.assertNotIn("could not clear", err)
+        self.engine.assert_called_once()
+        relabel.assert_called_once()
+        self.assertEqual(relabel.call_args.kwargs["home"], home)
+        clear.assert_called_once()
+        self.assertEqual(clear.call_args.kwargs["why"], "shutdown")
+        self.assertEqual(clear.call_args.kwargs["home"], home)
+        self.assertEqual(self.budget.load_reservations(home), {})
+
+    def test_managed_pinned_home_clears_on_relabel_failure(self):
+        with self.mock.patch.object(self.budget, "mem_available", return_value=1 << 40), \
+                self.mock.patch("pwd.getpwuid", side_effect=KeyError("uid")), \
+                self.mock.patch.object(self.budget, "set_reservation_state",
+                                       side_effect=self.budget.BudgetError("relabel boom")), \
+                self.mock.patch.object(self.srv, "_clear_memory",
+                                       wraps=self.srv._clear_memory) as clear:
+            exc, err, home = self._run_case(engine_exc=self._lose_home_after_admission)
+        self.assertEqual(exc.code, 3, err)
+        self.assertNotIn("Traceback", err)
+        self.assertNotIn("could not clear", err)
+        self.engine.assert_called_once()
+        clear.assert_called_once()
+        self.assertEqual(clear.call_args.kwargs["why"], "failed-relabel")
+        self.assertEqual(clear.call_args.kwargs["home"], home)
+        lines = [ln for ln in err.splitlines() if not ln.startswith("laya: admit | ")]
+        self.assertEqual(len(lines), 1, err)
+        self.assertIn("managed relabel failed", lines[0])
+        self.assertIn("relabel boom", lines[0])
+        self.assertEqual(self.budget.load_reservations(home), {})
+
+    def test_managed_pinned_home_survives_env_loss_before_relabel(self):
+        def drop_home():
+            os.environ.pop("MLX_OMARCHY_HOME", None)
+            os.environ.pop("HOME", None)
+
+        with self.mock.patch.object(self.budget, "mem_available", return_value=1 << 40), \
+                self.mock.patch("pwd.getpwuid", side_effect=KeyError("uid")):
+            with self.subTest("during encoder config load"), \
+                    self.mock.patch.object(self.budget, "admit_and_reserve",
+                                           wraps=self.budget.admit_and_reserve) as admit:
+                def drop_then_cfg(*_a, **_kw):
+                    drop_home()
+                    return self.cfg
+
+                self.load_encoder_config.side_effect = drop_then_cfg
+                try:
+                    exc, err, home = self._run_case(expect=AssertionError)
+                finally:
+                    self.load_encoder_config.side_effect = None
+                self.assertEqual(str(exc), "weights loaded")
+                admit.assert_called_once()
+                self.assertEqual(admit.call_args.kwargs["home"], home)
+                self.assertNotIn("could not clear", err)
+                self.assertTrue((home / "reservations.json").is_file())
+                self.assertEqual(self.budget.load_reservations(home), {})
+
+            with self.subTest("during admit print"):
+                exc, err, home = self._run_case(
+                    err=self._stderr_failing_on("laya: admit |", on_match=drop_home))
+                self.assertEqual(exc.code, 3, err)
+                self.assertIn("managed admission failed", err)
+                self.assertNotIn("could not clear", err)
+                self.engine.assert_not_called()
+                self.assertTrue((home / "reservations.json").is_file())
+                self.assertEqual(self.budget.load_reservations(home), {})
+
+            with self.subTest("during engine load"):
+                def drop_then_fail(*_a, **_kw):
+                    drop_home()
+                    raise OSError("weights unreadable")
+
+                exc, err, home = self._run_case(engine_exc=drop_then_fail, expect=OSError)
+                self.assertEqual(str(exc), "weights unreadable")
+                self.assertNotIn("could not clear", err)
+                self.engine.assert_called_once()
+                self.assertTrue((home / "reservations.json").is_file())
+                self.assertEqual(self.budget.load_reservations(home), {})
+
+    def test_standalone_unresolvable_home_keeps_original_exception(self):
+        # control: standalone keeps base behavior
+        exc, err, _ = self._run_case(no_home=True, managed=False, expect=RuntimeError)
+        self.assertIs(type(exc), RuntimeError)
+        self.assertEqual(str(exc), "Could not determine home directory.")
+        self.assertEqual(err, "")
+        self.engine.assert_not_called()
+
+    def test_standalone_invalid_reservation_precedes_home_resolution(self):
+        # control: standalone validation order matches base (BudgetError before home lookup)
+        bad_manifest = dict(self.manifest, weights_header={"param_elements": -100000000})
+        exc, err, _ = self._run_case(
+            manifest=bad_manifest, no_home=True, managed=False, expect=self.budget.BudgetError)
+        self.assertIn("positive integer bytes", str(exc))
+        self.assertEqual(err, "")
+        self.engine.assert_not_called()
 
 
 class _RecordFile(str):
