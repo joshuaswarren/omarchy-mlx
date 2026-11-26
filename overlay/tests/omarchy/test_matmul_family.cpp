@@ -7987,7 +7987,7 @@ TEST_CASE("bf16 Q4 prefill runs the scalar-FMA build without the cooperative rou
       caps.subgroup_size == 32 && !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
       (32u * 16u + 16u * 32u) * sizeof(float) <=
           caps.max_compute_shared_memory_size;
-  // The Intel/ANV fp16-operand 8x16x16 route
+  // The Intel/ANV bf16-operand 8x16x16 route
   // (QmmPrefillCoopmat16XeBF16) claims the same calls where its shape
   // is advertised - the FMA kernels stay reachable only behind
   // MLX_OMARCHY_NO_QMM_XE16 there, so this arm-vs-arm comparison is
@@ -8109,15 +8109,17 @@ TEST_CASE("bf16 Q4 prefill runs the scalar-FMA build without the cooperative rou
   unsetenv("MLX_OMARCHY_QMM_TILE_RB");
 }
 
-// QmmPrefillCoopmat16XeBF16 (shaders/qmm_coopmat16_xe.comp): the fp16-
-// operand 8x16x16 subgroup shape ANV advertises on Xe2 (BMG). x stages
-// through shared, so a ragged matrix_m tile zero-fills - the route
-// claims the q4-g64 bf16 prefill calls the Intel direct kernel's m%16
-// gate declines on a driver whose shape list has no M16 entry. Pin the
-// dispatch on m not a multiple of 16 and above the m<=8 batch-8 short
-// pass (qmv_small_t_default_part), then check the value class: fp16
-// operand staging bounds the call at roughly one 2^-11 rounding per
-// operand on top of the f32 accumulation chain and the bf16 store.
+// QmmPrefillCoopmat16XeBF16 (shaders/qmm_coopmat16_xe.comp): the bf16-
+// operand 8x16x16 subgroup shape ANV advertises on Xe2 (BMG), the same
+// hardware shape the dense Xe16 matmul emits. x stages through shared
+// as a straight bf16 copy, so a ragged matrix_m tile zero-fills - the
+// route claims the q4-g64 bf16 prefill calls the Intel direct kernel's
+// m%16 gate declines on a driver whose shape list has no M16 entry.
+// Pin the dispatch on m not a multiple of 16 and above the m<=8
+// batch-8 short pass (qmv_small_t_default_part), then check the value
+// class: bf16 operand staging bounds the call at roughly one 2^-8
+// rounding per operand on top of the f32 accumulation chain and the
+// bf16 store.
 TEST_CASE("bf16 Q4 prefill dispatches the Xe16 coopmat build on ragged rows") {
   if (!compute_available()) {
     return;
@@ -8135,7 +8137,7 @@ TEST_CASE("bf16 Q4 prefill dispatches the Xe16 coopmat build on ragged rows") {
   std::cout << "[provenance] device=" << caps.device_name
             << " xe16_reachable=" << (xe16_reachable ? 1 : 0) << "\n";
   if (!xe16_reachable) {
-    skip("no 8x16x16 fp16 subgroup coopmat shape on this device");
+    skip("no 8x16x16 bf16 subgroup coopmat shape on this device");
     return;
   }
   unsetenv("MLX_OMARCHY_QMM_TILE");
@@ -8186,12 +8188,12 @@ TEST_CASE("bf16 Q4 prefill dispatches the Xe16 coopmat build on ragged rows") {
       m_max = std::max(m_max, std::fabs(static_cast<double>(v)));
     }
     const double m_bound = std::max(m_max * 2.0, 1.0);
-    // fp16 operands: one 2^-11 relative rounding per factor against
+    // bf16 operands: one 2^-8 relative rounding per factor against
     // the f32 chain term the FMA route's bound uses, then the same
     // bf16 storage rounding.
     const double bound =
         (3.0 * k + 1.0) * m_bound * std::ldexp(1.0, -23) +
-        2.0 * k * m_bound * std::ldexp(1.0, -11) +
+        2.0 * k * m_bound * std::ldexp(1.0, -8) +
         m_bound * std::ldexp(1.0, -8);
     double max_diff = 0.0;
     for (size_t i = 0; i < expected.size(); ++i) {

@@ -105,10 +105,11 @@ CoopmatShape matmul_direct_coopmat_shape_c16(CoopmatType operand);
 CoopmatShape matmul_xe16_bf16_shape();
 
 // The exact 8x16x16 subgroup shape the Intel/ANV qmm prefill coopmat16
-// variant (shaders/qmm_coopmat16_xe.comp) emits: fp16 operands (bf16 x
-// is staged as fp16, the dequantized weights store fp16), fp32
-// accumulator and result, non-saturating. Same operand contract as
-// qmm_prefill_coopmat_shape_f16x16 on ANV's 8-row matrix dimension.
+// variant (shaders/qmm_coopmat16_xe.comp) emits: bf16 operands (x is
+// staged as a straight bf16 copy, the dequantized weights store bf16,
+// matching qmm_intel_bf16's operand contract), fp32 accumulator and
+// result, non-saturating. The same hardware shape as
+// matmul_xe16_bf16_shape; kept as a named route shape for gating.
 CoopmatShape qmm_prefill_coopmat16_xe_shape();
 
 } // namespace mlx::core::omarchy

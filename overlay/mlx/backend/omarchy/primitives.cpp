@@ -9933,7 +9933,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           coopmat_caps,
           qmm_xe16_reachable,
           "QmmPrefillCoopmat16XeBF16",
-          "cooperative_matrix_fp16_8x16x16",
+          "cooperative_matrix_bf16_8x16x16",
           omarchy::cooperative_matrix_advertises(
               xe16_hw.cooperative_matrix_shapes,
               omarchy::qmm_prefill_coopmat16_xe_shape()));

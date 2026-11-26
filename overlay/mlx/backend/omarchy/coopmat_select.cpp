@@ -81,8 +81,8 @@ CoopmatShape qmm_prefill_coopmat16_xe_shape() {
   shape.m = 8u;
   shape.n = 16u;
   shape.k = 16u;
-  shape.a = CoopmatType::Float16;
-  shape.b = CoopmatType::Float16;
+  shape.a = CoopmatType::BFloat16;
+  shape.b = CoopmatType::BFloat16;
   shape.c = CoopmatType::Float32;
   shape.result = CoopmatType::Float32;
   shape.scope = CoopmatScope::Subgroup;
