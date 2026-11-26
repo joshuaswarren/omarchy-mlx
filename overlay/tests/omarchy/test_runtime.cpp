@@ -853,7 +853,8 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // into two; receipts/2026-11-24-g14c-batch-work-200000).
   CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 200000);
 
-  // The G13C row (16-inch M1 Max) takes 80000: the 40000 row split every
+  // The G13C row (16-inch M1 Max) takes 80000
+  // (receipts/2026-11-26-g13c-batch-work-80000.md): the 40000 row split every
   // Qwen3-4B decode token mid-eval at layer 29 (~60k WG, 2 submits/tok);
   // 80000 keeps one decode step in one submit (decode p50 10.61 ms) while
   // holding all-submissions (incl. ctx=2048 prefill) at p99 32.05 ms / max
@@ -926,7 +927,7 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // Every calibrated row must sit between the off switch and a receipt-
   // bound ceiling: a calibrated value above 40000 would loosen the
   // shipped cap on that board without a receipt saying why. G13C sits at
-  // 80000 (one Qwen3-4B decode submit, ctx=2048 prefill p99 32.05 ms);
+  // 80000 (receipts/2026-11-26-g13c-batch-work-80000.md);
   // G14C sits at 200000 (receipts/2026-11-24-g14c-batch-work-200000);
   // G17C keeps the 100000 placeholder pending M5 calibration; G18G is
   // uncapped (headless, receipts/2026-11-23-g621-batch-budget-submits) —

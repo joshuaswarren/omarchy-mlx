@@ -821,8 +821,8 @@ inline bool gdn_g18g_composed_default(const std::string& device_name) {
 // route of MLX_OMARCHY_ARGREDUCE_CHUNKED and MLX_OMARCHY_LSE_CHUNKED (one workgroup per 4096-column chunk plus a merge dispatch). Measured on G14C
 // (M2 Max, Qwen3.5-9B 4-bit decode, both on against both off, same tokens): about 3.9 percent on one boot and 3.2 percent on another,
 // receipts/2026-10-23-vocab-tail-g14c. On G13C (M1 Max, Qwen3-4B 4-bit decode, ctx=512, DEFER_TOKENS=0) after online SDPA landed, chunked ArgMax
-// (-0.070 ms/tok) and LogSumExp (-0.044 ms/tok) save ~0.11 ms/tok (+1.0% on top of single-submit decode, greedy ids identical); G13G keeps the
-// single-workgroup kernels. Pure.
+// (-0.070 ms/tok) and LogSumExp (-0.044 ms/tok) save ~0.11 ms/tok (+1.0% on top of single-submit decode, greedy ids identical;
+// receipts/2026-11-26-g13c-batch-work-80000.md); G13G keeps the single-workgroup kernels. Pure.
 inline bool vocab_tail_chunked_default(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_VOCAB_TAIL_CHUNKED")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
