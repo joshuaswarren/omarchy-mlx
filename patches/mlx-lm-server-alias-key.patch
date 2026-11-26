@@ -1,7 +1,5 @@
-# mlx-omarchy original, not an upstream backport: nothing to drop at an mlx-lm pin.
-# mlx-lm is MIT licensed; this patch changes no upstream license or notice.
---- a/mlx_lm/server.py	2026-11-25 13:17:15.058223814 -0600
-+++ b/mlx_lm/server.py	2026-11-25 13:17:27.495119838 -0600
+--- a/mlx_lm/server.py
++++ a/mlx_lm/server.py
 @@ -3,6 +3,7 @@
  import argparse
  import json
@@ -10,7 +8,16 @@
  import pickle
  import platform
  import socket
-@@ -1127,6 +1127,8 @@
+@@ -313,6 +314,8 @@ class ModelProvider:
+         self._adapter_map = {}
+         self._draft_model_map = {}
+         self._model_map["default_model"] = self.cli_args.model
++        if self.cli_args.alias:
++            self._model_map[self.cli_args.alias] = self.cli_args.model
+         self._adapter_map["default_model"] = self.cli_args.adapter_path
+         self._draft_model_map["default_model"] = self.cli_args.draft_model
+ 
+@@ -1062,6 +1065,8 @@ class APIHandler(BaseHTTPRequestHandler):
          response_generator: ResponseGenerator,
          *args,
          system_fingerprint: Optional[str] = None,
@@ -19,7 +26,7 @@
          **kwargs,
      ):
          """
-@@ -1135,6 +1137,8 @@
+@@ -1070,6 +1075,8 @@ class APIHandler(BaseHTTPRequestHandler):
          self.created = int(time.time())
          self.response_generator = response_generator
          self.system_fingerprint = system_fingerprint or get_system_fingerprint()
@@ -28,7 +35,7 @@
          super().__init__(*args, **kwargs)
  
      def _set_cors_headers(self):
-@@ -1167,6 +1171,12 @@
+@@ -1102,6 +1109,12 @@ class APIHandler(BaseHTTPRequestHandler):
          """
          Respond to a POST request from a client.
          """
@@ -41,7 +48,7 @@
          request_factories = {
              "/v1/completions": self.handle_text_completions,
              "/v1/chat/completions": self.handle_chat_completions,
-@@ -1715,6 +1725,12 @@
+@@ -1621,6 +1634,12 @@ class APIHandler(BaseHTTPRequestHandler):
          """
          Respond to a GET request from a client.
          """
@@ -54,7 +61,7 @@
          if self.path.startswith("/v1/models"):
              self.handle_models_request()
          elif self.path == "/health":
-@@ -1724,6 +1740,17 @@
+@@ -1630,6 +1649,17 @@ class APIHandler(BaseHTTPRequestHandler):
              self.end_headers()
              self.wfile.write(b"Not Found")
  
@@ -72,7 +79,7 @@
      def handle_health_check(self):
          """
          Handle a GET request for the /health endpoint.
-@@ -1741,6 +1768,12 @@
+@@ -1647,6 +1677,12 @@ class APIHandler(BaseHTTPRequestHandler):
          self._set_completion_headers(200)
          self.end_headers()
  
@@ -85,7 +92,7 @@
          files = ["config.json", "model.safetensors.index.json", "tokenizer_config.json"]
  
          parts = self.path.split("/")
-@@ -1799,6 +1832,8 @@
+@@ -1705,6 +1741,8 @@ def _run_http_server(
      response_generator,
      server_class=ThreadingHTTPServer,
      handler_class=APIHandler,
@@ -94,7 +101,7 @@
  ):
      server_address = (host, port)
      infos = socket.getaddrinfo(
-@@ -1810,6 +1845,8 @@
+@@ -1716,6 +1754,8 @@ def _run_http_server(
          lambda *args, **kwargs: handler_class(
              response_generator,
              system_fingerprint=get_system_fingerprint(),
@@ -103,7 +110,7 @@
              *args,
              **kwargs,
          ),
-@@ -1837,7 +1874,13 @@
+@@ -1743,7 +1783,13 @@ def run(
      prompt_cache = LRUPromptCache(model_provider.cli_args.prompt_cache_size)
      response_generator = ResponseGenerator(model_provider, prompt_cache)
      if group.rank() == 0:
@@ -118,7 +125,7 @@
      else:
          response_generator.join()
  
-@@ -1978,6 +2021,18 @@
+@@ -1884,6 +1930,18 @@ def main():
          action="store_true",
          help="Use pipelining instead of tensor parallelism",
      )
