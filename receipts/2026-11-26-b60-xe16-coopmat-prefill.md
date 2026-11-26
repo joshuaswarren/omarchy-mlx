@@ -93,6 +93,23 @@ wheel.
   difference. Net per request still favors prop at 128 tokens
   (−1.7 s prefill vs ≤ +0.6 s decode); a >500-token decode could net
   negative if the premium sustains.
+- Main-ordered cause measurement (r5, 20 Hz `tile0/gt0/freq0/act_freq`
+  + hwmon card/pkg energy, arms base/prop/propidle, 2 runs each, same
+  wheels and boot): decode runs pinned at 2400 MHz GT clock on every
+  arm (mean 2395–2400, max 2400; propidle's only sub-max samples are
+  the post-idle ramp) — the slowdown is not GT core-clock DVFS, and
+  the `min_freq` lever (root-writable, currently 1200) could only
+  constrain. Decode card power 57–65 W, pkg 38–43 W, no arm
+  separation; `power_profile=power_saving`. Decode medians: base
+  30.8–32.9 ms/tok, prop 35.7–38.6, propidle 36.2–36.3 — propidle
+  (prop prefill → 3 s idle → decode) does NOT recover to base speed,
+  so the state left by the prop prefill is persistent across a 3 s
+  idle, not a decaying thermal/clock transient. Combined with the
+  identical dispatch/barrier counts and uniform per-kernel
+  inflation, the remaining candidates are VRAM layout / allocator
+  state or a memory-clock state from the different prefill
+  allocation pattern (act_freq covers the GT core only, not GDDR).
+  Evidence: `~/scratch/w7t-dec19/freq2/` (freq-*.csv, mk-*, out-*).
 - ctx512 decode (`45f9937`): both arms ≈ 45 ms/token steady state.
 - Per-kernel (ctx2048 kernel table): `MatmulBF16 n=134217728`
   17.5 ms/35 dispatches → `MatmulBF16CoopmatXe16` 9.8 ms/35;
