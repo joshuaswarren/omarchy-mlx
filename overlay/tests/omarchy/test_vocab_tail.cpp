@@ -685,19 +685,24 @@ bool subgroup_ready() {
           0u;
 }
 
-// True when eval_gpu takes the non-subgroup QMM_VEC_GREEDY_WORD route
-// for this K and row count: the staged QMM_VEC_GREEDY route claims
-// K = 2048 on subgroup devices; every other K takes the word route.
-// Both routes bind w and high_bits whole, so a device at the Vulkan
-// minimum maxStorageBufferRange composes on vocab-scale inputs.
-bool word_route_taken(int k, int n) {
+// True when w and high_bits each fit one storage-buffer binding on
+// this device. Every route — fused word, staged subgroup and the
+// composed tail — binds them whole, so a device at the Vulkan minimum
+// maxStorageBufferRange can run none of them above the fitting vocab.
+bool greedy_bindings_fit(int k, int n) {
   const auto& caps = omarchy::device(0).capabilities();
   const uint64_t w_bytes = static_cast<uint64_t>(n) * k / 8u * 4u;
   const uint64_t plane_bytes = static_cast<uint64_t>(n) * k * 3u / 32u * 4u;
-  const bool bindings_fit =
-      caps.max_storage_buffer_range == 0u ||
+  return caps.max_storage_buffer_range == 0u ||
       (w_bytes <= caps.max_storage_buffer_range &&
        plane_bytes <= caps.max_storage_buffer_range);
+}
+
+// True when eval_gpu takes the non-subgroup QMM_VEC_GREEDY_WORD route
+// for this K and row count: the staged QMM_VEC_GREEDY route claims
+// K = 2048 on subgroup devices; every other K takes the word route.
+bool word_route_taken(int k, int n) {
+  const bool bindings_fit = greedy_bindings_fit(k, n);
   return word_caps() && bindings_fit &&
       !(subgroup_ready() && k == kGreedyK && bindings_fit);
 }
@@ -876,7 +881,12 @@ TEST_CASE("fused greedy word head: K = 2560 (Qwen3.5-4B) matches") {
   // The word column is K-generic over 64-wide groups; K = 2560 is the
   // 4B head the DEC-46 card serves, and it also crosses to the word
   // route on subgroup-capable devices (the staged route is K = 2048).
-  for (int n : {8192, 131072}) {
+  // w is bound whole by every route; on a device at the Vulkan-minimum
+  // 128 MiB maxStorageBufferRange the 131,072-row vocab fits no route
+  // (the composed tail binds the same 160 MiB buffer), so the large
+  // leg drops to a floor-fitting vocab there.
+  const int n_large = greedy_bindings_fit(2560, 131072) ? 131072 : 98304;
+  for (int n : {8192, n_large}) {
     auto in = make_greedy_inputs(
         n, 0xdec52 + n, kScales, kBiases, {}, {}, false, stream, 2560);
     auto run = fused_argmax(in, stream);
