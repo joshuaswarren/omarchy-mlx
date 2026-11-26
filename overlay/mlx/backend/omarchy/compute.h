@@ -1340,6 +1340,13 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP2OutgateBF16Hd256,
   SdpaDecodeSplitP2OutgateBk32BF16Hd256,
   SdpaDecodeSplitP2OutgateBk64BF16Hd256,
+  // Single-dispatch fused Q/K RMSNorm+RoPE+KV-cache-write+online-softmax+
+  // optional output-gate decode SDPA for HD=128 (outgate) and HD=256 (plain
+  // and outgate, full or partial rotary width). Appended to keep profile ids
+  // stable.
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd128,
+  SdpaDecodeOnlineRopeSg32BF16Hd256,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256,
   Count,
 };
 

@@ -2,24 +2,23 @@
 // SPDX-License-Identifier: MIT
 //
 // Single-dispatch fused Q/K RMSNorm + RoPE + KV-cache write + online-softmax
-// bf16 decode SDPA for head width 128 (MLX_OMARCHY_SDPA_ONLINE_ROPE=1).
+// bf16 decode SDPA (optional fused output-gate epilogue under SDPA_OUTGATE) for
+// head width 128 or 256 (MLX_OMARCHY_SDPA_ONLINE_ROPE=1).
 //
-// Replaces three sequential per-layer decode dispatches and two CDM barriers
-// (FastRopeNormBF16(Q), FastRopeNormBF16(K -> k_cache), SdpaDecodeOnlineBF16)
-// with one 1024-thread (32-subgroup) workgroup per query head:
-// - Prologue RMSNorm: subgroup 0 normalizes Q and subgroup 1 normalizes K in
-//   parallel with zero barriers using the exact stride-64..1 reduction tree
-//   ((sq[L]+sq[L+64]) + (sq[L+32]+sq[L+96]) followed by subgroupShuffleDown
-//   16..1) and `precise` (weight * norm) * value reload.
-// - Prologue RoPE: threads 0..63 compute one (cos, sin) pair per thread and
-//   rotate both Q[t, t+64] and K[t, t+64] in lockstep (single trig expansion
-//   instead of four, minimizing SPIR-V size and register pressure).
-// - Leader query-head workgroup writes rotated K to k_cache via a coalesced
-//   256-byte uvec2 store; the hot k_len loop runs 100% branchless over
-//   key < k_len - 1 (identical to sdpa_decode_online.comp, zero k_new_u2 live
-//   in the loop), and only sg == ((k_len - 1) & 31) folds the final key from
-//   s_k_words[] after the loop — keeping both attn_out and k_cache bit-exact
-//   with FastRopeNormBF16 + SdpaDecodeOnlineBF16.
+// Replaces three (or six, with SDPA_OUTGATE) sequential per-layer decode
+// dispatches and two (or four) CDM barriers with one 1024-thread (32-subgroup)
+// workgroup per query head:
+// - HD=128: subgroup 0 normalizes Q and subgroup 1 normalizes K in parallel
+//   with zero barriers using the exact stride-64..1 reduction tree, rotates
+//   both Q and K in lockstep, writes rotated K via coalesced 256-byte uvec2
+//   store, runs a 100% branchless uvec2 hot loop over key < k_len - 1, folds
+//   last_key from s_k_words[], and merges in 1 WG barrier (16,896 B shared).
+// - HD=256: supports both Apple 8-subgroup blocked RMSNorm (flags bit 2,
+//   bit-identical to FastRopeNormAppleBF16) and stride-128..1 tree RMSNorm
+//   (bit-identical to FastRopeNormBF16), partial or full rotary width
+//   (half_dims in in_strides[0], passthrough tail untouched except s_scale on
+//   Q), coalesced 512-byte uvec4 K-cache store and K/V loads, and the two-pass
+//   half-D s_o merge from sdpa_decode_online.comp (17,152 B shared).
 
 #version 460
 
@@ -37,8 +36,16 @@
 #define SUBGROUPS 32
 #endif
 
+#ifndef HD
+#define HD 128
+#endif
+
 #if SUBGROUPS != 32
 #error "sdpa_decode_online_rope.comp requires SUBGROUPS=32"
+#endif
+
+#if HD != 128 && HD != 256
+#error "sdpa_decode_online_rope.comp supports HD=128 or HD=256 only"
 #endif
 
 layout(local_size_x = SUBGROUPS * 32, local_size_y = 1, local_size_z = 1) in;
@@ -46,12 +53,21 @@ layout(local_size_x = SUBGROUPS * 32, local_size_y = 1, local_size_z = 1) in;
 layout(set = 0, binding = 0, std430) readonly buffer QRaw {
   uint values[];
 } q_raw_data;
+#if HD == 128
 layout(set = 0, binding = 1, std430) buffer KeyCache {
   uvec2 values[];
 } key_data;
 layout(set = 0, binding = 2, std430) readonly buffer ValueCache {
   uvec2 values[];
 } value_data;
+#else
+layout(set = 0, binding = 1, std430) buffer KeyCache {
+  uvec4 values[];
+} key_data;
+layout(set = 0, binding = 2, std430) readonly buffer ValueCache {
+  uvec4 values[];
+} value_data;
+#endif
 layout(set = 0, binding = 3, std430) writeonly buffer Output {
   uint16_t values[];
 } output_data;
@@ -67,39 +83,45 @@ layout(set = 0, binding = 6, std430) readonly buffer KWeight {
 layout(set = 0, binding = 7, std430) readonly buffer Offsets {
   int values[];
 } offset_data;
+#ifdef SDPA_OUTGATE
+layout(set = 0, binding = 8, std430) readonly buffer Gate {
+  uint16_t values[];
+} gate_data;
+#endif
 
 layout(push_constant) uniform Params {
-  uint count;           // k_write_u2_base = (k_cache_write_elems >> 2)
+  uint count;           // k_write_vec_base (>>2 for HD=128, >>3 for HD=256)
   uint operation;       // floatBitsToUint(norm_eps)
   uint lhs_size;        // q_weight_offset (elements)
   uint rhs_size;        // k_weight_offset (elements)
   uint reduce_size;     // q_raw_head_stride (elements)
   uint output_size;     // k_raw_head_stride (elements)
   uint lhs_offset;      // q_raw_offset (elements)
-  uint rhs_offset;      // k_cache_base_offset (elements, % 4 == 0)
+  uint rhs_offset;      // k_cache_base_offset (elements, %4 or %8 == 0)
   uint output_offset;   // out_offset (elements)
   uint aux_size;        // k_raw_offset (elements)
-  uint aux_offset;      // v_cache_base_offset (elements, % 4 == 0)
+  uint aux_offset;      // v_cache_base_offset (elements, %4 or %8 == 0)
   uint matrix_m;        // heads
   uint matrix_n;        // kv_heads
   uint matrix_k;        // k_len
-  uint flags;           // bit 0: has_norm, bit 1: write_k_cache
+  uint flags;           // bit 0: has_norm, bit 1: write_k_cache, bit 2: apple_norm (HD=256)
   float alpha;          // sdpa scale
-  float beta;           // rope_beta = log(base) / 64.0
+  float beta;           // rope_beta = log(base) / float(half_dims)
   uint dims;            // offset_buf_offset (int32 elements)
   uint shape[4];        // [floatBitsToUint(rope_scale), k_head_stride, k_seq_stride, k_write_head_stride]
-  uint in_strides[4];   // [unused, v_head_stride, v_seq_stride, unused]
-  uint out_strides[4];  // [out_head_stride, unused, unused, unused]
+  uint in_strides[4];   // [half_dims (0 => D/2), v_head_stride, v_seq_stride, unused]
+  uint out_strides[4];  // [out_head_stride, gate_offset, gate_head_stride, unused]
 } params;
 
-const uint D = 128u;
-const uint HALF_D = 64u;
+const uint D = uint(HD);
+const uint TILE_D = 128u;
+const uint HALF_D = uint(HD) >> 1u;
 const float LOG2E = 1.4426950408889634;
 
-// 16,896 B total shared memory (s_o reuses prologue Q/K scratch).
+// 16,896 B (HD=128) or 17,152 B (HD=256) total shared memory.
 shared float s_max[SUBGROUPS];
 shared float s_sum[SUBGROUPS];
-shared float s_o[SUBGROUPS * D];
+shared float s_o[SUBGROUPS * TILE_D];
 shared uint s_k_words[HALF_D];
 
 float load_q_raw(uint abs_index) {
@@ -126,6 +148,10 @@ float load_k_weight(uint abs_index) {
   return uintBitsToFloat(bits << 16u);
 }
 
+float bf16_load(uint16_t raw) {
+  return uintBitsToFloat(uint(raw) << 16u);
+}
+
 uint bf16_bits(float value) {
   uint bits = floatBitsToUint(value);
   return isnan(value)
@@ -145,6 +171,15 @@ uint16_t bf16_store(float v) {
   uint rounding_bias = 0x00007fffu + ((bits >> 16u) & 1u);
   return uint16_t((bits + rounding_bias) >> 16u);
 }
+
+#ifdef SDPA_OUTGATE
+uint16_t apply_outgate(float val, uint gate_idx) {
+  uint16_t raw_out = bf16_store(val);
+  float g = bf16_load(gate_data.values[gate_idx]);
+  uint16_t raw_sig = bf16_store(1.0 / (1.0 + exp(-g)));
+  return bf16_store(bf16_load(raw_out) * bf16_load(raw_sig));
+}
+#endif
 
 float tree_reduce32(float v) {
   v += subgroupShuffleDown(v, 16u);
@@ -173,7 +208,9 @@ void main() {
 
   bool has_norm = (params.flags & 1u) != 0u;
   bool write_k = (params.flags & 2u) != 0u;
+  float s_scale = params.alpha * LOG2E;
 
+#if HD == 128
   // Prologue Phase A: Zero-barrier RMSNorm on Q (sg == 0) and K (sg == 1) in
   // parallel, reproducing fast_rope_norm.comp's stride-64..1 reduction order
   // and precise (weight * norm) * value rounding bit-for-bit.
@@ -212,7 +249,6 @@ void main() {
   // Prologue Phase B: Single (cos, sin) per thread across t = 0..63 rotates
   // BOTH Q[t, t+64] (pre-scaled into s_o[256..383]) and K[t, t+64] (into
   // s_o[384..511]).
-  float s_scale = params.alpha * LOG2E;
   if (t < HALF_D) {
     float position =
         uintBitsToFloat(params.shape[0]) * float(offset_data.values[params.dims]);
@@ -256,10 +292,6 @@ void main() {
   }
   barrier();
 
-  // Main body: 100% branchless 32-subgroup online-softmax loop over
-  // key < k_len - 1 (identical instruction sequence to sdpa_decode_online.comp),
-  // followed by a single post-loop fold of key == k_len - 1 from s_k_words[]
-  // in sg == ((k_len - 1) & 31) for exact bit-identity with split Q/K+SDPA.
   uint last_key = k_len - 1u;
 
   if (sg < k_len) {
@@ -280,7 +312,6 @@ void main() {
     float o3;
 
     if (sg < last_key) {
-      // Key 0 for this subgroup (guaranteed < last_key -> unconditional load).
       uvec2 kw = key_data.values[k_idx];
       uvec2 vw = value_data.values[v_idx];
       float dot = fma(q0, uintBitsToFloat(kw.x << 16u),
@@ -296,7 +327,6 @@ void main() {
 
       k_idx += k_step;
       v_idx += v_step;
-      // 100% branchless hot loop: every key here is strictly < last_key.
       for (uint key = sg + uint(SUBGROUPS); key < last_key; key += uint(SUBGROUPS)) {
         kw = key_data.values[k_idx];
         vw = value_data.values[v_idx];
@@ -319,7 +349,6 @@ void main() {
         o3 = fma(o3, factor, p * uintBitsToFloat(vw.y & 0xffff0000u));
       }
 
-      // Single post-loop step for the one subgroup owning key == last_key.
       if (sg == (last_key & 31u)) {
         kw = uvec2(s_k_words[lane * 2u], s_k_words[lane * 2u + 1u]);
         vw = value_data.values[v_idx];
@@ -339,7 +368,6 @@ void main() {
         o3 = fma(o3, factor, p * uintBitsToFloat(vw.y & 0xffff0000u));
       }
     } else {
-      // sg == last_key (only when k_len <= 32): single key from s_k_words[].
       uvec2 kw = uvec2(s_k_words[lane * 2u], s_k_words[lane * 2u + 1u]);
       uvec2 vw = value_data.values[v_idx];
       float dot = fma(q0, uintBitsToFloat(kw.x << 16u),
@@ -358,7 +386,7 @@ void main() {
       s_max[sg] = m_i;
       s_sum[sg] = l_i;
     }
-    uint obase = sg * D + lane * 4u;
+    uint obase = sg * TILE_D + lane * 4u;
     s_o[obase + 0u] = o0;
     s_o[obase + 1u] = o1;
     s_o[obase + 2u] = o2;
@@ -377,11 +405,384 @@ void main() {
 
     float acc = 0.0;
     for (uint s = 0u; s < active_sg; ++s) {
-      acc = fma(s_o[s * D + t], subgroupShuffle(w, s), acc);
+      acc = fma(s_o[s * TILE_D + t], subgroupShuffle(w, s), acc);
     }
 
     uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
+#ifdef SDPA_OUTGATE
+    uint gate_idx = params.out_strides[1] + head * params.out_strides[2] + t;
+    output_data.values[params.output_offset + head * out_head + t] =
+        apply_outgate(acc / denom, gate_idx);
+#else
     output_data.values[params.output_offset + head * out_head + t] =
         bf16_store(acc / denom);
+#endif
   }
+#else
+  // HD == 256
+  // Prologue Phase A: RMSNorm on Q (s_o[0..255]) and K (s_o[256..511]).
+  // flags bit 2 selects Apple 8-subgroup blocked reduction (bit-identical to
+  // FastRopeNormAppleBF16); cleared uses stride-128..1 tree reduction
+  // (bit-identical to FastRopeNormBF16). Both branches are workgroup-uniform.
+  bool use_apple_norm = (params.flags & 4u) != 0u;
+  if (!has_norm) {
+    if (sg < 8u) {
+      uint q_row_base = params.lhs_offset + head * params.reduce_size;
+      s_o[t] = load_q_raw(q_row_base + t);
+    } else if (sg < 16u) {
+      uint d = t - 256u;
+      uint k_row_base = params.aux_size + kv_head * params.output_size;
+      s_o[256u + d] = load_k_raw(k_row_base + d);
+    }
+  } else if (use_apple_norm) {
+    precise float value = 0.0;
+    if (sg < 8u) {
+      uint q_row_base = params.lhs_offset + head * params.reduce_size;
+      value = load_q_raw(q_row_base + t);
+      precise float squared = value * value;
+      float sg_sum = subgroupAdd(squared);
+      if (lane == 0u) {
+        s_o[1024u + sg] = sg_sum;
+      }
+    } else if (sg < 16u) {
+      uint d = t - 256u;
+      uint k_row_base = params.aux_size + kv_head * params.output_size;
+      value = load_k_raw(k_row_base + d);
+      precise float squared = value * value;
+      float sg_sum = subgroupAdd(squared);
+      if (lane == 0u) {
+        s_o[1032u + (sg - 8u)] = sg_sum;
+      }
+    }
+    barrier();
+    if (sg < 8u) {
+      float partial = (lane < 8u) ? s_o[1024u + lane] : 0.0;
+      float row_sum = subgroupAdd(partial);
+      float mean_square = row_sum / 256.0;
+      precise float eps = uintBitsToFloat(params.operation);
+      precise float norm = inversesqrt(mean_square + eps);
+      precise float weight = load_q_weight(params.lhs_size + t);
+      precise float weight_norm = weight * norm;
+      s_o[t] = rope_round(value * weight_norm);
+    } else if (sg < 16u) {
+      uint d = t - 256u;
+      float partial = (lane < 8u) ? s_o[1032u + lane] : 0.0;
+      float row_sum = subgroupAdd(partial);
+      float mean_square = row_sum / 256.0;
+      precise float eps = uintBitsToFloat(params.operation);
+      precise float norm = inversesqrt(mean_square + eps);
+      precise float weight = load_k_weight(params.rhs_size + d);
+      precise float weight_norm = weight * norm;
+      s_o[256u + d] = rope_round(value * weight_norm);
+    }
+  } else {
+    // Stride-128..1 tree reduction on 256 elements: sg 0 owns Q, sg 1 owns K.
+    if (sg < 2u) {
+      bool is_k = (sg == 1u);
+      uint row_base = is_k ? (params.aux_size + kv_head * params.output_size)
+                           : (params.lhs_offset + head * params.reduce_size);
+      float s0 = is_k ? load_k_raw(row_base + lane + 0u) : load_q_raw(row_base + lane + 0u);
+      float s1 = is_k ? load_k_raw(row_base + lane + 32u) : load_q_raw(row_base + lane + 32u);
+      float s2 = is_k ? load_k_raw(row_base + lane + 64u) : load_q_raw(row_base + lane + 64u);
+      float s3 = is_k ? load_k_raw(row_base + lane + 96u) : load_q_raw(row_base + lane + 96u);
+      float s4 = is_k ? load_k_raw(row_base + lane + 128u) : load_q_raw(row_base + lane + 128u);
+      float s5 = is_k ? load_k_raw(row_base + lane + 160u) : load_q_raw(row_base + lane + 160u);
+      float s6 = is_k ? load_k_raw(row_base + lane + 192u) : load_q_raw(row_base + lane + 192u);
+      float s7 = is_k ? load_k_raw(row_base + lane + 224u) : load_q_raw(row_base + lane + 224u);
+      s0 = s0 * s0;
+      s1 = s1 * s1;
+      s2 = s2 * s2;
+      s3 = s3 * s3;
+      s4 = s4 * s4;
+      s5 = s5 * s5;
+      s6 = s6 * s6;
+      s7 = s7 * s7;
+      float acc = ((s0 + s4) + (s2 + s6)) + ((s1 + s5) + (s3 + s7));
+      float sum = tree_reduce32(acc);
+      precise float mean_square = sum / 256.0;
+      precise float eps = uintBitsToFloat(params.operation);
+      precise float norm = inversesqrt(mean_square + eps);
+      uint w_base = is_k ? params.rhs_size : params.lhs_size;
+      uint s_base = sg * 256u;
+      for (uint blk = 0u; blk < 256u; blk += 32u) {
+        uint idx = blk + lane;
+        precise float v = is_k ? load_k_raw(row_base + idx) : load_q_raw(row_base + idx);
+        precise float w = is_k ? load_k_weight(w_base + idx) : load_q_weight(w_base + idx);
+        precise float wn = w * norm;
+        s_o[s_base + idx] = rope_round(v * wn);
+      }
+    }
+  }
+  barrier();
+
+  // Prologue Phase B: Partial or full RoPE (rot_half in in_strides[0], default
+  // 128) on Q -> s_o[512..767] (pre-scaled by s_scale) and K -> s_o[768..1023].
+  uint rot_half = params.in_strides[0] != 0u ? params.in_strides[0] : HALF_D;
+  uint rot_dims = rot_half << 1u;
+  if (t < rot_half) {
+    float position =
+        uintBitsToFloat(params.shape[0]) * float(offset_data.values[params.dims]);
+    float inv = exp(-float(t) * params.beta);
+    float theta = position * inv;
+    float c = rope_round(omarchy_trig_cos(theta));
+    float s = rope_round(omarchy_trig_sin(theta));
+
+    float qa = s_o[t];
+    float qb = s_o[t + rot_half];
+    s_o[512u + t] = rope_round(rope_round(qa * c) - rope_round(qb * s)) * s_scale;
+    s_o[512u + t + rot_half] =
+        rope_round(rope_round(qa * s) + rope_round(qb * c)) * s_scale;
+
+    float ka = s_o[256u + t];
+    float kb = s_o[256u + t + rot_half];
+    s_o[768u + t] = rope_round(rope_round(ka * c) - rope_round(kb * s));
+    s_o[768u + t + rot_half] =
+        rope_round(rope_round(ka * s) + rope_round(kb * c));
+  } else if (t >= rot_dims && t < D) {
+    s_o[512u + t] = s_o[t] * s_scale;
+    s_o[768u + t] = s_o[256u + t];
+  }
+  barrier();
+
+  // All 32 subgroups load rotated Q (8 elems/lane); sg == 0 packs rotated K
+  // into s_k_words[128] and (for leader WG) writes k_cache via coalesced uvec4.
+  float q0 = s_o[512u + lane * 8u + 0u];
+  float q1 = s_o[512u + lane * 8u + 1u];
+  float q2 = s_o[512u + lane * 8u + 2u];
+  float q3 = s_o[512u + lane * 8u + 3u];
+  float q4 = s_o[512u + lane * 8u + 4u];
+  float q5 = s_o[512u + lane * 8u + 5u];
+  float q6 = s_o[512u + lane * 8u + 6u];
+  float q7 = s_o[512u + lane * 8u + 7u];
+
+  if (sg == 0u) {
+    uint w0 = bf16_bits(s_o[768u + lane * 8u + 0u]) |
+        (bf16_bits(s_o[768u + lane * 8u + 1u]) << 16u);
+    uint w1 = bf16_bits(s_o[768u + lane * 8u + 2u]) |
+        (bf16_bits(s_o[768u + lane * 8u + 3u]) << 16u);
+    uint w2 = bf16_bits(s_o[768u + lane * 8u + 4u]) |
+        (bf16_bits(s_o[768u + lane * 8u + 5u]) << 16u);
+    uint w3 = bf16_bits(s_o[768u + lane * 8u + 6u]) |
+        (bf16_bits(s_o[768u + lane * 8u + 7u]) << 16u);
+    s_k_words[lane * 4u + 0u] = w0;
+    s_k_words[lane * 4u + 1u] = w1;
+    s_k_words[lane * 4u + 2u] = w2;
+    s_k_words[lane * 4u + 3u] = w3;
+    if (write_k && head == kv_head * repeats) {
+      uint k_write_idx =
+          params.count + kv_head * (params.shape[3] >> 3u) + lane;
+      key_data.values[k_write_idx] = uvec4(w0, w1, w2, w3);
+    }
+  }
+  barrier();
+
+  float o0 = 0.0;
+  float o1 = 0.0;
+  float o2 = 0.0;
+  float o3 = 0.0;
+  float o4 = 0.0;
+  float o5 = 0.0;
+  float o6 = 0.0;
+  float o7 = 0.0;
+
+  uint last_key = k_len - 1u;
+
+  if (sg < k_len) {
+    uint k_stride_v = params.shape[2] >> 3u;
+    uint v_stride_v = params.in_strides[2] >> 3u;
+    uint k_idx = ((params.rhs_offset + kv_head * params.shape[1]) >> 3u) +
+        sg * k_stride_v + lane;
+    uint v_idx = ((params.aux_offset + kv_head * params.in_strides[1]) >> 3u) +
+        sg * v_stride_v + lane;
+    uint k_step = uint(SUBGROUPS) * k_stride_v;
+    uint v_step = uint(SUBGROUPS) * v_stride_v;
+
+    float m_i;
+    float l_i;
+
+    if (sg < last_key) {
+      uvec4 kw = key_data.values[k_idx];
+      uvec4 vw = value_data.values[v_idx];
+      float dot = fma(q0, uintBitsToFloat(kw.x << 16u),
+                  fma(q1, uintBitsToFloat(kw.x & 0xffff0000u),
+                  fma(q2, uintBitsToFloat(kw.y << 16u),
+                  fma(q3, uintBitsToFloat(kw.y & 0xffff0000u),
+                  fma(q4, uintBitsToFloat(kw.z << 16u),
+                  fma(q5, uintBitsToFloat(kw.z & 0xffff0000u),
+                  fma(q6, uintBitsToFloat(kw.w << 16u),
+                      q7 * uintBitsToFloat(kw.w & 0xffff0000u))))))));
+      m_i = subgroupAdd(dot);
+      l_i = 1.0;
+      o0 = uintBitsToFloat(vw.x << 16u);
+      o1 = uintBitsToFloat(vw.x & 0xffff0000u);
+      o2 = uintBitsToFloat(vw.y << 16u);
+      o3 = uintBitsToFloat(vw.y & 0xffff0000u);
+      o4 = uintBitsToFloat(vw.z << 16u);
+      o5 = uintBitsToFloat(vw.z & 0xffff0000u);
+      o6 = uintBitsToFloat(vw.w << 16u);
+      o7 = uintBitsToFloat(vw.w & 0xffff0000u);
+
+      k_idx += k_step;
+      v_idx += v_step;
+      for (uint key = sg + uint(SUBGROUPS); key < last_key; key += uint(SUBGROUPS)) {
+        kw = key_data.values[k_idx];
+        vw = value_data.values[v_idx];
+        k_idx += k_step;
+        v_idx += v_step;
+
+        dot = fma(q0, uintBitsToFloat(kw.x << 16u),
+              fma(q1, uintBitsToFloat(kw.x & 0xffff0000u),
+              fma(q2, uintBitsToFloat(kw.y << 16u),
+              fma(q3, uintBitsToFloat(kw.y & 0xffff0000u),
+              fma(q4, uintBitsToFloat(kw.z << 16u),
+              fma(q5, uintBitsToFloat(kw.z & 0xffff0000u),
+              fma(q6, uintBitsToFloat(kw.w << 16u),
+                  q7 * uintBitsToFloat(kw.w & 0xffff0000u))))))));
+        float score = subgroupAdd(dot);
+        float new_max = max(m_i, score);
+        float factor = exp2(m_i - new_max);
+        float p = exp2(score - new_max);
+        m_i = new_max;
+        l_i = fma(l_i, factor, p);
+        o0 = fma(o0, factor, p * uintBitsToFloat(vw.x << 16u));
+        o1 = fma(o1, factor, p * uintBitsToFloat(vw.x & 0xffff0000u));
+        o2 = fma(o2, factor, p * uintBitsToFloat(vw.y << 16u));
+        o3 = fma(o3, factor, p * uintBitsToFloat(vw.y & 0xffff0000u));
+        o4 = fma(o4, factor, p * uintBitsToFloat(vw.z << 16u));
+        o5 = fma(o5, factor, p * uintBitsToFloat(vw.z & 0xffff0000u));
+        o6 = fma(o6, factor, p * uintBitsToFloat(vw.w << 16u));
+        o7 = fma(o7, factor, p * uintBitsToFloat(vw.w & 0xffff0000u));
+      }
+
+      if (sg == (last_key & 31u)) {
+        kw = uvec4(
+            s_k_words[lane * 4u + 0u],
+            s_k_words[lane * 4u + 1u],
+            s_k_words[lane * 4u + 2u],
+            s_k_words[lane * 4u + 3u]);
+        vw = value_data.values[v_idx];
+        dot = fma(q0, uintBitsToFloat(kw.x << 16u),
+              fma(q1, uintBitsToFloat(kw.x & 0xffff0000u),
+              fma(q2, uintBitsToFloat(kw.y << 16u),
+              fma(q3, uintBitsToFloat(kw.y & 0xffff0000u),
+              fma(q4, uintBitsToFloat(kw.z << 16u),
+              fma(q5, uintBitsToFloat(kw.z & 0xffff0000u),
+              fma(q6, uintBitsToFloat(kw.w << 16u),
+                  q7 * uintBitsToFloat(kw.w & 0xffff0000u))))))));
+        float score = subgroupAdd(dot);
+        float new_max = max(m_i, score);
+        float factor = exp2(m_i - new_max);
+        float p = exp2(score - new_max);
+        m_i = new_max;
+        l_i = fma(l_i, factor, p);
+        o0 = fma(o0, factor, p * uintBitsToFloat(vw.x << 16u));
+        o1 = fma(o1, factor, p * uintBitsToFloat(vw.x & 0xffff0000u));
+        o2 = fma(o2, factor, p * uintBitsToFloat(vw.y << 16u));
+        o3 = fma(o3, factor, p * uintBitsToFloat(vw.y & 0xffff0000u));
+        o4 = fma(o4, factor, p * uintBitsToFloat(vw.z << 16u));
+        o5 = fma(o5, factor, p * uintBitsToFloat(vw.z & 0xffff0000u));
+        o6 = fma(o6, factor, p * uintBitsToFloat(vw.w << 16u));
+        o7 = fma(o7, factor, p * uintBitsToFloat(vw.w & 0xffff0000u));
+      }
+    } else {
+      uvec4 kw = uvec4(
+          s_k_words[lane * 4u + 0u],
+          s_k_words[lane * 4u + 1u],
+          s_k_words[lane * 4u + 2u],
+          s_k_words[lane * 4u + 3u]);
+      uvec4 vw = value_data.values[v_idx];
+      float dot = fma(q0, uintBitsToFloat(kw.x << 16u),
+                  fma(q1, uintBitsToFloat(kw.x & 0xffff0000u),
+                  fma(q2, uintBitsToFloat(kw.y << 16u),
+                  fma(q3, uintBitsToFloat(kw.y & 0xffff0000u),
+                  fma(q4, uintBitsToFloat(kw.z << 16u),
+                  fma(q5, uintBitsToFloat(kw.z & 0xffff0000u),
+                  fma(q6, uintBitsToFloat(kw.w << 16u),
+                      q7 * uintBitsToFloat(kw.w & 0xffff0000u))))))));
+      m_i = subgroupAdd(dot);
+      l_i = 1.0;
+      o0 = uintBitsToFloat(vw.x << 16u);
+      o1 = uintBitsToFloat(vw.x & 0xffff0000u);
+      o2 = uintBitsToFloat(vw.y << 16u);
+      o3 = uintBitsToFloat(vw.y & 0xffff0000u);
+      o4 = uintBitsToFloat(vw.z << 16u);
+      o5 = uintBitsToFloat(vw.z & 0xffff0000u);
+      o6 = uintBitsToFloat(vw.w << 16u);
+      o7 = uintBitsToFloat(vw.w & 0xffff0000u);
+    }
+
+    if (lane == 0u) {
+      s_max[sg] = m_i;
+      s_sum[sg] = l_i;
+    }
+    if (lane < 16u) {
+      uint obase = sg * TILE_D + lane * 8u;
+      s_o[obase + 0u] = o0;
+      s_o[obase + 1u] = o1;
+      s_o[obase + 2u] = o2;
+      s_o[obase + 3u] = o3;
+      s_o[obase + 4u] = o4;
+      s_o[obase + 5u] = o5;
+      s_o[obase + 6u] = o6;
+      s_o[obase + 7u] = o7;
+    }
+  }
+
+  barrier();
+
+  uint active_sg = min(uint(SUBGROUPS), k_len);
+  float w = 0.0;
+  float denom = 1.0;
+  uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
+  uint out_base = params.output_offset + head * out_head;
+
+  if (t < TILE_D) {
+    float m = (lane < active_sg) ? s_max[lane] : uintBitsToFloat(0xff800000u);
+    float ls = (lane < active_sg) ? s_sum[lane] : 0.0;
+    float gmax = subgroupMax(m);
+    w = (lane < active_sg) ? exp2(m - gmax) : 0.0;
+    denom = subgroupAdd(ls * w);
+
+    float acc = 0.0;
+    for (uint s = 0u; s < active_sg; ++s) {
+      acc = fma(s_o[s * TILE_D + t], subgroupShuffle(w, s), acc);
+    }
+#ifdef SDPA_OUTGATE
+    uint gate_base = params.out_strides[1] + head * params.out_strides[2];
+    output_data.values[out_base + t] = apply_outgate(acc / denom, gate_base + t);
+#else
+    output_data.values[out_base + t] = bf16_store(acc / denom);
+#endif
+  }
+
+  barrier();
+
+  if (sg < k_len && lane >= 16u) {
+    uint obase = sg * TILE_D + (lane - 16u) * 8u;
+    s_o[obase + 0u] = o0;
+    s_o[obase + 1u] = o1;
+    s_o[obase + 2u] = o2;
+    s_o[obase + 3u] = o3;
+    s_o[obase + 4u] = o4;
+    s_o[obase + 5u] = o5;
+    s_o[obase + 6u] = o6;
+    s_o[obase + 7u] = o7;
+  }
+
+  barrier();
+
+  if (t < TILE_D) {
+    float acc = 0.0;
+    for (uint s = 0u; s < active_sg; ++s) {
+      acc = fma(s_o[s * TILE_D + t], subgroupShuffle(w, s), acc);
+    }
+#ifdef SDPA_OUTGATE
+    uint gate_base = params.out_strides[1] + head * params.out_strides[2];
+    output_data.values[out_base + TILE_D + t] =
+        apply_outgate(acc / denom, gate_base + TILE_D + t);
+#else
+    output_data.values[out_base + TILE_D + t] = bf16_store(acc / denom);
+#endif
+  }
+#endif
 }
