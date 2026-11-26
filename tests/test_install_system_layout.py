@@ -7,6 +7,7 @@ install.sh --system.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -64,11 +65,11 @@ def _wheel_bytes() -> None:
             info.external_attr = 0o100644 << 16
             zf.writestr(info, "\n".join(records) + "\n")
 
-    def build(vendor: Path) -> None:
+    def build(vendor: Path, mlx_version: str = "0.0.0.dev0+fake") -> None:
         vendor.mkdir(parents=True)
         make_wheel(
-            vendor / f"mlx_omarchy-0.0.0.dev0+fake-{PYTAG}-{PYTAG}-{PLATTAG}.whl",
-            "mlx-omarchy", "0.0.0.dev0+fake", f"{PYTAG}-{PYTAG}-{PLATTAG}",
+            vendor / f"mlx_omarchy-{mlx_version}-{PYTAG}-{PYTAG}-{PLATTAG}.whl",
+            "mlx-omarchy", mlx_version, f"{PYTAG}-{PYTAG}-{PLATTAG}",
             {"mlx/__init__.py": "", "mlx/bin/mlx-omarchy-info": "#!/bin/sh\necho fake-info\n",
              "mlx/bin/mlx-omarchy-parakeet": "#!/usr/bin/env python3\nprint('fake-parakeet')\n"},
             exec_files=("mlx/bin/mlx-omarchy-info", "mlx/bin/mlx-omarchy-parakeet"),
@@ -422,6 +423,91 @@ class SystemStageTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--vendor", result.stderr)
+
+    def test_staged_serve_build_stamp_matches_installed_wheel(self):
+        """The staged .build-commit must match the installed mlx-omarchy wheel
+        so chat workers do not exit 4 at startup with drift override unset."""
+        site = next((self.stage / "usr/lib/omarchy-mlx/venv").glob("lib/python3.*/site-packages"))
+        stamp_path = site / "mlx_omarchy_serve" / ".build-commit"
+        self.assertTrue(stamp_path.is_file(), ".build-commit missing")
+        stamp = stamp_path.read_text().strip()
+        self.assertNotEqual(stamp, "unknown")
+        self.assertEqual(stamp, "fake")
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("MLX_OMARCHY_ALLOW_SERVE_DRIFT", "PYTHONPATH")}
+        result = subprocess.run(
+            [str(self.stage / "usr/lib/omarchy-mlx/venv/bin/python"), "-c",
+             "from mlx_omarchy_serve import _mlxlm_server as s; s.check_build_stamp()"],
+            env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_mismatched_serve_build_stamp_fails_with_exit_4(self):
+        """When the recorded .build-commit disagrees with the installed wheel,
+        check_build_stamp() must fail closed (exit 4) naming both tokens."""
+        site = next((self.stage / "usr/lib/omarchy-mlx/venv").glob("lib/python3.*/site-packages"))
+        stamp_path = site / "mlx_omarchy_serve" / ".build-commit"
+        original = stamp_path.read_text()
+        try:
+            stamp_path.write_text("deadbeef00\n")
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("MLX_OMARCHY_ALLOW_SERVE_DRIFT", "PYTHONPATH")}
+            result = subprocess.run(
+                [str(self.stage / "usr/lib/omarchy-mlx/venv/bin/python"), "-c",
+                 "from mlx_omarchy_serve import _mlxlm_server as s; s.check_build_stamp()"],
+                env=env, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 4, result.stderr)
+            self.assertIn("deadbeef00", result.stderr)
+            self.assertIn("fake", result.stderr)
+        finally:
+            stamp_path.write_text(original)
+
+    def test_tarball_install_without_git_stamps_wheel_commit_not_unknown(self):
+        """A PKGBUILD tarball has no .git directory and no MLX_OMARCHY_VERSION.
+        install.sh --system must stamp .build-commit from the installed wheel
+        (never 'unknown') so packaged chat workers pass check_build_stamp()."""
+        tarball = self.tmp / "tarball-src"
+        tarball.mkdir()
+        shutil.copy2(REPO / "install.sh", tarball / "install.sh")
+        shutil.copy2(REPO / "README.md", tarball / "README.md")
+        for sub in ("packaging", "serve", "scripts", "demo"):
+            shutil.copytree(REPO / sub, tarball / sub)
+        for wheel_ver, expected_stamp in (
+            ("0.32.4.dev202611222118+cf66ff1d0", "cf66ff1d0"),
+            ("0.32.4.dev202611260056", "0.32.4.dev202611260056"),
+        ):
+            with self.subTest(wheel_ver=wheel_ver):
+                vendor = self.tmp / f"vendor-{expected_stamp}"
+                make_vendor_wheels(vendor, mlx_version=wheel_ver)
+                lock = self.tmp / f"lock-{expected_stamp}.txt"
+                lock.write_text(
+                    subprocess.run(
+                        ["bash", str(tarball / "packaging" / "gen-vendor-lock.sh"), str(vendor)],
+                        check=True, capture_output=True, text=True,
+                    ).stdout
+                )
+                stage = self.tmp / f"stage-{expected_stamp}"
+                env = {k: v for k, v in os.environ.items()
+                       if k not in ("MLX_OMARCHY_VERSION", "MLX_OMARCHY_ALLOW_SERVE_DRIFT", "PYTHONPATH")}
+                result = subprocess.run(
+                    ["bash", str(tarball / "install.sh"), "--system",
+                     "--dest-root", str(stage),
+                     "--vendor", str(vendor),
+                     "--lock", str(lock),
+                     "--python", sys.executable],
+                    env=env, capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                site = next((stage / "usr/lib/omarchy-mlx/venv").glob("lib/python3.*/site-packages"))
+                stamp = (site / "mlx_omarchy_serve" / ".build-commit").read_text().strip()
+                self.assertEqual(stamp, expected_stamp)
+                check = subprocess.run(
+                    [str(stage / "usr/lib/omarchy-mlx/venv/bin/python"), "-c",
+                     "from mlx_omarchy_serve import _mlxlm_server as s; s.check_build_stamp()"],
+                    env=env, capture_output=True, text=True,
+                )
+                self.assertEqual(check.returncode, 0, check.stderr)
 
 
 if __name__ == "__main__":

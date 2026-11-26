@@ -238,16 +238,39 @@ install_system() {
     cp -a "$serve_src/$pkg/." "$site_dir/$pkg/"
   done
   cp "$ROOT/serve/mlx_omarchy_paths.py" "$site_dir/mlx_omarchy_paths.py"
-  # Stamp the serve copies with this build so _mlxlm_server can refuse a
-  # mismatched wheel at startup.
+  # Stamp the serve copies with the installed mlx-omarchy wheel's build token
+  # so _mlxlm_server can refuse a mismatched wheel after a wheel-only upgrade.
+  # Reading the staged wheel directly keeps tarball/PKGBUILD builds (no .git,
+  # unset MLX_OMARCHY_VERSION) and wheels without a +commit suffix aligned with
+  # _mlxlm_server.check_build_stamp(), instead of writing 'unknown' and making
+  # every chat worker exit 4 at startup.
   local stamp="$site_dir/mlx_omarchy_serve/.build-commit"
-  if commit=$(git -C "$ROOT" rev-parse --short=10 HEAD 2>/dev/null); then
+  local wheel_token=""
+  wheel_token=$(env -u PYTHONPATH "$venv/bin/python" -c '
+import importlib.metadata as md
+from mlx_omarchy_serve import _mlxlm_server as shim
+try:
+    ver = md.version("mlx-omarchy")
+except md.PackageNotFoundError:
+    ver = None
+print(shim._wheel_commit(ver) or "")
+') || die "failed to read installed mlx-omarchy wheel version from $venv"
+  if [[ -n "$wheel_token" ]]; then
+    printf '%s\n' "$wheel_token" > "$stamp"
+  elif commit=$(git -C "$ROOT" rev-parse --short=10 HEAD 2>/dev/null); then
     printf '%s\n' "$commit" > "$stamp"
   elif [[ -n "${MLX_OMARCHY_VERSION:-}" ]]; then
     printf '%s\n' "${MLX_OMARCHY_VERSION#v}" > "$stamp"
   else
-    printf 'unknown\n' > "$stamp"
+    die "cannot determine serve build stamp: installed mlx-omarchy wheel has no version token and neither git HEAD nor MLX_OMARCHY_VERSION is available"
   fi
+  # Fail staging immediately if the recorded stamp disagrees with the installed
+  # wheel (with drift override stripped); shipping a package whose chat workers
+  # all exit 4 is a release fault.
+  env -u MLX_OMARCHY_ALLOW_SERVE_DRIFT -u PYTHONPATH "$venv/bin/python" -c '
+from mlx_omarchy_serve import _mlxlm_server as shim
+shim.check_build_stamp()
+' || die "staged serve build stamp does not match the installed mlx-omarchy wheel"
 
   if [[ -d "$site_dir/mlx_lm" ]]; then
     say "Applying mlx-lm serve patches (conv-ring off unless MLX_OMARCHY_CONV_RING=1)"
