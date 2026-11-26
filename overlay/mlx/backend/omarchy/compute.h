@@ -1266,6 +1266,18 @@ enum class ComputeKernel : uint16_t {
   // -DUSE_BF16): verbatim 16-bit copy, so the variant only changes the
   // element type. Appended to keep profile kernel ids stable.
   SliceUpdatePairBF16,
+  // Coalesced-K+V split-K decode SDPA pass 1 and matching pass 2 builds
+  // (shaders/sdpa_decode_split_p1kv.comp, sdpa_decode_split_p2.comp).
+  // Appended to keep profile kernel ids stable.
+  SdpaDecodeSplitP1KVBk32R4BF16Hd128,
+  SdpaDecodeSplitP1KVBk64R4BF16Hd128,
+  SdpaDecodeSplitP1KVBk128R4BF16Hd128,
+  SdpaDecodeSplitP2Bk32BF16Hd128,
+  SdpaDecodeSplitP1KVBk32R4BF16Hd256,
+  SdpaDecodeSplitP1KVBk64R4BF16Hd256,
+  SdpaDecodeSplitP1KVBk128R4BF16Hd256,
+  SdpaDecodeSplitP2Bk32BF16Hd256,
+  SdpaDecodeSplitP2Bk64BF16Hd256,
   // Token4 column carrying the residual+norm epilogue (qmm_vec.comp
   // QMM_VEC_TOKENS+RESNORM): the last finishing workgroup norms every
   // live token row of the materialized sum. Appended to keep profile
@@ -1279,7 +1291,6 @@ enum class ComputeKernel : uint16_t {
   // Per-member twin of the rope epilogue above: the same tail on the
   // single-weight Rows8 column, one dispatch per group member.
   QmmVecQ4WordSubgroupRows8RopeEpiBF16,
-
   Count,
 };
 

@@ -700,3 +700,69 @@ TEST_CASE("split-K verify rows: each causal row equals the same token decoded al
   }
   unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
 }
+
+TEST_CASE("split-K P1KV: float64 accuracy gate and two-dispatch count across HD=128/256 and BK=32/64/128") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool shuffle_ready =
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_BIT) != 0u;
+  struct ShapeCase {
+    int heads, kv_heads, width, keys;
+    bool one_hot;
+  };
+  for (const ShapeCase& sc : {
+           ShapeCase{32, 8, 128, 1, false},
+           ShapeCase{32, 8, 128, 17, false},
+           ShapeCase{32, 8, 128, 31, false},
+           ShapeCase{32, 8, 128, 33, false},
+           ShapeCase{32, 8, 128, 65, true},
+           ShapeCase{32, 8, 128, 513, false},
+           ShapeCase{16, 4, 256, 17, false},
+           ShapeCase{16, 4, 256, 65, true},
+           ShapeCase{16, 4, 256, 513, false},
+       }) {
+    Stream stream = gpu_stream();
+    Stored q = make_bf16(
+        pattern(static_cast<size_t>(sc.heads) * sc.width, 11, 1.0f),
+        Shape{1, sc.heads, 1, sc.width},
+        stream);
+    std::vector<float> k_host =
+        pattern(static_cast<size_t>(sc.kv_heads) * sc.keys * sc.width, 23, 1.0f);
+    std::vector<float> v_host =
+        pattern(static_cast<size_t>(sc.kv_heads) * sc.keys * sc.width, 37, 1.0f);
+    if (sc.one_hot) {
+      std::fill(k_host.begin(), k_host.end(), 0.0f);
+      for (size_t i = 0; i != v_host.size(); ++i) {
+        size_t key = (i / sc.width) % sc.keys;
+        v_host[i] = (i % sc.width) == (key % sc.width) ? 1.0f : 0.0f;
+      }
+    }
+    Stored k = make_bf16(k_host, Shape{1, sc.kv_heads, sc.keys, sc.width}, stream);
+    Stored v = make_bf16(v_host, Shape{1, sc.kv_heads, sc.keys, sc.width}, stream);
+    const float scale = 1.0f / std::sqrt(static_cast<float>(sc.width));
+    std::vector<double> ref = reference(
+        q.values, k.values, v.values, sc.heads, sc.kv_heads, sc.keys, sc.keys, 0, sc.width, scale);
+    Run baseline = run_attention(q.x, k.x, v.x, scale, "0", stream);
+    Errors e_base = error_against(baseline.out, ref);
+    double rounding = 0.0;
+    for (double r : ref) {
+      rounding = std::max(rounding, std::fabs(r) * std::ldexp(1.0, -8));
+    }
+    for (const char* bk : {"32", "64", "128"}) {
+      setenv("MLX_OMARCHY_SDPA_SPLIT_P1KV", bk, 1);
+      Run p1kv = run_attention(q.x, k.x, v.x, scale, "1", stream);
+      unsetenv("MLX_OMARCHY_SDPA_SPLIT_P1KV");
+      Errors e_p1kv = error_against(p1kv.out, ref);
+      INFO("width=" << sc.width << " keys=" << sc.keys << " bk=" << bk);
+      CHECK(e_p1kv.max <= e_base.max + 2.0 * rounding + 1e-6);
+      CHECK(e_p1kv.mean <= e_base.mean + 0.25 * rounding + 1e-7);
+      CHECK(e_p1kv.max <= 3.0 * rounding + 1e-5);
+      if (split_device_ready() && (sc.width == 256 || shuffle_ready)) {
+        CHECK(p1kv.launched == 2);
+      }
+    }
+  }
+  unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
+}
