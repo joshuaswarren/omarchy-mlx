@@ -416,7 +416,10 @@ bool qmm_residual_norm_enabled(
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off
-// (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
+// (explicit MLX_OMARCHY_FUSED_GEMV=0 and MLX_OMARCHY_FUSED_CHAIN=0 also
+// cover it); on by default where fused_gemv_enabled is on or on parts
+// whose balanced 2-member MLP pairs run on the epilogue-only route (G14C).
+bool fused_gemv_swiglu_route_enabled(const std::string& device_name);
 bool fused_gemv_swiglu_enabled(const Device& device);
 
 // MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=1 opts the grouped GEMV planner into

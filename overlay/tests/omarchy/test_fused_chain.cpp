@@ -2168,7 +2168,7 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
 }
 
 TEST_CASE("greedy prune default: the part rule and overrides") {
-  CHECK(omarchy::greedy_prune_off_default_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::greedy_prune_off_default_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::greedy_prune_off_default_part("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::greedy_prune_off_default_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::greedy_prune_off_default_part("Apple M4 (G16G B1)"));
@@ -2181,7 +2181,7 @@ TEST_CASE("greedy prune default: the part rule and overrides") {
 
   const std::string g14c = "Apple M2 Max (G14C B1)";
   const std::string g13c = "Apple M1 Max (G13C C0)";
-  CHECK_FALSE(omarchy::greedy_prune_enabled(g14c));
+  CHECK(omarchy::greedy_prune_enabled(g14c));
   CHECK(omarchy::greedy_prune_enabled(g13c));
 
   setenv("MLX_OMARCHY_NO_GREEDY_PRUNE", "1", 1);
@@ -2197,6 +2197,92 @@ TEST_CASE("greedy prune default: the part rule and overrides") {
   } else {
     unsetenv("MLX_OMARCHY_NO_GREEDY_PRUNE");
   }
+}
+
+TEST_CASE("greedy word over staged default: the part rule and overrides") {
+  CHECK(omarchy::greedy_word_over_staged_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::greedy_word_over_staged_part(""));
+
+  const char* prev = std::getenv("MLX_OMARCHY_GREEDY_WORD");
+  std::optional<std::string> saved =
+      prev ? std::optional<std::string>(prev) : std::nullopt;
+  unsetenv("MLX_OMARCHY_GREEDY_WORD");
+
+  const std::string g14c = "Apple M2 Max (G14C B1)";
+  const std::string g13c = "Apple M1 Max (G13C C0)";
+  CHECK(omarchy::greedy_word_preferred(g14c));
+  CHECK_FALSE(omarchy::greedy_word_preferred(g13c));
+
+  setenv("MLX_OMARCHY_GREEDY_WORD", "0", 1);
+  CHECK_FALSE(omarchy::greedy_word_preferred(g14c));
+  CHECK_FALSE(omarchy::greedy_word_preferred(g13c));
+
+  setenv("MLX_OMARCHY_GREEDY_WORD", "1", 1);
+  CHECK(omarchy::greedy_word_preferred(g14c));
+  CHECK(omarchy::greedy_word_preferred(g13c));
+
+  if (saved) {
+    setenv("MLX_OMARCHY_GREEDY_WORD", saved->c_str(), 1);
+  } else {
+    unsetenv("MLX_OMARCHY_GREEDY_WORD");
+  }
+}
+
+TEST_CASE("fused gemv swiglu default: G14C balanced pairs and overrides") {
+  const char* names[] = {
+      "MLX_OMARCHY_FUSED_CHAIN",
+      "MLX_OMARCHY_FUSED_GEMV",
+      "MLX_OMARCHY_QMM_EPILOGUE_GEMV",
+      "MLX_OMARCHY_FUSED_GEMV_SWIGLU"};
+  std::vector<std::optional<std::string>> saved;
+  for (const char* var : names) {
+    const char* v = std::getenv(var);
+    saved.push_back(v ? std::optional<std::string>(v) : std::nullopt);
+    unsetenv(var);
+  }
+  const std::string g14c = "Apple M2 Max (G14C B1)";
+  const std::string g16g = "Apple M4 (G16G B1)";
+  const std::string g13c = "Apple M1 Max (G13C C0)";
+
+  omarchy::env_note_eval();
+  CHECK(omarchy::fused_gemv_swiglu_route_enabled(g14c));
+  CHECK(omarchy::fused_gemv_swiglu_route_enabled(g13c));
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g16g));
+
+  setenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU", "0", 1);
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g14c));
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g13c));
+  unsetenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU");
+
+  setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g14c));
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g13c));
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+
+  setenv("MLX_OMARCHY_QMM_EPILOGUE_GEMV", "0", 1);
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g14c));
+  CHECK(omarchy::fused_gemv_swiglu_route_enabled(g13c));
+  unsetenv("MLX_OMARCHY_QMM_EPILOGUE_GEMV");
+
+  setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g14c));
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g13c));
+
+  for (size_t i = 0; i < std::size(names); ++i) {
+    if (saved[i]) {
+      setenv(names[i], saved[i]->c_str(), 1);
+    } else {
+      unsetenv(names[i]);
+    }
+  }
+  omarchy::env_note_eval();
 }
 
 // The gates through fused_route_enabled: the decision is made per call
