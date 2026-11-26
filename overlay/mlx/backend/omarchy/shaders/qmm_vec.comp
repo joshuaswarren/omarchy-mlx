@@ -102,8 +102,9 @@ uint16_t bf16_store(float value) {
      defined(QMM_VEC_SWIGLU) || \
      defined(QMM_VEC_BATCH) || defined(QMM_VEC_ROWS) || \
      defined(QMM_VEC_GREEDY) || \
-     ROWS_PER_SLOT != 2 || SLOTS_PER_GROUP < 8)
-#error "QMM_VEC_RESNORM builds on bf16 subgroup Q4 word 2-row >=8-slot single weight"
+     (ROWS_PER_SLOT != 2 && ROWS_PER_SLOT != 4) || \
+     (SLOTS_PER_GROUP != 4 && SLOTS_PER_GROUP < 8))
+#error "QMM_VEC_RESNORM builds on bf16 subgroup Q4 word 2/4-row (4 or >=8)-slot single weight"
 #endif
 #if defined(QMM_VEC_SWIGLU) && \
     (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
@@ -2143,17 +2144,50 @@ void main() {
   barrier();
 
   // Single-row Apple RMSNorm (mirrors shaders/fast_norm_apple.comp bit-for-bit)
-  // over sum0.values[0..n-1] on threads 0..255; barriers stay workgroup-uniform.
-  // Reads sum0 directly in both passes instead of staging float reg_x[16] so the
-  // epilogue adds zero register pressure to the QMV dot loop.
+  // over sum0.values[0..n-1] on 256 virtual lanes; barriers stay workgroup-uniform.
+  // SLOTS_PER_GROUP == 4 (128 threads) runs two 128-lane halves producing the
+  // exact same 8 subgroup partials and FP32 summation order as 256 threads.
   uint row_length = n;
   float eps = params.alpha;
   uint sub_id = lane / LANES;
   uint sub_lane = lane % LANES;
-  precise float reg_sq = 0.0;
   uint n_reads = row_length / 256u;
   bool reg_path =
       (row_length == 2048u || row_length == 2560u || row_length == 4096u);
+#if SLOTS_PER_GROUP == 4
+  for (uint half_i = 0u; half_i < 2u; ++half_i) {
+    uint vlane = half_i * 128u + lane;
+    precise float reg_sq = 0.0;
+    if (reg_path) {
+      uint base = vlane * n_reads;
+      for (uint i = 0u; i < 8u; ++i) {
+        float xv = LOAD_VALUE(sum0.values[base + i]);
+        reg_sq += xv * xv;
+      }
+      if (n_reads == 10u) {
+        for (uint i = 8u; i < 10u; ++i) {
+          float xv = LOAD_VALUE(sum0.values[base + i]);
+          reg_sq += xv * xv;
+        }
+      } else if (n_reads == 16u) {
+        for (uint i = 8u; i < 16u; ++i) {
+          float xv = LOAD_VALUE(sum0.values[base + i]);
+          reg_sq += xv * xv;
+        }
+      }
+    } else {
+      for (uint index = vlane; index < row_length; index += 256u) {
+        float xv = LOAD_VALUE(sum0.values[index]);
+        reg_sq += xv * xv;
+      }
+    }
+    float sub_partial = subgroupAdd(reg_sq);
+    if (sub_lane == 0u) {
+      s_resnorm_partial[half_i * 4u + sub_id] = sub_partial;
+    }
+  }
+#else
+  precise float reg_sq = 0.0;
   if (lane < 256u) {
     if (reg_path) {
       uint base = lane * n_reads;
@@ -2183,6 +2217,7 @@ void main() {
       s_resnorm_partial[sub_id] = sub_partial;
     }
   }
+#endif
   barrier();
   if (sub_id == 0u) {
     float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
@@ -2194,6 +2229,36 @@ void main() {
   barrier();
   float mean_square = s_resnorm_partial[0] / float(row_length);
   float norm = inversesqrt(mean_square + eps);
+#if SLOTS_PER_GROUP == 4
+  for (uint half_i = 0u; half_i < 2u; ++half_i) {
+    uint vlane = half_i * 128u + lane;
+    if (reg_path) {
+      uint base = vlane * n_reads;
+      for (uint i = 0u; i < n_reads; ++i) {
+        uint index = base + i;
+        float value = LOAD_VALUE(sum0.values[index]);
+        float weight =
+            (params.lhs_size == 1u)
+                ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                : LOAD_VALUE(norm_weight.values[params.rhs_offset + index]);
+        precise float norm_weight_v = norm * weight;
+        precise float result = value * norm_weight_v;
+        norm_output.values[index] = STORE_VALUE(result);
+      }
+    } else {
+      for (uint index = vlane; index < row_length; index += 256u) {
+        float value = LOAD_VALUE(sum0.values[index]);
+        float weight =
+            (params.lhs_size == 1u)
+                ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                : LOAD_VALUE(norm_weight.values[params.rhs_offset + index]);
+        precise float norm_weight_v = norm * weight;
+        precise float result = value * norm_weight_v;
+        norm_output.values[index] = STORE_VALUE(result);
+      }
+    }
+  }
+#else
   if (lane < 256u) {
     if (reg_path) {
       uint base = lane * n_reads;
@@ -2221,6 +2286,7 @@ void main() {
       }
     }
   }
+#endif
 }
 #elif defined(QMM_VEC_SWIGLU)
 #define ROUND_STORAGE(f) LOAD_VALUE(bf16_store(f))

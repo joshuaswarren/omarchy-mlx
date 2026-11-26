@@ -95,10 +95,15 @@ void main() {
     uint row = unit / params.matrix_n;
     uint unit_column = unit % params.matrix_n;
     int src_row = ids_data.values[params.dims + row];
-    if (src_row < 0) {
-      src_row += int(params.matrix_m);
+    uint src;
+    if ((params.flags & 1u) != 0u) {
+      src = uint(src_row);
+    } else {
+      if (src_row < 0) {
+        src_row += int(params.matrix_m);
+      }
+      src = uint(src_row);
     }
-    uint src = uint(src_row);
     uint group = unit_column / units_per_group;
     float scale = LOAD_VALUE(
         scales_data.values[params.rhs_offset + src * params.matrix_k +

@@ -3299,12 +3299,15 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     const int64_t words_per_row = w.shape(1);
     const int64_t groups_per_row = scales.shape(1);
     const int64_t elems_per_row = words_per_row * (32 / bits);
+    const bool ids_dtype_ok = ids->dtype() == int32 ||
+        (ids->dtype() == uint32 &&
+         omarchy::env_flag("MLX_OMARCHY_PROLOGUE_U32"));
     if (w.shape(0) != scales.shape(0) || w.shape(0) != biases.shape(0) ||
         scales.shape(1) != biases.shape(1) ||
         elems_per_row % group_size != 0 ||
         groups_per_row * group_size != elems_per_row ||
         node.size() != nrows * elems_per_row || nrows <= 0 ||
-        ids->dtype() != int32 ||
+        !ids_dtype_ok ||
         w.dtype() != uint32 || scales.dtype() != node.dtype() ||
         biases.dtype() != node.dtype() ||
         (node.dtype() != float32 && node.dtype() != float16 &&
@@ -4090,6 +4093,7 @@ bool dispatch_prologue_fold(
   params.matrix_k = static_cast<uint32_t>(fold.groups_per_row);
   params.dims =
       static_cast<uint32_t>(ids.offset() / ids.itemsize());
+  params.flags = ids.dtype() == uint32 ? 1u : 0u;
   std::array<ComputeBinding, 5> bindings{
       binding(ids), binding(w), binding(scales), binding(biases),
       binding(node)};

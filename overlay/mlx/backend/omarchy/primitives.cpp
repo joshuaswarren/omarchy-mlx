@@ -287,8 +287,47 @@ const QmmGeometry& qmm_geometry() {
           8u, K::QmmVecQ4WordSubgroupBF16,
           K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
     }
+    if (v == "4x4w2") {
+      return QmmGeometry{
+          16u,
+          K::QmmVecQ4WordSubgroupBF16R4S4W2,
+          K::QmmVecQ4MultiSubgroupBF16R4S4W2,
+          "4x4w2",
+          true,
+          true,
+          16u,
+          K::QmmVecQ4SwigluBF16R4S4W2,
+          16u,
+          K::QmmVecQ4ResNormBF16R4S4W2};
+    }
+    if (v == "4x8w2") {
+      return QmmGeometry{
+          32u,
+          K::QmmVecQ4WordSubgroupBF16R4S8W2,
+          K::QmmVecQ4MultiSubgroupBF16R4S8W2,
+          "4x8w2",
+          true,
+          true,
+          32u,
+          K::QmmVecQ4SwigluBF16R4S8W2,
+          32u,
+          K::QmmVecQ4ResNormBF16R4S8W2};
+    }
+    if (v == "2x16w2_full") {
+      return QmmGeometry{
+          32u,
+          K::QmmVecQ4WordSubgroupBF16R2S16W2,
+          K::QmmVecQ4MultiSubgroupBF16R2S16W2,
+          "2x16w2_full",
+          true,
+          true,
+          32u,
+          K::QmmVecQ4SwigluBF16R2S16W2,
+          32u,
+          K::QmmVecQ4ResNormBF16R2S16W2};
+    }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x8w2 2x16 2x16w2 2x16kcont 2x16kcs16");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x8w2 2x16 2x16w2 2x16w2_full 4x4w2 4x8w2 2x16kcont 2x16kcs16");
   }();
   return geometry;
 }
