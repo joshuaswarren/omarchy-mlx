@@ -164,10 +164,12 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // the 4B 23.29 -> 23.51 with identical tokens — M1D-1), 2x16 on parts that
 // pass the wide-2x16 probe (select_qmm_wide_2x16; on G13C the 4x8 and 4x4
 // routes measured 6.40 and 7.28 percent slower than 2x16 with identical
-// tokens, PAR-101 — #351), 2x4w2 on G14C (uvec2 weight loads in the 2x4
-// multi kernel: 2B ctx=512 +1.35% 5/5, 2B short +1.69% 3/3, 9B ctx=512
-// +1.18% 3/3 atop OUTGATE_FOLD=0, tokens identical), and 2x4 on every other
-// chip until its paired A/B lands.
+// tokens, PAR-101 — #351), and 2x4 on every other chip until its paired
+// A/B lands. 2x4w2 is not a device default anywhere (G14C unset is 2x8w2,
+// returned first); it ships only as the measured MLX_OMARCHY_QMM_GEOM=2x4w2
+// override on G14C (uvec2 weight loads in the 2x4 multi kernel: 2B ctx=512
+// +1.35% 5/5, 2B short +1.69% 3/3, 9B ctx=512 +1.18% 3/3 atop
+// OUTGATE_FOLD=0, tokens identical).
 // The accepted overrides are 2x4, 2x4w2, 2x16, 2x16w2, and 2x16kcont.
 struct QmmGeometry {
   uint32_t columns;
