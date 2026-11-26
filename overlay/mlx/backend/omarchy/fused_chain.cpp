@@ -2898,9 +2898,6 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     }
   }
 
-  }
-
-
   // Quantized-embedding prologue fold: a dequantize-direction
   // fast::Quantize whose three inputs each trace through single-use
   // Squeeze/Reshape/ExpandDims views to a Gather taking one full row of
