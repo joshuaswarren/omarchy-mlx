@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "serve"))
 
-from mlx_omarchy_assistant.coordinator import Coordinator, ConversationStore, BusyError, DecisionInputError, LocalModels, validate_decision, validate_score_answer, explanation_disagrees, format_decision_event
+from mlx_omarchy_assistant.coordinator import Coordinator, ConversationStore, BusyError, DecisionInputError, LocalModels, _RoutingWorker, validate_decision, validate_score_answer, explanation_disagrees, format_decision_event
 
 
 class ConversationTests(unittest.TestCase):
@@ -185,13 +185,86 @@ class WorkerLifetimeTests(unittest.TestCase):
             app.closed.set()
             app.watch.join(3)
 
+    def test_closed_routing_worker_returns_error_dict(self):
+        class StubModels:
+            def decision(self, pair, payload):
+                return {"answers": {}}
+
+            def close_connection(self):
+                pass
+
+        worker = _RoutingWorker(manager=None)
+        worker.models = StubModels()
+        worker.close()
+        reply = worker.call({}, {}, 1.0)
+        self.assertIsInstance(reply, dict)
+        self.assertEqual(list(reply.keys()), ["error"])
+        self.assertIsInstance(reply["error"], str)
+        self.assertTrue(reply["error"])
+
+    def test_auto_submit_racing_close_does_not_restart_workers(self):
+        events = []
+
+        class RacingManager:
+            def __init__(self):
+                self.coordinator = None
+
+            def status(self):
+                return None
+
+            def start(self):
+                events.append("start")
+                if events.count("start") == 1:
+                    self.coordinator.close()
+                return {
+                    "decision_url": "http://127.0.0.1:1",
+                    "chat_url": "http://127.0.0.1:1",
+                    "chat_model": "stub-chat",
+                    "model_paths": {"decision": "/nonexistent/decision", "chat": "/nonexistent/chat"},
+                }
+
+            def stop(self):
+                events.append("stop")
+                return {"stopped": True}
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        manager = RacingManager()
+        app = Coordinator(Path(directory.name), manager)
+        manager.coordinator = app
+        self.addCleanup(app.close)
+        cid = app.store.create()["id"]
+
+        with unittest.mock.patch.dict("os.environ", {"MLX_OMARCHY_ROUTING": ""}), \
+                unittest.mock.patch("mlx_omarchy_assistant.routing.fit_route_question",
+                                    return_value=(True, None)) as fit_mock:
+            with self.assertRaisesRegex(RuntimeError, "shutting down"):
+                app.submit(cid, {
+                    "mode": "auto",
+                    "text": "Help me choose between the tram and the ferry.",
+                })
+
+        fit_mock.assert_called_once()
+        with app.lock:
+            threads = [job["thread"] for job in app.turns.values() if "thread" in job]
+        for thread in threads:
+            thread.join(timeout=2)
+        time.sleep(0.05)
+
+        self.assertIn("stop", events)
+        self.assertNotIn("start", events[events.index("stop") + 1:], events)
+        self.assertEqual(app.routing_status()["last_reason"], "worker_error")
+        self.assertIsNone(app.store.get(cid)["active_turn"])
+        self.assertTrue(app.gpu.acquire(blocking=False))
+        app.gpu.release()
+
 
 class WorkerReplyTests(unittest.TestCase):
     """LocalModels refuses a malformed worker reply with a RuntimeError that
     names it, never a raw decoder, AttributeError or TypeError."""
 
-    def serve(self, *bodies):
-        """One loopback worker; request N gets status 200 and bodies[N]."""
+    def serve(self, *bodies, status=200):
+        """One loopback worker; request N gets `status` and bodies[N]."""
         pending = iter(bodies)
 
         class Handler(BaseHTTPRequestHandler):
@@ -201,7 +274,7 @@ class WorkerReplyTests(unittest.TestCase):
             def do_POST(self):
                 self.rfile.read(int(self.headers["Content-Length"]))
                 body = next(pending)
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 try:
@@ -340,6 +413,23 @@ class WorkerReplyTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "not JSON") as caught:
                     call(url)
                 self.assertIsInstance(caught.exception.__cause__, RecursionError)
+
+    def test_non_200_worker_reply_escapes_and_bounds_body(self):
+        body = b"overloaded\r\n\x1b[31mfake log\x07\x7f" + b"x" * 240
+        url = self.serve(body, body, status=503)
+        expected_tail = ": %r" % body[:200].decode("utf-8", "replace")
+        for label, call, prefix in (
+            ("decision", self.decision, "Decision worker refused the request (HTTP 503): "),
+            ("chat", self.chat, "Chat worker refused the request (HTTP 503): "),
+        ):
+            with self.subTest(worker=label):
+                with self.assertRaises(RuntimeError) as caught:
+                    call(url)
+                message = str(caught.exception)
+                self.assertTrue(message.startswith(prefix), message[:300])
+                self.assertFalse(any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in message),
+                                 repr(message[:300]))
+                self.assertTrue(message.endswith(expected_tail), message[:300])
 
 
 class NestedChatConnectionTests(unittest.TestCase):

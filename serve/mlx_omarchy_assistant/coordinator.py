@@ -394,7 +394,7 @@ def typed_results(spec, answers, text):
 
 
 def _refused(what, raw):
-    """A refusal of a malformed worker payload that names its first 200 bytes."""
+    """A worker refusal that names the first 200 bytes of the reply, repr-escaped."""
     return RuntimeError("%s: %r" % (what, raw[:200].decode("utf-8", "replace")))
 
 
@@ -462,8 +462,7 @@ class LocalModels:
             if len(raw) > 1024 * 1024:
                 raise ValueError("Decision response is too large")
             if response.status != 200:
-                raise RuntimeError("Decision worker refused the request (HTTP %d): %s"
-                                   % (response.status, raw[:500].decode("utf-8", "replace")))
+                raise _refused("Decision worker refused the request (HTTP %d)" % response.status, raw)
             try:
                 answer = json.loads(raw)
             except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, int digit cap, nesting too deep
@@ -500,9 +499,8 @@ class LocalModels:
             if phases is not None:
                 phases["chat_headers"] = time.monotonic()
             if response.status != 200:
-                detail = response.read(8192).decode("utf-8", "replace")
-                raise RuntimeError("Chat worker refused the request (HTTP %d): %s"
-                                   % (response.status, detail[:500]))
+                raise _refused("Chat worker refused the request (HTTP %d)" % response.status,
+                               response.read(8192))
             while not cancel.is_set():
                 line = response.readline(1024 * 1024 + 1)
                 if not line:
@@ -574,12 +572,12 @@ class _RoutingWorker:
         return Bound()
 
     def call(self, pair, payload, deadline_seconds):
-        with self.lock:
-            if self.inflight is not None and not self.inflight.done():
-                return {"busy": True}
-            self.inflight = self.pool.submit(self.models.decision, pair, payload)
-            future = self.inflight
         try:
+            with self.lock:
+                if self.inflight is not None and not self.inflight.done():
+                    return {"busy": True}
+                self.inflight = self.pool.submit(self.models.decision, pair, payload)
+                future = self.inflight
             return future.result(timeout=deadline_seconds)
         except concurrent.futures.TimeoutError:
             return {"timed_out": True}
@@ -688,6 +686,8 @@ class Coordinator:
         if not self.gpu.acquire(blocking=False):
             raise BusyError("Another local response is active. Wait or stop it before sending")
         try:
+            if self.closed.is_set():
+                raise RuntimeError("The assistant is shutting down")
             turn = self.store.begin(cid, payload.get("text"))
             job = {"cancel": threading.Event(), "heartbeat": time.monotonic(), "conversation_id": cid,
                    "ttft": {"phases": {"submit": time.monotonic()}}}
