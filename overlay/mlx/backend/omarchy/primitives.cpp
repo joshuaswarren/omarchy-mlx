@@ -18685,6 +18685,11 @@ void RoPE::eval_gpu(
     // losses stay on the shared-tree family). The subgroup reduction
     // order differs from the composed chain's tree there; the fused ==
     // composed bit checks bound any rounding tie it can introduce.
+    // (M2D-3) D <= 128 rows dispatch the 128-thread builds: the 256-thread
+    // build idles threads 128..255 there, and the 128-thread reduction is
+    // bit-identical because the dropped threads contribute exact +0.0 (the
+    // 256-thread tree's stride-128 step is (+0.0)-neutral at these rows).
+    const bool w128 = static_cast<size_t>(D) <= 128u;
     kernel = (params.reduce_size == 128u
                   ? params.count <= 64u &&
                           apple_norm_128_allowed(encoder.device()) &&
@@ -18693,8 +18698,11 @@ void RoPE::eval_gpu(
                         encoder.device(),
                         static_cast<size_t>(params.reduce_size),
                         static_cast<size_t>(params.count)))
-        ? omarchy::ComputeKernel::FastRopeNormAppleBF16
-        : omarchy::ComputeKernel::FastRopeNormBF16;
+        ? (w128 ? omarchy::ComputeKernel::FastRopeNormAppleBF16W128
+                : omarchy::ComputeKernel::FastRopeNormAppleBF16)
+        : (w128 ? omarchy::ComputeKernel::FastRopeNormBF16W128
+                : omarchy::ComputeKernel::FastRopeNormBF16);
+
   } else if (direct_bf16) {
     kernel = half_split
         ? (with_freqs ? omarchy::ComputeKernel::FastRopeFreqsHalfSplitBF16
