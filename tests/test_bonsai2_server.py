@@ -441,10 +441,11 @@ class RequestValidationTests(unittest.TestCase):
 
         from mlx_omarchy_bonsai2 import server as server_module
 
-        def refuse(name, byte_count, *, note="", owner=None, state="pending"):
+        def refuse(name, byte_count, *, note="", owner=None, home=None, state="pending"):
             raise ValueError("required bytes exceed available headroom")
 
         fake_budget = types.SimpleNamespace(
+            default_home=lambda: self.tmp / "home",
             estimate_required=lambda memory, context_tokens: types.SimpleNamespace(total=1),
             admit_and_reserve=refuse,
         )
@@ -482,11 +483,12 @@ class RequestValidationTests(unittest.TestCase):
 
         events = []
 
-        def fake_atomic(name, byte_count, *, note="", owner=None, state="pending"):
+        def fake_atomic(name, byte_count, *, note="", owner=None, home=None, state="pending"):
             events.append("reserve")
             return types.SimpleNamespace(fits=True, lines=[])
 
         fake_budget = types.SimpleNamespace(
+            default_home=lambda: self.tmp / "home",
             estimate_required=lambda memory, context_tokens: types.SimpleNamespace(total=1024),
             admit_and_reserve=fake_atomic,
             set_reservation_state=lambda *a, **k: events.append("resident"),
@@ -542,12 +544,16 @@ class RequestValidationTests(unittest.TestCase):
         from mlx_omarchy_bonsai2 import server as server_module
 
         calls = {}
+        pinned_home = self.tmp / "pinned-home"
 
-        def fake_atomic(name, byte_count, *, note="", owner=None, state="pending"):
-            calls.update(name=name, byte_count=byte_count, note=note, owner=owner, state=state)
+        def fake_atomic(name, byte_count, *, note="", owner=None, home=None, state="pending"):
+            calls.update(
+                name=name, byte_count=byte_count, note=note, owner=owner, home=home, state=state
+            )
             return types.SimpleNamespace(fits=True, lines=["ok"])
 
         fake_budget = types.SimpleNamespace(
+            default_home=lambda: pinned_home,
             estimate_required=lambda memory, context_tokens: types.SimpleNamespace(
                 total=memory["weights_bytes"] + 1024
             ),
@@ -577,6 +583,7 @@ class RequestValidationTests(unittest.TestCase):
         self.assertGreaterEqual(calls["byte_count"], facts["total_header_bytes"] + 1024)
         self.assertGreater(calls["byte_count"], facts["live_weights_bytes"])
         self.assertEqual(calls["owner"], "pid0-abc")
+        self.assertEqual(calls["home"], pinned_home)
         self.assertEqual(calls["state"], "pending")
 
     def test_bind_failure_releases_reservation(self):
@@ -587,11 +594,12 @@ class RequestValidationTests(unittest.TestCase):
 
         events = []
 
-        def fake_atomic(name, byte_count, *, note="", owner=None, state="pending"):
+        def fake_atomic(name, byte_count, *, note="", owner=None, home=None, state="pending"):
             events.append("reserve")
             return types.SimpleNamespace(fits=True, lines=[])
 
         fake_budget = types.SimpleNamespace(
+            default_home=lambda: self.tmp / "home",
             estimate_required=lambda memory, context_tokens: types.SimpleNamespace(total=1024),
             admit_and_reserve=fake_atomic,
             set_reservation_state=lambda *a, **k: events.append("resident"),
