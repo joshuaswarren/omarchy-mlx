@@ -2381,11 +2381,33 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   // while a dense GEMV values row feeds the values cache — the
   // producer-direct window pair. Both arms write the same result
   // whether or not the planner arms the direct write.
+  std::vector<float> keys_host(1 * 2 * 8 * D);
+  std::vector<float> values_host(1 * 2 * 8 * D);
+  {
+    array keys_f32 = astype(keys_init, float32, stream);
+    array values_f32 = astype(values_init, float32, stream);
+    eval({keys_f32, values_f32});
+    sync_stream(stream);
+    std::memcpy(
+        keys_host.data(), keys_f32.data<float>(), keys_host.size() * 4);
+    std::memcpy(
+        values_host.data(),
+        values_f32.data<float>(),
+        values_host.size() * 4);
+  }
   auto run_window = [&](const char* trio) {
     setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
     setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
-    array keys_cache = copy(keys_init, stream);
-    array values_cache = copy(values_init, stream);
+    // Each arm's cache comes straight from host data through astype so
+    // its buffer has one owner: a copy() of the evaluated cache can
+    // share the source buffer, which blocks the donation the in-place
+    // window checks for.
+    array keys_cache = astype(
+        array(keys_host.data(), {1, 2, 8, D}, float32), bfloat16,
+        stream);
+    array values_cache = astype(
+        array(values_host.data(), {1, 2, 8, D}, float32), bfloat16,
+        stream);
     eval({keys_cache, values_cache});
     sync_stream(stream);
     const void* keys_before = keys_cache.data<void>();
