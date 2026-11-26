@@ -20534,7 +20534,7 @@ void ScaledDotProductAttention::eval_gpu(
              (hw.required_subgroup_size == 0u ||
               hw.required_subgroup_size == 64u))) &&
            hw.max_compute_work_group_invocations >= 64u &&
-           hw.max_compute_work_group_size[0] >= 64u);
+           hw.max_compute_work_group_size[0] >= 64u));
       constexpr uint32_t kCausalFlash16WgRows = 16u;
       out.set_data(allocate_omarchy(out.nbytes()));
       omarchy::ComputeParams params;
