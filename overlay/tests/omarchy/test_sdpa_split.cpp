@@ -773,7 +773,9 @@ TEST_CASE("online-softmax 1-dispatch SDPA: default gating, float64 accuracy, and
   CHECK(omarchy::sdpa_online_default("Apple M1 Max (G13C C0)", 2304u));
   CHECK(!omarchy::sdpa_online_default("Apple M1 Max (G13C C0)", 2305u));
   CHECK(!omarchy::sdpa_online_default("Apple M2 Max (G14C C0)", 512u));
-  CHECK(!omarchy::sdpa_online_default("Apple M1 (G13G B1)", 512u));
+  CHECK(omarchy::sdpa_online_default("Apple M1 (G13G B1)", 512u));
+  CHECK(omarchy::sdpa_online_default("Apple M1 (G13G B1)", 2304u));
+  CHECK(!omarchy::sdpa_online_default("Apple M1 (G13G B1)", 2305u));
 
   if (!compute_available()) {
     return;
