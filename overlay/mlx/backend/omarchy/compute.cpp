@@ -494,6 +494,9 @@
 #include "quantize_f16.h"
 #include "dequant_bf16.h"
 #include "quantize_bf16.h"
+#include "gather_dequant_f32.h"
+#include "gather_dequant_f16.h"
+#include "gather_dequant_bf16.h"
 #include "quantize_fp_f32.h"
 #include "quantize_fp_f16.h"
 #include "quantize_fp_bf16.h"
@@ -1191,6 +1194,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {quantize_bf16, quantize_bf16_size};
     case ComputeKernel::DequantBF16:
       return {dequant_bf16, dequant_bf16_size};
+    case ComputeKernel::GatherDequantF32:
+      return {gather_dequant_f32, gather_dequant_f32_size};
+    case ComputeKernel::GatherDequantF16:
+      return {gather_dequant_f16, gather_dequant_f16_size};
+    case ComputeKernel::GatherDequantBF16:
+      return {gather_dequant_bf16, gather_dequant_bf16_size};
     case ComputeKernel::ConvF32:
       return {conv_f32, conv_f32_size};
     case ComputeKernel::ConvF16:

@@ -747,6 +747,35 @@ struct RopeNormFold {
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
+// A planned quantized-embedding prologue fold: a dequantize-direction
+// fast::Quantize whose three inputs each trace through single-use view
+// ops to a Gather taking one full row of a table by the same index
+// array. Pending until the Quantize evaluates, then done (one
+// gather-dequant dispatch wrote the output) or failed (the gathers,
+// views and dequantize replay on their own paths).
+struct PrologueFold {
+  array quant;
+  array ids;
+  array w;
+  array scales;
+  array biases;
+  // Skipped tape nodes in dependency order (per arm: gather first,
+  // then its views outward to the quant input) with the pieces the
+  // failure replay needs: tape nodes are detached by eval time.
+  struct ReplayStep {
+    array node;
+    std::shared_ptr<Primitive> prim;
+    std::vector<array> inputs;
+  };
+  std::vector<ReplayStep> replay;
+  int bits = 0;
+  int group_size = 0;
+  int64_t words_per_row = 0;
+  int64_t groups_per_row = 0;
+  int64_t nrows = 0;
+  enum class State : uint8_t { pending, done, failed } state{State::pending};
+};
+
 // A planned decode GEMV group: pending until its first member
 // evaluates, then done (every member and epilogue is written by the
 // one dispatch) or failed (every node takes its own path).
@@ -809,6 +838,9 @@ struct EagerFusionState {
   std::unordered_map<std::uintptr_t, size_t> rope_norm_skip_roles;
   std::unordered_map<std::uintptr_t, size_t> rope_norm_roles;
   std::vector<RopeNormFold> rope_norms;
+  std::unordered_map<std::uintptr_t, size_t> prologue_skip_roles;
+  std::unordered_map<std::uintptr_t, size_t> prologue_fold_roles;
+  std::vector<PrologueFold> prologue_folds;
 };
 
 thread_local EagerFusionState* eager_state = nullptr;
@@ -2052,6 +2084,136 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           cand);
     }
   }
+
+  // Quantized-embedding prologue fold: a dequantize-direction
+  // fast::Quantize whose three inputs each trace through single-use
+  // Squeeze/Reshape/ExpandDims views to a Gather taking one full row of
+  // a table on axis 0 by the same index array gets one gather-dequant
+  // dispatch; the gathers, views and dequantize never run on their
+  // own. Word-pack affine dequantize only (bits 2/4/8); anything else
+  // keeps the ordinary path. MLX_OMARCHY_PROLOGUE_FOLD=0 disables.
+  const bool prologue_fold =
+      std::getenv("MLX_OMARCHY_PROLOGUE_FOLD") == nullptr ||
+      env_flag("MLX_OMARCHY_PROLOGUE_FOLD");
+  for (const auto& node : tape) {
+    if (!prologue_fold) {
+      break;
+    }
+    if (!is_op(&node, typeid(fast::Quantize)) ||
+        node.inputs().size() != 3 || claimed.count(node.id())) {
+      continue;
+    }
+    const auto qst =
+        static_cast<const fast::Quantize&>(node.primitive()).state();
+    const int group_size = std::get<1>(qst);
+    const int bits = std::get<2>(qst);
+    const auto mode = std::get<3>(qst);
+    const bool dequantize = std::get<4>(qst);
+    if (!dequantize || mode != QuantizationMode::Affine ||
+        (bits != 2 && bits != 4 && bits != 8) || group_size <= 0 ||
+        (group_size * bits) % 32 != 0) {
+      continue;
+    }
+    std::vector<const array*> gathers(3, nullptr);
+    std::vector<std::vector<const array*>> arm_views(3);
+    const array* ids = nullptr;
+    bool ok = true;
+    for (int arm = 0; arm < 3 && ok; ++arm) {
+      const array* cur = lookup(node.inputs()[arm]);
+      while (ok && cur != nullptr &&
+             (is_op(cur, typeid(Squeeze)) || is_op(cur, typeid(Reshape)) ||
+              is_op(cur, typeid(ExpandDims)))) {
+        if (uses[cur->id()] != 1 || cur->inputs().size() != 1 ||
+            claimed.count(cur->id())) {
+          ok = false;
+          break;
+        }
+        arm_views[arm].push_back(cur);
+        cur = lookup(cur->inputs()[0]);
+      }
+      if (!ok || cur == nullptr || !is_op(cur, typeid(Gather)) ||
+          uses[cur->id()] != 1 || claimed.count(cur->id()) ||
+          cur->inputs().size() != 2 ||
+          cur->primitive().stream() != node.primitive().stream()) {
+        break;
+      }
+      const auto gst =
+          static_cast<const Gather&>(cur->primitive()).state();
+      const array& table = cur->inputs()[0];
+      // Single full-row take on axis 0: slice covers row 0..1 plus the
+      // table's remaining extents in full.
+      if (gst.first.size() != 1 || gst.first[0] != 0 ||
+          gst.second.size() != static_cast<size_t>(table.ndim()) ||
+          table.ndim() != 2 || gst.second[0] != 1 ||
+          gst.second[1] != table.shape(1)) {
+        break;
+      }
+      const array* idx = &cur->inputs()[1];
+      if (ids == nullptr) {
+        ids = idx;
+      } else if (idx->id() != ids->id()) {
+        break;
+      }
+      gathers[arm] = cur;
+    }
+    if (gathers[0] == nullptr || gathers[1] == nullptr ||
+        gathers[2] == nullptr || ids == nullptr) {
+      continue;
+    }
+    const array& w = gathers[0]->inputs()[0];
+    const array& scales = gathers[1]->inputs()[0];
+    const array& biases = gathers[2]->inputs()[0];
+    const int64_t nrows = ids->size();
+    const int64_t words_per_row = w.shape(1);
+    const int64_t groups_per_row = scales.shape(1);
+    const int64_t elems_per_row = words_per_row * (32 / bits);
+    if (w.shape(0) != scales.shape(0) || w.shape(0) != biases.shape(0) ||
+        scales.shape(1) != biases.shape(1) ||
+        elems_per_row % group_size != 0 ||
+        groups_per_row * group_size != elems_per_row ||
+        node.size() != nrows * elems_per_row || nrows <= 0 ||
+        (ids->dtype() != int32 && ids->dtype() != uint32) ||
+        w.dtype() != uint32 || scales.dtype() != node.dtype() ||
+        biases.dtype() != node.dtype() ||
+        (node.dtype() != float32 && node.dtype() != float16 &&
+         node.dtype() != bfloat16)) {
+      continue;
+    }
+    std::vector<PrologueFold::ReplayStep> replay;
+    for (int arm = 0; arm < 3; ++arm) {
+      replay.push_back(
+          PrologueFold::ReplayStep{
+              *gathers[arm],
+              gathers[arm]->primitive_ptr(),
+              gathers[arm]->inputs()});
+      for (auto it = arm_views[arm].rbegin(); it != arm_views[arm].rend();
+           ++it) {
+        replay.push_back(
+            PrologueFold::ReplayStep{
+                **it, (*it)->primitive_ptr(), (*it)->inputs()});
+      }
+    }
+    const size_t index = state->prologue_folds.size();
+    state->prologue_fold_roles.emplace(node.id(), index);
+    for (const auto& step : replay) {
+      state->prologue_skip_roles.emplace(step.node.id(), index);
+      claimed.insert(step.node.id());
+    }
+    claimed.insert(node.id());
+    state->prologue_folds.push_back(PrologueFold{
+        node,
+        *ids,
+        w,
+        scales,
+        biases,
+        std::move(replay),
+        bits,
+        group_size,
+        words_per_row,
+        groups_per_row,
+        nrows,
+        PrologueFold::State::pending});
+  }
 }
 
 EagerFusionScope::~EagerFusionScope() {
@@ -2334,9 +2496,117 @@ bool dispatch_rope_norm_fold(
   return true;
 }
 
+// One gather-dequant dispatch for a planned embedding prologue fold:
+// binds the token-id buffer plus the three source tables and writes
+// the dequantize output. ids is read on the GPU, so the index value
+// never crosses the host. Returns false on a contract check; the
+// caller then replays the ordinary gathers/views and lets the
+// dequantize run normally.
+bool dispatch_prologue_fold(
+    array& node,
+    const PrologueFold& fold,
+    const Stream& stream) {
+  const array& ids = fold.ids;
+  const array& w = fold.w;
+  const array& scales = fold.scales;
+  const array& biases = fold.biases;
+  if (ids.data_shared_ptr() == nullptr || w.data_shared_ptr() == nullptr ||
+      scales.data_shared_ptr() == nullptr ||
+      biases.data_shared_ptr() == nullptr ||
+      !ids.flags().row_contiguous || !w.flags().row_contiguous ||
+      !scales.flags().row_contiguous || !biases.flags().row_contiguous ||
+      ids.offset() % ids.itemsize() != 0 ||
+      w.offset() % w.itemsize() != 0 ||
+      scales.offset() % scales.itemsize() != 0 ||
+      biases.offset() % biases.itemsize() != 0) {
+    return false;
+  }
+  node.set_data(allocator().malloc(node.nbytes()));
+  if (node.size() == 0) {
+    return true;
+  }
+  auto& encoder = get_command_encoder(stream);
+  encoder.add_temporary(ids);
+  encoder.add_temporary(w);
+  encoder.add_temporary(scales);
+  encoder.add_temporary(biases);
+  ComputeParams params;
+  params.count = static_cast<uint32_t>(fold.nrows * fold.words_per_row);
+  params.operation = static_cast<uint32_t>(fold.bits);
+  params.lhs_size = static_cast<uint32_t>(w.size());
+  params.rhs_size = static_cast<uint32_t>(scales.size());
+  params.reduce_size = static_cast<uint32_t>(fold.group_size);
+  params.output_size = static_cast<uint32_t>(node.size());
+  params.lhs_offset =
+      static_cast<uint32_t>(w.offset() / w.itemsize());
+  params.rhs_offset =
+      static_cast<uint32_t>(scales.offset() / scales.itemsize());
+  params.aux_size = static_cast<uint32_t>(biases.size());
+  params.aux_offset =
+      static_cast<uint32_t>(biases.offset() / biases.itemsize());
+  params.output_offset = 0;
+  params.matrix_m = static_cast<uint32_t>(w.shape(0));
+  params.matrix_n = static_cast<uint32_t>(fold.words_per_row);
+  params.matrix_k = static_cast<uint32_t>(fold.groups_per_row);
+  params.dims =
+      static_cast<uint32_t>(ids.offset() / ids.itemsize());
+  std::array<ComputeBinding, 5> bindings{
+      binding(ids), binding(w), binding(scales), binding(biases),
+      binding(node)};
+  const auto kernel = node.dtype() == float16
+      ? ComputeKernel::GatherDequantF16
+      : node.dtype() == bfloat16 ? ComputeKernel::GatherDequantBF16
+                                 : ComputeKernel::GatherDequantF32;
+  encoder.dispatch_compute(
+      kernel, bindings, params, compute_dispatch_group_count(params.count));
+  return true;
+}
+
 bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (!eager_state) {
     return false;
+  }
+  if (auto skip = eager_state->prologue_skip_roles.find(node.id());
+      skip != eager_state->prologue_skip_roles.end()) {
+    // The fold's dispatch owns this node while pending or done; on a
+    // failed fold the fire arm replays every skipped node before the
+    // dequantize runs, so nothing ever falls through unwritten.
+    return eager_state->prologue_folds[skip->second].state !=
+        PrologueFold::State::failed;
+  }
+  if (auto fit = eager_state->prologue_fold_roles.find(node.id());
+      fit != eager_state->prologue_fold_roles.end()) {
+    auto& fold = eager_state->prologue_folds[fit->second];
+    if (fold.state == PrologueFold::State::done) {
+      return true;
+    }
+    if (fold.state == PrologueFold::State::failed) {
+      return false;
+    }
+    if (fold.quant.status() == array::Status::evaluated &&
+        fold.quant.data_shared_ptr() != nullptr) {
+      // A nested settle scope already fired this fold; re-dispatching
+      // would only rewrite the output.
+      fold.state = PrologueFold::State::done;
+      return true;
+    }
+    fold.state = dispatch_prologue_fold(node, fold, stream)
+        ? PrologueFold::State::done
+        : PrologueFold::State::failed;
+    if (fold.state == PrologueFold::State::failed) {
+      // Replay the skipped gathers and views in dependency order so
+      // the ordinary dequantize path below reads settled inputs.
+      auto& encoder = get_command_encoder(stream);
+      for (auto& step : fold.replay) {
+        for (const auto& input : step.inputs) {
+          encoder.add_temporary(input);
+        }
+        std::vector<array> outs{step.node};
+        step.prim->eval_gpu(step.inputs, outs);
+      }
+      return false;
+    }
+    return true;
   }
   if (auto skip = eager_state->rope_norm_skip_roles.find(node.id());
       skip != eager_state->rope_norm_skip_roles.end()) {
