@@ -174,6 +174,8 @@ TEST_CASE("an NVIDIA-style list advertises the dense CMAT16 routes") {
   CHECK_FALSE(omarchy::cooperative_matrix_advertises(
       eight,
       omarchy::matmul_direct_coopmat_shape_c16(CoopmatType::Float16)));
+}
+
 TEST_CASE("RADV GFX1201 advertises the 16x16x16 bf16 route, not the 8x8x8 f32 one") {
   // Shapes as measured by
   // vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR on RADV GFX1201
