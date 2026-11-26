@@ -2390,7 +2390,7 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
         keys_cache, kr, Shape{0, 0, 3, 0}, Shape{1, 2, 4, D}, stream);
     array values_out = slice_update(
         values_cache, vrow, Shape{0, 0, 3, 0}, Shape{1, 2, 4, 4}, stream);
-    eval({keys_out, values_out, qr});
+    eval({values_out, keys_out, qr});
     sync_stream(stream);
     return std::make_tuple(
         qr, keys_out, values_out, keys_out.data<void>() == keys_before);
