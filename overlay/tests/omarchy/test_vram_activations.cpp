@@ -166,10 +166,46 @@ int main() {
       "refuses 2x8w2 without subgroup arithmetic");
   fails += check(
       !select_qmm_2x8w2("Intel Arc B60 (BMG)", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, rtx_caps, true),
-      "BMG keeps its measured 2x16kcont/kcs16 route");
+      "BMG keeps its bit-identical 2x16w2 route");
   fails += check(
       !select_qmm_wide_2x16("Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, true),
       "Apple G14C does not select 2x16 even when opt-in env is set");
+
+  // 3b. Default QMM geometry selection pins bit-identical routes only:
+  // 2x16kcont and 2x16kcs16 are excluded from every default path.
+  {
+    struct GeomCase {
+      const char* label;
+      const char* name;
+      VkPhysicalDeviceType type;
+      QmmWideCaps caps;
+      bool vram;
+      const char* want;
+    };
+    const GeomCase cases[] = {
+        {"BMG discrete", "Intel Arc B60 (BMG)", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, rtx_caps, true, "2x16w2"},
+        {"BMG no VRAM", "Intel Arc B60 (BMG)", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, rtx_caps, false, "2x4"},
+        {"RTX 5060 Ti", "NVIDIA GeForce RTX 5060 Ti", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, rtx_caps, true, "2x8w2"},
+        {"RX 9070 wg256", "AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, wg256, true, "2x8w2"},
+        {"RX 9070 sg64", "AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, sg64, true, "2x4"},
+        {"Apple G13G", "Apple M1 (G13G B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x8w2"},
+        {"Apple G13C", "Apple M1 Max (G13C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x8w2"},
+        {"Apple G14C", "Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x8w2"},
+        {"Apple G18G", "Apple M6 (G18G B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x16"},
+        {"llvmpipe", "llvmpipe (LLVM 19.1.7, 256 bits)", VK_PHYSICAL_DEVICE_TYPE_CPU, rtx_caps, false, "2x16"},
+        {"narrow wg", "Apple M6 (G18G B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, narrow_wg, false, "2x4"},
+    };
+    for (const auto& c : cases) {
+      std::string got = select_default_qmm_geometry_name(c.name, c.type, c.caps, c.vram);
+      const std::string want_msg = std::string("default QMM geom for ") +
+          c.label + " is " + c.want + " (got " + got + ")";
+      const std::string excl_msg = std::string("default QMM geom for ") +
+          c.label + " excludes kcont variants";
+      fails += check(got == c.want, want_msg.c_str());
+      fails += check(
+          got != "2x16kcont" && got != "2x16kcs16", excl_msg.c_str());
+    }
+  }
 
   // 4. Host/device coherence state machine.
   {
