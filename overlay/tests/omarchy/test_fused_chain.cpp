@@ -2583,6 +2583,40 @@ TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
   }
 }
 
+// Member views must carry a real data_size: fresh output nodes hold
+// data_size 0 until set_data, and a zero span makes is_trailing_broadcast
+// fail, dropping consumers off the BinaryVec/UnaryVec path (and letting
+// reshaped views reach the dims==0 modulo). The view alias must record
+// the view span, not the node's pre-set_data zero.
+TEST_CASE("dual-write member view keeps a real data_size") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 128;
+  auto a = make_linear(64, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  x.eval();
+  sync_stream(stream);
+  array parent = zeros({64}, bfloat16, stream);
+  parent.eval();
+  sync_stream(stream);
+
+  std::vector<mlx::core::omarchy::GemvFusionMember> members;
+  members.push_back({project(x, a, stream), std::nullopt, std::nullopt});
+  members[0].out_view = {parent, 0u};
+  setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
+  CHECK(mx_omarchy_dualout_dispatch(members, stream));
+  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+
+  CHECK_EQ(members[0].node.data_size(), members[0].node.size());
+  CHECK_NE(members[0].node.data_size(), 0);
+}
+
 // TapeIndex scratch-map contract (EagerFusionScope): growth past the
 // prepared estimate, swap-shrink releasing capacity, and generation-wrap
 // rezeroing. TapeIndex<>, the production table, runs a 32-bit generation;
