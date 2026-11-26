@@ -155,6 +155,9 @@ struct KvDirectWindow {
   // rows straight into |base|'s buffer (|node| shares that storage) and
   // the fresh cache copy disappears entirely.
   bool in_place{false};
+  // True when |node|'s storage was already bound ahead of producer replay
+  // (e.g. a fused SDPA-RoPE plan that fell back after binding k_su).
+  bool prebound{false};
 };
 
 // DecodeFusion: one fused decode GEMV group. Up to kQmmVecMultiWeights
@@ -287,7 +290,7 @@ bool dispatch_quantized_gemv_group(
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
     const array& input,
-    const std::optional<KvDirectWindow>* sum_windows,
+    std::optional<KvDirectWindow>* sum_windows,
     const Stream& stream);
 
 enum class SliceUpdatePairDispatch : uint8_t { done, not_ready, unsupported };
@@ -332,6 +335,34 @@ bool rope_epi_enabled();
 // trio pairs are unaffected; the MLX_OMARCHY_FUSED_CHAIN and
 // MLX_OMARCHY_FUSED_TRIO gates still cover the whole scan.
 bool rope_norm_pair_enabled();
+
+// MLX_OMARCHY_SDPA_ONLINE_ROPE=1 opts the fused Q/K RMSNorm+RoPE+KV-write+
+// online-softmax BF16 decode SDPA (HD=128) scan in.
+struct CapabilityReport;
+bool sdpa_online_rope_enabled(const CapabilityReport& caps, uint32_t k_len);
+
+struct SdpaOnlineRopeCtx {
+  const array* q_raw{nullptr};
+  const array* k_raw{nullptr};
+  const array* offset{nullptr};
+  const array* q_weight{nullptr};
+  const array* k_weight{nullptr};
+  KvDirectWindow* k_window{nullptr};
+  uint32_t q_head_stride{0};
+  uint32_t k_head_stride{0};
+  bool has_norm{false};
+  float norm_eps{0.0f};
+  float rope_base{0.0f};
+  float rope_scale{1.0f};
+};
+
+// Returns the planned fused Q/K RopeNorm+KV-write+SDPA context when the SDPA
+// node has a bound pending plan, or nullptr otherwise.
+const SdpaOnlineRopeCtx* find_sdpa_online_rope(
+    const array& out,
+    const Stream& stream);
+void commit_sdpa_online_rope(const array& out);
+void abort_sdpa_online_rope(const array& out, const Stream& stream);
 
 // find_sdpa_transpose_out returns the materializing Reshape node a
 // decode-rows SDPA should store into directly (the planned

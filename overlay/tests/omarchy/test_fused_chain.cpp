@@ -3198,3 +3198,171 @@ TEST_CASE("rope-epi covers vd>128 on the member route and refuses token4") {
   expect_bit_exact(off.keys, on_token4.keys, stream);
   expect_bit_exact(off.values, on_token4.values, stream);
 }
+
+TEST_CASE("sdpa online rope norm: bit-exact output and k_cache with two fewer dispatches") {
+  unsetenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_MAX_KEYS");
+  CHECK(omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 512u));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 2304u));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 2305u));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M2 Max (G14C C0)", 512u));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 512u));
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  constexpr VkSubgroupFeatureFlags kFeatures =
+      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+  const bool ready = caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 1024u &&
+      caps.max_compute_work_group_size[0] >= 1024u &&
+      caps.max_compute_shared_memory_size >= 16896u &&
+      (caps.subgroup_operations & kFeatures) == kFeatures;
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  const int H = 32;
+  const int KVH = 8;
+  const int D = 128;
+  const int CAP = 64;
+  const float scale = 1.0f / std::sqrt(static_cast<float>(D));
+  array xq_4d = astype(
+      random::normal(Shape{1, H, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array xk_4d = astype(
+      random::normal(Shape{1, KVH, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array xq_pre = astype(
+      random::normal(Shape{1, 1, H, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array xk_pre = astype(
+      random::normal(Shape{1, 1, KVH, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array wq = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream), bfloat16, stream);
+  array wk = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream), bfloat16, stream);
+  array keys_init = astype(
+      random::normal(Shape{1, KVH, CAP, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array values_init = astype(
+      random::normal(Shape{1, KVH, CAP, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  std::vector<float> xv_float(128, 0.125f);
+  array xv = astype(array(xv_float.data(), {1, 128}, float32), bfloat16, stream);
+  array wq_proj = transpose(
+      astype(
+          random::normal(Shape{H * D, 128}, float32, std::nullopt, stream),
+          bfloat16, stream),
+      stream);
+  array wk_proj = transpose(
+      astype(
+          random::normal(Shape{KVH * D, 128}, float32, std::nullopt, stream),
+          bfloat16, stream),
+      stream);
+  array wv = transpose(
+      astype(
+          random::normal(Shape{KVH * D, 128}, float32, std::nullopt, stream),
+          bfloat16, stream),
+      stream);
+  eval({xq_4d, xk_4d, xq_pre, xk_pre, wq, wk, keys_init, values_init, xv, wq_proj, wk_proj, wv});
+  sync_stream(stream);
+  std::vector<float> keys_host(1 * KVH * CAP * D);
+  std::vector<float> values_host(1 * KVH * CAP * D);
+  {
+    array kf = astype(keys_init, float32, stream);
+    array vf = astype(values_init, float32, stream);
+    eval({kf, vf});
+    sync_stream(stream);
+    std::memcpy(keys_host.data(), kf.data<float>(), keys_host.size() * 4);
+    std::memcpy(values_host.data(), vf.data<float>(), values_host.size() * 4);
+  }
+  enum class Mode { inline_norm, folded_norm, plain_rope };
+  auto run = [&](Mode mode, int pos, const char* fuse_flag) {
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+    setenv("MLX_OMARCHY_ROPE_NORM_PAIR", "0", 1);
+    setenv("MLX_OMARCHY_SDPA_ONLINE", "1", 1);
+    setenv("MLX_OMARCHY_SDPA_ONLINE_ROPE", fuse_flag, 1);
+    array keys_cache = astype(
+        array(keys_host.data(), {1, KVH, CAP, D}, float32), bfloat16, stream);
+    array values_cache = astype(
+        array(values_host.data(), {1, KVH, CAP, D}, float32), bfloat16, stream);
+    array offset = array(pos, int32);
+    array offset_k = array(pos, int32);
+    eval({keys_cache, values_cache, offset, offset_k});
+    sync_stream(stream);
+    const void* keys_before = keys_cache.data<void>();
+    array qproj = matmul(xv, wq_proj, stream);
+    array kproj = matmul(xv, wk_proj, stream);
+    array vproj = matmul(xv, wv, stream);
+    array vrow = transpose(
+        reshape(vproj, Shape{1, 1, KVH, D}, stream), {0, 2, 1, 3}, stream);
+    array qr(0.0f);
+    array kr(0.0f);
+    if (mode == Mode::inline_norm) {
+      qr = fast::rope_rms_norm(
+          xq_4d, D, wq, 1e-6f, false, 1000000.0f, 1.0f, offset, stream);
+      kr = fast::rope_rms_norm(
+          xk_4d, D, wk, 1e-6f, false, 1000000.0f, 1.0f, offset, stream);
+    } else if (mode == Mode::folded_norm) {
+      // Exact Qwen3-4B decode topology: lazy Q/K projections -> reshape ->
+      // rms_norm -> transpose -> rope, evaluated with values_out listed first
+      // so v_su visits before q_reshape/k_reshape on the tape.
+      array q_lazy = reshape(qproj, Shape{1, 1, H, D}, stream);
+      array k_lazy = reshape(kproj, Shape{1, 1, KVH, D}, stream);
+      array qn = fast::rms_norm(q_lazy, wq, 1e-6f, stream);
+      array kn = fast::rms_norm(k_lazy, wk, 1e-6f, stream);
+      array qt = transpose(qn, {0, 2, 1, 3}, stream);
+      array kt = transpose(kn, {0, 2, 1, 3}, stream);
+      qr = fast::rope(qt, D, false, 1000000.0f, 1.0f, offset, std::nullopt, stream);
+      kr = fast::rope(kt, D, false, 1000000.0f, 1.0f, offset_k, std::nullopt, stream);
+    } else {
+      qr = fast::rope(xq_4d, D, false, 1000000.0f, 1.0f, offset, std::nullopt, stream);
+      kr = fast::rope(xk_4d, D, false, 1000000.0f, 1.0f, offset_k, std::nullopt, stream);
+    }
+    const int k_len = pos + 1;
+    array keys_out = slice_update(
+        keys_cache, kr, Shape{0, 0, pos, 0}, Shape{1, KVH, k_len, D}, stream);
+    array values_out = slice_update(
+        values_cache, vrow, Shape{0, 0, pos, 0}, Shape{1, KVH, k_len, D}, stream);
+    keys_cache = array(0.0f);
+    values_cache = array(0.0f);
+    array k_view = slice(keys_out, Shape{0, 0, 0, 0}, Shape{1, KVH, k_len, D}, stream);
+    array v_view = slice(values_out, Shape{0, 0, 0, 0}, Shape{1, KVH, k_len, D}, stream);
+    array attn = fast::scaled_dot_product_attention(
+        qr, k_view, v_view, scale, "", std::nullopt, std::nullopt, false, stream);
+    uint64_t before = counters().vk_compute_dispatches.load();
+    eval({values_out, keys_out, attn, qproj, kproj});
+    sync_stream(stream);
+    uint64_t launched = counters().vk_compute_dispatches.load() - before;
+    int64_t last_k = counters().last_dispatched_kernel.load();
+    return std::make_tuple(
+        attn, keys_out, values_out, launched, last_k,
+        keys_out.data<void>() == keys_before);
+  };
+  for (Mode mode : {Mode::inline_norm, Mode::folded_norm, Mode::plain_rope}) {
+    for (int pos : {0, 36}) {
+      auto [a_off, k_off, v_off, n_off, lk_off, ip_off] = run(mode, pos, "0");
+      auto [a_on, k_on, v_on, n_on, lk_on, ip_on] = run(mode, pos, "1");
+      INFO("mode=" << static_cast<int>(mode) << " pos=" << pos);
+      if (ready) {
+        CHECK(ip_on);
+        CHECK_EQ(n_on + 2, n_off);
+        CHECK_EQ(
+            lk_on,
+            static_cast<int64_t>(
+                omarchy::ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128));
+      }
+      expect_bit_exact(a_off, a_on, stream);
+      expect_bit_exact(k_off, k_on, stream);
+      expect_bit_exact(v_off, v_on, stream);
+    }
+  }
+  unsetenv("MLX_OMARCHY_SDPA_ONLINE_ROPE");
+  unsetenv("MLX_OMARCHY_SDPA_ONLINE");
+  unsetenv("MLX_OMARCHY_ROPE_NORM_PAIR");
+  unsetenv("MLX_OMARCHY_FUSED_TRIO");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+}
