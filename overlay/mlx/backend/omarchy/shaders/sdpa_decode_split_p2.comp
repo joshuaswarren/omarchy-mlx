@@ -27,6 +27,11 @@ layout(set = 0, binding = 0, std430) readonly buffer Scratch {
 layout(set = 0, binding = 1, std430) writeonly buffer Output {
   uint16_t values[];
 } output_data;
+#ifdef SDPA_OUTGATE
+layout(set = 0, binding = 2, std430) readonly buffer Gate {
+  uint16_t values[];
+} gate_data;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -75,6 +80,19 @@ uint16_t bf16_store(float value) {
   }
   return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
+
+#ifdef SDPA_OUTGATE
+float bf16_load(uint16_t raw) {
+  return uintBitsToFloat(uint(raw) << 16u);
+}
+
+uint16_t apply_outgate(float val, uint gate_idx) {
+  uint16_t raw_out = bf16_store(val);
+  float g = bf16_load(gate_data.values[gate_idx]);
+  uint16_t raw_sig = bf16_store(1.0 / (1.0 + exp(-g)));
+  return bf16_store(bf16_load(raw_out) * bf16_load(raw_sig));
+}
+#endif
 
 void main() {
   uint t = gl_LocalInvocationID.x;
@@ -135,7 +153,15 @@ void main() {
     total += s_acc[l * LANES + t];
   }
   uint out_base = params.output_offset + head * out_head + t * 4u;
+#ifdef SDPA_OUTGATE
+  uint gate_base = params.out_strides[1] + head * params.out_strides[2] + t * 4u;
+  for (uint d = 0u; d < 4u; ++d) {
+    output_data.values[out_base + d] =
+        apply_outgate(total[d] / denominator, gate_base + d);
+  }
+#else
   for (uint d = 0u; d < 4u; ++d) {
     output_data.values[out_base + d] = bf16_store(total[d] / denominator);
   }
+#endif
 }

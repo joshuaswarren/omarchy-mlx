@@ -373,6 +373,18 @@ void abort_sdpa_online_rope(const array& out, const Stream& stream);
 const array* find_sdpa_transpose_out(const array& out);
 void commit_sdpa_transpose_out(const array& out);
 
+// Fused SDPA output-gate epilogue (tail = Reshape(Transpose(SDPA)) *
+// Sigmoid(gate), with optional strided gate Reshape bypass): SDPA writes the
+// gated product directly into tail, skipping the gate copy, sigmoid, and
+// multiply dispatches. Bit-identical to the unfused sequence.
+struct SdpaOutgatePlan {
+  array tail;
+  array gate_src;
+};
+bool sdpa_outgate_enabled();
+const SdpaOutgatePlan* find_sdpa_outgate(const array& out);
+void commit_sdpa_outgate(const array& out);
+
 class Device;
 struct CapabilityReport;
 
