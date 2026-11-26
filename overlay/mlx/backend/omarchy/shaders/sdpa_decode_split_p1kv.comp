@@ -364,22 +364,22 @@ void main() {
     }
     barrier();
     uint head = kv_head * SPLIT_R + r;
-    uint base = (head * nblocks + block) * (D + 2u);
+    uint base = (head * nblocks + block) * (D + 4u);
     if (t == 0u) {
 #if BK_KEYS == 32
-      scratch_data.values[base] = s_max[r];
-      scratch_data.values[base + 1u] = s_sum[r];
+      scratch_data.values[base + D] = s_max[r];
+      scratch_data.values[base + D + 1u] = s_sum[r];
 #elif BK_KEYS == 64
-      scratch_data.values[base] = s_max[r * 2u];
-      scratch_data.values[base + 1u] = s_sum[r * 2u] + s_sum[r * 2u + 1u];
+      scratch_data.values[base + D] = s_max[r * 2u];
+      scratch_data.values[base + D + 1u] = s_sum[r * 2u] + s_sum[r * 2u + 1u];
 #else
-      scratch_data.values[base] = s_max[r * 4u];
-      scratch_data.values[base + 1u] = s_sum[r * 4u] + s_sum[r * 4u + 1u] +
+      scratch_data.values[base + D] = s_max[r * 4u];
+      scratch_data.values[base + D + 1u] = s_sum[r * 4u] + s_sum[r * 4u + 1u] +
           s_sum[r * 4u + 2u] + s_sum[r * 4u + 3u];
 #endif
     }
     float total = s_o[t] + s_o[D + t] + s_o[2u * D + t] + s_o[3u * D + t];
-    scratch_data.values[base + 2u + t] = total;
+    scratch_data.values[base + t] = total;
     if (r + 1u < SPLIT_R) {
       barrier();
     }
@@ -439,24 +439,24 @@ void main() {
     }
     barrier();
     uint head = kv_head * SPLIT_R + r;
-    uint base = (head * nblocks + block) * (D + 2u);
+    uint base = (head * nblocks + block) * (D + 4u);
     if (t == 0u) {
 #if BK_KEYS == 32
-      scratch_data.values[base] = s_max[r];
-      scratch_data.values[base + 1u] = s_sum[r];
+      scratch_data.values[base + D] = s_max[r];
+      scratch_data.values[base + D + 1u] = s_sum[r];
 #elif BK_KEYS == 64
-      scratch_data.values[base] = s_max[r * 2u];
-      scratch_data.values[base + 1u] = s_sum[r * 2u] + s_sum[r * 2u + 1u];
+      scratch_data.values[base + D] = s_max[r * 2u];
+      scratch_data.values[base + D + 1u] = s_sum[r * 2u] + s_sum[r * 2u + 1u];
 #else
-      scratch_data.values[base] = s_max[r * 4u];
-      scratch_data.values[base + 1u] = s_sum[r * 4u] + s_sum[r * 4u + 1u] +
+      scratch_data.values[base + D] = s_max[r * 4u];
+      scratch_data.values[base + D + 1u] = s_sum[r * 4u] + s_sum[r * 4u + 1u] +
           s_sum[r * 4u + 2u] + s_sum[r * 4u + 3u];
 #endif
     }
     for (uint d = 0u; d < 2u; ++d) {
       uint dim = d * 128u + t;
       float total = s_o[dim] + s_o[D + dim] + s_o[2u * D + dim] + s_o[3u * D + dim];
-      scratch_data.values[base + 2u + dim] = total;
+      scratch_data.values[base + dim] = total;
     }
     if (r + 1u < SPLIT_R) {
       barrier();

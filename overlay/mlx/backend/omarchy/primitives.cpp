@@ -17938,7 +17938,7 @@ void ScaledDotProductAttention::eval_gpu(
         const int merge_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_MERGE");
         // An explicit select beats the bk64 default (the merge prototype is its own pass 1); an unset flag keeps
         // bk64's route because the merge's block counter only covers the 128-key value-phase shape.
-        const bool split_merge = pv && !split_wide && split_group == 4u &&
+        bool split_merge = pv && !split_wide && split_group == 4u &&
             encoder.device().compute().binding_limit() >= 6 &&
             (merge_env > 0 || (merge_env < 0 && !bk64 && omarchy::sdpa_split_merge_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
         const uint32_t split_rows = split_rows_route ? static_cast<uint32_t>(q_len) : 1u;
@@ -17959,6 +17959,7 @@ void ScaledDotProductAttention::eval_gpu(
             ((decode_caps.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_BIT) != 0u);
         if ((p1kv_bk == 32 || p1kv_bk == 64 || p1kv_bk == 128) &&
             split_group == 4u && p1kv_v_aligned && p1kv_shuffle_ok) {
+          split_merge = false;
           split_block_keys = static_cast<uint32_t>(p1kv_bk);
           if (split_wide) {
             if (p1kv_bk == 32) {
