@@ -19173,6 +19173,54 @@ void ScaledDotProductAttention::eval_gpu(
   const bool decode_batch_ok = batch == 1 ||
       (decode_bf16_probe && q_len == 1 &&
           decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
+  // Optional SDPA output-gate epilogue resolver shared by the Online and
+  // Split-K decode routes (B=1, q_len=1, bf16): verifies the gate input is
+  // materialized and computes its flat offset and per-head stride.
+  struct ResolvedSdpaOutgate {
+    array* tail{nullptr};
+    const array* gate{nullptr};
+    uint32_t gate_offset{0u};
+    uint32_t gate_head_stride{0u};
+  };
+  auto resolve_sdpa_outgate = [&]() -> std::optional<ResolvedSdpaOutgate> {
+    if (batch != 1 || q_len != 1 || out.dtype() != bfloat16) {
+      return std::nullopt;
+    }
+    const omarchy::SdpaOutgatePlan* plan = omarchy::find_sdpa_outgate(out);
+    if (plan == nullptr) {
+      return std::nullopt;
+    }
+    if (plan->tail.dtype() != bfloat16 ||
+        plan->tail.data_shared_ptr() != nullptr ||
+        plan->tail.shape() != Shape{1, 1, heads * head_dim} ||
+        plan->tail.primitive().stream() != s) {
+      return std::nullopt;
+    }
+    const array& g = plan->gate_src;
+    if (g.dtype() != bfloat16 || g.data_shared_ptr() == nullptr ||
+        g.status() == array::Status::unscheduled ||
+        (g.event().valid() && !g.event().is_signaled() &&
+         g.event().stream() != s)) {
+      return std::nullopt;
+    }
+    uint32_t g_head_stride = 0u;
+    if (g.ndim() == 4 && g.shape() == Shape{1, 1, heads, head_dim} &&
+        g.strides()[3] == 1) {
+      g_head_stride = checked_u32(g.strides()[2], tag, out);
+    } else if (
+        g.ndim() == 3 && g.shape() == Shape{1, 1, heads * head_dim} &&
+        g.flags().row_contiguous) {
+      g_head_stride = checked_u32(head_dim, tag, out);
+    } else {
+      return std::nullopt;
+    }
+    ResolvedSdpaOutgate r;
+    r.tail = const_cast<array*>(&plan->tail);
+    r.gate = &g;
+    r.gate_offset = checked_item_offset(g, g.size(), tag, out);
+    r.gate_head_stride = g_head_stride;
+    return r;
+  };
   // Single-dispatch online-softmax bf16 decode route (HD=128 or HD=256,
   // batch 1, q_len 1): one 1024-thread (32-subgroup) or 512-thread (16-subgroup
   // for HD=256 when MLX_OMARCHY_SDPA_ONLINE=16) workgroup per query head,
@@ -19230,20 +19278,53 @@ void ScaledDotProductAttention::eval_gpu(
         online_params.aux_offset = checked_item_offset(v, v.size(), tag, out);
         if (online_params.rhs_offset % online_align == 0u &&
             online_params.aux_offset % online_align == 0u) {
-          out.set_data(allocate_omarchy(out.nbytes()));
-          online_params.count = checked_u32(out.size(), tag, out);
           online_params.matrix_m = checked_u32(heads, tag, out);
           online_params.matrix_n = checked_u32(kv_heads, tag, out);
           online_params.matrix_k = checked_u32(k_len, tag, out);
           online_params.alpha = scale_;
           online_params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
-          online_params.output_offset =
-              checked_item_offset(out, out.size(), tag, out);
           online_params.shape[0] = checked_u32(q.strides()[1], tag, out);
           online_params.shape[1] = checked_u32(k.strides()[1], tag, out);
           online_params.shape[2] = checked_u32(k.strides()[2], tag, out);
           online_params.in_strides[1] = checked_u32(v.strides()[1], tag, out);
           online_params.in_strides[2] = checked_u32(v.strides()[2], tag, out);
+          if (encoder.device().compute().binding_limit() >= 5u) {
+            if (auto og = resolve_sdpa_outgate(); og.has_value()) {
+              array& tail_out = *og->tail;
+              tail_out.set_data(allocate_omarchy(tail_out.nbytes()));
+              encoder.add_temporary(tail_out);
+              encoder.add_temporary(*og->gate);
+              online_params.count = checked_u32(tail_out.size(), tag, out);
+              online_params.output_offset =
+                  checked_item_offset(tail_out, tail_out.size(), tag, out);
+              online_params.out_strides[0] = checked_u32(head_dim, tag, out);
+              online_params.out_strides[1] = og->gate_offset;
+              online_params.out_strides[2] = og->gate_head_stride;
+              std::array<omarchy::ComputeBinding, 5> og_bindings{
+                  binding(q),
+                  binding(k),
+                  binding(v),
+                  binding(tail_out),
+                  binding(*og->gate)};
+              const auto og_kernel = head_dim == 256
+                  ? (online_sg16
+                         ? omarchy::ComputeKernel::
+                               SdpaDecodeOnlineOutgateSg16BF16Hd256
+                         : omarchy::ComputeKernel::
+                               SdpaDecodeOnlineOutgateSg32BF16Hd256)
+                  : omarchy::ComputeKernel::
+                        SdpaDecodeOnlineOutgateSg32BF16Hd128;
+              encoder.dispatch_compute(
+                  og_kernel, og_bindings, online_params,
+                  online_params.matrix_m);
+              omarchy::commit_sdpa_outgate(out);
+              return;
+            }
+          }
+          out.set_data(allocate_omarchy(out.nbytes()));
+          online_params.count = checked_u32(out.size(), tag, out);
+          online_params.output_offset =
+              checked_item_offset(out, out.size(), tag, out);
           online_params.out_strides[0] = checked_u32(out.strides()[1], tag, out);
           std::array<omarchy::ComputeBinding, 4> online_bindings{
               binding(q), binding(k), binding(v), binding(out)};
@@ -19289,14 +19370,12 @@ void ScaledDotProductAttention::eval_gpu(
       split_params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
       split_params.aux_offset = checked_item_offset(v, v.size(), tag, out);
       if (split_params.rhs_offset % 8u == 0u && split_params.aux_offset % 2u == 0u) {
-        out.set_data(allocate_omarchy(out.nbytes()));
         split_params.count = checked_u32(out.size(), tag, out);
         split_params.matrix_m = checked_u32(heads, tag, out);
         split_params.matrix_n = checked_u32(kv_heads, tag, out);
         split_params.matrix_k = checked_u32(k_len, tag, out);
         split_params.alpha = scale_;
         split_params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
-        split_params.output_offset = checked_item_offset(out, out.size(), tag, out);
         split_params.shape[0] = checked_u32(q.strides()[1], tag, out);
         split_params.shape[1] = checked_u32(k.strides()[1], tag, out);
         split_params.shape[2] = checked_u32(k.strides()[2], tag, out);
@@ -19392,6 +19471,46 @@ void ScaledDotProductAttention::eval_gpu(
             }
           }
         }
+        std::optional<ResolvedSdpaOutgate> split_og;
+        omarchy::ComputeKernel split_p2_og = split_p2;
+        if (split_rows == 1u && !split_merge) {
+          bool has_og_kernel = true;
+          if (split_p2 == omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256) {
+            split_p2_og =
+                omarchy::ComputeKernel::SdpaDecodeSplitP2OutgateBF16Hd256;
+          } else if (
+              split_p2 ==
+              omarchy::ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd256) {
+            split_p2_og =
+                omarchy::ComputeKernel::SdpaDecodeSplitP2OutgateBk32BF16Hd256;
+          } else if (
+              split_p2 ==
+              omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd256) {
+            split_p2_og =
+                omarchy::ComputeKernel::SdpaDecodeSplitP2OutgateBk64BF16Hd256;
+          } else if (
+              split_p2 == omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128) {
+            split_p2_og =
+                omarchy::ComputeKernel::SdpaDecodeSplitP2OutgateBF16Hd128;
+          } else {
+            has_og_kernel = false;
+          }
+          if (has_og_kernel) {
+            split_og = resolve_sdpa_outgate();
+          }
+        }
+        if (split_og.has_value()) {
+          array& tail_out = *split_og->tail;
+          tail_out.set_data(allocate_omarchy(tail_out.nbytes()));
+          encoder.add_temporary(tail_out);
+          encoder.add_temporary(*split_og->gate);
+          split_params.output_offset =
+              checked_item_offset(tail_out, tail_out.size(), tag, out);
+        } else {
+          out.set_data(allocate_omarchy(out.nbytes()));
+          split_params.output_offset =
+              checked_item_offset(out, out.size(), tag, out);
+        }
         const uint32_t split_q_offset = split_params.lhs_offset;
         const uint32_t split_out_offset = split_params.output_offset;
         const uint32_t split_q_row = checked_u32(q.strides()[2], tag, out);
@@ -19420,8 +19539,22 @@ void ScaledDotProductAttention::eval_gpu(
           } else {
             std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
             encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
-            std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
-            encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
+            if (split_og.has_value()) {
+              split_params.out_strides[0] = checked_u32(head_dim, tag, out);
+              split_params.out_strides[1] = split_og->gate_offset;
+              split_params.out_strides[2] = split_og->gate_head_stride;
+              std::array<omarchy::ComputeBinding, 3> split_pass2_og{
+                  binding(scratch),
+                  binding(*split_og->tail),
+                  binding(*split_og->gate)};
+              encoder.dispatch_compute(
+                  split_p2_og, split_pass2_og, split_params,
+                  split_params.matrix_m);
+              omarchy::commit_sdpa_outgate(out);
+            } else {
+              std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
+              encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
+            }
           }
         }
         return;

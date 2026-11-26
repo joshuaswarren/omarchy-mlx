@@ -1329,6 +1329,17 @@ enum class ComputeKernel : uint16_t {
   // (+0.0)-neutral on every element the 128-thread build computes.
   FastRopeNormBF16W128,
   FastRopeNormAppleBF16W128,
+  // Fused SDPA output-gate epilogue (out * sigmoid(gate) with direct strided
+  // gate read from q_proj split output), deleting CopyGeneral + Sigmoid +
+  // Multiply dispatches and 2 CDM barriers per full-attention layer.
+  // Bit-identical to the unfused sequence. Appended to keep profile ids stable.
+  SdpaDecodeOnlineOutgateSg32BF16Hd128,
+  SdpaDecodeOnlineOutgateSg32BF16Hd256,
+  SdpaDecodeOnlineOutgateSg16BF16Hd256,
+  SdpaDecodeSplitP2OutgateBF16Hd128,
+  SdpaDecodeSplitP2OutgateBF16Hd256,
+  SdpaDecodeSplitP2OutgateBk32BF16Hd256,
+  SdpaDecodeSplitP2OutgateBk64BF16Hd256,
   Count,
 };
 
