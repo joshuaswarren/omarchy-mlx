@@ -431,9 +431,9 @@ TEST_CASE("folded in_proj_a/b into GDN conv+delta+norm matches unfused bytes and
   array x = bf16({1, 1, k}, 401, 0.5f, s);
   array wa_f = bf16({H, k}, 402, 0.25f, s);
   array wb_f = bf16({H, k}, 403, 0.25f, s);
-  auto qa = quantize(wa_f, 64, 4, "affine", s);
-  auto qb = quantize(wb_f, 64, 4, "affine", s);
-  eval({x, qa[0], qa[1], qa[2], qb[0], qb[1], qb[2]});
+  auto qa = quantize(wa_f, 64, 4, "affine", std::nullopt, s);
+  auto qb = quantize(wb_f, 64, 4, "affine", std::nullopt, s);
+  eval(std::vector<array>{x, qa[0], qa[1], qa[2], qb[0], qb[1], qb[2]});
 
   auto run_chain = [&]() -> Run {
     const uint64_t before = compute_dispatches();
