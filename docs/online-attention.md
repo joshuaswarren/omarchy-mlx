@@ -6,8 +6,9 @@ defaults per part, and the environment overrides. The full flag rows live in
 
 All online routes are single-dispatch online-softmax bf16 decode kernels for
 Apple GPUs: one workgroup per query head, softmax streamed over the key range,
-zero scratch, no atomics, no merge pass, bitwise identical to the split-K and
-composed fallbacks at every key length. They require bf16 q/k/v/out, batch 1,
+zero scratch, no atomics, no merge pass. Greedy token ids match the split-K
+and composed fallbacks at every measured context (the receipts cover the
+measured key ranges; the routes are written to store identical words). They require bf16 q/k/v/out, batch 1,
 one query token, a 32-lane subgroup with basic, arithmetic and shuffle
 operations, and coalesced K/V loads.
 
@@ -25,9 +26,11 @@ Default-on per part and head width (PRs #1012, #1016):
 A decode step at context N attends N + 1 keys, so the model call crosses the
 cap one token before the context count reaches it.
 
-Device gates beyond the part table: 1,024 threads (32 subgroups) for width
-128, 512 threads (16 subgroups) for width 256; shared memory 16,640 B or
-8,320 B; K/V strides aligned to 4 bytes (width 128) or 8 bytes (width 256);
+Device gates beyond the part table: 1,024 threads (32 subgroups) and
+16,640 B shared memory for both widths by default. Setting
+MLX_OMARCHY_SDPA_ONLINE=16 switches width 256 to the 512-thread (16-subgroup)
+twin at 8,320 B. K/V strides align to 4 bytes (width 128) or 8 bytes
+(width 256);
 no sinks, no logsumexp output. Outside the gates the split-K pair or the
 composed route serves the call.
 
@@ -64,5 +67,7 @@ G14C cap stays at 1024.
    while its own window holds, then the composed route.
 3. bf16 verify calls with 2 to 16 query rows: the split-K pair one row at a
    time (`MLX_OMARCHY_SDPA_SPLIT_ROWS=0` composes).
-4. f16, sinks, logsumexp, batched decode past the batch gate, or anything the
-   gates refuse: the composed route.
+4. bf16 decode with batch > 1: the batched fused route (one workgroup index
+   walks the batch, per-row base offsets, bit-identical per row).
+5. f16, sinks, logsumexp, batch > 1 with MLX_OMARCHY_SDPA_DECODE_BATCH=0, or
+   anything the gates refuse: the composed route.
