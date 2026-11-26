@@ -23,9 +23,12 @@ Memory admission (Main review round 3):
     pending -> resident with resident_floor_bytes = the run dtype's exact
     parameter nbytes; a floor exceeding the admitted total is a mismatch
     and is refused
-  - under --managed anything less than the shared atomic
-    budget.admit_and_reserve API is fail-closed (exit 3); standalone runs
-    degrade to warn-and-continue
+  - under --managed every admission or relabel refusal — missing atomic
+    budget API, unreadable or invalid manifest/encoder config, budget
+    refusal, or relabel mismatch — is fail-closed (exit 3); standalone
+    runs warn and continue without the budget module, its atomic API, a
+    non-empty manifest, or a verified relabel floor, and otherwise raise
+    the original error
 """
 
 from __future__ import annotations
@@ -59,6 +62,15 @@ _MAX_OPTIONS = 64  # per-question option bound used in the workspace estimate
 # factor over the term sum. The on-host workspace audit re-verifies the
 # factor against real GPU hardware inside the window.
 _WORKSPACE_SAFETY_FACTOR = 2.0
+
+
+# What a bad manifest, encoder config or registry raises during admission:
+# OSError (I/O), ValueError (JSON, UTF-8, int(), BudgetError), KeyError
+# (config field), TypeError/AttributeError (field types), OverflowError
+# (Infinity), RecursionError (deep JSON).
+_ADMISSION_ERRORS = (
+    OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError, RecursionError,
+)
 
 
 def _parse_args(argv):
@@ -187,8 +199,7 @@ def _memory_api_tier(budget):
 
 
 class ManagedBudgetUnavailable(RuntimeError):
-    """managed co-serving cannot run against this budget module, or a claimed
-    child cannot bind its batch reservation (exit 3)."""
+    """managed co-serving admission, claim, or relabel refused (exit 3)."""
 
 
 def _budget_or_fail(managed):
@@ -227,7 +238,7 @@ def _register_pending(model_dir: Path, name: str, managed: bool, dtype: str, max
     manifest = _read_manifest(model_dir)
     if not manifest:
         if managed:
-            raise RuntimeError(
+            raise ManagedBudgetUnavailable(
                 "managed co-serving requires a converted manifest (estimated_bytes, "
                 "weights_header, context_max_tokens); %s has none. Run "
                 "mlx_omarchy_laya.convert first or pass an unmanaged standalone run."
@@ -246,8 +257,12 @@ def _register_pending(model_dir: Path, name: str, managed: bool, dtype: str, max
     admission = budget.admit_and_reserve(
         name, int(total), note=manifest.get("source_revision", "laya"), owner=owner
     )
-    for line in getattr(admission, "lines", []):
-        print("laya: admit | %s" % line, file=sys.stderr)
+    try:
+        for line in getattr(admission, "lines", []):
+            print("laya: admit | %s" % line, file=sys.stderr)
+    except BaseException:
+        _clear_memory(name, managed, why="failed-startup", owner=owner)
+        raise
     return admission, owner, int(total)
 
 
@@ -270,7 +285,7 @@ def _relabel_resident(model_dir: Path, name: str, managed: bool, registered, own
                                 dtype, max_questions)
     if not relabel_admissible(admitted_total, floor, workspace):
         if managed:
-            raise RuntimeError(
+            raise ManagedBudgetUnavailable(
                 "resident requirement %d (params %d + recomputed workspace %d) exceeds "
                 "the admitted total %d for %s; refusing to relabel — the admission "
                 "commitment is never grown post hoc"
@@ -383,8 +398,12 @@ def _claim_reserved(budget, model_dir: Path, catalog_id: str, payload: dict,
         if not msg.startswith("claim refused"):
             msg = "claim refused: %s" % msg
         raise ManagedBudgetUnavailable(msg) from exc
-    print("laya: claimed %s (%d bytes) from pair %s" % (
-        name, claimed_bytes, pair_id), file=sys.stderr)
+    try:
+        print("laya: claimed %s (%d bytes) from pair %s" % (
+            name, claimed_bytes, pair_id), file=sys.stderr)
+    except BaseException:
+        _clear_memory(name, True, why="failed-startup", owner=record["owner"])
+        raise
     return {"state": "pending", "claimed": record["claimed"]}, record["owner"], int(total)
 
 
@@ -399,39 +418,50 @@ class LayaState:
         self.managed = args.managed
         self.max_questions = args.max_questions
         self.model_dir = Path(args.model).resolve()
-        self.manifest = _read_manifest(self.model_dir)
-        self.catalog_id = str(self.manifest.get("catalog_id") or self.engine_id_fallback(args))
-        claim_payload = None
-        budget = _budget_or_none()
-        raw_fd = os.environ.get(_CLAIM_FD_ENV)
-        if raw_fd is not None:
+        self.catalog_id = None
+        try:
+            self.manifest = _read_manifest(self.model_dir)
+            self.catalog_id = str(self.manifest.get("catalog_id") or self.engine_id_fallback(args))
+            claim_payload = None
+            budget = _budget_or_none()
+            raw_fd = os.environ.get(_CLAIM_FD_ENV)
+            if raw_fd is not None:
+                if not self.managed:
+                    raise ManagedBudgetUnavailable(
+                        "claim mode (managed pair child) requires --managed; refusing "
+                        "to bind a batch reservation without fail-closed admission")
+                if budget is None:
+                    raise ManagedBudgetUnavailable(
+                        "claim mode requires mlx_omarchy_serve.budget on PYTHONPATH")
+                claim_payload = _read_claim_payload(budget, raw_fd)
+            if claim_payload is not None:
+                # Claimed child: the parent manager fit-checked and reserved this
+                # worker's allocation in the atomic batch transaction. The child
+                # re-derives its own requirement with the SAME run-args math and
+                # refuses any mismatch before a single weight loads.
+                self.reservation, self.owner, self.admitted_total = _claim_reserved(
+                    budget, self.model_dir, self.catalog_id, claim_payload,
+                    args.dtype, args.max_questions)
+            else:
+                # pending phase: dtype-aware atomic admit + reserve BEFORE any weight
+                # is resident; concurrent admissions subtract it from MemAvailable
+                self.reservation, self.owner, self.admitted_total = _register_pending(
+                    self.model_dir, self.catalog_id, self.managed, args.dtype, args.max_questions
+                )
+        except _ADMISSION_ERRORS as exc:
             if not self.managed:
-                raise ManagedBudgetUnavailable(
-                    "claim mode (managed pair child) requires --managed; refusing "
-                    "to bind a batch reservation without fail-closed admission")
-            if budget is None:
-                raise ManagedBudgetUnavailable(
-                    "claim mode requires mlx_omarchy_serve.budget on PYTHONPATH")
-            claim_payload = _read_claim_payload(budget, raw_fd)
-        if claim_payload is not None:
-            # Claimed child: the parent manager fit-checked and reserved this
-            # worker's allocation in the atomic batch transaction. The child
-            # re-derives its own requirement with the SAME run-args math and
-            # refuses any mismatch before a single weight loads.
-            self.reservation, self.owner, self.admitted_total = _claim_reserved(
-                budget, self.model_dir, self.catalog_id, claim_payload,
-                args.dtype, args.max_questions)
-        else:
-            # pending phase: dtype-aware atomic admit + reserve BEFORE any weight
-            # is resident; concurrent admissions subtract it from MemAvailable
-            self.reservation, self.owner, self.admitted_total = _register_pending(
-                self.model_dir, self.catalog_id, self.managed, args.dtype, args.max_questions
-            )
+                raise
+            target = self.catalog_id or str(self.model_dir)
+            raise ManagedBudgetUnavailable(
+                "managed admission failed for %s: %s: %s"
+                % (target, type(exc).__name__, exc)
+            ) from exc
         # Phase-scoped BaseException guards: whichever phase fails clears the
         # held reservation exactly once with a DISTINCT registry label
-        # (forensics: failed-startup vs failed-relabel), then re-raises the
-        # original error — including SystemExit/KeyboardInterrupt from the
-        # SIGTERM handler arriving mid-load.
+        # (forensics: failed-startup vs failed-relabel), then re-raises —
+        # including SystemExit/KeyboardInterrupt from the SIGTERM handler
+        # arriving mid-load. Under --managed a relabel admission error is
+        # re-raised as ManagedBudgetUnavailable (exit 3).
         try:
             self.engine = LayaEngine(args.model, dtype=dtype, require_gpu=not args.allow_cpu)
         except BaseException:
@@ -443,8 +473,13 @@ class LayaState:
             self.reservation = _relabel_resident(self.model_dir, self.catalog_id, self.managed,
                                                  self.reservation, self.owner,
                                                  args.dtype, self.admitted_total, args.max_questions)
-        except BaseException:
+        except BaseException as exc:
             _clear_memory(self.catalog_id, self.managed, why="failed-relabel", owner=self.owner)
+            if self.managed and isinstance(exc, _ADMISSION_ERRORS):
+                raise ManagedBudgetUnavailable(
+                    "managed relabel failed for %s: %s: %s"
+                    % (self.catalog_id, type(exc).__name__, exc)
+                ) from exc
             raise
 
     @staticmethod
@@ -614,7 +649,7 @@ def serve_main(argv):
         # held) clears the reservation before the process exits
         state = LayaState(args)
     except ManagedBudgetUnavailable as exc:
-        print("laya: %s" % exc, file=sys.stderr)
+        print("laya: %s" % " ".join(str(exc).splitlines()), file=sys.stderr)
         sys.exit(3)
     try:
         httpd = ThreadingHTTPServer((args.host, args.port), _make_handler(state))

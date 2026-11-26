@@ -26,6 +26,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import stat
 import sys
 import tempfile
 import threading
@@ -50,6 +51,7 @@ HEALTH_TIMEOUT_SECONDS = 120.0
 CONVERT_TIMEOUT_SECONDS = 900.0
 CHAT_PORT_ROLE = "chat"
 DECISION_PORT_ROLE = "decision"
+CHAT_PROMPT_CACHE_SIZE = 1  # retain one chat KV prefix slot when the budget covers it
 
 
 class PairError(RuntimeError):
@@ -105,7 +107,8 @@ def admissible_context(chat_entry: dict, *, other_bytes: int, preference: str,
     reserve = desktop_reserve(available)
 
     def fits(tokens: int) -> bool:
-        total = chat_estimate(chat_entry, tokens).total
+        total = chat_estimate(chat_entry, tokens,
+                              ignore_peak_override=backend_override).total
         return total + other_bytes + reserved_bytes + reserve <= available
 
     def largest_fitting(upper: int) -> int | None:
@@ -500,27 +503,107 @@ def _boot_id() -> str | None:
 
 # ------------------------------------------------------------------ workers
 
-def chat_estimate(chat_entry: dict, tokens: int) -> budget.Estimate:
+def _peak_override_bytes(chat_entry: dict, tokens: int) -> int | None:
+    """Measured worker peak bytes governing `tokens` (> DEFAULT_CONTEXT_TOKENS).
+
+    When `extension.backend_context_peak_bytes_by_tokens` lists measured tiers
+    (e.g. {"8192": ..., "16384": ...}), select the smallest qualified tier >=
+    `tokens` so a smaller context (8192 on 16 GiB) uses its own measured peak
+    while larger contexts keep the higher-tier peak. Falls back to scalar
+    `extension.backend_context_peak_bytes` when absent or above all tiers.
+    """
+    if tokens <= budget.DEFAULT_CONTEXT_TOKENS:
+        return None
+    extension = chat_entry.get("extension") or {}
+    by_tokens = extension.get("backend_context_peak_bytes_by_tokens")
+    if by_tokens is not None:
+        if not isinstance(by_tokens, dict):
+            raise PairError(
+                "catalog extension.backend_context_peak_bytes_by_tokens must be a dict or absent")
+        tiers: list[tuple[int, int]] = []
+        for raw_tok, raw_peak in by_tokens.items():
+            try:
+                tok = int(raw_tok)
+            except (TypeError, ValueError) as exc:
+                raise PairError(
+                    f"catalog extension.backend_context_peak_bytes_by_tokens key {raw_tok!r} "
+                    "must be a positive int") from exc
+            if isinstance(raw_tok, bool) or tok <= 0:
+                raise PairError(
+                    f"catalog extension.backend_context_peak_bytes_by_tokens key {raw_tok!r} "
+                    "must be a positive int")
+            peak = _opt_int(raw_peak, f"backend_context_peak_bytes_by_tokens[{raw_tok}]")
+            if peak is None:
+                raise PairError(
+                    f"catalog extension.backend_context_peak_bytes_by_tokens[{raw_tok}] "
+                    "must be a positive int")
+            tiers.append((tok, peak))
+        tiers.sort()
+        for tier_tok, tier_peak in tiers:
+            if tokens <= tier_tok:
+                return tier_peak
+    return _opt_int(extension.get("backend_context_peak_bytes"),
+                    "backend_context_peak_bytes")
+
+
+def chat_estimate(chat_entry: dict, tokens: int,
+                  prompt_cache_size: int = 0,
+                  *, ignore_peak_override: bool = False) -> budget.Estimate:
     """What the chat worker needs at `tokens`. _chat_worker_argv launches mlx-lm with the
     prefill chunk serve_cli.server_argv pins, so its scratch is part of the estimate (issue
     #240); every admission, reservation and claim of the chat worker goes through here.
     Above the default context, an entry that names a measured worker peak
-    (extension.backend_context_peak_bytes, taken at its qualified limit) needs at least that peak:
-    the scratch formula alone read 7.7 GiB where the 4B worker peaked at 16.9 GiB."""
+    (extension.backend_context_peak_bytes_by_tokens or extension.backend_context_peak_bytes)
+    needs at least that peak: the scratch formula alone read 7.7 GiB where the 4B worker
+    peaked at 16.9 GiB at 16384.
+    When prompt_cache_size > 0, each retained cache slot adds one full-context KV allocation
+    on top of the active-request requirement (matching mlx_omarchy_serve.__main__)."""
+    if isinstance(prompt_cache_size, bool) or not isinstance(prompt_cache_size, int) \
+            or prompt_cache_size < 0:
+        raise PairError(f"prompt_cache_size must be a non-negative int, got {prompt_cache_size!r}")
     estimate = budget.estimate_required(
         chat_entry["memory"], tokens,
         budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, tokens))
-    peak = _opt_int((chat_entry.get("extension") or {}).get("backend_context_peak_bytes"),
-                    "backend_context_peak_bytes")
-    if peak is None or tokens <= budget.DEFAULT_CONTEXT_TOKENS or peak <= estimate.total:
-        return estimate
-    return dataclasses.replace(estimate, workspace=peak - estimate.weights - estimate.kv,
-                               peak_override=True, total=peak)
+    peak = None if ignore_peak_override else _peak_override_bytes(chat_entry, tokens)
+    if peak is not None and tokens > budget.DEFAULT_CONTEXT_TOKENS and peak > estimate.total:
+        estimate = dataclasses.replace(
+            estimate, workspace=peak - estimate.weights - estimate.kv,
+            peak_override=True, total=peak)
+    if prompt_cache_size > 0:
+        if not estimate.kv_known:
+            raise PairError(
+                f"prompt_cache_size={prompt_cache_size} requires known kv_bytes_per_token "
+                "to budget retained KV caches")
+        cache_extra = estimate.kv * prompt_cache_size
+        estimate = dataclasses.replace(
+            estimate, workspace=estimate.workspace + cache_extra,
+            total=estimate.total + cache_extra)
+    return estimate
+
+
+def chat_prompt_cache_size(chat_entry: dict, tokens: int, *,
+                           other_bytes: int,
+                           available_bytes: int,
+                           reserved_bytes: int = 0,
+                           ignore_peak_override: bool = False) -> int:
+    """Enable one retained KV cache slot on the chat worker when KV facts are
+    known and the extra slot fits inside the pair memory budget; fall back to
+    0 on tight-RAM hosts so caching never causes a pair refusal."""
+    if chat_entry["memory"].get("kv_bytes_per_token") is None:
+        return 0
+    reserve = desktop_reserve(available_bytes)
+    cached_total = chat_estimate(chat_entry, tokens,
+                                 prompt_cache_size=CHAT_PROMPT_CACHE_SIZE,
+                                 ignore_peak_override=ignore_peak_override).total
+    if cached_total + other_bytes + reserved_bytes + reserve <= available_bytes:
+        return CHAT_PROMPT_CACHE_SIZE
+    return 0
 
 
 def _chat_worker_argv(spec: managed.WorkerSpec) -> list[str]:
     return serve_cli.server_argv("mlx-lm", None, spec.model_dir,
-                                 "127.0.0.1", spec.port, spec.context_tokens)
+                                 "127.0.0.1", spec.port, spec.context_tokens,
+                                 prompt_cache_size=spec.prompt_cache_size)
 
 
 def _decision_worker_argv(spec: managed.WorkerSpec) -> list[str]:
@@ -633,6 +716,7 @@ class PairManager:
         self._lifetime_write_fd: int | None = None
         self._lifetime_read_fd: int | None = None
         self._context_tokens: int | None = None
+        self._chat_prompt_cache_size: int = 0
         self._available_bytes_override: int | None = None  # test seam
         self._cancel = threading.Event()
 
@@ -825,6 +909,7 @@ class PairManager:
             "chat_model": prepared.get("chat_id"),
             "decision_model": prepared.get("decision_id"),
             "context_tokens": self._context_tokens,
+            "chat_prompt_cache_size": self._chat_prompt_cache_size,
             "context": prepared.get("sizing")
                        or (self._last_plan or {}).get("context"),
             "downloads": (self._last_plan or {}).get("downloads") or [],
@@ -1192,11 +1277,28 @@ class PairManager:
             return self.status()
 
     def _newest_lock_pair_id(self) -> str | None:
+        """The newest regular *.json lock file. Absent dir: None; a dir that
+        cannot be listed or searched: PairError, never "no saved pair lock"."""
         directory = pair_lock_path(self.home, "unused").parent
-        if not directory.is_dir():
+        candidates = []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if not entry.name.endswith(".json"):
+                        continue
+                    try:
+                        info = entry.stat()
+                    except OSError:  # vanished mid-scan, dangling or looping link
+                        continue
+                    if stat.S_ISREG(info.st_mode):  # never a dir or FIFO
+                        candidates.append((info.st_mtime_ns, entry.name))
+            # still searchable, so a failed entry stat was that entry's own
+            os.stat(os.path.join(directory, "."))
+        except (FileNotFoundError, NotADirectoryError, ValueError):  # ValueError: unencodable path
             return None
-        candidates = sorted(directory.glob("*.json"), key=lambda path: path.stat().st_mtime)
-        return candidates[-1].stem if candidates else None
+        except OSError as exc:
+            raise PairError(f"pair lock directory {directory} is unreadable: {exc}") from exc
+        return Path(max(candidates)[1]).stem if candidates else None
 
     def start(self, pair_id: str | None = None) -> dict:
         with self._op_lock:
@@ -1250,24 +1352,45 @@ class PairManager:
                     f"memory changed since setup: the prepared context {context} "
                     f"no longer fits (admissible {sizing['context_tokens']}, "
                     f"binding {sizing['binding']}); re-run setup")
-            chat_bytes = chat_estimate(chat, context).total
-            items = [(chat["id"], chat_bytes, f"pair {pair['id']} chat"),
-                     (decision["id"], decision_bytes, f"pair {pair['id']} decisions")]
-            if prepared["voice_bytes"]:
-                items.append((f"voice-{pair['id']}", prepared["voice_bytes"],
-                              f"pair {pair['id']} voice admission"))
+            available = self._available_bytes()
+            other_bytes = decision_bytes + prepared["voice_bytes"]
+            cache_size = chat_prompt_cache_size(
+                chat, context, other_bytes=other_bytes,
+                available_bytes=available)
+
+            def build_items(size: int) -> list[tuple[str, int, str]]:
+                chat_bytes = chat_estimate(chat, context, prompt_cache_size=size).total
+                batch = [(chat["id"], chat_bytes, f"pair {pair['id']} chat"),
+                         (decision["id"], decision_bytes, f"pair {pair['id']} decisions")]
+                if prepared["voice_bytes"]:
+                    batch.append((f"voice-{pair['id']}", prepared["voice_bytes"],
+                                  f"pair {pair['id']} voice admission"))
+                return batch
+
             self._state = "starting"
             try:
                 records = budget.admit_and_reserve_batch(
-                    items, pair_id=pair["id"], home=self.home,
-                    available_bytes=self._available_bytes())
+                    build_items(cache_size), pair_id=pair["id"], home=self.home,
+                    available_bytes=available)
             except budget.BudgetError as exc:
-                self._state = "error"
-                self._error = str(exc)
-                raise PairError(f"pair admission refused: {exc}") from exc
+                if cache_size > 0:
+                    cache_size = 0
+                    try:
+                        records = budget.admit_and_reserve_batch(
+                            build_items(0), pair_id=pair["id"], home=self.home,
+                            available_bytes=available)
+                    except budget.BudgetError as fallback_exc:
+                        self._state = "error"
+                        self._error = str(fallback_exc)
+                        raise PairError(f"pair admission refused: {fallback_exc}") from fallback_exc
+                else:
+                    self._state = "error"
+                    self._error = str(exc)
+                    raise PairError(f"pair admission refused: {exc}") from exc
             self._records = {r["name"]: r for r in records}
             self._pair_id = pair["id"]
             self._context_tokens = context
+            self._chat_prompt_cache_size = cache_size
             self._error = None
             lifetime_r = self._ensure_lifetime_pipe()
             env = self._child_env()
@@ -1277,7 +1400,8 @@ class PairManager:
                 chat_port, decision_port = managed.free_ports(2)
                 specs = {
                     "chat": managed.WorkerSpec("chat", prepared["chat_path"],
-                                               chat_port, context, 0),
+                                               chat_port, context, 0,
+                                               prompt_cache_size=cache_size),
                     "decision": managed.WorkerSpec("decision", prepared["decision_path"],
                                                    decision_port, context,
                                                    prepared["max_questions"]),
@@ -1343,6 +1467,7 @@ class PairManager:
                 self._release_unclaimed_records(pair["id"])
                 self._children = survivors
                 self._close_lifetime()
+                self._chat_prompt_cache_size = 0
                 self._state = "error"
                 self._error = str(exc)
                 raise PairError(f"pair start failed: {exc}") from exc
@@ -1446,6 +1571,7 @@ class PairManager:
                               self._children.items()
                               if not report["children"][role]["confirmed_dead"]}
             self._context_tokens = None
+            self._chat_prompt_cache_size = 0
             if self._prepared:
                 for key in ("chat_url", "decision_url"):
                     self._prepared.pop(key, None)
@@ -1482,33 +1608,70 @@ class PairManager:
             decision = self.catalog_models[prepared["decision_id"]]
             decision_bytes = decision_requirement_bytes(prepared["decision_path"],
                                                         prepared["max_questions"])
-            sizing = self._admissible(chat, other_bytes=decision_bytes,
+            reservations = budget.load_reservations(self.home)
+            decision_rec = reservations.get(decision["id"])
+            if (decision_rec is not None
+                    and decision_rec.get("pair_id") == prepared["pair_id"]):
+                decision_remaining = budget._contribution(decision_rec)
+            else:
+                decision_remaining = decision_bytes
+            available = self._available_bytes()
+            sizing = self._admissible(chat, other_bytes=decision_remaining,
                                       preference=prepared["preference"],
-                                        available_bytes=self._available_bytes())
+                                      available_bytes=available)
             if required_tokens > sizing["context_tokens"]:
                 return {"ok": False, "changed": False,
                         "reason": sizing["binding"], "limits": sizing["limits"],
                         "context_tokens": current, "requested": required_tokens}
-            new_bytes = chat_estimate(chat, required_tokens).total
-            current_bytes = chat_estimate(chat, current).total
+            dev_smoke = self._dev_smoke()
+            current_cache = self._chat_prompt_cache_size
+            new_cache = chat_prompt_cache_size(
+                chat, required_tokens,
+                other_bytes=decision_remaining + prepared["voice_bytes"],
+                available_bytes=available,
+                ignore_peak_override=dev_smoke)
+            new_bytes = chat_estimate(chat, required_tokens,
+                                      prompt_cache_size=new_cache,
+                                      ignore_peak_override=dev_smoke).total
+            current_bytes = chat_estimate(chat, current,
+                                          prompt_cache_size=current_cache,
+                                          ignore_peak_override=dev_smoke).total
             record = self._records[chat["id"]]
             log_path = (self.home / "assistant" / "logs"
                         / f"{prepared['pair_id']}-chat.log")
             try:
                 budget.resize_reservation(chat["id"], new_bytes,
                                           owner=record["owner"], home=self.home,
-                                          available_bytes=self._available_bytes())
+                                          available_bytes=available)
             except budget.BudgetError as exc:
-                return {"ok": False, "changed": False, "reason": "memory",
-                        "error": str(exc), "context_tokens": current,
-                        "requested": required_tokens}
+                if new_cache > 0:
+                    new_cache = 0
+                    new_bytes = chat_estimate(chat, required_tokens,
+                                              prompt_cache_size=0,
+                                              ignore_peak_override=dev_smoke).total
+                    try:
+                        budget.resize_reservation(chat["id"], new_bytes,
+                                                  owner=record["owner"],
+                                                  home=self.home,
+                                                  available_bytes=available)
+                    except budget.BudgetError as fallback_exc:
+                        return {"ok": False, "changed": False, "reason": "memory",
+                                "error": str(fallback_exc),
+                                "context_tokens": current,
+                                "requested": required_tokens}
+                else:
+                    return {"ok": False, "changed": False, "reason": "memory",
+                            "error": str(exc), "context_tokens": current,
+                            "requested": required_tokens}
 
-            def spawn_chat(tokens: int, port: int):
+            def spawn_chat(tokens: int, port: int, cache_size: int):
                 spec = managed.WorkerSpec("chat", prepared["chat_path"], port,
-                                          tokens, 0)
+                                          tokens, 0, prompt_cache_size=cache_size)
                 payload = {"name": chat["id"],
                            "claim_token": record["claim_token"],
-                           "bytes": chat_estimate(chat, tokens).total,
+                           "bytes": chat_estimate(chat, tokens,
+                                                  prompt_cache_size=cache_size,
+                                                  ignore_peak_override=dev_smoke).total,
                            "pair_id": prepared["pair_id"]}
                 return managed.spawn_claiming_worker(
                     _chat_worker_argv(spec), payload,
@@ -1543,7 +1706,7 @@ class PairManager:
                         "requested": required_tokens}
             new_port = managed.free_port()
             try:
-                popen = spawn_chat(required_tokens, new_port)
+                popen = spawn_chat(required_tokens, new_port, new_cache)
             except Exception as exc:
                 restore_reservation()
                 raise PairError(f"chat worker restart failed to spawn: {exc}; "
@@ -1556,9 +1719,11 @@ class PairManager:
                                    deadline=HEALTH_TIMEOUT_SECONDS, abort=abort):
                 prepared["chat_url"] = f"http://127.0.0.1:{new_port}/v1"
                 self._context_tokens = required_tokens
+                self._chat_prompt_cache_size = new_cache
                 self._records[chat["id"]]["bytes"] = new_bytes
                 return {"ok": True, "changed": True,
                         "context_tokens": required_tokens,
+                        "chat_prompt_cache_size": new_cache,
                         "limits": sizing["limits"], "requested": required_tokens}
             # the growth failed: the failed candidate is terminated and
             # verified dead BEFORE the reservation is touched or any
@@ -1570,7 +1735,7 @@ class PairManager:
             restore_reservation()
             fallback_port = managed.free_port()
             try:
-                popen = spawn_chat(current, fallback_port)
+                popen = spawn_chat(current, fallback_port, current_cache)
             except Exception as exc:
                 raise PairError(stop_note(
                     f"chat worker failed health at {required_tokens} tokens "

@@ -12,6 +12,7 @@ subprocesses running a stub that uses the REAL claim/lifetime protocol
 model itself is replaced.
 """
 
+import contextlib
 import json
 import os
 import signal
@@ -366,6 +367,41 @@ class CatalogPairSchemaTests(unittest.TestCase):
                 receipt = extension.get("backend_context_receipt")
                 self.assertTrue(receipt)
                 self.assertTrue((Path(__file__).resolve().parents[1] / receipt).is_file())
+            by_tokens = extension.get("backend_context_peak_bytes_by_tokens") or {}
+            receipts_by_tokens = extension.get("backend_context_receipts_by_tokens") or {}
+            for tok in by_tokens:
+                with self.subTest(model=entry["id"], tokens=tok):
+                    tier_receipt = receipts_by_tokens.get(tok)
+                    self.assertTrue(tier_receipt, f"missing receipt for tier {tok}")
+                    self.assertTrue((Path(__file__).resolve().parents[1] / tier_receipt).is_file())
+
+    def test_tiered_backend_context_peaks_select_smallest_covering_tier(self):
+        import copy
+        chat = copy.deepcopy({m["id"]: m for m in self.bundled["models"]}["qwen3-4b-instruct-2507-4bit"])
+        chat["extension"]["backend_context_peak_bytes_by_tokens"] = {
+            "8192": 7 * GiB,
+            "16384": 18123325440,
+        }
+        # Default context stays on the plain estimate (below 4096).
+        self.assertLess(pairs.chat_estimate(chat, 4096).total, 6 * GiB)
+        # 4097..8192 uses the 8192 measured peak; 8193..16384 keeps the 16384 peak.
+        self.assertEqual(pairs.chat_estimate(chat, 8192).total, 7 * GiB)
+        self.assertEqual(pairs.chat_estimate(chat, 8193).total, 18123325440)
+        self.assertEqual(pairs.chat_estimate(chat, 16384).total, 18123325440)
+        # A 16 GiB host (12 GiB available) admits 8192 but refuses 8193+.
+        ctx_16 = pairs.admissible_context(chat, other_bytes=2 * GiB, preference="balanced",
+                                          available_bytes=12 * GiB)
+        self.assertEqual(ctx_16["context_tokens"], 8192)
+        self.assertEqual(ctx_16["binding"], "memory")
+        # A 24 GiB host still admits 16384.
+        ctx_24 = pairs.admissible_context(chat, other_bytes=3 * GiB // 2, preference="balanced",
+                                          available_bytes=24 * GiB)
+        self.assertEqual(ctx_24["context_tokens"], 16384)
+        # Malformed peak tiers fail closed.
+        bad = copy.deepcopy(chat)
+        bad["extension"]["backend_context_peak_bytes_by_tokens"] = {"notanint": 7 * GiB}
+        with self.assertRaises(pairs.PairError):
+            pairs.chat_estimate(bad, 8192)
 
     def test_compact_limit_is_not_admitted_where_the_measured_peak_does_not_fit(self):
         # The qualification run measured the chat worker's peak (VmHWM 17,698,560 kB = 16.9 GiB)
@@ -393,6 +429,24 @@ class CatalogPairSchemaTests(unittest.TestCase):
         self.assertGreaterEqual(ctx["context_tokens"], 16384)
         self.assertTrue(ctx["backend_context_qualified"])
 
+    def test_compact_qwen35_4b_admits_8192_on_16gb_host(self):
+        # Hybrid Qwen3.5-4B-MLX-4bit measured 6,729,600 kB (6.42 GiB) VmHWM at
+        # 8192 on a 16 GB host, so 8192 fits alongside the 2.41 GiB decision
+        # worker and 2.00 GiB desktop reserve (~10.83 GiB total).
+        chat = {m["id"]: m for m in self.bundled["models"]}["qwen3.5-4b-mlx-4bit"]
+        decision = 2589732096
+        ctx_16 = pairs.admissible_context(chat, other_bytes=decision, preference="balanced",
+                                          available_bytes=12 * GiB)
+        self.assertEqual(ctx_16["context_tokens"], 8192)
+        self.assertEqual(ctx_16["binding"], "backend")
+        self.assertTrue(ctx_16["backend_context_qualified"])
+        self.assertEqual(pairs.chat_estimate(chat, 8192).total, 6891110400)
+        self.assertLess(pairs.chat_estimate(chat, 4096).total, 5 * GiB)
+        tight = pairs.admissible_context(chat, other_bytes=decision, preference="balanced",
+                                         available_bytes=9 * GiB)
+        self.assertLessEqual(tight["context_tokens"], budget.DEFAULT_CONTEXT_TOKENS)
+        self.assertEqual(tight["binding"], "memory")
+
     def test_bundled_chat_models_pin_revision_hashes_and_license(self):
         models = {entry["id"]: entry for entry in self.bundled["models"]}
         expected = {
@@ -400,6 +454,8 @@ class CatalogPairSchemaTests(unittest.TestCase):
                                      "mlx-community/Qwen3.5-9B-MLX-4bit", 5950221072),
             "qwen3-4b-instruct-2507-4bit": ("50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
                                              "mlx-community/Qwen3-4B-Instruct-2507-4bit", 2263022417),
+            "qwen3.5-4b-mlx-4bit": ("32f3e8ecf65426fc3306969496342d504bfa13f3",
+                                     "mlx-community/Qwen3.5-4B-MLX-4bit", 3034300695),
         }
         for model_id, (revision, repo, weights) in expected.items():
             with self.subTest(model=model_id):
@@ -430,7 +486,7 @@ class CatalogPairSchemaTests(unittest.TestCase):
         compact = pairs.select_default_pair(self.bundled["pairs"], self.bundled["models"],
                                             preference="balanced", available_bytes=10 * GiB)
         self.assertEqual(compact["id"], "compact")
-        self.assertEqual(compact["chat_model"], "qwen3-4b-instruct-2507-4bit")
+        self.assertEqual(compact["chat_model"], "qwen3.5-4b-mlx-4bit")
         with self.assertRaisesRegex(pairs.PairError, "no default pair fits"):
             pairs.select_default_pair(self.bundled["pairs"], self.bundled["models"],
                                       preference="balanced", available_bytes=2 * GiB)
@@ -1607,6 +1663,42 @@ class PairManagerTests(BasePairTest):
         self.assertEqual(self.manager._children["decision"].popen.pid, decision_pid)
         self.assertNotEqual(self.manager._children["chat"].popen.pid, old_chat_pid)
 
+    def test_ensure_context_uses_resident_decision_contribution(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        os.environ[PAIR_DEV_QUALIFICATION_ENV] = "1"
+        self.addCleanup(lambda: os.environ.pop(PAIR_DEV_QUALIFICATION_ENV, None))
+        self.manager.setup("everyday", approve_download=True, context_tokens=4096)
+        self.manager.start()
+        self.addCleanup(self.manager.stop)
+        decision_id = self.manager._prepared["decision_id"]
+        decision_rec = budget.load_reservations(self.home)[decision_id]
+        decision_full = decision_rec["bytes"]
+        decision_floor = (decision_full * 3) // 4
+        budget.set_reservation_state(
+            decision_id, "resident", owner=decision_rec["owner"],
+            resident_floor_bytes=decision_floor, home=self.home)
+        target_tokens = 8192
+        chat = self.manager.catalog_models[CHAT_SMALL_ID]
+        chat_need = pairs.chat_estimate(chat, target_tokens, prompt_cache_size=0,
+                                        ignore_peak_override=True).total
+        # Post-start MemAvailable covers the remaining unmaterialized decision
+        # headroom + chat_need + desktop reserve, but would falsely refuse if
+        # ensure_context double-counted the full decision reservation.
+        decision_remaining = decision_full - decision_floor
+        # Solve tight_available = chat_need + decision_remaining + reserve + margin
+        # with margin < decision_floor (so full decision_full would not fit).
+        margin = max(1, decision_floor // 4)
+        base_need = chat_need + decision_remaining + margin
+        tight_available = max(base_need + budget.SAFETY_RESERVE_BYTES,
+                              int(base_need / (1.0 - pairs.DESKTOP_RESERVE_FRACTION)) + 1024 * 1024)
+        self.assertLess(tight_available,
+                        chat_need + decision_full + pairs.desktop_reserve(tight_available))
+        self.manager._available_bytes_override = tight_available
+        result = self.manager.ensure_context(target_tokens)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.manager.status()["context_tokens"], target_tokens)
+
     def test_ensure_context_short_turn_keeps_current_cap(self):
         self.manager._state = "ready"
         self.manager._prepared = {"preference": "balanced"}
@@ -1719,9 +1811,14 @@ class PairManagerTests(BasePairTest):
         self.manager.setup("everyday", approve_download=True, context_tokens=4096)
         self.manager.start()
         self.addCleanup(self.manager.stop)
-        chat_memory = self.manager.catalog_models[CHAT_SMALL_ID]["memory"]
+        chat_entry = self.manager.catalog_models[CHAT_SMALL_ID]
         current = self.manager._context_tokens
-        current_bytes = chat_total(chat_memory, current)
+        current_bytes = pairs.chat_estimate(
+            chat_entry, current,
+            prompt_cache_size=self.manager._chat_prompt_cache_size).total
+        self.assertEqual(
+            budget.load_reservations(self.home)[CHAT_SMALL_ID]["bytes"],
+            current_bytes)
         old_chat = self.manager._children["chat"]
         with mock.patch.object(managed, "terminate", return_value=False):
             result = self.manager.ensure_context(current + 8192)
@@ -1743,9 +1840,14 @@ class PairManagerTests(BasePairTest):
         self.manager.setup("everyday", approve_download=True, context_tokens=4096)
         self.manager.start()
         self.addCleanup(self.manager.stop)
-        chat_memory = self.manager.catalog_models[CHAT_SMALL_ID]["memory"]
+        chat_entry = self.manager.catalog_models[CHAT_SMALL_ID]
         current = self.manager._context_tokens
-        current_bytes = chat_total(chat_memory, current)
+        current_bytes = pairs.chat_estimate(
+            chat_entry, current,
+            prompt_cache_size=self.manager._chat_prompt_cache_size).total
+        self.assertEqual(
+            budget.load_reservations(self.home)[CHAT_SMALL_ID]["bytes"],
+            current_bytes)
         old_chat = self.manager._children["chat"]
         decision_pid = self.manager._children["decision"].popen.pid
         events = []
@@ -1848,6 +1950,108 @@ class PairManagerTests(BasePairTest):
         self.assertIn(CHAT_SMALL_ID, held)
         self.assertEqual(held[CHAT_SMALL_ID]["pair_id"], "everyday")
 
+    def test_start_adopts_newest_lock_past_entries_that_are_not_lock_files(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        self.manager.setup("everyday", approve_download=True)
+        self.manager.start()
+        self.manager.stop()
+        locks = pairs.pair_lock_path(self.home, "unused").parent
+        newer = time.time() + 60
+        real_scandir = os.scandir
+
+        def scandir_then_unlink(path):
+            with real_scandir(path) as entries:
+                listed = list(entries)
+            (locks / "vanished.json").unlink()
+            return contextlib.nullcontext(iter(listed))
+
+        for name, make, scandir in (
+                ("directory.json", Path.mkdir, real_scandir),
+                ("fifo.json", os.mkfifo, real_scandir),
+                ("vanished.json", Path.touch, scandir_then_unlink),
+                ("dangling.json", lambda path: path.symlink_to(locks / "gone"), real_scandir),
+                ("looping.json", lambda path: path.symlink_to(path), real_scandir),
+                # the temp file a killed write_pair_lock() leaves behind
+                ("everyday.json1a2b.tmp", Path.touch, real_scandir)):
+            with self.subTest(name):
+                path = locks / name
+                make(path)
+                try:
+                    if not path.is_symlink():
+                        os.utime(path, (newer, newer))
+                    restarted = pairs.PairManager(self.home)
+                    self.addCleanup(restarted.stop)
+                    with mock.patch("os.scandir", scandir):
+                        self.assertEqual(restarted._newest_lock_pair_id(), "everyday")
+                    # only once the pick is right: a picked FIFO hangs start()
+                    status = restarted.start()
+                    self.assertEqual((status["state"], status["pair_id"]),
+                                     ("ready", "everyday"))
+                    restarted.stop()
+                finally:
+                    if path.is_dir() and not path.is_symlink():
+                        path.rmdir()
+                    else:
+                        path.unlink(missing_ok=True)
+
+    def test_newest_lock_orders_by_nanosecond_mtime_then_name(self):
+        lock = {"version": 1, "models": {}}
+        for pair_id in ("everyday", "quality"):
+            pairs.write_pair_lock(self.home, pair_id, dict(lock, pair_id=pair_id))
+        stamp = time.time_ns()
+        os.utime(pairs.pair_lock_path(self.home, "quality"), ns=(stamp, stamp))
+        os.utime(pairs.pair_lock_path(self.home, "everyday"), ns=(stamp + 1, stamp + 1))
+        self.assertEqual(self.manager._newest_lock_pair_id(), "everyday")
+        os.utime(pairs.pair_lock_path(self.home, "everyday"), ns=(stamp, stamp))
+        self.assertEqual(self.manager._newest_lock_pair_id(), "quality")  # tie: last name
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+    def test_unreadable_lock_directory_is_pair_error_not_absent(self):
+        # server.resume() reports a "no saved pair lock" message as absent
+        pairs.write_pair_lock(self.home, "everyday",
+                              {"version": 1, "pair_id": "everyday", "models": {}})
+        locks = pairs.pair_lock_path(self.home, "unused").parent
+        for path, mode in ((locks, 0o000), (locks, 0o300), (locks, 0o400),
+                           (locks.parent, 0o000)):
+            with self.subTest(path=path.name, mode=oct(mode)):
+                path.chmod(mode)
+                try:
+                    with self.assertRaisesRegex(
+                            pairs.PairError, "pair lock directory .* is unreadable"):
+                        self.manager.adopt_saved()
+                    with self.assertRaisesRegex(pairs.PairError, "no prepared pair"):
+                        self.manager.start()
+                finally:
+                    path.chmod(0o755)
+        real_scandir = os.scandir
+
+        def scandir_then_lock(path):
+            with real_scandir(path) as entries:
+                listed = list(entries)
+            locks.chmod(0o400)
+            return contextlib.nullcontext(iter(listed))
+
+        with self.subTest("locked during the scan"):
+            try:
+                with mock.patch("os.scandir", scandir_then_lock), self.assertRaisesRegex(
+                        pairs.PairError, "pair lock directory .* is unreadable"):
+                    self.manager.adopt_saved()
+            finally:
+                locks.chmod(0o755)
+
+    def test_missing_or_file_lock_directory_is_no_saved_lock(self):
+        locks = pairs.pair_lock_path(self.home, "unused").parent
+        with self.assertRaisesRegex(pairs.PairError, "no saved pair lock to adopt"):
+            self.manager.adopt_saved()
+        locks.parent.mkdir(parents=True)
+        locks.write_text("")
+        with self.assertRaisesRegex(pairs.PairError, "no saved pair lock to adopt"):
+            self.manager.adopt_saved()
+        self.manager.home = self.home / "nul\0home"  # base's is_dir() was False
+        with self.assertRaisesRegex(pairs.PairError, "no saved pair lock to adopt"):
+            self.manager.adopt_saved()
+
     def test_setup_without_approval_uses_cached_artifacts(self):
         self.make_chat_snapshot(CHAT_SMALL_ID)
         self.make_converted_laya()
@@ -1938,6 +2142,84 @@ class PairManagerTests(BasePairTest):
         self.assertIsNotNone(held[CHAT_SMALL_ID]["claimed"])
         self.assertIsNotNone(held[DECISION_ID]["claimed"])
         self.assertTrue(stopped["stopped"])
+
+    def test_chat_worker_enables_prompt_cache_size_1_when_budget_allows(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        seen_specs = []
+        base_builder = stub_argv_builder("chat")
+
+        def recording_chat_argv(spec):
+            seen_specs.append(spec)
+            return base_builder(spec)
+
+        with mock.patch.object(pairs, "_chat_worker_argv", recording_chat_argv):
+            self.manager.setup("everyday", approve_download=True)
+            status = self.manager.start()
+            self.addCleanup(self.manager.stop)
+        self.assertEqual(status["state"], "ready")
+        self.assertEqual(status["chat_prompt_cache_size"], 1)
+        self.assertEqual(len(seen_specs), 1)
+        self.assertEqual(seen_specs[0].prompt_cache_size, 1)
+        chat = self.manager.catalog_models[CHAT_SMALL_ID]
+        expected_cached = pairs.chat_estimate(
+            chat, status["context_tokens"], prompt_cache_size=1).total
+        expected_uncached = pairs.chat_estimate(
+            chat, status["context_tokens"], prompt_cache_size=0).total
+        self.assertGreater(expected_cached, expected_uncached)
+        held = budget.load_reservations(self.home)
+        self.assertEqual(held[CHAT_SMALL_ID]["bytes"], expected_cached)
+        # Real _chat_worker_argv forwards --prompt-cache-size 1
+        real_argv = self._old_builders[0](seen_specs[0])
+        idx = real_argv.index("--prompt-cache-size")
+        self.assertEqual(real_argv[idx + 1], "1")
+
+    def test_chat_worker_falls_back_to_prompt_cache_size_0_when_memory_is_tight(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        chat = self.manager.catalog_models[CHAT_SMALL_ID]
+        decision_bytes = pairs.decision_requirement_bytes(
+            self.home / "models" / DECISION_ID, 8)
+        uncached = pairs.chat_estimate(chat, 4096, prompt_cache_size=0).total
+        cached = pairs.chat_estimate(chat, 4096, prompt_cache_size=1).total
+        self.assertGreater(cached, uncached)
+        # Pick an available_bytes where uncached fits with desktop_reserve
+        # (10% or 2 GiB), while cached (+1 KV slot) does not.
+        tight = uncached + decision_bytes + budget.SAFETY_RESERVE_BYTES + (cached - uncached) // 2
+        self.assertEqual(
+            pairs.chat_prompt_cache_size(chat, 4096, other_bytes=decision_bytes,
+                                         available_bytes=tight),
+            0,
+        )
+        self.manager._available_bytes_override = tight
+        seen_specs = []
+        base_builder = stub_argv_builder("chat")
+
+        def recording_chat_argv(spec):
+            seen_specs.append(spec)
+            return base_builder(spec)
+
+        with mock.patch.object(pairs, "_chat_worker_argv", recording_chat_argv):
+            self.manager.setup("everyday", approve_download=True, context_tokens=4096,
+                               available_bytes=tight)
+            status = self.manager.start()
+            self.addCleanup(self.manager.stop)
+        self.assertEqual(status["state"], "ready")
+        self.assertEqual(status["chat_prompt_cache_size"], 0)
+        self.assertEqual(seen_specs[0].prompt_cache_size, 0)
+        held = budget.load_reservations(self.home)
+        self.assertEqual(held[CHAT_SMALL_ID]["bytes"], uncached)
+
+    def test_chat_estimate_rejects_prompt_cache_when_kv_is_unknown(self):
+        chat = dict(self.manager.catalog_models[CHAT_SMALL_ID])
+        chat["memory"] = dict(chat["memory"], kv_bytes_per_token=None)
+        self.assertEqual(
+            pairs.chat_prompt_cache_size(chat, 4096, other_bytes=0,
+                                         available_bytes=64 * GiB),
+            0,
+        )
+        with self.assertRaises(pairs.PairError):
+            pairs.chat_estimate(chat, 4096, prompt_cache_size=1)
 
 
 def _on_pinned_stack(fn):

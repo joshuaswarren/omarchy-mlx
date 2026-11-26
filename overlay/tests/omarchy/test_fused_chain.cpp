@@ -2075,6 +2075,23 @@ TEST_CASE("gemv balanced QKV route: part and width guards") {
   CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({8192, 512, 512}));
 }
 
+TEST_CASE("gemv balanced pair route: width guard") {
+  // MLP gate/up pairs (equal widths).
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(6144, 6144));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(9728, 9728));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(12288, 12288));
+  // Split-pair GDN in_proj: [6144, 2048] + [16, 16].
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(6144, 2048));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(16, 16));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(8192, 2048));
+  // Pairs beyond the 4:1 ratio stay per-node.
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(6144, 16));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(4096, 512));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(4096, 1023));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(0, 16));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(-1, 16));
+}
+
 TEST_CASE("qmm residual norm default: shape, device capabilities and overrides") {
   const char* names[] = {
       "MLX_OMARCHY_FUSED_CHAIN", "MLX_OMARCHY_QMM_RESIDUAL_NORM"};
@@ -2092,15 +2109,25 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   caps.max_compute_work_group_size[0] = 512;
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 256, false));
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 2048, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 0, false));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4095, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4097, false));
 
-  auto g14c_caps = caps;
-  g14c_caps.device_name = "Apple M2 Max (G14C B1)";
-  CHECK(omarchy::qmm_residual_norm_enabled(g14c_caps, 2560, false));
+  auto dgpu_caps = caps;
+  dgpu_caps.device_name = "NVIDIA GeForce RTX 5060 Ti";
+  CHECK(omarchy::qmm_residual_norm_enabled(dgpu_caps, 2560, false));
+
+  auto apple = caps;
+  apple.unified_memory = true;
+  apple.device_name = "Apple M1 (G13G)";
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2048, false));
+  apple.device_name = "Apple M1 Max (G13C)";
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+  apple.device_name = "Apple M2 Max (G14C B1)";
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
 
   auto g13g_caps = caps;
   g13g_caps.device_name = "Apple M1 (G13G B1)";
@@ -2122,14 +2149,17 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 2048, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   for (size_t i = 0; i < saved.size(); ++i) {
@@ -2139,6 +2169,7 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
       unsetenv(names[i]);
     }
   }
+  omarchy::env_note_eval();
 }
 
 TEST_CASE("greedy prune default: the part rule and overrides") {
@@ -2190,6 +2221,7 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
   }
   const std::string m4 = "Apple M4 (G16G B1)";
   const std::string m1 = "Apple M1 (G13G B1)";
+  omarchy::env_note_eval();
   for (const char* var : {"MLX_OMARCHY_FUSED_GEMV", "MLX_OMARCHY_FUSED_TRIO"}) {
     INFO(var);
     const bool m4_unset = std::strcmp(var, "MLX_OMARCHY_FUSED_TRIO") == 0;
@@ -2198,22 +2230,28 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
     CHECK_EQ(omarchy::fused_route_enabled(var, m4), m4_unset);
     CHECK(omarchy::fused_route_enabled(var, m1));
     setenv(var, "1", 1);
+    omarchy::env_note_eval();
     CHECK(omarchy::fused_route_enabled(var, m4));
     CHECK(omarchy::fused_route_enabled(var, m1));
     setenv(var, "0", 1);
+    omarchy::env_note_eval();
     CHECK_FALSE(omarchy::fused_route_enabled(var, m1));
     CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
     setenv(var, "1", 1);
     setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+    omarchy::env_note_eval();
     CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
     CHECK_FALSE(omarchy::fused_route_enabled(var, m1));
     unsetenv("MLX_OMARCHY_FUSED_CHAIN");
     unsetenv(var);
+    omarchy::env_note_eval();
   }
   // The trio gate does not depend on the GEMV gate, set or unset.
   setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::fused_route_enabled("MLX_OMARCHY_FUSED_TRIO", m4));
   setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::fused_route_enabled("MLX_OMARCHY_FUSED_TRIO", m4));
   for (size_t i = 0; i < saved.size(); ++i) {
     if (saved[i]) {
@@ -2222,6 +2260,7 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
       unsetenv(names[i]);
     }
   }
+  omarchy::env_note_eval();
 }
 
 // MLX_OMARCHY_FUSED_TRIO=1 reaches the RoPE-pair planner with the GEMV
@@ -2270,6 +2309,157 @@ TEST_CASE("fused trio override plans the rope pair with the gemv route off") {
       static_cast<int64_t>(omarchy::ComputeKernel::FastTrioRopePairF16));
   expect_bit_exact(q_solo, q_pair, stream);
   expect_bit_exact(k_solo, k_pair, stream);
+}
+
+// FastRopeNormPair*: one dispatch rotates the bf16 rope_rms_norm pair of
+// one decode step when the two calls share state but differ in head
+// count (8 q heads, 2 kv heads). Phase A evals only the pair so the
+// kernel id and the 2->1 dispatch merge are observable; phase B places
+// the k output behind a producer-direct KV window into the keys cache
+// (with a dense-GEMV values member) and requires bit-exact agreement
+// with the unpaired run.
+TEST_CASE("rope norm pair covers unequal heads and the kv window") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  const int D = 64;
+  array xq = astype(
+      random::normal(Shape{1, 8, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array xk = astype(
+      random::normal(Shape{1, 2, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array wq = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  array wk = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  array offset = array(17, int32);
+  array keys_init = astype(
+      random::normal(Shape{1, 2, 8, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array values_init = astype(
+      random::normal(Shape{1, 2, 8, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  // The values member of the producer-direct pair: a dense bf16 decode
+  // GEMV row reshaped into the cache append row. Dense groups only
+  // form with at least two matmuls on a shared input, so a sibling
+  // projection on the same x stands in for the second member; the
+  // slice_update pair contract also needs identical dtype and shapes
+  // on both caches.
+  std::vector<float> xv_float(64, 0.125f);
+  array xv =
+      astype(array(xv_float.data(), {1, 64}, float32), bfloat16, stream);
+  array wv = astype(
+      random::normal(Shape{64, 128}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array wv2 = astype(
+      random::normal(Shape{64, 128}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  const int64_t norm_pair_a = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairBF16);
+  const int64_t norm_pair_b = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairAppleBF16);
+  auto pair_kernel_seen = [&](int64_t last) {
+    return last == norm_pair_a || last == norm_pair_b;
+  };
+  // Phase A: only the two rope outputs on the tape. The pair collapses
+  // two rope dispatches into one and leaves its kernel id as the most
+  // recent dispatch.
+  auto run_pair = [&](const char* trio) {
+    setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+    setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
+    setenv("MLX_OMARCHY_ROPE_NORM_PAIR", trio, 1);
+    array qr = fast::rope_rms_norm(
+        xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    array kr = fast::rope_rms_norm(
+        xk, D, wk, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    uint64_t before = counters().vk_compute_dispatches.load();
+    eval({qr, kr});
+    sync_stream(stream);
+    return std::make_tuple(
+        qr, kr, counters().vk_compute_dispatches.load() - before,
+        counters().last_dispatched_kernel.load());
+  };
+  eval({xq, xk, wq, wk, offset, keys_init, values_init, xv, wv, wv2});
+  sync_stream(stream);
+  auto [q_pair, k_pair, n_pair, last_pair] = run_pair("1");
+  auto [q_solo, k_solo, n_solo, last_solo] = run_pair("0");
+  CHECK_EQ(n_pair, 1);
+  CHECK(pair_kernel_seen(last_pair));
+  CHECK_EQ(n_solo, 2);
+  CHECK_FALSE(pair_kernel_seen(last_solo));
+  expect_bit_exact(q_solo, q_pair, stream);
+  expect_bit_exact(k_solo, k_pair, stream);
+  // Phase B: the k rope output feeds slice_update into the keys cache
+  // while a dense GEMV values row feeds the values cache — the
+  // producer-direct window pair. Both arms write the same result
+  // whether or not the planner arms the direct write.
+  std::vector<float> keys_host(1 * 2 * 8 * D);
+  std::vector<float> values_host(1 * 2 * 8 * D);
+  {
+    array keys_f32 = astype(keys_init, float32, stream);
+    array values_f32 = astype(values_init, float32, stream);
+    eval({keys_f32, values_f32});
+    sync_stream(stream);
+    std::memcpy(
+        keys_host.data(), keys_f32.data<float>(), keys_host.size() * 4);
+    std::memcpy(
+        values_host.data(),
+        values_f32.data<float>(),
+        values_host.size() * 4);
+  }
+  auto run_window = [&](const char* trio) {
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
+    setenv("MLX_OMARCHY_ROPE_NORM_PAIR", trio, 1);
+    // Each arm's cache comes straight from host data through astype so
+    // its buffer has one owner: a copy() of the evaluated cache can
+    // share the source buffer, which blocks the donation the in-place
+    // window checks for.
+    array keys_cache = astype(
+        array(keys_host.data(), {1, 2, 8, D}, float32), bfloat16,
+        stream);
+    array values_cache = astype(
+        array(values_host.data(), {1, 2, 8, D}, float32), bfloat16,
+        stream);
+    eval({keys_cache, values_cache});
+    sync_stream(stream);
+    const void* keys_before = keys_cache.data<void>();
+    array vproj = matmul(xv, wv, stream);
+    array vrest = matmul(xv, wv2, stream);
+    array vrow = reshape(vproj, Shape{1, 2, 1, D}, stream);
+    array qr = fast::rope_rms_norm(
+        xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    array kr = fast::rope_rms_norm(
+        xk, D, wk, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
+    array keys_out = slice_update(
+        keys_cache, kr, Shape{0, 0, 3, 0}, Shape{1, 2, 4, D}, stream);
+    array values_out = slice_update(
+        values_cache, vrow, Shape{0, 0, 3, 0}, Shape{1, 2, 4, D}, stream);
+    // The in-place arm needs the cache buffers donatable, which means
+    // the slice_update edge must be the last handle — drop the locals
+    // before eval as the kv_ops window cases do.
+    keys_cache = array(0.0f);
+    values_cache = array(0.0f);
+    eval({keys_out, values_out, qr, vrest});
+    sync_stream(stream);
+    return std::make_tuple(
+        qr, keys_out, values_out, keys_out.data<void>() == keys_before);
+  };
+  auto [wq_pair, keys_pair, values_pair, in_place_pair] = run_window("1");
+  auto [wq_solo, keys_solo, values_solo, in_place_solo] = run_window("0");
+  unsetenv("MLX_OMARCHY_FUSED_TRIO");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  unsetenv("MLX_OMARCHY_ROPE_NORM_PAIR");
+  CHECK(in_place_pair);
+  expect_bit_exact(wq_solo, wq_pair, stream);
+  expect_bit_exact(keys_solo, keys_pair, stream);
+  expect_bit_exact(values_solo, values_pair, stream);
 }
 
 // The planner decides per node from the node's own stream: in one eval
@@ -2332,14 +2522,14 @@ TEST_CASE("fused planner leaves CPU-stream nodes to the CPU") {
   }
 }
 
-TEST_CASE("outgate fold default: G13 non-G13C and G14C default off, env overrides") {
+TEST_CASE("outgate fold default: G13 and G14C default off, env overrides") {
   struct EnvReset {
     ~EnvReset() {
       unsetenv("MLX_OMARCHY_OUTGATE_FOLD");
     }
   } env_reset;
 
-  CHECK(omarchy::outgate_fold_default_for_device("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 Pro (G13S C0)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M2 Max (G14C B1)"));
@@ -2347,8 +2537,10 @@ TEST_CASE("outgate fold default: G13 non-G13C and G14C default off, env override
       "llvmpipe (LLVM 19.1.7, 256 bits)"));
 
   setenv("MLX_OMARCHY_OUTGATE_FOLD", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::outgate_fold_enabled());
   setenv("MLX_OMARCHY_OUTGATE_FOLD", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::outgate_fold_enabled());
 }
 
@@ -2561,6 +2753,40 @@ TEST_CASE("dual-write group serves q/k/v and gate/up views byte-identically") {
   }
 }
 
+// Member views must carry a real data_size: fresh output nodes hold
+// data_size 0 until set_data, and a zero span makes is_trailing_broadcast
+// fail, dropping consumers off the BinaryVec/UnaryVec path (and letting
+// reshaped views reach the dims==0 modulo). The view alias must record
+// the view span, not the node's pre-set_data zero.
+TEST_CASE("dual-write member view keeps a real data_size") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
+  const int k = 128;
+  auto a = make_linear(64, k, bfloat16, stream);
+  array x = astype(
+      random::normal(Shape{1, 1, k}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  x.eval();
+  sync_stream(stream);
+  array parent = zeros({64}, bfloat16, stream);
+  parent.eval();
+  sync_stream(stream);
+
+  std::vector<mlx::core::omarchy::GemvFusionMember> members;
+  members.push_back({project(x, a, stream), std::nullopt, std::nullopt});
+  members[0].out_view = {parent, 0u};
+  setenv("MLX_OMARCHY_QMM_DUAL_OUT", "1", 1);
+  CHECK(mx_omarchy_dualout_dispatch(members, stream));
+  unsetenv("MLX_OMARCHY_QMM_DUAL_OUT");
+
+  CHECK_EQ(members[0].node.data_size(), members[0].node.size());
+  CHECK_NE(members[0].node.data_size(), 0);
+}
+
 // TapeIndex scratch-map contract (EagerFusionScope): growth past the
 // prepared estimate, swap-shrink releasing capacity, and generation-wrap
 // rezeroing. TapeIndex<>, the production table, runs a 32-bit generation;
@@ -2618,4 +2844,362 @@ TEST_CASE("TapeIndex generation wrap rezeros stale slots") {
   CHECK(t.find(42) == nullptr);
   CHECK(t.put_if_absent(42, 8));
   CHECK(*t.find(42) == 8);
+}
+
+namespace {
+
+// Fused RMSNorm+RoPE epilogue (MLX_OMARCHY_ROPE_EPI): the q/k member
+// rows' norm+rotate tail on the token decode group. These cases check
+// the epilogue against the unfused path on real tensors across
+// multiple token rows and rope heads (direct tensor parity, not
+// generated-ID parity), plus the refusal contracts: differing q/k rope
+// states must not share the query's plan parameters, and a head dim the
+// token4 scratch cannot hold must refuse when the member route is off.
+struct RopeEpiEnv {
+  RopeEpiEnv() {
+    setenv("MLX_OMARCHY_FUSED_CHAIN", "1", 1);
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    setenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI", "1", 1);
+    setenv("MLX_OMARCHY_ROPE_EPI", "1", 1);
+  }
+  ~RopeEpiEnv() {
+    unsetenv("MLX_OMARCHY_FUSED_CHAIN");
+    unsetenv("MLX_OMARCHY_FUSED_GEMV");
+    unsetenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
+    unsetenv("MLX_OMARCHY_ROPE_EPI");
+    unsetenv("MLX_OMARCHY_ROPE_EPI_MEMBER");
+  }
+};
+
+// Decode tape: three 4-bit/group-64 transposed projections sharing one
+// bf16 multi-row x; the q and k outputs reach rope_rms_norm through a
+// reshape+transpose chain; the k rope feeds the keys slice update and
+// the v view feeds the values update (the producer-direct pair).
+struct RopeEpiTape {
+  int t = 4;
+  int q_heads = 4;
+  int kv_heads = 2;
+  int head_dim = 64;
+  int k = 64;
+  array x{0};
+  array qw{0};
+  array qs{0};
+  array qb{0};
+  array kw{0};
+  array ks{0};
+  array kb{0};
+  array vw{0};
+  array vs{0};
+  array vb{0};
+  array wq{0};
+  array wk{0};
+  array off{0};
+  array keys_cache{0};
+  array values_cache{0};
+};
+
+RopeEpiTape make_rope_epi_tape(const Stream& stream, int head_dim) {
+  RopeEpiTape tp;
+  tp.head_dim = head_dim;
+  const int nq = tp.q_heads * tp.head_dim;
+  const int nk = tp.kv_heads * tp.head_dim;
+  const int words = tp.k / 8;
+  const int groups = tp.k / 64;
+  auto make_words = [words](int n, uint32_t salt) {
+    std::vector<uint32_t> w(static_cast<size_t>(n) * words);
+    for (size_t i = 0; i < w.size(); ++i) {
+      w[i] = (salt + static_cast<uint32_t>(i)) * 2654435761u;
+    }
+    return array(w.data(), {n, words}, uint32);
+  };
+  std::vector<float> xf(tp.t * tp.k);
+  for (size_t i = 0; i < xf.size(); ++i) {
+    xf[i] = static_cast<float>(static_cast<int>((i * 37 + 11) % 17) - 8) *
+        0.0625f;
+  }
+  tp.x = astype(
+      array(xf.data(), {1, tp.t, tp.k}, float32), bfloat16, stream);
+  tp.qw = make_words(nq, 1u);
+  tp.kw = make_words(nk, 7u);
+  tp.vw = make_words(nk, 13u);
+  std::vector<float> scale_v(nq, 0.25f);
+  std::vector<float> bias_v(nq, -0.125f);
+  tp.qs = astype(
+      array(scale_v.data(), {nq, groups}, float32), bfloat16, stream);
+  tp.qb = astype(
+      array(bias_v.data(), {nq, groups}, float32), bfloat16, stream);
+  std::vector<float> kscale_v(nk, 0.5f);
+  std::vector<float> kbias_v(nk, 0.25f);
+  tp.ks = astype(
+      array(kscale_v.data(), {nk, groups}, float32), bfloat16, stream);
+  tp.kb = astype(
+      array(kbias_v.data(), {nk, groups}, float32), bfloat16, stream);
+  tp.vs = astype(
+      array(kscale_v.data(), {nk, groups}, float32), bfloat16, stream);
+  tp.vb = astype(
+      array(kbias_v.data(), {nk, groups}, float32), bfloat16, stream);
+  std::vector<float> wq_v(tp.head_dim);
+  std::vector<float> wk_v(tp.head_dim);
+  for (int i = 0; i < tp.head_dim; ++i) {
+    wq_v[i] = 1.0f + static_cast<float>(i % 8) * 0.0078125f;
+    wk_v[i] = 1.0f + static_cast<float>((i + 3) % 8) * 0.0078125f;
+  }
+  tp.wq = astype(
+      array(wq_v.data(), {tp.head_dim}, float32), bfloat16, stream);
+  tp.wk = astype(
+      array(wk_v.data(), {tp.head_dim}, float32), bfloat16, stream);
+  tp.off = array(3, int32);
+  std::vector<float> cache_v(tp.kv_heads * 8 * tp.head_dim);
+  for (size_t i = 0; i < cache_v.size(); ++i) {
+    cache_v[i] = static_cast<float>(i % 128) * 0.0078125f - 0.5f;
+  }
+  tp.keys_cache = astype(
+      array(
+          cache_v.data(), {1, tp.kv_heads, 8, tp.head_dim}, float32),
+      bfloat16, stream);
+  tp.values_cache = astype(
+      array(
+          cache_v.data(), {1, tp.kv_heads, 8, tp.head_dim}, float32),
+      bfloat16, stream);
+  eval({tp.x,
+        tp.qw,
+        tp.qs,
+        tp.qb,
+        tp.kw,
+        tp.ks,
+        tp.kb,
+        tp.vw,
+        tp.vs,
+        tp.vb,
+        tp.wq,
+        tp.wk,
+        tp.off,
+        tp.keys_cache,
+        tp.values_cache});
+  sync_stream(stream);
+  return tp;
+}
+
+struct RopeEpiOut {
+  array q;
+  array keys;
+  array values;
+  uint64_t dispatches{0};
+  int64_t last_kernel{-1};
+};
+
+RopeEpiOut rope_epi_eval(
+    const RopeEpiTape& tp,
+    const Stream& stream,
+    int q_dims,
+    int k_dims,
+    float k_base,
+    float k_scale) {
+  array qp = quantized_matmul(
+      tp.x, tp.qw, tp.qs, tp.qb, true, 64, 4, "affine", stream);
+  array kp = quantized_matmul(
+      tp.x, tp.kw, tp.ks, tp.kb, true, 64, 4, "affine", stream);
+  array vp = quantized_matmul(
+      tp.x, tp.vw, tp.vs, tp.vb, true, 64, 4, "affine", stream);
+  array qv = transpose(
+      reshape(
+          qp, Shape{1, tp.t, tp.q_heads, tp.head_dim}, stream),
+      {0, 2, 1, 3},
+      stream);
+  array kv = transpose(
+      reshape(
+          kp, Shape{1, tp.t, tp.kv_heads, tp.head_dim}, stream),
+      {0, 2, 1, 3},
+      stream);
+  array vv = transpose(
+      reshape(
+          vp, Shape{1, tp.t, tp.kv_heads, tp.head_dim}, stream),
+      {0, 2, 1, 3},
+      stream);
+  array qrot = fast::rope_rms_norm(
+      qv,
+      q_dims,
+      tp.wq,
+      1e-6f,
+      false,
+      10000.0f,
+      1.0f,
+      tp.off,
+      stream);
+  array krot = fast::rope_rms_norm(
+      kv,
+      k_dims,
+      tp.wk,
+      1e-6f,
+      false,
+      k_base,
+      k_scale,
+      tp.off,
+      stream);
+  array uk = slice_update(
+      tp.keys_cache,
+      krot,
+      Shape{0, 0, 3, 0},
+      Shape{1, tp.kv_heads, 3 + tp.t, tp.head_dim},
+      stream);
+  array uv = slice_update(
+      tp.values_cache,
+      vv,
+      Shape{0, 0, 3, 0},
+      Shape{1, tp.kv_heads, 3 + tp.t, tp.head_dim},
+      stream);
+  RopeEpiOut out{qrot, uk, uv, 0, -1};
+  out.dispatches = counters().vk_compute_dispatches.load();
+  eval({qrot, uk, uv});
+  sync_stream(stream);
+  out.dispatches =
+      counters().vk_compute_dispatches.load() - out.dispatches;
+  out.last_kernel = counters().last_dispatched_kernel.load();
+  return out;
+}
+
+bool rope_epi_caps(const Stream& stream) {
+  const auto& caps =
+      omarchy::get_command_encoder(stream).device().capabilities();
+  return caps.storage_buffer_16bit_access && caps.shader_int16 &&
+      caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
+          0u;
+}
+
+} // namespace
+
+// Per-member route (default): q/k member Rows8 dispatches carry the
+// norm+rotate tail. The last-finisher-per-head protocol must produce
+// the unfused path's exact bits on every one of the 4 token rows and
+// 6 rope heads (4 q + 2 k), and the values window stays the same.
+TEST_CASE("rope-epi member tail is bit-exact across rows and heads") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!rope_epi_caps(stream)) {
+    skip("the rope-epi tail needs bf16 storage and 32-lane subgroup arithmetic");
+    return;
+  }
+  RopeEpiEnv env;
+  set_compile_mode(CompileMode::disabled);
+  RopeEpiTape tp = make_rope_epi_tape(stream, 64);
+  unsetenv("MLX_OMARCHY_ROPE_EPI");
+  RopeEpiOut off = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  setenv("MLX_OMARCHY_ROPE_EPI", "1", 1);
+  RopeEpiOut on = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  CHECK_EQ(
+      on.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16));
+  CHECK_NE(
+      off.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16));
+  expect_bit_exact(off.q, on.q, stream);
+  expect_bit_exact(off.keys, on.keys, stream);
+  expect_bit_exact(off.values, on.values, stream);
+}
+
+// Token4 route (MLX_OMARCHY_ROPE_EPI_MEMBER=0): the joint dispatch's
+// per-head last finisher runs the same tail; same parity contract.
+TEST_CASE("rope-epi token4 tail is bit-exact across rows and heads") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!rope_epi_caps(stream)) {
+    skip("the rope-epi tail needs bf16 storage and 32-lane subgroup arithmetic");
+    return;
+  }
+  RopeEpiEnv env;
+  setenv("MLX_OMARCHY_ROPE_EPI_MEMBER", "0", 1);
+  set_compile_mode(CompileMode::disabled);
+  RopeEpiTape tp = make_rope_epi_tape(stream, 64);
+  unsetenv("MLX_OMARCHY_ROPE_EPI");
+  RopeEpiOut off = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  setenv("MLX_OMARCHY_ROPE_EPI", "1", 1);
+  RopeEpiOut on = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  CHECK_EQ(
+      on.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::
+              QmmVecQ4MultiToken4RopeEpiSubgroupBF16));
+  expect_bit_exact(off.q, on.q, stream);
+  expect_bit_exact(off.keys, on.keys, stream);
+  expect_bit_exact(off.values, on.values, stream);
+}
+
+// The plan stores the query rope's state for both sides: a keys rope
+// with different rotation dims must refuse the fold and take the
+// ordinary paths (values stay correct).
+TEST_CASE("rope-epi refuses differing q/k rope states") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!rope_epi_caps(stream)) {
+    skip("the rope-epi tail needs bf16 storage and 32-lane subgroup arithmetic");
+    return;
+  }
+  RopeEpiEnv env;
+  set_compile_mode(CompileMode::disabled);
+  RopeEpiTape tp = make_rope_epi_tape(stream, 64);
+  unsetenv("MLX_OMARCHY_ROPE_EPI");
+  RopeEpiOut off = rope_epi_eval(tp, stream, 64, 32, 10000.0f, 1.0f);
+  setenv("MLX_OMARCHY_ROPE_EPI", "1", 1);
+  RopeEpiOut on = rope_epi_eval(tp, stream, 64, 32, 10000.0f, 1.0f);
+  CHECK_NE(
+      on.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16));
+  CHECK_NE(
+      on.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::
+              QmmVecQ4MultiToken4RopeEpiSubgroupBF16));
+  expect_bit_exact(off.q, on.q, stream);
+  expect_bit_exact(off.keys, on.keys, stream);
+  expect_bit_exact(off.values, on.values, stream);
+}
+
+// Head dim 192: the member route folds two reads per lane and still
+// produces the unfused bits; the token4 mega-dispatch stages only 128
+// floats of normed row per subgroup, so with the member route off the
+// plan must refuse and fall back rather than overwrite a neighbor's
+// scratch (the review's scratch-overrun finding).
+TEST_CASE("rope-epi covers vd>128 on the member route and refuses token4") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!rope_epi_caps(stream)) {
+    skip("the rope-epi tail needs bf16 storage and 32-lane subgroup arithmetic");
+    return;
+  }
+  RopeEpiEnv env;
+  set_compile_mode(CompileMode::disabled);
+  RopeEpiTape tp = make_rope_epi_tape(stream, 192);
+  unsetenv("MLX_OMARCHY_ROPE_EPI");
+  RopeEpiOut off = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  setenv("MLX_OMARCHY_ROPE_EPI", "1", 1);
+  RopeEpiOut on_member = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  CHECK_EQ(
+      on_member.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16));
+  expect_bit_exact(off.q, on_member.q, stream);
+  expect_bit_exact(off.keys, on_member.keys, stream);
+  expect_bit_exact(off.values, on_member.values, stream);
+  setenv("MLX_OMARCHY_ROPE_EPI_MEMBER", "0", 1);
+  RopeEpiOut on_token4 = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  unsetenv("MLX_OMARCHY_ROPE_EPI_MEMBER");
+  CHECK_NE(
+      on_token4.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16));
+  expect_bit_exact(off.q, on_token4.q, stream);
+  expect_bit_exact(off.keys, on_token4.keys, stream);
+  expect_bit_exact(off.values, on_token4.values, stream);
 }

@@ -19,12 +19,14 @@
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/compile.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
 #include "mlx/random.h"
 #include "mlx/stream.h"
+#include "mlx/transforms.h"
 
 using namespace mlx::core;
 using mlx::core::omarchy::trace::counters;
@@ -189,4 +191,74 @@ TEST_CASE("decode step dispatch count") {
       static_cast<unsigned long long>(eager),
       static_cast<unsigned long long>(compiled),
       static_cast<unsigned long long>(compiled_fused));
+}
+
+TEST_CASE("deferred commits collapse eval boundaries into one submission") {
+  if (!gpu::is_available()) {
+    printf("Skipping: no Vulkan device\n");
+    return;
+  }
+  set_default_device(Device::gpu);
+  Stream stream = new_stream(Device::gpu);
+  constexpr int kTestLayers = 4;
+
+  auto layers = make_layers(kTestLayers, stream);
+  array lm_head =
+      multiply(random::normal(Shape{kHidden, kVocab}, float32, std::nullopt, stream),
+               array(kScaleStd),
+               stream);
+  lm_head.eval();
+  array x = multiply(
+      random::normal(Shape{1, 1, kHidden}, float32, std::nullopt, stream),
+      array(kScaleStd),
+      stream);
+  x.eval();
+
+  // The work budget is a device-calibrated flush boundary this test does
+  // not exercise; hold the node and byte budgets out of the way so the
+  // only commit point left is the event signal.
+  omarchy::batch_work_budget_test_override().store(0);
+  constexpr int kTokens = 4;
+
+  // Defer on: every async_eval boundary queues its event signal onto the
+  // open batch; the only submission is the one the final wait flushes.
+  omarchy::defer_commits_test_override().store(1);
+  array cur = x;
+  {
+    array warm = decode_token(layers, lm_head, cur);
+    warm.eval();
+  }
+  uint64_t subs_before = counters().vk_submissions.load();
+  for (int i = 0; i < kTokens; ++i) {
+    cur = decode_token(layers, lm_head, cur);
+    async_eval(cur);
+  }
+  uint64_t subs_mid = counters().vk_submissions.load();
+  cur.eval();
+  uint64_t subs_after = counters().vk_submissions.load();
+
+  CHECK_EQ(subs_mid, subs_before);
+  CHECK_EQ(subs_after - subs_before, 1);
+
+  // Defer off: the same boundaries self-submit once each.
+  omarchy::defer_commits_test_override().store(0);
+  cur = x;
+  {
+    array warm = decode_token(layers, lm_head, cur);
+    warm.eval();
+  }
+  subs_before = counters().vk_submissions.load();
+  for (int i = 0; i < kTokens; ++i) {
+    cur = decode_token(layers, lm_head, cur);
+    async_eval(cur);
+  }
+  subs_mid = counters().vk_submissions.load();
+  cur.eval();
+  subs_after = counters().vk_submissions.load();
+
+  CHECK_EQ(subs_mid - subs_before, kTokens);
+  CHECK_EQ(subs_after - subs_before, kTokens);
+
+  omarchy::defer_commits_test_override().store(-1);
+  omarchy::batch_work_budget_test_override().store(-1);
 }

@@ -73,11 +73,19 @@
 #define ELEM float16_t
 #endif
 
+// CMAT16 builds the same tile geometry on the 16x16x16 shape (f16 or
+// bf16 operands, f32 accumulator): two matrices per subgroup instead of
+// four, one 16x16 element block per accumulator. Dispatch then gates
+// k % 16 == 0 and a 32-lane subgroup (native or requiredSubgroupSize).
+#ifdef CMAT16
+const uint MAT = 16u;
+#else
 const uint MAT = 8u;
-const uint SG = 4u;
+#endif
+const uint SG = 32u / MAT;
 const uint TILE = 64u;
 #if WIDE_N
-#define SG_N 8u
+#define SG_N (64u / MAT)
 #define TILE_N 128u
 #else
 #define SG_N SG

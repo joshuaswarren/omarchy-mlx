@@ -45,4 +45,49 @@ CoopmatShape qmm_prefill_coopmat_shape_f16x16() {
   return shape;
 }
 
+CoopmatShape matmul_direct_coopmat_shape_c16(CoopmatType operand) {
+  CoopmatShape shape;
+  shape.m = 16u;
+  shape.n = 16u;
+  shape.k = 16u;
+  // The dense direct kernel loads A and B as the storage dtype and keeps
+  // an fp32 accumulator; the result drains converted to ELEM in the same
+  // shader, so the advertised C/result stay fp32.
+  shape.a = operand;
+  shape.b = operand;
+  shape.c = CoopmatType::Float32;
+  shape.result = CoopmatType::Float32;
+  shape.scope = CoopmatScope::Subgroup;
+  shape.saturating = false;
+  return shape;
+}
+
+CoopmatShape matmul_xe16_bf16_shape() {
+  CoopmatShape shape;
+  shape.m = 8u;
+  shape.n = 16u;
+  shape.k = 16u;
+  shape.a = CoopmatType::BFloat16;
+  shape.b = CoopmatType::BFloat16;
+  shape.c = CoopmatType::Float32;
+  shape.result = CoopmatType::Float32;
+  shape.scope = CoopmatScope::Subgroup;
+  shape.saturating = false;
+  return shape;
+}
+
+CoopmatShape qmm_prefill_coopmat16_xe_shape() {
+  CoopmatShape shape;
+  shape.m = 8u;
+  shape.n = 16u;
+  shape.k = 16u;
+  shape.a = CoopmatType::BFloat16;
+  shape.b = CoopmatType::BFloat16;
+  shape.c = CoopmatType::Float32;
+  shape.result = CoopmatType::Float32;
+  shape.scope = CoopmatScope::Subgroup;
+  shape.saturating = false;
+  return shape;
+}
+
 } // namespace mlx::core::omarchy

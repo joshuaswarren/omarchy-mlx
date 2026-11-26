@@ -1078,6 +1078,8 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP2BF16Hd128,
   SdpaDecodeSplitP1VBk64R4BF16Hd128,
   SdpaDecodeSplitP2Bk64BF16Hd128,
+  // Single-dispatch value-phase split-K with the pass-2 merge folded into the last block's workgroup (sdpa_decode_split_p1m.comp, head width 128).
+  SdpaDecodeSplitP1MR4BF16Hd128,
   // Head width 256 of the split-K pair (sdpa_decode_split_p1.comp / sdpa_decode_split_p2.comp -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Plain pass 1 only.
   SdpaDecodeSplitP1R1BF16Hd256,
   SdpaDecodeSplitP1R2BF16Hd256,
@@ -1245,6 +1247,72 @@ enum class ComputeKernel : uint16_t {
   // profile kernel ids stable.
   GatedDeltaDecodeConvBF16PfGqa,
   GatedDeltaDecodeConvNormBF16PfGqa,
+  // 16x16x16 dense direct builds (matmul_coopmat_direct.comp -DCMAT16):
+  // same tile geometry as the 8x8x8 family, for drivers whose coopmat
+  // list has no fp32 8x8x8 shape (NVIDIA, ANV, RADV). fp16 operands;
+  // bf16 operands gated on OMARCHY_BF16_DIRECT. Dispatched with a
+  // requiredSubgroupSize 32 pin on drivers whose native subgroup size
+  // differs. Appended to keep profile kernel ids stable.
+  MatmulDirectF16C16Nn,
+  MatmulDirectF16C16Nt,
+  MatmulDirectF16C16Tn,
+  MatmulDirectF16C16Tt,
+  MatmulDirectBF16C16Nn,
+  MatmulDirectBF16C16Nt,
+  MatmulDirectBF16C16Tn,
+  MatmulDirectBF16C16Tt,
+  QmmVecGreedyWordBF16,
+  // Coalesced-K+V split-K decode SDPA pass 1 and matching pass 2 builds
+  // (shaders/sdpa_decode_split_p1kv.comp, sdpa_decode_split_p2.comp).
+  // Appended to keep profile kernel ids stable.
+  SdpaDecodeSplitP1KVBk32R4BF16Hd128,
+  SdpaDecodeSplitP1KVBk64R4BF16Hd128,
+  SdpaDecodeSplitP1KVBk128R4BF16Hd128,
+  SdpaDecodeSplitP2Bk32BF16Hd128,
+  SdpaDecodeSplitP1KVBk32R4BF16Hd256,
+  SdpaDecodeSplitP1KVBk64R4BF16Hd256,
+  SdpaDecodeSplitP1KVBk128R4BF16Hd256,
+  SdpaDecodeSplitP2Bk32BF16Hd256,
+  SdpaDecodeSplitP2Bk64BF16Hd256,
+  // bf16 twin of the two-tensor SliceUpdate merge (slice_update_pair.comp
+  // -DUSE_BF16): verbatim 16-bit copy, so the variant only changes the
+  // element type. Appended to keep profile kernel ids stable.
+  SliceUpdatePairBF16,
+  // Token4 column carrying the residual+norm epilogue (qmm_vec.comp
+  // QMM_VEC_TOKENS+RESNORM): the last finishing workgroup norms every
+  // live token row of the materialized sum. Appended to keep profile
+  // kernel ids stable.
+  QmmVecQ4MultiToken4ResNormSubgroupBF16,
+  // QMM_VEC_TOKENS+ROPE_EPI): the last finishing workgroup norms and
+  // rotates the Q/K member rows of the layer's two fused-norm ropes,
+  // storing queries to a fresh buffer and keys through the slice
+  // pair's KV window. Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiToken4RopeEpiSubgroupBF16,
+  // Per-member twin of the rope epilogue above: the same tail on the
+  // single-weight Rows8 column, one dispatch per group member.
+  QmmVecQ4WordSubgroupRows8RopeEpiBF16,
+  // Dense bf16 matmul on the Intel/ANV 8x16x16 bf16 x bf16 -> f32
+  // subgroup shape (shaders/matmul_coopmat_xe16.comp), for devices
+  // without the fp32 8x8x8 shape the staged coopmat routes require.
+  // Appended to keep profile kernel ids stable.
+  MatmulBF16CoopmatXe16,
+  // bf16-operand 8x16x16 build of the QMM prefill coopmat16 kernel for
+  // Intel/ANV, whose coopmat list carries no M16 entry
+  // (shaders/qmm_coopmat16_xe.comp): staged x_s tile, so ragged
+  // matrix_m is covered where QmmPrefillIntelBF16's m%16 gate is not.
+  // Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmat16XeBF16,
+  // Both rope_rms_norm calls of one layer in one dispatch (the
+  // FastTrioRopePair idea for the norm-carrying bf16 form). One
+  // workgroup per rotation row per side; see shaders/fast_rope_norm_pair.comp.
+  // Appended to keep profile kernel ids stable.
+  FastRopeNormPairBF16,
+  FastRopeNormPairAppleBF16,
+  // Single-dispatch online-softmax bf16 decode SDPA for head width 128
+  // (32 subgroups / 1024 threads per query-head workgroup, coalesced uvec2
+  // K+V loads, zero scratch/atomics). Appended to keep profile kernel ids
+  // stable.
+  SdpaDecodeOnlineSg32BF16Hd128,
   Count,
 };
 
@@ -1321,7 +1389,8 @@ class ComputeRuntime {
       VkDevice device,
       uint32_t binding_limit,
       uint32_t required_subgroup_size,
-      bool subgroup_size_16_admitted);
+      bool subgroup_size_16_admitted,
+      bool subgroup_size_32_admitted);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -1392,6 +1461,7 @@ class ComputeRuntime {
   uint32_t binding_limit_{0};
   uint32_t required_subgroup_size_{0};
   bool subgroup_size_16_admitted_{false};
+  bool subgroup_size_32_admitted_{false};
   bool push_descriptors_{false};
 
   VkDevice device_;

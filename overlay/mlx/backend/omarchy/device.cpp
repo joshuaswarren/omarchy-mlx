@@ -1062,6 +1062,20 @@ bool Runtime::init_impl() {
             p13.maxComputeWorkgroupSubgroups,
             16u,
             256u);
+    // 32-lane admission follows the same enable rule, for the CMAT16
+    // dense matmul builds on drivers whose native subgroup is 16 (ANV)
+    // or 64 (RADV) lanes. A native-32 device reports
+    // required_subgroup_size == 0 and needs no pin.
+    info.caps.subgroup_size_32_admitted =
+        info.caps.required_subgroup_size != 0 &&
+        subgroup_size_admitted(
+            f13.subgroupSizeControl == VK_TRUE,
+            p13.requiredSubgroupSizeStages,
+            p13.minSubgroupSize,
+            p13.maxSubgroupSize,
+            p13.maxComputeWorkgroupSubgroups,
+            32u,
+            128u);
     info.caps.icd_path = icd_path;
     info.caps.icd_source = icd_selection.packaged
         ? "packaged"
@@ -1578,8 +1592,12 @@ Device::Device(uint32_t physical_device_index) {
       hw.shader_atomic_float_add ? VK_TRUE : VK_FALSE;
   VkPhysicalDeviceCooperativeMatrixFeaturesKHR enabled_cm{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+  // Any advertised shape enables the feature: a driver that lists only
+  // the 16x16x16 fp16-operand C16 entry sets neither convenience
+  // boolean, yet the dense CMAT16 route can claim it.
   enabled_cm.cooperativeMatrix =
-      (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16)
+      (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16 ||
+       !hw.cooperative_matrix_shapes.empty())
           ? VK_TRUE
           : VK_FALSE;
   VkPhysicalDevice16BitStorageFeatures enabled16{
@@ -1601,7 +1619,8 @@ Device::Device(uint32_t physical_device_index) {
   enabled16.pNext = &enabled12;
   enabled12.pNext = &enabled13;
   enabled13.pNext = &enabled_fa;
-  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16) {
+  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16 ||
+      !hw.cooperative_matrix_shapes.empty()) {
     enabled_fa.pNext = &enabled_cm;
   }
 #ifdef OMARCHY_BF16_CMAT
@@ -1628,7 +1647,8 @@ Device::Device(uint32_t physical_device_index) {
   // tail exists when both bits are set, matching the extension pair in
   // device_extension_names.
   void** tail = &enabled_fa.pNext;
-  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16) {
+  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16 ||
+      !hw.cooperative_matrix_shapes.empty()) {
     tail = &enabled_cm.pNext;
 #ifdef OMARCHY_BF16_CMAT
     if (hw.cooperative_matrix_bf16_8 || hw.cooperative_matrix_bf16) {
@@ -1710,6 +1730,8 @@ Device::Device(uint32_t physical_device_index) {
   DeviceExtInput ext_in;
   ext_in.shader_atomic_float_add = hw.shader_atomic_float_add;
   ext_in.cooperative_matrix_f32_8 = hw.cooperative_matrix_f32_8;
+  ext_in.cooperative_matrix_any_shape =
+      !hw.cooperative_matrix_shapes.empty();
 #ifdef OMARCHY_BF16_CMAT
   ext_in.cooperative_matrix_bf16_8 = hw.cooperative_matrix_bf16_8;
   ext_in.cooperative_matrix_bf16 = hw.cooperative_matrix_bf16;
@@ -1864,7 +1886,8 @@ Device::Device(uint32_t physical_device_index) {
       device_,
       binding_limit,
       hardware_caps_.required_subgroup_size,
-      hardware_caps_.subgroup_size_16_admitted);
+      hardware_caps_.subgroup_size_16_admitted,
+      hardware_caps_.subgroup_size_32_admitted);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 

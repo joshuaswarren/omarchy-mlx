@@ -417,6 +417,64 @@ class GpuClientCapTests(unittest.TestCase):
                     gpu_client_cap_bytes=int(7.56 * GiB))
                 self.assertTrue(ok.fits)
 
+    def test_admit_batch_applies_gpu_client_cap_per_child(self):
+        # Each worker in a pair runs in its own process / DRM client, so the
+        # per-client GPU cap constrains each child individually while host RAM
+        # constrains the combined sum. On a 16 GB machine (7.55 GiB per-client
+        # cap, 11.84 GiB MemAvailable), compact @ 8192 (6.67 GiB chat + 1.41
+        # GiB decision = 8.08 GiB total) fits; everyday (7.72 GiB chat + 1.41
+        # GiB decision) must still refuse.
+        cap = 8112340992  # 7.56 GiB
+        avail = int(11.84 * GiB)
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            records = budget.admit_and_reserve_batch(
+                [("chat-4b", int(6.67 * GiB), "chat"),
+                 ("decision", int(1.41 * GiB), "decision")],
+                pair_id="compact", home=home, available_bytes=avail,
+                gpu_client_cap_bytes=cap)
+            self.assertEqual(len(records), 2)
+            self.assertEqual(set(budget.load_reservations(home)),
+                             {"chat-4b", "decision"})
+
+            with tempfile.TemporaryDirectory() as tmp2:
+                home2 = Path(tmp2)
+                with self.assertRaises(budget.BudgetError) as ctx:
+                    budget.admit_and_reserve_batch(
+                        [("chat-9b", int(7.72 * GiB), "chat"),
+                         ("decision", int(1.41 * GiB), "decision")],
+                        pair_id="everyday", home=home2, available_bytes=16 * GiB,
+                        gpu_client_cap_bytes=cap)
+                self.assertIn("7.56", str(ctx.exception))
+                self.assertIn("chat-9b", str(ctx.exception))
+                self.assertIn("7.72", str(ctx.exception))
+                self.assertEqual(budget.load_reservations(home2), {})
+
+    def test_resize_refuses_over_gpu_client_cap(self):
+        cap = 8112340992  # 7.56 GiB
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            records = budget.admit_and_reserve_batch(
+                [("chat", int(4.0 * GiB), "chat"),
+                 ("decision", int(1.41 * GiB), "decision")],
+                pair_id="compact", home=home, available_bytes=16 * GiB,
+                gpu_client_cap_bytes=cap)
+            owner = records[0]["owner"]
+            # Growth within per-client cap succeeds even when combined pair
+            # exceeds the per-client cap.
+            resized = budget.resize_reservation(
+                "chat", int(6.67 * GiB), owner=owner, home=home,
+                available_bytes=16 * GiB, gpu_client_cap_bytes=cap)
+            self.assertEqual(resized["bytes"], int(6.67 * GiB))
+            # Growth over per-client cap refuses and retains prior bytes.
+            with self.assertRaises(budget.BudgetError) as ctx:
+                budget.resize_reservation(
+                    "chat", int(7.72 * GiB), owner=owner, home=home,
+                    available_bytes=16 * GiB, gpu_client_cap_bytes=cap)
+            self.assertIn("7.56", str(ctx.exception))
+            self.assertEqual(budget.load_reservations(home)["chat"]["bytes"],
+                             int(6.67 * GiB))
+
 
 class DiskTests(unittest.TestCase):
     def test_disk_check_compares_free_to_need(self):

@@ -80,6 +80,12 @@ check() {
   # package build here instead.
   python3 scripts/verify_runtime_assets.py \
     "$srcdir/stage/usr/lib/omarchy-mlx/venv/lib/python3.14/site-packages/mlx/share/mlx-omarchy/parakeet-1"
+
+  # Serve-copy build stamp: fail the package build if .build-commit disagrees
+  # with the installed mlx-omarchy wheel (otherwise every chat worker exits 4).
+  env -u MLX_OMARCHY_ALLOW_SERVE_DRIFT -u PYTHONPATH \
+    "$srcdir/stage/usr/lib/omarchy-mlx/venv/bin/python" \
+    -c 'from mlx_omarchy_serve import _mlxlm_server as s; s.check_build_stamp()'
 }
 
 package() {

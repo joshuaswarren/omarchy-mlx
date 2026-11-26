@@ -1,6 +1,6 @@
 --- a/mlx_lm/generate.py
 +++ b/mlx_lm/generate.py
-@@ -304,6 +304,83 @@
+@@ -304,6 +304,90 @@
              prompt_cache[e] = c.to_quantized(group_size=kv_group_size, bits=kv_bits)
  
  
@@ -36,7 +36,7 @@
 +        and emb.group_size == 64
 +        and getattr(emb, "mode", "affine") == "affine"
 +        and "biases" in emb
-+        and emb.weight.shape[1] == 256
++        and emb.weight.shape[1] % 8 == 0
 +    ):
 +        return None
 +    high = getattr(emb, "_greedy_high_bits", None)
@@ -75,7 +75,14 @@
 +            hidden, emb.weight, emb.scales, emb.biases, high, group_size=64, bits=4
 +        )
 +        logits = emb.as_linear(hidden)
-+        return token, (logits - mx.logsumexp(logits, keepdims=True)).squeeze(0)
++        logprobs = (logits - mx.logsumexp(logits, keepdims=True)).squeeze(0)
++        # The staged K=2048 route keeps its 0xFFFFFFFF sentinel net; the
++        # word route sizes its candidate buffer at the row count, so the
++        # sentinel is unreachable there — and a per-token int(token)
++        # sync inside _step breaks the pipeline's one-token lookahead.
++        if hidden.shape[-1] == 2048 and int(token) >= emb.weight.shape[0]:
++            token = mx.argmax(logprobs)
++        return token, logprobs
 +
 +    head.body = text.model
 +    return head

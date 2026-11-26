@@ -7,6 +7,7 @@ catalog commands.
 """
 
 import contextlib
+import errno
 import io
 import json
 import os
@@ -1017,11 +1018,47 @@ class CatalogCommandTests(CliTestBase):
         self.assertIn("qualified", out)
 
     def test_catalog_status_offline_names_bundled_fallback(self):
-        with unittest.mock.patch.object(catalog, "cache_path",
-                                        lambda _h=None: Path(self.tmp.name) / "none.json"):
-            code, out, _ = self.run_cli(["catalog", "status"])
-        self.assertEqual(code, 0)
-        self.assertIn("bundled fallback", out)
+        root = Path(self.tmp.name)
+        (root / "dir.json").mkdir()
+        (root / "file.json").write_bytes(b"")
+        cases = (
+            ("missing", root / "none.json"),
+            ("directory", root / "dir.json"),
+            ("not a regular file", Path(os.devnull)),
+            ("parent is a file", root / "file.json" / "cache.json"),
+        )
+        for label, cache_path in cases:
+            with self.subTest(label):
+                self.stdout = io.StringIO()
+                with unittest.mock.patch.object(
+                        catalog, "cache_path", lambda _h=None, p=cache_path: p):
+                    code, out, _ = self.run_cli(["catalog", "status"])
+                self.assertEqual(code, 0)
+                self.assertIn(f"cache:  none at {cache_path}\n", out)
+                self.assertIn("live:   bundled fallback\n", out)
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses mode bits")
+    def test_catalog_status_unreadable_cache_names_bundled_fallback(self):
+        valid = catalog.bundled_path().read_bytes()
+        for label, lock_dir in (("untraversable dir", True), ("unreadable file", False)):
+            with self.subTest(label):
+                parent = Path(self.tmp.name) / label.replace(" ", "-")
+                parent.mkdir()
+                cache = parent / "cache.json"
+                cache.write_bytes(valid)
+                target = parent if lock_dir else cache
+                self.addCleanup(os.chmod, target, 0o700)
+                os.chmod(target, 0o000)
+                self.stdout = io.StringIO()
+                with unittest.mock.patch.object(
+                        catalog, "cache_path", lambda _h=None, p=cache: p):
+                    code, out, _ = self.run_cli(["catalog", "status"])
+                self.assertEqual(code, 0)
+                self.assertIn(
+                    f"cache:  unreadable at {cache} ({os.strerror(errno.EACCES)})\n",
+                    out,
+                )
+                self.assertIn("live:   bundled fallback\n", out)
 
     def catalog_status_with_cache(self, data: bytes) -> str:
         cache = Path(self.tmp.name) / "cache.json"
@@ -1287,6 +1324,17 @@ class MalformedSnapshotJsonTests(CliTestBase):
         with unittest.mock.patch.object(Path, "stat", side_effect=unencodable):
             self.assertFalse(serve_cli.nonempty_file(root / "caf\u00e9.safetensors"))
 
+    def test_snapshot_directories_at_file_names_are_gaps(self):
+        snap = Path(self.tmp.name) / "dir-entries"
+        snap.mkdir()
+        (snap / "model.safetensors").write_bytes(b"x" * 32)
+        for name in ("config.json", "tokenizer.json", "extra.json"):
+            (snap / name).mkdir()
+        self.assertEqual(
+            serve_cli.snapshot_gaps(snap, ["extra.json"]),
+            ["config.json", "a tokenizer file (tokenizer.json et al.)", "extra.json"],
+        )
+
     def test_serve_refuses_local_dir_with_malformed_index(self):
         directory = self.model_dir(b'{"weight_map": {"w": 123}}')
         code, _, err = self.run_cli(["serve", str(directory), "--weights-gib", "1",
@@ -1306,6 +1354,236 @@ class MalformedSnapshotJsonTests(CliTestBase):
                 self.assertEqual(err.getvalue(), "")
         with unittest.mock.patch.object(serve_cli.json, "loads", side_effect=RecursionError):
             self.assertIsNone(serve_cli.check_custom_code(self.model_dir()))
+
+
+@unittest.skipIf(os.geteuid() == 0, "root bypasses mode bits")
+class UntraversableSnapshotTests(unittest.TestCase):
+    """Snapshot probing survives an untraversable cache or snapshot directory
+    on both Python 3.11 and 3.14 and reports the unreadable directory."""
+
+    REPO = "org/model"
+    REVISION = "0123456789abcdef0123456789abcdef01234567"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def make_complete_snapshot(self, directory: Path) -> Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "model.safetensors").write_bytes(b"x" * 32)
+        (directory / "config.json").write_text("{}")
+        (directory / "tokenizer.json").write_text("{}")
+        (directory / "extra.json").write_text("{}")
+        return directory
+
+    def test_untraversable_snapshot_reports_gaps_without_raising(self):
+        full_gaps = [
+            MALFORMED_INDEX,
+            "config.json",
+            "a tokenizer file (tokenizer.json et al.)",
+        ]
+        patterns = ["extra.json", "*.safetensors"]
+        for label, lock_parent in (("snapshot dir 000", False), ("parent dir 000", True)):
+            with self.subTest(label):
+                parent = Path(self.tmp.name) / label.replace(" ", "-")
+                snap = self.make_complete_snapshot(parent / "snap")
+                self.assertTrue(serve_cli.snapshot_complete(snap))
+                self.assertEqual(serve_cli.snapshot_gaps(snap, patterns), [])
+                target = parent if lock_parent else snap
+                self.addCleanup(os.chmod, target, 0o700)
+                os.chmod(target, 0o000)
+                self.assertFalse(serve_cli.snapshot_complete(snap))
+                self.assertEqual(serve_cli.snapshot_gaps(snap), full_gaps)
+                self.assertEqual(serve_cli.snapshot_gaps(snap, patterns), full_gaps + patterns)
+
+    def test_uncheckable_index_symlink_does_not_fall_back_to_single_weights(self):
+        root = Path(self.tmp.name) / "index-symlink"
+        snap = self.make_complete_snapshot(root / "snap")
+        sibling = root / "locked-index"
+        sibling.mkdir()
+        target_index = sibling / "model.safetensors.index.json"
+        target_index.write_text(json.dumps(
+            {"weight_map": {"w0": "model-00001-of-00001.safetensors"}}
+        ))
+        (snap / "model.safetensors.index.json").symlink_to(target_index)
+        self.assertEqual(
+            serve_cli.snapshot_gaps(snap),
+            ["model-00001-of-00001.safetensors"],
+        )
+        self.addCleanup(os.chmod, sibling, 0o700)
+        os.chmod(sibling, 0o000)
+        self.assertEqual(serve_cli.snapshot_gaps(snap), [MALFORMED_INDEX])
+        self.assertFalse(serve_cli.snapshot_complete(snap))
+
+    def test_offline_snapshot_detail_reports_unreadable_cache(self):
+        resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, self.REVISION)
+        missing = serve_cli.Resolved(
+            self.REPO, None, None, self.REPO, "fedcba987654" + "0" * 28
+        )
+        readable_hub = Path(self.tmp.name) / "readable-hub"
+        self.make_complete_snapshot(
+            readable_hub / "models--org--model" / "snapshots" / self.REVISION
+        )
+        with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(readable_hub)}):
+            self.assertEqual(serve_cli.offline_snapshot_detail(resolved), "")
+            self.assertEqual(
+                serve_cli.offline_snapshot_detail(missing),
+                "; the Hugging Face cache has no snapshot for revision fedcba987654 of org/model",
+            )
+        reason = os.strerror(errno.EACCES)
+        for label, lock_hub in (("snapshot dir 000", False), ("hub dir 000", True)):
+            with self.subTest(label):
+                hub = Path(self.tmp.name) / label.replace(" ", "-")
+                snap = self.make_complete_snapshot(
+                    hub / "models--org--model" / "snapshots" / self.REVISION
+                )
+                target = hub if lock_hub else snap
+                self.addCleanup(os.chmod, target, 0o700)
+                os.chmod(target, 0o000)
+                expected = (
+                    f"; the Hugging Face cache snapshot for revision 0123456789ab "
+                    f"of org/model is unreadable at {snap} ({reason})"
+                )
+                with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(hub)}):
+                    self.assertEqual(serve_cli.offline_snapshot_detail(resolved), expected)
+
+    def test_offline_snapshot_detail_reports_unreadable_hub_parent(self):
+        resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, self.REVISION)
+        locked = Path(self.tmp.name) / "locked"
+        hub = locked / "hub"
+        snap = self.make_complete_snapshot(
+            hub / "models--org--model" / "snapshots" / self.REVISION
+        )
+        self.addCleanup(os.chmod, locked, 0o700)
+        os.chmod(locked, 0o000)
+        expected = (
+            f"; the Hugging Face cache snapshot for revision 0123456789ab "
+            f"of org/model is unreadable at {snap} ({os.strerror(errno.EACCES)})"
+        )
+        with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(hub)}):
+            self.assertEqual(serve_cli.offline_snapshot_detail(resolved), expected)
+
+    def test_offline_snapshot_detail_does_not_create_missing_hub(self):
+        resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, self.REVISION)
+        missing_hub = Path(self.tmp.name) / "absent-parent" / "hub"
+        with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(missing_hub)}):
+            self.assertEqual(
+                serve_cli.offline_snapshot_detail(resolved),
+                "; the Hugging Face cache has no snapshot for revision 0123456789ab of org/model",
+            )
+        self.assertFalse(missing_hub.exists())
+        self.assertFalse(missing_hub.parent.exists())
+
+    def test_offline_snapshot_detail_file_at_hub_cache(self):
+        resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, self.REVISION)
+        file_hub = Path(self.tmp.name) / "hub-is-file"
+        file_hub.write_text("not a directory")
+        with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(file_hub)}):
+            self.assertEqual(
+                serve_cli.offline_snapshot_detail(resolved),
+                "; the Hugging Face cache has no snapshot for revision 0123456789ab of org/model",
+            )
+
+    def test_offline_snapshot_detail_reports_unsearchable_snapshot_dir(self):
+        resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, self.REVISION)
+        hub = Path(self.tmp.name) / "snapshot-dir-400"
+        snap = self.make_complete_snapshot(
+            hub / "models--org--model" / "snapshots" / self.REVISION
+        )
+        self.addCleanup(os.chmod, snap, 0o700)
+        os.chmod(snap, 0o400)
+        expected = (
+            f"; the Hugging Face cache snapshot for revision 0123456789ab "
+            f"of org/model is unreadable at {snap} ({os.strerror(errno.EACCES)})"
+        )
+        with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(hub)}):
+            self.assertEqual(serve_cli.offline_snapshot_detail(resolved), expected)
+
+    def test_offline_snapshot_detail_file_at_snapshot_path(self):
+        resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, self.REVISION)
+        hub = Path(self.tmp.name) / "file-at-snapshot"
+        snap = hub / "models--org--model" / "snapshots" / self.REVISION
+        snap.parent.mkdir(parents=True, exist_ok=True)
+        snap.write_text("not a directory")
+        with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(hub)}):
+            self.assertEqual(
+                serve_cli.offline_snapshot_detail(resolved),
+                "; the Hugging Face cache has no snapshot for revision 0123456789ab of org/model",
+            )
+
+    def test_offline_snapshot_detail_reports_unreadable_when_locked_during_gap_scan(self):
+        resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, self.REVISION)
+        hub = Path(self.tmp.name) / "locked-during-scan"
+        snap = self.make_complete_snapshot(
+            hub / "models--org--model" / "snapshots" / self.REVISION
+        )
+        real_snapshot_gaps = serve_cli.snapshot_gaps
+        self.addCleanup(os.chmod, snap, 0o700)
+
+        def lock_then_scan(*args, **kwargs):
+            os.chmod(snap, 0o000)
+            return real_snapshot_gaps(*args, **kwargs)
+
+        expected = (
+            f"; the Hugging Face cache snapshot for revision 0123456789ab "
+            f"of org/model is unreadable at {snap} ({os.strerror(errno.EACCES)})"
+        )
+        with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(hub)}), \
+             unittest.mock.patch.object(serve_cli, "snapshot_gaps", side_effect=lock_then_scan):
+            self.assertEqual(serve_cli.offline_snapshot_detail(resolved), expected)
+
+    def test_offline_snapshot_detail_probes_before_scanning_patterns(self):
+        # A pattern 3.11's Path.glob() rejects (weights**.json) or a revision
+        # containing NUL (rejected by 3.14's Path.glob()) must not raise when
+        # the snapshot directory is absent, a regular file, or unreadable.
+        reason = os.strerror(errno.EACCES)
+        with self.subTest("absent revision with weights**.json"):
+            hub = Path(self.tmp.name) / "probe-absent"
+            hub.mkdir()
+            resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, self.REVISION)
+            with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(hub)}):
+                self.assertEqual(
+                    serve_cli.offline_snapshot_detail(resolved, patterns=["weights**.json"]),
+                    "; the Hugging Face cache has no snapshot for revision 0123456789ab of org/model",
+                )
+        with self.subTest("regular file at snapshot path with weights**.json"):
+            hub = Path(self.tmp.name) / "probe-file"
+            snap = hub / "models--org--model" / "snapshots" / self.REVISION
+            snap.parent.mkdir(parents=True, exist_ok=True)
+            snap.write_text("not a directory")
+            resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, self.REVISION)
+            with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(hub)}):
+                self.assertEqual(
+                    serve_cli.offline_snapshot_detail(resolved, patterns=["weights**.json"]),
+                    "; the Hugging Face cache has no snapshot for revision 0123456789ab of org/model",
+                )
+        with self.subTest("snapshot dir 000 with weights**.json"):
+            hub = Path(self.tmp.name) / "probe-mode-000"
+            snap = self.make_complete_snapshot(
+                hub / "models--org--model" / "snapshots" / self.REVISION
+            )
+            self.addCleanup(os.chmod, snap, 0o700)
+            os.chmod(snap, 0o000)
+            resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, self.REVISION)
+            expected = (
+                f"; the Hugging Face cache snapshot for revision 0123456789ab "
+                f"of org/model is unreadable at {snap} ({reason})"
+            )
+            with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(hub)}):
+                self.assertEqual(
+                    serve_cli.offline_snapshot_detail(resolved, patterns=["weights**.json"]),
+                    expected,
+                )
+        with self.subTest("nul revision with wildcard pattern"):
+            hub = Path(self.tmp.name) / "probe-nul"
+            hub.mkdir()
+            nul_rev = "abc\x00def"
+            resolved = serve_cli.Resolved(self.REPO, None, None, self.REPO, nul_rev)
+            with unittest.mock.patch.dict(os.environ, {"HF_HUB_CACHE": str(hub)}):
+                self.assertEqual(
+                    serve_cli.offline_snapshot_detail(resolved, patterns=["*.safetensors"]),
+                    f"; the Hugging Face cache has no snapshot for revision {nul_rev[:12]} of org/model",
+                )
 
 
 if __name__ == "__main__":

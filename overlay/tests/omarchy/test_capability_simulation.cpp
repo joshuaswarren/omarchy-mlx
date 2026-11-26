@@ -375,6 +375,18 @@ TEST_CASE("capability report is stamped with the active profile") {
     CHECK(omarchy::cooperative_matrix_advertises(
         c.cooperative_matrix_shapes,
         omarchy::qmm_prefill_coopmat_shape_f16x16()));
+    CHECK(omarchy::cooperative_matrix_advertises(
+        c.cooperative_matrix_shapes,
+        omarchy::matmul_direct_coopmat_shape_c16(
+            omarchy::CoopmatType::Float16)));
+    // The bf16-operand twin the dense CMAT16 route needs rides the same
+    // axis but only where hardware truth enabled the bf16 extension.
+    CHECK_EQ(
+        omarchy::cooperative_matrix_advertises(
+            c.cooperative_matrix_shapes,
+            omarchy::matmul_direct_coopmat_shape_c16(
+                omarchy::CoopmatType::BFloat16)),
+        h.cooperative_matrix_bf16);
     // The cooperative-matrix device feature itself is never simulated:
     // it inherits hardware truth, and require_backed refuses a claimed
     // dispatch the runtime device cannot back.
@@ -614,6 +626,99 @@ TEST_CASE("coopmat f32 matmul routes per the profile") {
             << " (backed=" << coopmat_backed() << ")\n";
 }
 
+TEST_CASE("cmat16 dense matmul routes per the profile") {
+  if (!compute_available() || !float16_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // The CMAT16 dense direct route claims a dtype when its operand
+  // 16x16x16 shape is advertised and the fp32 8x8x8 route is absent
+  // (the gate also takes the stored shape's exact subgroup scope and
+  // k % 16, both fixed by the cell below).
+  const auto& c = caps();
+  const auto f16_shape =
+      omarchy::matmul_direct_coopmat_shape_c16(omarchy::CoopmatType::Float16);
+  const auto bf16_shape =
+      omarchy::matmul_direct_coopmat_shape_c16(omarchy::CoopmatType::BFloat16);
+  const bool f16_claim = !c.cooperative_matrix_f32_8 &&
+      omarchy::cooperative_matrix_advertises(
+          c.cooperative_matrix_shapes, f16_shape);
+  const bool bf16_claim = !c.cooperative_matrix_f32_8 &&
+      c.cooperative_matrix_bf16 &&
+      omarchy::cooperative_matrix_advertises(
+          c.cooperative_matrix_shapes, bf16_shape);
+  if (!f16_claim && !bf16_claim) {
+    return;
+  }
+  // m, n >= 32, k % 16 == 0, all offsets/gaps even: the dense CMAT16
+  // gate shape. Integer inputs keep every product and the fp32
+  // accumulation exact, so the stored bits equal the f64 reference.
+  constexpr int m = 64;
+  constexpr int k = 32;
+  constexpr int n = 32;
+  std::vector<float> a_values(static_cast<size_t>(m) * k);
+  std::vector<float> b_values(static_cast<size_t>(k) * n);
+  std::mt19937 gen(23);
+  std::uniform_int_distribution<int> small(-2, 2);
+  for (auto& v : a_values) {
+    v = static_cast<float>(small(gen));
+  }
+  for (auto& v : b_values) {
+    v = static_cast<float>(small(gen));
+  }
+  std::vector<float> expected(static_cast<size_t>(m) * n, 0.0f);
+  for (int r = 0; r < m; ++r) {
+    for (int col = 0; col < n; ++col) {
+      double acc = 0.0;
+      for (int inner = 0; inner < k; ++inner) {
+        acc += static_cast<double>(a_values[r * k + inner]) *
+            b_values[inner * n + col];
+      }
+      expected[r * n + col] = static_cast<float>(acc);
+    }
+  }
+  for (const bool bf16 : {false, true}) {
+    const bool claim = bf16 ? bf16_claim : f16_claim;
+    if (!claim) {
+      continue;
+    }
+    const auto shape = bf16 ? bf16_shape : f16_shape;
+    array a(a_values.begin(), Shape{m, k}, bf16 ? bfloat16 : float16);
+    array b(b_values.begin(), Shape{k, n}, bf16 ? bfloat16 : float16);
+    std::string error = evaluation_error(matmul(a, b, stream));
+    const bool backed = omarchy::cooperative_matrix_advertises(
+        hw().cooperative_matrix_shapes, shape);
+    if (!backed) {
+      // Simulated 16x16x16 shape over hardware without one: loud, named.
+      std::cout << "[capsim cmat16-dense] profile=" << g_profile
+                << (bf16 ? " bf16" : " f16") << " -> named refusal\n";
+      expect_simulated_refusal(
+          error,
+          "MatmulDirectC16",
+          bf16 ? "cooperative_matrix_bf16_16x16x16"
+               : "cooperative_matrix_fp16_16x16x16");
+      continue;
+    }
+    REQUIRE(error.empty());
+    omarchy::get_command_encoder(stream).synchronize();
+    const int64_t kernel =
+        omarchy::trace::counters().last_dispatched_kernel.load();
+    expect_close(readback_f32(stream, matmul(a, b, stream)),
+        expected,
+        1e-5,
+        1e-6);
+    if (!omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT")) {
+      CHECK_EQ(
+          kernel,
+          static_cast<int64_t>(
+              bf16 ? omarchy::ComputeKernel::MatmulDirectBF16C16Nn
+                   : omarchy::ComputeKernel::MatmulDirectF16C16Nn));
+    }
+    std::cout << "[capsim cmat16-dense] profile=" << g_profile
+              << (bf16 ? " bf16" : " f16") << " -> MatmulDirectC16\n";
+  }
+}
+
 TEST_CASE("f16 q4 g64 prefill routes per the profile") {
   if (!compute_available() || !float16_available()) {
     return;
@@ -722,6 +827,26 @@ TEST_CASE("bf16 q4 g64 prefill routes per the profile") {
       expect_simulated_refusal(error, "QmmPrefillCoopmatBF16");
       continue;
     }
+    // 16x16x16 fp16-operand twin (dispatch's coopmat16_reachable mirror):
+    // the q4 g64 transposed cell here is exactly that route's shape, so
+    // on a device advertising it the claim lands before the FMA arm.
+    const bool coopmat16_arm = !rb && !coopmat_reachable &&
+        !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+        c.cooperative_matrix_bf16 &&
+        omarchy::cooperative_matrix_advertises(
+            c.cooperative_matrix_shapes,
+            omarchy::qmm_prefill_coopmat_shape_f16x16()) &&
+        c.subgroup_size == 32u &&
+        (32u * 16u + 16u * 32u) * 2u + 2u * 16u * 16u * 4u <=
+            c.max_compute_shared_memory_size;
+    if (coopmat16_arm &&
+        !omarchy::cooperative_matrix_advertises(
+            hw().cooperative_matrix_shapes,
+            omarchy::qmm_prefill_coopmat_shape_f16x16())) {
+      expect_simulated_refusal(
+          error, "QmmPrefillCoopmat16BF16", "cooperative_matrix_fp16_16x16x16");
+      continue;
+    }
     REQUIRE_MESSAGE(error.empty(), error);
     omarchy::get_command_encoder(stream).synchronize();
     const int64_t kernel =
@@ -740,7 +865,11 @@ TEST_CASE("bf16 q4 g64 prefill routes per the profile") {
       CHECK_NE(kernel, id(omarchy::ComputeKernel::QmmPrefillFmaPreciseBF16));
       CHECK_NE(kernel, id(omarchy::ComputeKernel::QmmTileBF16));
     } else {
-      CHECK_EQ(kernel, id(omarchy::ComputeKernel::QmmPrefillFmaBF16));
+      CHECK_EQ(
+          kernel,
+          id(coopmat16_arm
+                 ? omarchy::ComputeKernel::QmmPrefillCoopmat16BF16
+                 : omarchy::ComputeKernel::QmmPrefillFmaBF16));
     }
     // The tile kernel's derived bound (matmul family qmm tile case): k-step
     // f32 rounding plus one bf16 storage rounding of the output.
@@ -1021,9 +1150,11 @@ TEST_CASE("apple norm selection follows the subgroup gate") {
   }
 
   // Gate closed (subgroup-size-64, no-cooperative-matrix) or open
-  // (m1 profiles on backed hardware): width 128 is never Apple-selected
-  // (measured shape predicate), width 2048 rows 9 is selected only when
-  // the gate is open. Either way the kill switch keeps the same bits.
+  // (m1 profiles on backed hardware): width 128 leaves the shared shape
+  // guard (measured shape predicate; the rope-site gate does not reach
+  // this standalone rms_norm dispatch), width 2048 rows 9 is selected
+  // only when the gate is open. Either way the kill switch keeps the
+  // same bits.
   for (int width : {128, 2048}) {
     auto x_data = lattice(9 * width, 73);
     auto w_data = lattice(width, 74);

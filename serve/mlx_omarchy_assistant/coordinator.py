@@ -394,14 +394,16 @@ def typed_results(spec, answers, text):
 
 
 def _refused(what, raw):
-    """A refusal of a malformed worker payload that names its first 200 bytes."""
+    """A worker refusal that names the first 200 bytes of the reply, repr-escaped."""
     return RuntimeError("%s: %r" % (what, raw[:200].decode("utf-8", "replace")))
 
 
 class LocalModels:
     def __init__(self, manager):
         self.manager = manager
-        self.connection = None
+        # Each in-flight call's socket, kept here because http.client hands
+        # the socket of a close-delimited response to the response object.
+        self.sockets = {}
         self.lock = threading.Lock()
         self.tokenizer = None
         self.tokenizer_path = None
@@ -411,21 +413,27 @@ class LocalModels:
         if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "::1", "localhost"):
             raise ValueError("Model workers must use local loopback HTTP")
         connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=90)
+        connection.connect()
         with self.lock:
-            self.connection = connection
+            self.sockets[connection] = connection.sock
         return connection
 
-    def close_connection(self):
+    def _release(self, connection, response):
         with self.lock:
-            if self.connection:
-                if self.connection.sock:
-                    import socket
-                    try:
-                        self.connection.sock.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-                self.connection.close()
-                self.connection = None
+            self.sockets.pop(connection, None)
+        if response is not None:
+            response.close()  # a close-delimited response owns the socket
+        connection.close()
+
+    def close_connection(self):
+        """Unblock every in-flight call; each call's own finally closes it."""
+        import socket
+        with self.lock:
+            for sock in self.sockets.values():
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
 
     def count(self, path, messages):
         if self.tokenizer_path != path:
@@ -446,6 +454,7 @@ class LocalModels:
 
     def decision(self, pair, payload):
         connection = self._connect(pair["decision_url"])
+        response = None
         try:
             connection.request("POST", "/v1/decisions", json.dumps(payload), {"Content-Type": "application/json"})
             response = connection.getresponse()
@@ -453,8 +462,7 @@ class LocalModels:
             if len(raw) > 1024 * 1024:
                 raise ValueError("Decision response is too large")
             if response.status != 200:
-                raise RuntimeError("Decision worker refused the request (HTTP %d): %s"
-                                   % (response.status, raw[:500].decode("utf-8", "replace")))
+                raise _refused("Decision worker refused the request (HTTP %d)" % response.status, raw)
             try:
                 answer = json.loads(raw)
             except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, int digit cap, nesting too deep
@@ -463,10 +471,9 @@ class LocalModels:
                 raise _refused("Decision worker sent a response without an answers object", raw)
             return answer
         finally:
-            self.close_connection()
+            self._release(connection, response)
 
     def chat(self, pair, messages, max_tokens, cancel, phases=None, yield_headers=None):
-        connection = self._connect(pair["chat_url"])
         model = str((pair.get("model_paths") or {}).get("chat") or pair["chat_model"])
         # Greedy decoding loops on the 2B model ("Extra socks" until the token cap);
         # a mild penalty removed the loops in the 2026-09-28 card experiment.
@@ -474,7 +481,13 @@ class LocalModels:
                    "stream": True, "temperature": 0, "repetition_penalty": REPETITION_PENALTY,
                    "chat_template_kwargs": {"enable_thinking": False}}
         finish = None
+        if cancel.is_set():
+            return
+        connection = self._connect(pair["chat_url"])
+        response = None
         try:
+            if cancel.is_set():  # cancelled while connecting, before close_connection() could see the socket
+                return
             headers = {"Content-Type": "application/json"}
             if yield_headers:
                 headers.update(yield_headers)
@@ -486,9 +499,8 @@ class LocalModels:
             if phases is not None:
                 phases["chat_headers"] = time.monotonic()
             if response.status != 200:
-                detail = response.read(8192).decode("utf-8", "replace")
-                raise RuntimeError("Chat worker refused the request (HTTP %d): %s"
-                                   % (response.status, detail[:500]))
+                raise _refused("Chat worker refused the request (HTTP %d)" % response.status,
+                               response.read(8192))
             while not cancel.is_set():
                 line = response.readline(1024 * 1024 + 1)
                 if not line:
@@ -531,7 +543,7 @@ class LocalModels:
             if not cancel.is_set():
                 yield ("finish", finish)
         finally:
-            self.close_connection()
+            self._release(connection, response)
 
 
 class _RoutingWorker:
@@ -560,12 +572,12 @@ class _RoutingWorker:
         return Bound()
 
     def call(self, pair, payload, deadline_seconds):
-        with self.lock:
-            if self.inflight is not None and not self.inflight.done():
-                return {"busy": True}
-            self.inflight = self.pool.submit(self.models.decision, pair, payload)
-            future = self.inflight
         try:
+            with self.lock:
+                if self.inflight is not None and not self.inflight.done():
+                    return {"busy": True}
+                self.inflight = self.pool.submit(self.models.decision, pair, payload)
+                future = self.inflight
             return future.result(timeout=deadline_seconds)
         except concurrent.futures.TimeoutError:
             return {"timed_out": True}
@@ -579,6 +591,7 @@ class _RoutingWorker:
 
 # The fenced assistant-ui envelope marker, shared by the _run phase helpers.
 _UI_MARKER = "```assistant-ui\n"
+_SHUTTING_DOWN = "The assistant is shutting down"
 
 
 class _TurnSetup:
@@ -636,6 +649,7 @@ class Coordinator:
         self.gpu = threading.Lock()
         self.speech = SpeechYieldScheduler(self.gpu)
         self.lock = threading.RLock()
+        self._lifecycle = threading.RLock()  # held across pair starts; close() drains it after setting closed
         self.turns = {}
         self.actions = set()
         self.closed = threading.Event()
@@ -643,11 +657,22 @@ class Coordinator:
         self.watch = threading.Thread(target=self._watch, daemon=True)
         self.watch.start()
 
+    def _start_pair(self):
+        """Start the worker pair unless shutdown has started.
+
+        close() sets `closed` first and then waits for (cancelling) any start
+        that already passed the check; every later start is refused.
+        """
+        with self._lifecycle:
+            if self.closed.is_set():
+                raise RuntimeError(_SHUTTING_DOWN)
+            return self.manager.start()
+
     def submit(self, cid, payload):
         if self.failure:
             raise RuntimeError(self.failure)
         if self.closed.is_set():
-            raise RuntimeError("The assistant is shutting down")
+            raise RuntimeError(_SHUTTING_DOWN)
         if set(payload) - {"text", "mode", "options", "criteria", "questions",
                            "max_tokens", "routing_evidence"}:
             raise ValueError("Unknown turn field")
@@ -674,14 +699,20 @@ class Coordinator:
         if not self.gpu.acquire(blocking=False):
             raise BusyError("Another local response is active. Wait or stop it before sending")
         try:
-            turn = self.store.begin(cid, payload.get("text"))
-            job = {"cancel": threading.Event(), "heartbeat": time.monotonic(), "conversation_id": cid,
-                   "ttft": {"phases": {"submit": time.monotonic()}}}
             with self.lock:
+                if self.closed.is_set():
+                    raise RuntimeError(_SHUTTING_DOWN)
+                turn = self.store.begin(cid, payload.get("text"))
+                job = {"cancel": threading.Event(), "heartbeat": time.monotonic(), "conversation_id": cid,
+                       "ttft": {"phases": {"submit": time.monotonic()}}}
+                thread = threading.Thread(target=self._run, args=(cid, turn, payload, maximum, job), daemon=True)
+                job["thread"] = thread
+                try:
+                    thread.start()
+                except BaseException:
+                    self.store.finish(cid, turn, stopped=True)
+                    raise
                 self.turns[turn] = job
-            thread = threading.Thread(target=self._run, args=(cid, turn, payload, maximum, job), daemon=True)
-            job["thread"] = thread
-            thread.start()
             return turn
         except BaseException:
             self.gpu.release()
@@ -701,7 +732,7 @@ class Coordinator:
         needs criteria too, otherwise the turn becomes `clarify`.
         """
         try:
-            pair = self.manager.start()
+            pair = self._start_pair()
         except Exception as error:
             # Pair start refused; ordinary chat still has to work.
             routing = {"policy_version": ROUTING_POLICY.version,
@@ -835,7 +866,9 @@ class Coordinator:
             self._guard_turn_end(cid, turn, setup.mode, setup.result, cancel, state)
         except Exception as error:
             failed = True
-            if not cancel.is_set():
+            # close() sets `closed` before it cancels running turns; a turn
+            # failing in that gap is being shut down, not failing.
+            if not cancel.is_set() and not self.closed.is_set():
                 self.store.emit(cid, turn, "error", {"code": type(error).__name__, "message": str(error)[:1000]})
         finally:
             self._release_turn(cid, turn, cancel, failed,
@@ -848,7 +881,7 @@ class Coordinator:
         Returns a _TurnSetup, or None when the turn ends before streaming
         (cancel before start, or a draft turn completed by _run_draft)."""
         from .components import SCHEMA_PROMPT
-        pair = self.manager.start()
+        pair = self._start_pair()
         phase("pair_start")
         if cancel.is_set():
             return None
@@ -1464,6 +1497,12 @@ class Coordinator:
             jobs = list(self.turns.items())
         for turn, job in jobs:
             self.cancel(job["conversation_id"], turn)
+        # A pair start that saw `closed` unset still holds _lifecycle. Cancel it
+        # instead of waiting out a cold start; PairManager.start() clears its
+        # cancel flag on entry, so keep cancelling until the start lets go.
+        while not self._lifecycle.acquire(timeout=0.1):
+            self.manager.cancel()
+        self._lifecycle.release()
         for turn, job in jobs:
             job["thread"].join(timeout=10)
         survivors = [turn for turn, job in jobs if job["thread"].is_alive()]

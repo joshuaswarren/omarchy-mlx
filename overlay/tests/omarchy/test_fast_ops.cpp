@@ -410,14 +410,17 @@ TEST_CASE("fused norm forward on f16 and bf16 storage") {
 
 // The rope_rms_norm fuse is contractually bit-identical to
 // rope(rms_norm(x, weight, eps), ...) (mlx/fast.h), and the Apple
-// row-reduction shares one reduction order with the composed kernels at
-// every shape it serves, so flipping MLX_OMARCHY_NORM_APPLE must not
-// move a single bit either. The backend fuse gate (mlx/fast.cpp
+// row-reduction matches the composed kernels' bits at every shape it
+// serves (the shared shapes share one order; the rope-site 128 route
+// reduces in the subgroup order and the checks below still require the
+// same bits), so flipping MLX_OMARCHY_NORM_APPLE must not move a single
+// bit either. The backend fuse gate (mlx/fast.cpp
 // "omarchy fence") only accepts bf16, non-traditional, D <= 256 with
 // even D and a contiguous last axis; anything else throws the named
 // refusal (the model path pre-filters through the python gate). Sweep
 // the dispatch-predicate edges across fuseable cells: the 128-wide q/k
-// rows (never Apple-selected), the 256 any-rows selections with the
+// rows (Apple-selected only on the parts of
+// norm_apple_128_default_part), the 256 any-rows selections with the
 // 64/65-row boundary, and even prefill widths; pin refusals for
 // non-bf16 dtypes, D > 256, and odd widths (they must throw, never
 // silently fall back to a plain rope with the norm skipped).
@@ -4295,6 +4298,23 @@ TEST_CASE("rope half-split builds: MLX_OMARCHY_NO_ROPE_HALF_SPLIT values") {
     INFO("value=\"" << v << "\"");
     CHECK_EQ(omarchy::rope_half_split_setting(v), -1);
   }
+}
+
+TEST_CASE("norm apple 128 part rule") {
+  // Pure and per call: the fused rope+norm D=128 subgroup build defaults
+  // on only on G13C today; every other part keeps the shared-tree kernel
+  // (the measured gated/scaled losses at 128 stay on that family
+  // everywhere).
+  for (int round = 0; round < 2; ++round) {
+    CHECK(omarchy::norm_apple_128_default_part("Apple M1 Max (G13C C0)"));
+    CHECK(!omarchy::norm_apple_128_default_part("Apple M2 Max (G14C B1)"));
+  }
+  CHECK(omarchy::norm_apple_128_default_part("Apple M1 Max (G13C B1)"));
+  CHECK(!omarchy::norm_apple_128_default_part("Apple M1 (G13G B1)"));
+  CHECK(!omarchy::norm_apple_128_default_part("Apple M4 (G16G B1)"));
+  CHECK(!omarchy::norm_apple_128_default_part("Apple M5 Max (G17C B1)"));
+  CHECK(!omarchy::norm_apple_128_default_part("Apple M6 (G18G B1)"));
+  CHECK(!omarchy::norm_apple_128_default_part(""));
 }
 
 TEST_CASE("fused rope half-split form runs the half-split builds") {

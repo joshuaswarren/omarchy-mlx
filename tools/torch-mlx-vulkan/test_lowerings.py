@@ -1316,6 +1316,10 @@ def test_blas_accum():
     fx_run(torch.ops.aten.addr.default, (inp_addr, v1, v2), {})
     fx_run(torch.ops.aten.addr.default, (inp_addr, v1, v2), {"beta": 0.5, "alpha": 3.0})
     fx_run(torch.ops.aten.addr.default, (inp_addr, v1, v2), {"beta": 0})
+    # PT-AK: a 0-dim input broadcasts against the outer product.
+    scalar_inp = torch.tensor(2.0)
+    fx_run(torch.ops.aten.addr.default, (scalar_inp, v1, v2), {})
+    fx_run(torch.ops.aten.addr.default, (scalar_inp, v1, v2), {"beta": 0.5, "alpha": 2.0})
     fx_run(torch.ops.aten.vdot.default, (vec, vec), {})
     # vdot conjugates the first argument for complex inputs
     ca = torch.tensor(rng.randn(4) + 1j * rng.randn(4)).cfloat()
