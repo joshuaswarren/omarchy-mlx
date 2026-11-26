@@ -3076,6 +3076,7 @@ bool rope_epi_caps(const Stream& stream) {
 // the unfused path's exact bits on every one of the 4 token rows and
 // 6 rope heads (4 q + 2 k), and the values window stays the same.
 TEST_CASE("rope-epi member tail is bit-exact across rows and heads") {
+TEST_CASE("fused add+rmsnorm pair matches composed path bit-exactly") {
   if (!compute_available()) {
     return;
   }
@@ -3372,4 +3373,114 @@ TEST_CASE("sdpa online rope norm: bit-exact output and k_cache with two fewer di
   unsetenv("MLX_OMARCHY_ROPE_NORM_PAIR");
   unsetenv("MLX_OMARCHY_FUSED_TRIO");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  // Widths: 2048 exercises the register path (the M2 decode rows),
+  // 512 the strided fallback; rows > 1 exercises the row loop.
+  for (Shape shape : {Shape{1, 2048}, Shape{1, 512}, Shape{2, 2048}}) {
+    // Materialize x, r, w ONCE per shape so the baseline and candidate
+    // graphs consume the identical tensors (w8E review of #944: fresh
+    // random::normal inside forward() gave the two arms different
+    // inputs and the bit-exact compare meant nothing).
+    array x = astype(
+        random::normal(shape, float32, std::nullopt, stream), bfloat16,
+        stream);
+    array r = astype(
+        random::normal(shape, float32, std::nullopt, stream), bfloat16,
+        stream);
+    array w = astype(
+        random::normal(Shape{shape.back()}, float32, std::nullopt, stream),
+        bfloat16, stream);
+    eval({x, r, w});
+    sync_stream(stream);
+    auto forward = [&]() {
+      array h = add(x, r, stream);
+      array out = fast::rms_norm(h, w, 1e-5, stream);
+      return std::vector<array>{h, out};
+    };
+    auto run = [&]() {
+      auto outs = forward();
+      eval(outs);
+      sync_stream(stream);
+      return outs;
+    };
+
+    setenv("MLX_OMARCHY_ADD_NORM_FUSE", "0", 1);
+    auto baseline = run();
+    uint64_t before = counters().vk_compute_dispatches.load();
+    // Rebuild fresh nodes and eval them: the off arm dispatches the
+    // composed add + norm pair as two kernels.
+    auto off_again = forward();
+    eval(off_again);
+    sync_stream(stream);
+    uint64_t per_node =
+        counters().vk_compute_dispatches.load() - before;
+
+    setenv("MLX_OMARCHY_ADD_NORM_FUSE", "1", 1);
+    auto candidate = run();
+    before = counters().vk_compute_dispatches.load();
+    auto on_again = forward();
+    eval(on_again);
+    sync_stream(stream);
+    uint64_t fused = counters().vk_compute_dispatches.load() - before;
+
+    INFO("shape ", shape, " per_node ", per_node, " fused ", fused);
+    if (fused < per_node) {
+      // The device passed the apple gate and the fold fired: exactly
+      // one dispatch saved per pair. On devices the gate refuses the
+      // counts match and this branch is skipped; bit-exactness below
+      // holds either way.
+      CHECK_EQ(fused, per_node - 1);
+    }
+    for (size_t i = 0; i < baseline.size(); ++i) {
+      INFO("output ", i);
+      expect_bit_exact(baseline[i], candidate[i], stream);
+    }
+  }
+  unsetenv("MLX_OMARCHY_ADD_NORM_FUSE");
+}
+
+TEST_CASE("add+norm fold refuses non-contiguous addends, composed matches") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  // A transposed addend (row_contiguous=false) must refuse the fold and
+  // produce the composed chain's bits, not corrupt output (#944 review).
+  // {2048,1} transposed would be trivially contiguous, so use a
+  // 2-row tensor transposed to {2,2048} plus a broadcast to the
+  // operating shape.
+  array xt = astype(
+      random::normal(Shape{2048, 2}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array x = broadcast_to(transpose(xt, {1, 0}, stream), Shape{2, 2048},
+                         stream);
+  array r = astype(
+      random::normal(Shape{2, 2048}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array w = astype(
+      random::normal(Shape{2048}, float32, std::nullopt, stream), bfloat16,
+      stream);
+  eval({x, r, w});
+  sync_stream(stream);
+  auto forward = [&]() {
+    array h = add(x, r, stream);
+    array out = fast::rms_norm(h, w, 1e-5, stream);
+    return std::vector<array>{h, out};
+  };
+  setenv("MLX_OMARCHY_ADD_NORM_FUSE", "0", 1);
+  auto baseline = forward();
+  eval(baseline);
+  sync_stream(stream);
+  setenv("MLX_OMARCHY_ADD_NORM_FUSE", "1", 1);
+  auto candidate = forward();
+  eval(candidate);
+  sync_stream(stream);
+  for (size_t i = 0; i < baseline.size(); ++i) {
+    INFO("output ", i);
+    expect_bit_exact(baseline[i], candidate[i], stream);
+  }
+  unsetenv("MLX_OMARCHY_ADD_NORM_FUSE");
 }
