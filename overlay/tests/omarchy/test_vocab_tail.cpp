@@ -628,7 +628,7 @@ GreedyInputs make_greedy_inputs(
 // The primitive's own fallback expression, evaluated through the normal
 // ops so the reference exercises the composed vocab tail.
 uint32_t composed_argmax(const GreedyInputs& in, const Stream& stream) {
-  auto logits = fast::quantized_matmul(
+  auto logits = quantized_matmul(
       in.x, in.w, in.scales, in.biases, true, 64, 4, "affine", stream);
   auto logprobs =
       subtract(logits, logsumexp(logits, -1, true, stream), stream);
@@ -645,6 +645,15 @@ struct GreedyRun {
 };
 
 GreedyRun fused_argmax(const GreedyInputs& in, const Stream& stream) {
+  // Materialize the lazy astype inputs first so the dispatch window
+  // counts only the head itself (array handles share the node).
+  array x_m = in.x, w_m = in.w, s_m = in.scales, b_m = in.biases,
+        h_m = in.high;
+  x_m.eval();
+  w_m.eval();
+  s_m.eval();
+  b_m.eval();
+  h_m.eval();
   uint64_t before = dispatches();
   auto out = fast::greedy_quantized_argmax(
       in.x, in.w, in.scales, in.biases, in.high, 64, 4, stream);
@@ -669,16 +678,18 @@ bool word_caps() {
       caps.shader_int16;
 }
 
-// True when the primitive takes the non-subgroup QMM_VEC_GREEDY_WORD
-// route for a K = 2048 head (subgroup devices claim K = 2048 for the
-// staged QMM_VEC_GREEDY route; other K values always take the word
-// route).
-bool word_route_expected() {
+bool subgroup_ready() {
   const auto& caps = omarchy::device(0).capabilities();
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  return caps.subgroup_size == 32u &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
           0u;
-  return word_caps() && !subgroup_ready;
+}
+
+// True when eval_gpu takes the non-subgroup QMM_VEC_GREEDY_WORD route
+// for this K: the staged QMM_VEC_GREEDY route claims K = 2048 on
+// subgroup devices; every other K takes the word route.
+bool word_route_taken(int k) {
+  return word_caps() && !(subgroup_ready() && k == kGreedyK);
 }
 
 const std::vector<float> kScales{0.5f, 0.75f, 1.0f, 1.25f, 0.875f};
@@ -691,14 +702,21 @@ TEST_CASE("fused greedy word head: token matches the composed argmax") {
     return;
   }
   Stream stream = gpu_stream();
-  for (int n : {2048, 8192, 12289}) {
-    auto in = make_greedy_inputs(
-        n, 0xdec46 + n, kScales, kBiases, {}, {}, false, stream);
-    auto run = fused_argmax(in, stream);
-    CHECK(run.token == composed_argmax(in, stream));
-    CHECK(run.token < static_cast<uint32_t>(n));
-    CHECK(run.stats[0] == static_cast<uint32_t>(n));
-    CHECK(run.stats[1] == 0u);
+  // K = 2560 forces the word route on subgroup-capable devices too.
+  for (int k : {kGreedyK, 2560}) {
+    for (int n : {2048, 8192, 12289}) {
+      auto in = make_greedy_inputs(
+          n, 0xdec46 + n + k, kScales, kBiases, {}, {}, false, stream, k);
+      auto run = fused_argmax(in, stream);
+      CHECK(run.token == composed_argmax(in, stream));
+      CHECK(run.token < static_cast<uint32_t>(n));
+      // stats[0] = rows evaluated exactly, stats[1] = overflow flag on
+      // the word route; the staged route reports its own stats.
+      if (word_route_taken(k)) {
+        CHECK(run.stats[0] == static_cast<uint32_t>(n));
+        CHECK(run.stats[1] == 0u);
+      }
+    }
   }
 }
 
@@ -707,32 +725,35 @@ TEST_CASE("fused greedy word head: equal max rows pick the first index") {
     return;
   }
   Stream stream = gpu_stream();
-  const int n = 12289;
-  auto base = make_greedy_inputs(
-      n, 0xdec47, kScales, kBiases, {}, {}, false, stream);
-  uint32_t arg = composed_argmax(base, stream);
-  // Duplicate the argmax row at later positions (crossing a chunk edge
-  // when it fits): argreduce's first-index rule keeps the original. A
-  // last-position argmax gets an earlier duplicate instead, which then
-  // becomes the answer.
-  std::vector<int> targets;
-  uint32_t expected = arg;
-  if (arg == static_cast<uint32_t>(n - 1)) {
-    targets = {0};
-    expected = 0;
-  } else {
-    if (arg + 4096 < static_cast<uint32_t>(n)) {
-      targets.push_back(static_cast<int>(arg) + 4096);
+  for (int k : {kGreedyK, 2560}) {
+    const int n = 12289;
+    auto base = make_greedy_inputs(
+        n, 0xdec47 + k, kScales, kBiases, {}, {}, false, stream, k);
+    uint32_t arg = composed_argmax(base, stream);
+    // Duplicate the argmax row at later positions (crossing a chunk edge
+    // when it fits): argreduce's first-index rule keeps the original. A
+    // last-position argmax gets an earlier duplicate instead, which then
+    // becomes the answer.
+    std::vector<int> targets;
+    uint32_t expected = arg;
+    if (arg == static_cast<uint32_t>(n - 1)) {
+      targets = {0};
+      expected = 0;
+    } else {
+      if (arg + 4096 < static_cast<uint32_t>(n)) {
+        targets.push_back(static_cast<int>(arg) + 4096);
+      }
+      if (targets.empty() || targets.back() != n - 1) {
+        targets.push_back(n - 1);
+      }
     }
-    if (targets.empty() || targets.back() != n - 1) {
-      targets.push_back(n - 1);
-    }
+    std::vector<int> sources(targets.size(), static_cast<int>(arg));
+    auto tied = make_greedy_inputs(
+        n, 0xdec47 + k, kScales, kBiases, sources, targets, false, stream,
+        k);
+    CHECK(fused_argmax(tied, stream).token == expected);
+    CHECK(composed_argmax(tied, stream) == expected);
   }
-  std::vector<int> sources(targets.size(), static_cast<int>(arg));
-  auto tied = make_greedy_inputs(
-      n, 0xdec47, kScales, kBiases, sources, targets, false, stream);
-  CHECK(fused_argmax(tied, stream).token == expected);
-  CHECK(composed_argmax(tied, stream) == expected);
 }
 
 TEST_CASE("fused greedy word head: NaN row yields the first normalized index") {
@@ -740,20 +761,23 @@ TEST_CASE("fused greedy word head: NaN row yields the first normalized index") {
     return;
   }
   Stream stream = gpu_stream();
-  const int n = 8192;
-  auto in = make_greedy_inputs(
-      n, 0xdec48, kScales, kBiases, {}, {}, false, stream);
-  // One NaN scale makes row 37's logit NaN; nan_max propagates it to
-  // the row maximum, so every normalized element is NaN and argreduce
-  // answers index 0.
-  std::vector<float> nan_scales(n * kGreedyGroups, 0.5f);
-  nan_scales[37 * kGreedyGroups] = kNan;
-  array sf(nan_scales.data(), Shape{n, kGreedyGroups}, float32);
-  GreedyInputs nan_in{
-      in.x, in.w, astype(sf, bfloat16, stream), in.biases, in.high};
-  auto run = fused_argmax(nan_in, stream);
-  CHECK(run.token == 0u);
-  CHECK(composed_argmax(nan_in, stream) == 0u);
+  for (int k : {kGreedyK, 2560}) {
+    const int n = 8192;
+    const int groups = k / 64;
+    auto in = make_greedy_inputs(
+        n, 0xdec48 + k, kScales, kBiases, {}, {}, false, stream, k);
+    // One NaN scale makes row 37's logit NaN; nan_max propagates it to
+    // the row maximum, so every normalized element is NaN and argreduce
+    // answers index 0.
+    std::vector<float> nan_scales(n * groups, 0.5f);
+    nan_scales[37 * groups] = kNan;
+    array sf(nan_scales.data(), Shape{n, groups}, float32);
+    GreedyInputs nan_in{
+        in.x, in.w, astype(sf, bfloat16, stream), in.biases, in.high};
+    auto run = fused_argmax(nan_in, stream);
+    CHECK(run.token == 0u);
+    CHECK(composed_argmax(nan_in, stream) == 0u);
+  }
 }
 
 TEST_CASE("fused greedy word head: +inf rows pick the first") {
@@ -761,31 +785,41 @@ TEST_CASE("fused greedy word head: +inf rows pick the first") {
     return;
   }
   Stream stream = gpu_stream();
-  const int n = 8192;
-  // x all-ones keeps every row's dot and input_sum positive, so an
-  // infinite scale and bias make that row's logit exactly +inf; the
-  // normalized row is NaN at the +inf logits and -inf elsewhere, and
-  // argreduce's first-NaN rule answers the first +inf row.
-  auto in = make_greedy_inputs(
-      n, 0xdec49, {0.5f}, {0.1f}, {}, {}, true, stream);
-  std::vector<float> inf_scales(n * kGreedyGroups, 0.5f);
-  std::vector<float> inf_biases(n * kGreedyGroups, 0.1f);
-  for (int r : {100, 2300}) {
-    for (int g = 0; g < kGreedyGroups; ++g) {
-      inf_scales[r * kGreedyGroups + g] = kInf;
-      inf_biases[r * kGreedyGroups + g] = kInf;
+  // The staged subgroup route (K = 2048 on subgroup devices) diverges
+  // from the composed contract on +inf logits — pre-existing, reported
+  // separately — so this test exercises legs where the word route
+  // actually fires (K = 2560 always; K = 2048 only without subgroup).
+  for (int k : {kGreedyK, 2560}) {
+    if (!word_route_taken(k)) {
+      continue;
     }
+    const int n = 8192;
+    const int groups = k / 64;
+    // x all-ones keeps every row's dot and input_sum positive, so an
+    // infinite scale and bias make that row's logit exactly +inf; the
+    // normalized row is NaN at the +inf logits and -inf elsewhere, and
+    // argreduce's first-NaN rule answers the first +inf row.
+    auto in = make_greedy_inputs(
+        n, 0xdec49 + k, {0.5f}, {0.1f}, {}, {}, true, stream, k);
+    std::vector<float> inf_scales(n * groups, 0.5f);
+    std::vector<float> inf_biases(n * groups, 0.1f);
+    for (int r : {100, 2300}) {
+      for (int g = 0; g < groups; ++g) {
+        inf_scales[r * groups + g] = kInf;
+        inf_biases[r * groups + g] = kInf;
+      }
+    }
+    array sf(inf_scales.data(), Shape{n, groups}, float32);
+    array bf(inf_biases.data(), Shape{n, groups}, float32);
+    GreedyInputs inf_in{in.x,
+                        in.w,
+                        astype(sf, bfloat16, stream),
+                        astype(bf, bfloat16, stream),
+                        in.high};
+    auto run = fused_argmax(inf_in, stream);
+    CHECK(run.token == 100u);
+    CHECK(composed_argmax(inf_in, stream) == 100u);
   }
-  array sf(inf_scales.data(), Shape{n, kGreedyGroups}, float32);
-  array bf(inf_biases.data(), Shape{n, kGreedyGroups}, float32);
-  GreedyInputs inf_in{in.x,
-                      in.w,
-                      astype(sf, bfloat16, stream),
-                      astype(bf, bfloat16, stream),
-                      in.high};
-  auto run = fused_argmax(inf_in, stream);
-  CHECK(run.token == 100u);
-  CHECK(composed_argmax(inf_in, stream) == 100u);
 }
 
 TEST_CASE("fused greedy word head: all -inf logits pick index 0") {
@@ -793,15 +827,17 @@ TEST_CASE("fused greedy word head: all -inf logits pick index 0") {
     return;
   }
   Stream stream = gpu_stream();
-  const int n = 8192;
-  // scale 0 and bias -inf: bias_term = input_sum * -inf = -inf, so
-  // every logit is -inf; the normalized row is all-NaN and argreduce
-  // answers index 0.
-  auto in = make_greedy_inputs(
-      n, 0xdec50, {0.0f}, {-kInf}, {}, {}, true, stream);
-  auto run = fused_argmax(in, stream);
-  CHECK(run.token == 0u);
-  CHECK(composed_argmax(in, stream) == 0u);
+  for (int k : {kGreedyK, 2560}) {
+    const int n = 8192;
+    // scale 0 and bias -inf: bias_term = input_sum * -inf = -inf, so
+    // every logit is -inf; the normalized row is all-NaN and argreduce
+    // answers index 0.
+    auto in = make_greedy_inputs(
+        n, 0xdec50 + k, {0.0f}, {-kInf}, {}, {}, true, stream, k);
+    auto run = fused_argmax(in, stream);
+    CHECK(run.token == 0u);
+    CHECK(composed_argmax(in, stream) == 0u);
+  }
 }
 
 TEST_CASE("fused greedy word head: two dispatches on the word route") {
@@ -812,7 +848,7 @@ TEST_CASE("fused greedy word head: two dispatches on the word route") {
   auto in = make_greedy_inputs(
       12289, 0xdec51, kScales, kBiases, {}, {}, false, stream);
   auto run = fused_argmax(in, stream);
-  if (word_route_expected()) {
+  if (word_route_taken(kGreedyK)) {
     CHECK(run.launched == 2u);
     CHECK(
         omarchy::trace::counters().last_dispatched_kernel.load() ==
@@ -834,7 +870,7 @@ TEST_CASE("fused greedy word head: K = 2560 (Qwen3.5-4B) matches") {
     auto in = make_greedy_inputs(
         n, 0xdec52 + n, kScales, kBiases, {}, {}, false, stream, 2560);
     auto run = fused_argmax(in, stream);
-    if (word_caps()) {
+    if (word_route_taken(2560)) {
       CHECK(run.launched == 2u);
       CHECK(
           omarchy::trace::counters().last_dispatched_kernel.load() ==
