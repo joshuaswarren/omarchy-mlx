@@ -197,18 +197,19 @@ diff --git a/mlx/array.h b/mlx/array.h
  
    /** The array's siblings. */
 --- a/python/src/convert.cpp	2026-09-30 08:29:59.000000000 -0500
-+++ python/src/convert.cpp	2026-11-25 13:45:20.115865167 -0600
-@@ -18,6 +18,9 @@
++++ python/src/convert.cpp	2026-11-25 20:50:53.564552858 -0600
+@@ -18,6 +18,10 @@
  #include "mlx/dtype_utils.h"
  #include "mlx/ops.h"
  #include "mlx/utils.h"
 +#ifdef MLX_OMARCHY_BACKEND
++#include <cstdio>
 +#include "mlx/backend/omarchy/allocator.h"
 +#endif
  
  // Defined in ops.cpp.
  namespace mlx::core {
-@@ -354,6 +357,22 @@
+@@ -354,6 +358,29 @@
      nb::gil_scoped_release nogil;
      arr.eval();
    }
@@ -219,6 +220,13 @@ diff --git a/mlx/array.h b/mlx/array.h
 +  // reaching the device, and later device writes would rewrite bytes the
 +  // caller still holds - so flagged buffers export a forced copy whose
 +  // storage this ndarray owns.
++  if (const char* logv = std::getenv("MLX_OMARCHY_VRAM_WEIGHTS_LOG")) {
++    if (*logv != '\0') {
++      std::fprintf(stderr, "[omarchy-export] shadow=%d flags=%d device=%d\n",
++          mx::omarchy::buffer_is_shadow(arr.buffer()) ? 1 : 0,
++          mx::omarchy::buffer_debug_flags(arr.buffer()), (int)device_type);
++    }
++  }
 +  if (mx::omarchy::buffer_is_shadow(arr.buffer())) {
 +    if (device_type != nb::device::cpu::value) {
 +      throw nb::buffer_error(
@@ -231,7 +239,7 @@ diff --git a/mlx/array.h b/mlx/array.h
    data = device_type == nb::device::cpu::value ? arr.buffer().raw_ptr()
                                                 : arr.buffer().ptr();
    byte_offset = arr.offset();
-@@ -382,11 +401,32 @@
+@@ -382,11 +409,32 @@
  
  nb::ndarray<> mlx_to_dlpack(
      const mx::array& a,
