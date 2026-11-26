@@ -2310,7 +2310,7 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
       bfloat16, stream);
   array values_init = astype(
       random::normal(Shape{1, 2, 8, D}, float32, std::nullopt, stream),
-      float16, stream);
+      bfloat16, stream);
   // The values member of the producer-direct pair: a 4-bit decode GEMV
   // row plus its Add epilogue, reshaped into the cache append row, as
   // in the kv_ops window cases.
@@ -2321,13 +2321,13 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   std::vector<float> xv_float(64, 0.125f);
   std::vector<float> vadd_float(128, -0.25f);
   array vscales =
-      astype(array(vscale_float.data(), {128, 1}, float32), float16, stream);
+      astype(array(vscale_float.data(), {128, 1}, float32), bfloat16, stream);
   array vbiases =
-      astype(array(vbias_float.data(), {128, 1}, float32), float16, stream);
+      astype(array(vbias_float.data(), {128, 1}, float32), bfloat16, stream);
   array xv =
-      astype(array(xv_float.data(), {1, 64}, float32), float16, stream);
+      astype(array(xv_float.data(), {1, 64}, float32), bfloat16, stream);
   array vadd =
-      astype(array(vadd_float.data(), {128}, float32), float16, stream);
+      astype(array(vadd_float.data(), {128}, float32)), bfloat16, stream);
   const int64_t norm_pair_a = static_cast<int64_t>(
       omarchy::ComputeKernel::FastRopeNormPairBF16);
   const int64_t norm_pair_b = static_cast<int64_t>(
