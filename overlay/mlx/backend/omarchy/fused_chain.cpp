@@ -855,6 +855,38 @@ struct SdpaTransposeFold {
   bool fired{false};
 };
 
+struct SdpaOnlineRopePlan {
+  array q_rope;
+  array k_rope;
+  array sdpa;
+  array q_raw;
+  array k_raw;
+  array offset;
+  std::optional<array> q_weight;
+  std::optional<array> k_weight;
+  std::optional<array> q_view;
+  std::optional<array> k_view;
+  std::shared_ptr<Primitive> q_view_prim;
+  std::shared_ptr<Primitive> k_view_prim;
+  std::shared_ptr<Primitive> q_rope_prim;
+  std::shared_ptr<Primitive> k_rope_prim;
+  std::vector<array> q_rope_inputs;
+  std::vector<array> k_rope_inputs;
+  int q_norm_fold{-1};
+  int k_norm_fold{-1};
+  size_t pair_index{0};
+  bool has_norm{false};
+  float eps{0.0f};
+  float base{0.0f};
+  float scale{1.0f};
+  int dims{0};
+  SdpaOnlineRopeCtx ctx;
+  bool q_skipped{false};
+  bool k_skipped{false};
+  enum class State : uint8_t { pending, k_bound, done, failed } state{
+      State::pending};
+};
+
 struct EagerFusionState {
   std::unordered_map<std::uintptr_t, EagerRole> roles;
   std::unordered_map<std::uintptr_t, FusedChain> chains;
@@ -865,6 +897,10 @@ struct EagerFusionState {
   // attention out array id -> fold index; reshape/view ids -> fold index
   std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_plans;
   std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_skip_roles;
+  std::vector<SdpaOnlineRopePlan> sdpa_online_rope_plans;
+  std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_skip_roles;
+  std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_su_roles;
+  std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_roles;
   TapeIndex<size_t> dense_gemv_roles;
   std::vector<DenseGemvGroup> dense_gemv_groups;
   TapeIndex<size_t> slice_update_roles;
@@ -909,6 +945,10 @@ struct EagerFusionState {
     sdpa_transpose_folds.clear();
     sdpa_transpose_plans.clear();
     sdpa_transpose_skip_roles.clear();
+    sdpa_online_rope_plans.clear();
+    sdpa_online_rope_skip_roles.clear();
+    sdpa_online_rope_su_roles.clear();
+    sdpa_online_rope_roles.clear();
   }
 };
 
@@ -2701,6 +2741,206 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           cand);
     }
   }
+  // Fused Q/K RMSNorm+RoPE+KV-cache-write+online-softmax BF16 decode SDPA
+  // (HD=128, batch 1, q_len 1; MLX_OMARCHY_SDPA_ONLINE_ROPE=1). Collapses
+  // FastRopeNormBF16(Q) + FastRopeNormBF16(K -> k_cache) + SdpaDecodeOnline
+  // into a single 1024-thread dispatch per attention layer.
+  if (fused_chain_enabled()) {
+    for (const array& sdpa : tape) {
+      if (!is_op(&sdpa, typeid(fast::ScaledDotProductAttention)) ||
+          sdpa.dtype() != bfloat16 || sdpa.ndim() != 4 || sdpa.shape(0) != 1 ||
+          sdpa.shape(2) != 1 || sdpa.shape(3) != 128 ||
+          sdpa.inputs().size() != 3 || claimed.count(sdpa.id())) {
+        continue;
+      }
+      const array* q_rope = lookup(sdpa.inputs()[0]);
+      const array* k_in = lookup(sdpa.inputs()[1]);
+      const array& v_in = sdpa.inputs()[2];
+      if (q_rope == nullptr || k_in == nullptr ||
+          q_rope->dtype() != bfloat16 || k_in->dtype() != bfloat16 ||
+          v_in.dtype() != bfloat16 || k_in->ndim() != 4 || v_in.ndim() != 4 ||
+          k_in->shape(0) != 1 || k_in->shape(3) != 128 ||
+          v_in.shape(0) != 1 || v_in.shape(3) != 128 ||
+          k_in->shape(2) <= 0 || k_in->shape(1) <= 0 ||
+          sdpa.shape(1) % k_in->shape(1) != 0) {
+        continue;
+      }
+      const Device* sdpa_dev = stream_device(sdpa);
+      if (sdpa_dev == nullptr ||
+          !sdpa_online_rope_enabled(
+              sdpa_dev->capabilities(),
+              static_cast<uint32_t>(k_in->shape(2)))) {
+        continue;
+      }
+      if (!is_op(q_rope, typeid(fast::RoPE)) || uses[q_rope->id()] != 1 ||
+          state->rope_redirect_roles.count(q_rope->id()) ||
+          state->sdpa_online_rope_skip_roles.count(q_rope->id()) ||
+          (claimed.count(q_rope->id()) &&
+           !state->rope_norm_roles.count(q_rope->id()))) {
+        continue;
+      }
+      const array* k_su = k_in;
+      if (is_op(k_su, typeid(Slice)) && !k_su->inputs().empty()) {
+        k_su = lookup(k_su->inputs()[0]);
+      }
+      if (k_su == nullptr || !is_op(k_su, typeid(SliceUpdate))) {
+        continue;
+      }
+      auto su_it = state->slice_update_roles.find(k_su->id());
+      if (su_it == nullptr) {
+        continue;
+      }
+      const size_t pair_idx = *su_it;
+      const auto& pair = state->slice_update_pairs[pair_idx];
+      if (!pair.direct || !pair.windows[0].has_value() ||
+          !pair.windows[1].has_value() ||
+          pair.windows[0]->node.id() != k_su->id() ||
+          state->sdpa_online_rope_su_roles.count(k_su->id())) {
+        continue;
+      }
+      const array* k_rope = lookup(k_su->inputs()[1]);
+      if (k_rope == nullptr || !is_op(k_rope, typeid(fast::RoPE)) ||
+          uses[k_rope->id()] != 1 || k_rope->dtype() != bfloat16 ||
+          state->sdpa_online_rope_skip_roles.count(k_rope->id()) ||
+          (claimed.count(k_rope->id()) &&
+           !state->rope_norm_roles.count(k_rope->id()))) {
+        continue;
+      }
+      auto red_it = state->rope_redirect_roles.find(k_rope->id());
+      if (red_it == nullptr || *red_it != pair_idx) {
+        continue;
+      }
+      if (q_rope->primitive().stream() != sdpa.primitive().stream() ||
+          k_rope->primitive().stream() != sdpa.primitive().stream()) {
+        continue;
+      }
+      const auto& qr = static_cast<const fast::RoPE&>(q_rope->primitive());
+      const auto& kr = static_cast<const fast::RoPE&>(k_rope->primitive());
+      const auto& qst = qr.state();
+      const auto& kst = kr.state();
+      // Forward, non-traditional, dims == 128, matching base/scale, shared
+      // scalar offset (same node or equal host-constant int32 scalars).
+      if (!std::get<5>(qst) || !std::get<5>(kst) || std::get<2>(qst) ||
+          std::get<2>(kst) || std::get<1>(qst) != 128 ||
+          std::get<1>(kst) != 128 || std::get<3>(qst) != std::get<3>(kst) ||
+          std::get<4>(qst) != std::get<4>(kst) ||
+          q_rope->inputs().size() < 2 || k_rope->inputs().size() < 2 ||
+          q_rope->inputs()[1].size() != 1 ||
+          q_rope->inputs()[1].dtype() != int32 ||
+          !rope_offset_shared(q_rope->inputs()[1], k_rope->inputs()[1])) {
+        continue;
+      }
+      auto* q_fold_ptr = state->rope_norm_roles.find(q_rope->id());
+      auto* k_fold_ptr = state->rope_norm_roles.find(k_rope->id());
+      const bool q_inline_norm = qr.has_norm() && q_rope->inputs().size() == 3;
+      const bool k_inline_norm = kr.has_norm() && k_rope->inputs().size() == 3;
+      const bool q_folded_norm = q_fold_ptr != nullptr && !qr.has_norm();
+      const bool k_folded_norm = k_fold_ptr != nullptr && !kr.has_norm();
+      const bool q_plain = !qr.has_norm() && q_rope->inputs().size() == 2 &&
+          q_fold_ptr == nullptr;
+      const bool k_plain = !kr.has_norm() && k_rope->inputs().size() == 2 &&
+          k_fold_ptr == nullptr;
+      bool has_norm = false;
+      float eps = 0.0f;
+      int q_fold_idx = -1;
+      int k_fold_idx = -1;
+      array q_raw = q_rope->inputs()[0];
+      array k_raw = k_rope->inputs()[0];
+      std::optional<array> q_weight;
+      std::optional<array> k_weight;
+      std::optional<array> q_view;
+      std::optional<array> k_view;
+      std::shared_ptr<Primitive> q_view_prim;
+      std::shared_ptr<Primitive> k_view_prim;
+      if (q_inline_norm && k_inline_norm) {
+        if (qr.norm_eps() != kr.norm_eps() ||
+            q_rope->inputs()[2].dtype() != bfloat16 ||
+            k_rope->inputs()[2].dtype() != bfloat16 ||
+            q_rope->inputs()[2].size() != 128 ||
+            k_rope->inputs()[2].size() != 128) {
+          continue;
+        }
+        has_norm = true;
+        eps = qr.norm_eps();
+        q_weight = q_rope->inputs()[2];
+        k_weight = k_rope->inputs()[2];
+      } else if (q_folded_norm && k_folded_norm) {
+        const auto& qf = state->rope_norms[*q_fold_ptr];
+        const auto& kf = state->rope_norms[*k_fold_ptr];
+        if (qf.eps != kf.eps || qf.w.size() != 128 || kf.w.size() != 128) {
+          continue;
+        }
+        has_norm = true;
+        eps = qf.eps;
+        q_fold_idx = static_cast<int>(*q_fold_ptr);
+        k_fold_idx = static_cast<int>(*k_fold_ptr);
+        q_raw = qf.x;
+        k_raw = kf.x;
+        q_weight = qf.w;
+        k_weight = kf.w;
+        q_view = qf.view;
+        k_view = kf.view;
+        q_view_prim = qf.view_prim;
+        k_view_prim = kf.view_prim;
+      } else if (q_plain && k_plain) {
+        has_norm = false;
+      } else {
+        continue;
+      }
+      if (q_raw.dtype() != bfloat16 || k_raw.dtype() != bfloat16) {
+        continue;
+      }
+      const size_t plan_idx = state->sdpa_online_rope_plans.size();
+      state->sdpa_online_rope_plans.push_back(SdpaOnlineRopePlan{
+          *q_rope,
+          *k_rope,
+          sdpa,
+          q_raw,
+          k_raw,
+          q_rope->inputs()[1],
+          q_weight,
+          k_weight,
+          q_view,
+          k_view,
+          q_view_prim,
+          k_view_prim,
+          q_rope->primitive_ptr(),
+          k_rope->primitive_ptr(),
+          q_rope->inputs(),
+          k_rope->inputs(),
+          q_fold_idx,
+          k_fold_idx,
+          pair_idx,
+          has_norm,
+          eps,
+          std::get<3>(qst),
+          std::get<4>(qst),
+          128,
+          SdpaOnlineRopeCtx{},
+          false,
+          false,
+          SdpaOnlineRopePlan::State::pending});
+      state->sdpa_online_rope_skip_roles.emplace(q_rope->id(), plan_idx);
+      state->sdpa_online_rope_skip_roles.emplace(k_rope->id(), plan_idx);
+      state->sdpa_online_rope_su_roles.emplace(pair.nodes[0].id(), plan_idx);
+      state->sdpa_online_rope_su_roles.emplace(pair.nodes[1].id(), plan_idx);
+      state->sdpa_online_rope_roles.emplace(sdpa.id(), plan_idx);
+      claimed.put_if_absent(q_rope->id(), 1);
+      claimed.put_if_absent(k_rope->id(), 1);
+      claimed.put_if_absent(sdpa.id(), 1);
+    }
+    if (omarchy::env_str("MLX_OMARCHY_SDPA_ROPE_TRACE") != nullptr &&
+        !state->sdpa_online_rope_plans.empty()) {
+      static int sr_trace = 0;
+      if (sr_trace < 4) {
+        ++sr_trace;
+        std::fprintf(
+            stderr,
+            "[sdpa-rope] planned=%zu\n",
+            state->sdpa_online_rope_plans.size());
+      }
+    }
+  }
   // Decode RoPE pair plan: two adjacent forward RoPE nodes sharing one
   // scalar offset input, one stream, float16 storage, identical rope
   // state (dims, traditional, base, scale, forward; no freqs), and no
@@ -3207,6 +3447,243 @@ bool rope_norm_pair_enabled() {
       std::strcmp(env, "0") != 0;
 }
 
+bool sdpa_online_rope_enabled(const CapabilityReport& caps, uint32_t k_len) {
+  if (!fused_chain_enabled()) {
+    return false;
+  }
+  const char* env = omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE_ROPE");
+  if (env != nullptr && env[0] != '\0') {
+    return std::strcmp(env, "0") != 0;
+  }
+  const char* online_env = omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE");
+  if (online_env != nullptr && std::strcmp(online_env, "0") == 0) {
+    return false;
+  }
+  constexpr VkSubgroupFeatureFlags kOnlineRopeSubgroupFeatures =
+      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+  if (caps.subgroup_size != 32u ||
+      caps.max_compute_work_group_invocations < 1024u ||
+      caps.max_compute_work_group_size[0] < 1024u ||
+      caps.max_compute_shared_memory_size < 16896u ||
+      (caps.subgroup_operations & kOnlineRopeSubgroupFeatures) !=
+          kOnlineRopeSubgroupFeatures) {
+    return false;
+  }
+  return sdpa_online_rope_default(caps.device_name, k_len);
+}
+
+static bool resolve_sdpa_rope_head_stride(
+    const array& raw,
+    const std::optional<array>& view,
+    const std::shared_ptr<Primitive>& view_prim,
+    int expected_heads,
+    uint32_t& head_stride_out) {
+  if (raw.data_shared_ptr() == nullptr || raw.dtype() != bfloat16 ||
+      raw.offset() % raw.itemsize() != 0) {
+    return false;
+  }
+  auto contiguous_strides = [](const Shape& shape) {
+    Strides strides(shape.size(), 0);
+    strides.back() = 1;
+    for (int ax = static_cast<int>(shape.size()) - 2; ax >= 0; --ax) {
+      strides[ax] = strides[ax + 1] * shape[ax + 1];
+    }
+    return strides;
+  };
+  Strides strides;
+  Shape shape;
+  if (view.has_value()) {
+    if (!raw.flags().row_contiguous ||
+        view->offset() % view->itemsize() != 0 ||
+        view->shape(-1) != raw.shape(-1)) {
+      return false;
+    }
+    shape = view->shape();
+    Strides parent = contiguous_strides(raw.shape());
+    if (view_prim && typeid(*view_prim) == typeid(Transpose)) {
+      const auto& axes = static_cast<const Transpose&>(*view_prim).state();
+      if (axes.size() != static_cast<size_t>(view->ndim())) {
+        return false;
+      }
+      strides = Strides(axes.size(), 0);
+      for (size_t ax = 0; ax < axes.size(); ++ax) {
+        if (axes[ax] < 0 || static_cast<size_t>(axes[ax]) >= parent.size()) {
+          return false;
+        }
+        strides[ax] = parent[axes[ax]];
+      }
+    } else {
+      strides = contiguous_strides(view->shape());
+    }
+  } else {
+    shape = raw.shape();
+    strides = raw.strides();
+  }
+  if (shape.size() != 4 || shape[0] != 1 || shape[1] != expected_heads ||
+      shape[2] != 1 || shape[3] != 128 || strides[3] != 1 || strides[1] < 0) {
+    return false;
+  }
+  head_stride_out = static_cast<uint32_t>(strides[1]);
+  return true;
+}
+
+static void replay_sdpa_rope_side(
+    array& rope_node,
+    const std::shared_ptr<Primitive>& rope_prim,
+    const std::vector<array>& rope_inputs,
+    int norm_fold_idx,
+    const Stream& stream) {
+  if (rope_node.data_shared_ptr() != nullptr) {
+    return;
+  }
+  auto& encoder = get_command_encoder(stream);
+  if (norm_fold_idx >= 0 && eager_state != nullptr) {
+    auto& fold = eager_state->rope_norms[norm_fold_idx];
+    if (fold.state != RopeNormFold::State::done) {
+      fold.state = RopeNormFold::State::failed;
+      encoder.add_temporary(fold.x);
+      encoder.add_temporary(fold.w);
+      std::vector<array> norm_in{fold.x, fold.w};
+      std::vector<array> norm_out{fold.norm};
+      fold.norm_prim->eval_gpu(norm_in, norm_out);
+      if (fold.view.has_value()) {
+        encoder.add_temporary(fold.norm);
+        std::vector<array> view_in{fold.norm};
+        std::vector<array> view_out{*fold.view};
+        fold.view_prim->eval_gpu(view_in, view_out);
+      }
+    }
+  }
+  for (const auto& in : rope_inputs) {
+    encoder.add_temporary(in);
+  }
+  std::vector<array> outs{rope_node};
+  rope_prim->eval_gpu(rope_inputs, outs);
+}
+
+const SdpaOnlineRopeCtx* find_sdpa_online_rope(
+    const array& out,
+    const Stream& stream) {
+  if (!eager_state) {
+    return nullptr;
+  }
+  auto it = eager_state->sdpa_online_rope_roles.find(out.id());
+  if (it == eager_state->sdpa_online_rope_roles.end()) {
+    return nullptr;
+  }
+  auto& plan = eager_state->sdpa_online_rope_plans[it->second];
+  if (plan.state != SdpaOnlineRopePlan::State::k_bound) {
+    return nullptr;
+  }
+  auto& pair = eager_state->slice_update_pairs[plan.pair_index];
+  uint32_t q_hs = 0;
+  uint32_t k_hs = 0;
+  const bool weights_ok = !plan.has_norm ||
+      (plan.q_weight.has_value() && plan.k_weight.has_value() &&
+       plan.q_weight->data_shared_ptr() != nullptr &&
+       plan.k_weight->data_shared_ptr() != nullptr &&
+       plan.q_weight->offset() % plan.q_weight->itemsize() == 0 &&
+       plan.k_weight->offset() % plan.k_weight->itemsize() == 0);
+  const bool off_ok = plan.offset.data_shared_ptr() != nullptr &&
+      plan.offset.offset() % plan.offset.itemsize() == 0;
+  if (!pair.windows[0].has_value() ||
+      pair.windows[0]->node.data_shared_ptr() == nullptr || !weights_ok ||
+      !off_ok ||
+      !resolve_sdpa_rope_head_stride(
+          plan.q_raw, plan.q_view, plan.q_view_prim, plan.sdpa.shape(1), q_hs) ||
+      !resolve_sdpa_rope_head_stride(
+          plan.k_raw,
+          plan.k_view,
+          plan.k_view_prim,
+          plan.k_rope.shape(1),
+          k_hs)) {
+    abort_sdpa_online_rope(out, stream);
+    return nullptr;
+  }
+  plan.ctx = SdpaOnlineRopeCtx{
+      &plan.q_raw,
+      &plan.k_raw,
+      &plan.offset,
+      plan.has_norm ? &*plan.q_weight : nullptr,
+      plan.has_norm ? &*plan.k_weight : nullptr,
+      &*pair.windows[0],
+      q_hs,
+      k_hs,
+      plan.has_norm,
+      plan.eps,
+      plan.base,
+      plan.scale};
+  return &plan.ctx;
+}
+
+void commit_sdpa_online_rope(const array& out) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->sdpa_online_rope_roles.find(out.id());
+  if (it == eager_state->sdpa_online_rope_roles.end()) {
+    return;
+  }
+  auto& plan = eager_state->sdpa_online_rope_plans[it->second];
+  plan.state = SdpaOnlineRopePlan::State::done;
+  if (plan.q_norm_fold >= 0) {
+    eager_state->rope_norms[plan.q_norm_fold].state = RopeNormFold::State::done;
+  }
+  if (plan.k_norm_fold >= 0) {
+    eager_state->rope_norms[plan.k_norm_fold].state = RopeNormFold::State::done;
+  }
+  if (omarchy::env_str("MLX_OMARCHY_SDPA_ROPE_TRACE") != nullptr) {
+    static int commit_trace = 0;
+    if (commit_trace < 4) {
+      ++commit_trace;
+      std::fprintf(stderr, "[sdpa-rope] committed=%d\n", commit_trace);
+    }
+  }
+}
+
+void abort_sdpa_online_rope(const array& out, const Stream& stream) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->sdpa_online_rope_roles.find(out.id());
+  if (it == eager_state->sdpa_online_rope_roles.end()) {
+    return;
+  }
+  auto& plan = eager_state->sdpa_online_rope_plans[it->second];
+  if (plan.state == SdpaOnlineRopePlan::State::done ||
+      plan.state == SdpaOnlineRopePlan::State::failed) {
+    return;
+  }
+  if (omarchy::env_str("MLX_OMARCHY_SDPA_ROPE_TRACE") != nullptr) {
+    static int abort_trace = 0;
+    if (abort_trace < 4) {
+      ++abort_trace;
+      std::fprintf(stderr, "[sdpa-rope] aborted=%d\n", abort_trace);
+    }
+  }
+  plan.state = SdpaOnlineRopePlan::State::failed;
+  auto& pair = eager_state->slice_update_pairs[plan.pair_index];
+  // k_su already bound window.node to k_cache storage: temporarily re-arm
+  // pair.state = pending so k_rope's replay writes straight into window.node.
+  if (pair.direct && pair.windows[0].has_value() &&
+      pair.windows[0]->node.data_shared_ptr() != nullptr) {
+    pair.state = SliceUpdatePair::State::pending;
+  }
+  if (plan.q_skipped) {
+    replay_sdpa_rope_side(
+        plan.q_rope, plan.q_rope_prim, plan.q_rope_inputs, plan.q_norm_fold, stream);
+  }
+  if (plan.k_skipped) {
+    replay_sdpa_rope_side(
+        plan.k_rope, plan.k_rope_prim, plan.k_rope_inputs, plan.k_norm_fold, stream);
+  }
+  if (pair.direct) {
+    pair.state = SliceUpdatePair::State::done;
+  }
+}
+
 KvDirectWindow* find_rope_kv_redirect(const array& out) {
   if (!eager_state) {
     return nullptr;
@@ -3283,6 +3760,12 @@ void commit_sdpa_transpose_out(const array& out) {
 }
 
 void bind_kv_window_storage(KvDirectWindow& window, const Stream& stream) {
+  if (window.node.data_shared_ptr() != nullptr) {
+    auto& encoder = get_command_encoder(stream);
+    encoder.add_temporary(window.node);
+    encoder.add_temporary(window.base);
+    return;
+  }
   if (window.in_place) {
     window.node.copy_shared_buffer(
         window.base,
@@ -3595,6 +4078,59 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return eager_state->rope_norms[*skip].state !=
         RopeNormFold::State::failed;
   }
+  if (auto sr_skip = eager_state->sdpa_online_rope_skip_roles.find(node.id());
+      sr_skip != eager_state->sdpa_online_rope_skip_roles.end()) {
+    auto& plan = eager_state->sdpa_online_rope_plans[sr_skip->second];
+    if (plan.state != SdpaOnlineRopePlan::State::failed ||
+        node.data_shared_ptr() != nullptr) {
+      if (node.id() == plan.q_rope.id()) {
+        plan.q_skipped = true;
+      } else if (node.id() == plan.k_rope.id()) {
+        plan.k_skipped = true;
+      }
+      return true;
+    }
+  }
+  if (auto sr_su = eager_state->sdpa_online_rope_su_roles.find(node.id());
+      sr_su != eager_state->sdpa_online_rope_su_roles.end()) {
+    auto& plan = eager_state->sdpa_online_rope_plans[sr_su->second];
+    if (plan.state == SdpaOnlineRopePlan::State::k_bound ||
+        plan.state == SdpaOnlineRopePlan::State::done) {
+      return true;
+    }
+    if (plan.state == SdpaOnlineRopePlan::State::pending) {
+      auto& pair = eager_state->slice_update_pairs[plan.pair_index];
+      // Only check KV-window readiness here; q_raw/k_raw may live on sibling
+      // tape branches not yet evaluated when v_su or k_su is visited. Their
+      // buffers and head strides are validated at SDPA time in
+      // find_sdpa_online_rope().
+      if (pair.direct && pair.values_committed && pair.windows[0].has_value() &&
+          pair.windows[1].has_value() &&
+          pair.windows[1]->node.data_shared_ptr() != nullptr &&
+          pair.windows[0]->base.data_shared_ptr() != nullptr) {
+        auto& win = *pair.windows[0];
+        bind_kv_window_storage(win, stream);
+        win.prebound = true;
+        pair.state = SliceUpdatePair::State::done;
+        plan.state = SdpaOnlineRopePlan::State::k_bound;
+        return true;
+      }
+      // Runtime refusal before binding k_su: only replay ropes that were
+      // already skipped (so their inputs are guaranteed evaluated); unvisited
+      // ropes will execute normally when reached on the tape.
+      plan.state = SdpaOnlineRopePlan::State::failed;
+      pair.direct = false;
+      pair.state = SliceUpdatePair::State::pending;
+      if (plan.q_skipped) {
+        replay_sdpa_rope_side(
+            plan.q_rope, plan.q_rope_prim, plan.q_rope_inputs, plan.q_norm_fold, stream);
+      }
+      if (plan.k_skipped) {
+        replay_sdpa_rope_side(
+            plan.k_rope, plan.k_rope_prim, plan.k_rope_inputs, plan.k_norm_fold, stream);
+      }
+    }
+  }
   if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
       rope_pair != nullptr) {
     auto& pair = eager_state->rope_pairs[*rope_pair];
@@ -3758,14 +4294,11 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
             (w.base.dtype() != float16 && w.base.dtype() != bfloat16) ||
             !w.base.flags().row_contiguous ||
             w.base.size() != w.base.data_size() ||
-            w.base.offset() % w.base.itemsize() != 0 ||
-            w.base.data_shared_ptr() == nullptr) {
+            w.base.offset() % w.base.itemsize() != 0) {
           abort_kv_direct();
           group.sum_windows.clear();
           break;
         }
-        bind_kv_window_storage(w, stream);
-        commit_values_kv_write(w.node);
       }
       group.state = dispatch_dense_gemv_group(
                         group.nodes,
@@ -3776,6 +4309,11 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
                         stream)
           ? DenseGemvGroup::State::done
           : DenseGemvGroup::State::failed;
+      if (group.state == DenseGemvGroup::State::failed &&
+          !group.sum_windows.empty()) {
+        abort_kv_direct();
+        group.sum_windows.clear();
+      }
     }
     return group.state == DenseGemvGroup::State::done;
   }

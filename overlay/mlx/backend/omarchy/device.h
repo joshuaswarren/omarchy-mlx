@@ -1204,6 +1204,30 @@ inline bool sdpa_online_default(const std::string& device_name, uint32_t k_len) 
   return max_keys != 0u && k_len <= max_keys;
 }
 
+// Single-dispatch fused Q/K RMSNorm + RoPE + KV-cache write + online-softmax
+// bf16 decode SDPA for head width 128 (shaders/sdpa_decode_online_rope.comp).
+// Largest cache length, in keys, up to which the fused route is the default
+// on a part. 0 keeps separate FastRopeNormBF16 + SdpaDecodeOnlineBF16.
+//
+// G13C (Apple M1 Max, 32 GPU cores): Qwen3-4B 4-bit decode 5-pair ABBA atop
+// #997 + #984 wins +1.42% (ctx 256, 5/5), +1.36% (ctx 512, 5/5, 104.68 tok/s),
+// +1.63% (ctx 1024, 4/5), and +1.71% (ctx 2048, 5/5) with bit-identical greedy
+// token IDs; capped at 2304 keys to match sdpa_online_max_keys().
+inline uint32_t sdpa_online_rope_max_keys(const std::string& device_name) {
+  if (const char* env =
+          std::getenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_MAX_KEYS")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
+  if (device_name.find("G13C") != std::string::npos) return 2304u;
+  return 0u;
+}
+
+inline bool sdpa_online_rope_default(
+    const std::string& device_name, uint32_t k_len) {
+  uint32_t max_keys = sdpa_online_rope_max_keys(device_name);
+  return max_keys != 0u && k_len <= max_keys;
+}
+
 // Width-256 value-phase pass 1 (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Four query heads per
 // key-value head only (the partial-sum tile for eight would not fit in shared memory), and V element offset, head stride and key stride multiples of 8 (16-byte
 // loads). Flag values: unset follows the per-chip default below; "0" keeps the old pass 1 at every length; any other non-empty value selects the variant.

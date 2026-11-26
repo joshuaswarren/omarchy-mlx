@@ -11753,7 +11753,7 @@ bool dispatch_quantized_gemv_group(
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
     const array& x,
-    const std::optional<KvDirectWindow>* sum_windows,
+    std::optional<KvDirectWindow>* sum_windows,
     const Stream& stream) {
   if (nodes.size() < 2 || nodes.size() > kDenseVecMultiWeights) {
     return false;
@@ -11834,8 +11834,10 @@ bool dispatch_dense_gemv_group(
   bool any_window = false;
   for (size_t i = 0; i < nodes.size(); ++i) {
     if (sum_windows && sum_windows[i]) {
-      // The caller installed the window storage (in place: the live
-      // cache; otherwise a fresh copy enqueued before this dispatch).
+      // All dispatch checks passed: install the KV window storage now so a
+      // capability/shape refusal above never commits a direct write.
+      bind_kv_window_storage(*sum_windows[i], stream);
+      commit_values_kv_write(sum_windows[i]->node);
       any_window = true;
       continue;
     }
@@ -11843,12 +11845,14 @@ bool dispatch_dense_gemv_group(
   }
   std::array<ComputeBinding, kDenseVecMultiBindings> bindings{};
   bindings[0] = binding(x);
-  const ComputeBinding filler = binding(nodes[0]);
+  const ComputeBinding filler = binding(x);
   for (uint32_t i = 0; i < kDenseVecMultiWeights; ++i) {
     const uint32_t base = 1 + i * kDenseVecMultiBindingsPerWeight;
     if (i < nodes.size()) {
       bindings[base] = binding(nodes[i].inputs()[1]);
-      bindings[base + 1] = binding(nodes[i]);
+      bindings[base + 1] = (sum_windows && sum_windows[i])
+          ? binding(sum_windows[i]->node)
+          : binding(nodes[i]);
     } else {
       bindings[base] = filler;
       bindings[base + 1] = filler;
@@ -18202,7 +18206,8 @@ void rope_trig_gate(
     float base,
     float scale,
     const array& out) {
-  Stream stream = out.primitive().stream();
+  Stream stream =
+      out.has_primitive() ? out.primitive().stream() : default_stream(Device::gpu);
   int T = in.shape(-2);
   float worst_offset;
   if (offset.size() == 1) {
@@ -18391,7 +18396,7 @@ void RoPE::eval_gpu(
     omarchy::KvDirectWindow& window = *kv_window;
     // The rope writes its rows into the buffer the member array exposes.
     if (
-        window.node.data_shared_ptr() != nullptr ||
+        (!window.prebound && window.node.data_shared_ptr() != nullptr) ||
         window.base.data_shared_ptr() == nullptr ||
         window.base.dtype() != out.dtype() ||
         (out.dtype() == bfloat16 && (kv_window->offset & 1u) != 0u) ||
@@ -18710,6 +18715,118 @@ void ScaledDotProductAttention::eval_gpu(
   if (out.size() == 0) {
     out.set_data(allocate_omarchy(out.nbytes()));
     return;
+  }
+
+  // Single-dispatch fused Q/K RMSNorm+RoPE+KV-cache-write+online-softmax bf16
+  // decode SDPA (HD=128, batch 1, q_len 1). Runs before any access to q's data
+  // buffer because q_rope and k_rope were skipped on the tape.
+  if (const omarchy::SdpaOnlineRopeCtx* rope_ctx =
+          omarchy::find_sdpa_online_rope(out, s)) {
+    const auto& decode_caps = encoder.device().capabilities();
+    constexpr VkSubgroupFeatureFlags kOnlineRopeSubgroupFeatures =
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+        VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+    const bool online_rope_device_ready = decode_caps.subgroup_size == 32u &&
+        decode_caps.max_compute_work_group_invocations >= 1024u &&
+        decode_caps.max_compute_work_group_size[0] >= 1024u &&
+        decode_caps.max_compute_shared_memory_size >= 16896u &&
+        (decode_caps.subgroup_operations & kOnlineRopeSubgroupFeatures) ==
+            kOnlineRopeSubgroupFeatures;
+    bool dispatched = false;
+    if (online_rope_device_ready && q.dtype() == bfloat16 &&
+        k.dtype() == bfloat16 && v.dtype() == bfloat16 &&
+        out.dtype() == bfloat16 && inputs.size() == 3 && !has_sinks_ &&
+        !output_logsumexp_ && batch == 1 && q_len == 1 && head_dim == 128 &&
+        v_dim == 128 && k_len > 0 && kv_heads > 0 && heads % kv_heads == 0 &&
+        k.strides()[3] == 1 && v.strides()[3] == 1 &&
+        k.strides()[1] % 4 == 0 && k.strides()[2] % 4 == 0 &&
+        v.strides()[1] % 4 == 0 && v.strides()[2] % 4 == 0 &&
+        rope_ctx->k_window != nullptr &&
+        rope_ctx->k_window->node.data_shared_ptr() != nullptr &&
+        k.data_shared_ptr() != nullptr && v.data_shared_ptr() != nullptr &&
+        k.buffer().ptr() == rope_ctx->k_window->node.buffer().ptr() &&
+        rope_ctx->k_window->strides[0] ==
+            static_cast<uint32_t>(k.strides()[1])) {
+      const uint32_t k_base_elems = checked_item_offset(k, k.size(), tag, out);
+      const uint32_t v_base_elems = checked_item_offset(v, v.size(), tag, out);
+      const uint32_t k_win_node_elems = checked_item_offset(
+          rope_ctx->k_window->node, rope_ctx->k_window->node.size(), tag, out);
+      const uint32_t k_write_elems =
+          k_win_node_elems + rope_ctx->k_window->offset;
+      const uint64_t expected_write = static_cast<uint64_t>(k_base_elems) +
+          static_cast<uint64_t>(k_len - 1) *
+              static_cast<uint64_t>(k.strides()[2]);
+      if (k_base_elems % 4u == 0u && v_base_elems % 4u == 0u &&
+          k_write_elems % 4u == 0u &&
+          static_cast<uint64_t>(k_write_elems) == expected_write) {
+        out.set_data(allocate_omarchy(out.nbytes()));
+        const array& q_raw = *rope_ctx->q_raw;
+        const array& k_raw = *rope_ctx->k_raw;
+        const array& off = *rope_ctx->offset;
+        const array& qw = rope_ctx->has_norm ? *rope_ctx->q_weight : q_raw;
+        const array& kw = rope_ctx->has_norm ? *rope_ctx->k_weight : k_raw;
+        encoder.add_temporary(q_raw);
+        encoder.add_temporary(k_raw);
+        encoder.add_temporary(off);
+        if (rope_ctx->has_norm) {
+          encoder.add_temporary(qw);
+          encoder.add_temporary(kw);
+        }
+        encoder.add_temporary(rope_ctx->k_window->node);
+        omarchy::ComputeParams rp;
+        rp.count = k_write_elems >> 2u;
+        rp.operation = std::bit_cast<uint32_t>(rope_ctx->norm_eps);
+        rp.lhs_size =
+            rope_ctx->has_norm ? checked_item_offset(qw, qw.size(), tag, out)
+                               : 0u;
+        rp.rhs_size =
+            rope_ctx->has_norm ? checked_item_offset(kw, kw.size(), tag, out)
+                               : 0u;
+        rp.reduce_size = rope_ctx->q_head_stride;
+        rp.output_size = rope_ctx->k_head_stride;
+        rp.lhs_offset = checked_item_offset(q_raw, q_raw.size(), tag, out);
+        rp.rhs_offset = k_base_elems;
+        rp.output_offset = checked_item_offset(out, out.size(), tag, out);
+        rp.aux_size = checked_item_offset(k_raw, k_raw.size(), tag, out);
+        rp.aux_offset = v_base_elems;
+        rp.matrix_m = checked_u32(heads, tag, out);
+        rp.matrix_n = checked_u32(kv_heads, tag, out);
+        rp.matrix_k = checked_u32(k_len, tag, out);
+        rp.flags = (rope_ctx->has_norm ? 1u : 0u) | 2u;
+        rp.alpha = scale_;
+        rp.beta = static_cast<float>(
+            std::log(static_cast<double>(rope_ctx->rope_base)) / 64.0);
+        rp.dims = checked_item_offset(off, off.size(), tag, out);
+        rp.shape[0] = std::bit_cast<uint32_t>(rope_ctx->rope_scale);
+        rp.shape[1] = checked_u32(k.strides()[1], tag, out);
+        rp.shape[2] = checked_u32(k.strides()[2], tag, out);
+        rp.shape[3] = rope_ctx->k_window->strides[0];
+        rp.in_strides[1] = checked_u32(v.strides()[1], tag, out);
+        rp.in_strides[2] = checked_u32(v.strides()[2], tag, out);
+        rp.out_strides[0] = checked_u32(out.strides()[1], tag, out);
+        std::array<omarchy::ComputeBinding, 8> rb{
+            binding(q_raw),
+            binding(k),
+            binding(v),
+            binding(out),
+            binding(k_raw),
+            binding(qw),
+            binding(kw),
+            binding(off)};
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128,
+            rb,
+            rp,
+            rp.matrix_m);
+        omarchy::commit_sdpa_online_rope(out);
+        dispatched = true;
+      }
+    }
+    if (dispatched) {
+      return;
+    }
+    omarchy::abort_sdpa_online_rope(out, s);
   }
 
   // Shared commit of the attention result into the output: with GQA the
