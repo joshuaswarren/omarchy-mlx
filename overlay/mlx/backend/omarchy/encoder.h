@@ -324,7 +324,8 @@ inline bool defer_commits_enabled(std::string_view device_name) {
 // can assert the schedule contract without a device.
 MLX_API std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes);
 
-class MLX_API CommandEncoder {
+class MLX_API CommandEncoder
+    : public std::enable_shared_from_this<CommandEncoder> {
  public:
   explicit CommandEncoder(Device& device);
   ~CommandEncoder();
@@ -339,6 +340,7 @@ class MLX_API CommandEncoder {
   // driver provably finished that submission. No shared_ptr is held:
   // eager donation (is_donatable) must see the input's refcount at 1.
   void add_temporary(const array& arr) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     auto data = arr.data_shared_ptr();
     if (!data) {
       return;
@@ -358,6 +360,7 @@ class MLX_API CommandEncoder {
   // with completion == 0 while the queued commands still reference
   // them, and then be recycled or destroyed mid-flight.
   void note_binding_owner(const void* owner) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     auto* buf = static_cast<VulkanBuffer*>(const_cast<void*>(owner));
     if (!buf) {
       return;
@@ -369,6 +372,7 @@ class MLX_API CommandEncoder {
   // Handlers run on the device completion thread when this submission's
   // GPU work finishes.
   void add_completed_handler(std::function<void()> task) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     completed_handlers_.push_back(std::move(task));
   }
 
@@ -479,6 +483,7 @@ class MLX_API CommandEncoder {
       VkSemaphore semaphore,
       uint64_t value,
       std::shared_ptr<void> keepalive) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     std::lock_guard<std::mutex> lk(pending_sem_mutex_);
     wait_semaphores_.push_back({semaphore, value, std::move(keepalive)});
   }
@@ -488,6 +493,7 @@ class MLX_API CommandEncoder {
       uint64_t value,
       std::shared_ptr<void> keepalive,
       std::function<void(uint64_t)> on_submit = {}) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     std::lock_guard<std::mutex> lk(pending_sem_mutex_);
     signal_semaphores_.push_back(
         {semaphore, value, std::move(keepalive), std::move(on_submit)});
@@ -714,13 +720,20 @@ class MLX_API CommandEncoder {
   uint64_t last_completion_{0};
   VkDescriptorPool desc_pool_{VK_NULL_HANDLE};
   uint32_t desc_pool_remaining_{0};
+  // Serializes every mutation of encoder state: deferred signals let a
+  // waiter on another thread commit this encoder, and a foreign commit
+  // is only legal when recording, queueing, and submit() cannot overlap
+  // (Vulkan's external-synchronization rule). Recursive because public
+  // entry points nest (synchronize -> commit -> submit, dispatch ->
+  // emit_pending). Readers stay lock-free.
+  std::recursive_mutex op_mutex_;
   // Guards the pending semaphore lists: deferred signals let a waiter on
   // another thread commit this encoder, so queueing and submit()'s
   // snapshot must serialize against each other.
   std::mutex pending_sem_mutex_;
   std::vector<PendingSemaphore> wait_semaphores_;
   std::vector<PendingSemaphore> signal_semaphores_;
-  bool deferred_signals_pending_{false};
+  std::atomic<bool> deferred_signals_pending_{false};
   // Raw buffers referenced by the open batch, pre-bound once each: a
   // persistent buffer (weights, KV) touched by many dispatches inserts
   // on its first binding and dedups on every later one, so submit() and
@@ -753,8 +766,10 @@ class MLX_API CommandEncoder {
 };
 
 MLX_API CommandEncoder& get_command_encoder(Stream s);
-std::unordered_map<int, CommandEncoder>& get_command_encoders();
-std::unordered_map<int, CommandEncoder>& get_global_command_encoders();
+std::unordered_map<int, std::shared_ptr<CommandEncoder>>&
+get_command_encoders();
+std::unordered_map<int, std::shared_ptr<CommandEncoder>>&
+get_global_command_encoders();
 void synchronize_pending_encoders();
 
 // Commit every encoder holding a deferred event signal. Waiters call this

@@ -186,7 +186,7 @@ void Event::wait() {
   if (value() == 0) {
     return;
   }
-  event.has_waiters_.store(true, std::memory_order_release);
+  event.has_waiters_.store(true, std::memory_order_seq_cst);
   // Deferred commits: a queued signal (or the completed-handler that would
   // signal a host event) may sit in an uncommitted batch. Flush the
   // encoders that owe one so this wait always has a submission to observe.
@@ -247,7 +247,7 @@ void Event::wait(Stream s) {
   if (value() == 0) {
     return;
   }
-  event.has_waiters_.store(true, std::memory_order_release);
+  event.has_waiters_.store(true, std::memory_order_seq_cst);
   if (s.device == Device::gpu) {
     VkSemaphore semaphore = event.host
         ? event.bridge_host_to_gpu(s, value())
@@ -321,10 +321,17 @@ void Event::signal(Stream s) {
       encoder.add_completed_handler([impl, target_value, keepalive]() {
         impl->signal_host(target_value);
       });
-      if (!event.has_waiters_.load(std::memory_order_acquire) &&
-          omarchy::defer_commits_enabled(
+      if (omarchy::defer_commits_enabled(
               encoder.device().hardware_capabilities().device_name)) {
+        // Register first, then check for waiters: a wait that lands
+        // between the note and this load is seen here (seq_cst), and a
+        // wait that lands after it finds the registry entry and flushes
+        // the encoder itself. Checking first would leave a gap where the
+        // signal registers after the wait already flushed.
         encoder.note_deferred_signals();
+        if (event.has_waiters_.load(std::memory_order_seq_cst)) {
+          encoder.commit();
+        }
       } else {
         encoder.commit();
       }
@@ -372,10 +379,17 @@ void Event::signal(Stream s) {
       // An event that already has waiters cannot defer: its wait may be
       // queued (or blocking) before this signal runs, leaving no later
       // point that provably flushes the producer.
-      if (!event.has_waiters_.load(std::memory_order_acquire) &&
-          omarchy::defer_commits_enabled(
+      if (omarchy::defer_commits_enabled(
               encoder.device().hardware_capabilities().device_name)) {
+        // Register first, then check for waiters: a wait that lands
+        // between the note and this load is seen here (seq_cst), and a
+        // wait that lands after it finds the registry entry and flushes
+        // the encoder itself. Checking first would leave a gap where the
+        // signal registers after the wait already flushed.
         encoder.note_deferred_signals();
+        if (event.has_waiters_.load(std::memory_order_seq_cst)) {
+          encoder.commit();
+        }
       } else {
         encoder.commit();
       }
@@ -392,10 +406,19 @@ bool Event::is_signaled() const {
   if (!event.is_created()) {
     return false;
   }
-  if (event.host) {
-    return event.host->signaled(value());
+  bool signaled = event.host
+      ? event.host->signaled(value())
+      : event.gpu->counter() >= value();
+  if (!signaled) {
+    // A deferred signal may sit uncommitted in the producer's batch; a
+    // poller is a waiter, so give the flush a chance to submit it before
+    // answering false.
+    omarchy::flush_deferred_signal_encoders();
+    signaled = event.host
+        ? event.host->signaled(value())
+        : event.gpu->counter() >= value();
   }
-  return event.gpu->counter() >= value();
+  return signaled;
 }
 
 std::atomic<Error*>& Event::error() {

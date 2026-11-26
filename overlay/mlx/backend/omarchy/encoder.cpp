@@ -257,31 +257,32 @@ CommandEncoder::CommandEncoder(Device& device) : device_(device) {
 
 // Encoders that owe a deferred event signal, process-wide. get_command_
 // encoders() is thread-local, so a wait on another thread cannot reach
-// the producer's encoder through it; this set is the cross-thread route.
+// the producer's encoder through it; this map is the cross-thread route.
+// Weak ownership: the flush may outlive the producer thread, and a raw
+// pointer dereferenced after the registry lock drops is a UAF — the
+// weak_ptr expires with the encoder instead.
 namespace {
 std::mutex& deferred_signal_registry_mutex() {
   static std::mutex m;
   return m;
 }
-std::unordered_set<CommandEncoder*>& deferred_signal_registry() {
-  static std::unordered_set<CommandEncoder*> encoders;
+std::unordered_map<CommandEncoder*, std::weak_ptr<CommandEncoder>>&
+deferred_signal_registry() {
+  static std::unordered_map<CommandEncoder*, std::weak_ptr<CommandEncoder>>
+      encoders;
   return encoders;
 }
 } // namespace
 
 void CommandEncoder::note_deferred_signals() {
-  if (!deferred_signals_pending_) {
-    deferred_signals_pending_ = true;
+  if (!deferred_signals_pending_.exchange(
+          true, std::memory_order_acq_rel)) {
     std::lock_guard<std::mutex> lk(deferred_signal_registry_mutex());
-    deferred_signal_registry().insert(this);
+    deferred_signal_registry()[this] = weak_from_this();
   }
 }
 
 CommandEncoder::~CommandEncoder() {
-  {
-    std::lock_guard<std::mutex> lk(deferred_signal_registry_mutex());
-    deferred_signal_registry().erase(this);
-  }
   // Drain pending work (and its temporaries) while the device is alive.
   // A wedged queue throws here; swallow so destruction can continue, the
   // bounded error already surfaced through synchronize().
@@ -413,6 +414,8 @@ void CommandEncoder::upload_device_local_if_needed(
     VkDeviceSize offset,
     VkDeviceSize range,
     bool exact_write_coverage) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   if (!vb || !vb->device_local) {
     return;
   }
@@ -516,6 +519,8 @@ void CommandEncoder::copy_buffer(
     VkDeviceSize size,
     VkDeviceSize src_offset,
     VkDeviceSize dst_offset) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   auto* src_vb = omarchy::allocator().lookup_buffer_handle(src);
   auto* dst_vb = omarchy::allocator().lookup_buffer_handle(dst);
   if (src_vb && src_vb == dst_vb) {
@@ -582,6 +587,8 @@ void CommandEncoder::fill_buffer(
     uint32_t value,
     VkDeviceSize size,
     VkDeviceSize offset) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   auto* dst_vb = omarchy::allocator().lookup_buffer_handle(dst);
   upload_device_local_if_needed(dst_vb, false, true, offset, size, true);
   commit_device_local_write(dst_vb);
@@ -624,6 +631,8 @@ void CommandEncoder::fill_buffer(
 }
 
 ComputeBinding CommandEncoder::resnorm_ticket_binding() {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   if (!resnorm_ticket_buf_.ptr()) {
     resnorm_ticket_buf_ = omarchy::allocator().malloc(
         kInFlightCommandBuffers * kResNormTicketStride);
@@ -671,6 +680,8 @@ ComputeBinding CommandEncoder::resnorm_ticket_binding() {
 // values increase along the queue).
 VkDescriptorSet CommandEncoder::acquire_descriptor_set(
     ComputeRuntime& compute) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   timeline::ScopedEvent tl_desc(
       timeline::Kind::DescUpdate, timeline::SubKind::DescAlloc, encoder_id_);
   auto& dt = vk::device_table();
@@ -753,6 +764,8 @@ void CommandEncoder::dispatch_compute(
     uint32_t group_count_x,
     uint32_t group_count_y,
     uint32_t group_count_z) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   if (group_count_x == 0 || group_count_y == 0 || group_count_z == 0) {
     return;
   }
@@ -775,6 +788,8 @@ void CommandEncoder::dispatch_compute(
     uint32_t group_count_x,
     uint32_t group_count_y,
     uint32_t group_count_z) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   if (group_count_x == 0 || group_count_y == 0 || group_count_z == 0) {
     return;
   }
@@ -799,6 +814,8 @@ void CommandEncoder::dispatch_compute(
     uint32_t group_count_x,
     uint32_t group_count_y,
     uint32_t group_count_z) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   if (group_count_x == 0 || group_count_y == 0 || group_count_z == 0) {
     return;
   }
@@ -821,6 +838,8 @@ void CommandEncoder::dispatch_compute_pipeline(
     uint32_t group_count_x,
     uint32_t group_count_y,
     uint32_t group_count_z) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   // The stuck-submit diagnostic names this kernel (trace.h); one relaxed
   // store per dispatch, unconditional so a hang report needs no env.
   trace::counters().last_dispatched_kernel.store(
@@ -1528,6 +1547,8 @@ void CommandEncoder::emit_pending() {
 }
 
 void CommandEncoder::commit() {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   if (!recording_ && pending_.empty() && wait_semaphores_.empty() &&
       signal_semaphores_.empty() && completed_handlers_.empty()) {
     trace::counters().commit_calls_noop++;
@@ -1551,6 +1572,8 @@ void CommandEncoder::synchronize(const char* reason) {
 }
 
 void CommandEncoder::wait_outstanding_submissions() {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+
   // Timeline wait on the device completion semaphore at the newest
   // reserved value: the next submission this encoder commits starts only
   // after every submission reserved so far, on any stream, has completed.
@@ -1968,28 +1991,32 @@ CommandEncoder& get_command_encoder(Stream s) {
           ") in current thread.");
     }
   }
-  return it->second;
+  return *it->second;
 }
 
-std::unordered_map<int, CommandEncoder>& get_command_encoders() {
-  static thread_local std::unordered_map<int, CommandEncoder> encoders;
+std::unordered_map<int, std::shared_ptr<CommandEncoder>>&
+get_command_encoders() {
+  static thread_local std::unordered_map<int, std::shared_ptr<CommandEncoder>>
+      encoders;
   return encoders;
 }
 
-std::unordered_map<int, CommandEncoder>& get_global_command_encoders() {
-  static std::unordered_map<int, CommandEncoder> global_encoders;
+std::unordered_map<int, std::shared_ptr<CommandEncoder>>&
+get_global_command_encoders() {
+  static std::unordered_map<int, std::shared_ptr<CommandEncoder>>
+      global_encoders;
   return global_encoders;
 }
 
 void synchronize_pending_encoders() {
   for (auto& [idx, enc] : get_command_encoders()) {
-    if (enc.needs_commit()) {
-      enc.synchronize("vram readback");
+    if (enc->needs_commit()) {
+      enc->synchronize("vram readback");
     }
   }
   for (auto& [idx, enc] : get_global_command_encoders()) {
-    if (enc.needs_commit()) {
-      enc.synchronize("vram readback");
+    if (enc->needs_commit()) {
+      enc->synchronize("vram readback");
     }
   }
 }
@@ -1999,15 +2026,23 @@ void flush_deferred_signal_encoders() {
   // note_deferred_signals() paths and must not hold it. Entries whose flag
   // cleared in the meantime (already submitted) are skipped, not pruned;
   // the destructor or the next flush drops them.
-  std::vector<CommandEncoder*> pending;
+  std::vector<std::weak_ptr<CommandEncoder>> pending;
   {
     std::lock_guard<std::mutex> lk(deferred_signal_registry_mutex());
-    pending.assign(
-        deferred_signal_registry().begin(), deferred_signal_registry().end());
+    pending.reserve(deferred_signal_registry().size());
+    for (auto& [ptr, weak] : deferred_signal_registry()) {
+      pending.push_back(weak);
+    }
     deferred_signal_registry().clear();
   }
-  for (auto* enc : pending) {
-    if (enc->deferred_signals_pending()) {
+  // Commits run outside the registry lock and under each encoder's
+  // op_mutex_, so a commit from a foreign thread serializes against the
+  // owner's recording. lock() keeps the encoder alive through its own
+  // destructor's wait: an expired entry means the producer already died,
+  // and its destructor drained the batch.
+  for (auto& weak : pending) {
+    std::shared_ptr<CommandEncoder> enc = weak.lock();
+    if (enc && enc->deferred_signals_pending()) {
       enc->commit();
     }
   }
