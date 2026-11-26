@@ -10616,6 +10616,7 @@ bool dispatch_quantized_gemv_group(
   // boundaries are deleted. Everything the shader cannot express
   // refuses the whole group, which falls back to ordinary evals.
   bool rope_epi_active = false;
+  bool member_route = false;
   int64_t epi_heads[2] = {0, 0};
   int epi_pattern[2] = {0, 0};
   int64_t epi_d = 0;
@@ -10759,6 +10760,87 @@ bool dispatch_quantized_gemv_group(
                 window.strides[2]);
           }
         }
+        rope_epi_active = false;
+      }
+    }
+    if (rope_epi_active) {
+      // The remaining refusals MUST decide here, inside the contract
+      // phase: the member allocation loop and the KV-window commits
+      // below run for every member before the dispatch reaches this
+      // point, and a return after commit_values_kv_write leaves
+      // pair.values_committed set so the fallback skips the values
+      // SliceUpdate. All reads are pure, so the window contract and
+      // the route election land alongside the rest of the checks.
+      const array& q_view = rope_epi->q.rope.inputs()[0];
+      const array& k_view = rope_epi->k.rope.inputs()[0];
+      array& q_member = members[rope_epi->q.member_index].node;
+      array& k_member = members[rope_epi->k.member_index].node;
+      const auto& win = *rope_epi->k.window;
+      if (win.node.data_shared_ptr() != nullptr ||
+          win.base.data_shared_ptr() == nullptr ||
+          win.base.dtype() != bfloat16 ||
+          !win.base.flags().row_contiguous ||
+          win.base.size() != win.base.data_size() ||
+          win.base.offset() % win.base.itemsize() != 0 ||
+          (win.offset & 1u) != 0u ||
+          !input_ready(win.base, stream)) {
+        if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+          static int trv = 0;
+          if (trv++ < 4) {
+            std::fprintf(
+                stderr,
+                "[epi-ctr] view: q_v=%p q_m=%p k_v=%p k_m=%p kn=%p kb=%p "
+                "bf16=%d rows=%d den=%d off=%u rdy=%d\n",
+                q_view.data_shared_ptr(),
+                q_member.data_shared_ptr(),
+                k_view.data_shared_ptr(),
+                k_member.data_shared_ptr(),
+                win.node.data_shared_ptr(),
+                win.base.data_shared_ptr(),
+                static_cast<int>(win.base.dtype() == bfloat16),
+                static_cast<int>(win.base.flags().row_contiguous),
+                static_cast<int>(win.base.size() == win.base.data_size()),
+                win.offset,
+                static_cast<int>(input_ready(win.base, stream)));
+          }
+        }
+        rope_epi_active = false;
+      }
+    }
+    if (rope_epi_active) {
+      // Per-member route election, decided here with the rest of the
+      // contract: the token4/member choice changes only dispatch
+      // layout, but the vd>128 refusal must fire before any member
+      // allocation or KV-window commit below. Live read (not cached):
+      // the A/B knob is toggled per eval in tests. rows/lhs_offset
+      // constraints match the member kernels' PACKED_ROPE_TOKEN
+      // dispatch table; lhs_offset is x.offset()/x.itemsize().
+      const char* epi_member_env = std::getenv("MLX_OMARCHY_ROPE_EPI_MEMBER");
+      const bool epi_member_route = epi_member_env == nullptr ||
+          epi_member_env[0] == '\0' || std::strcmp(epi_member_env, "0") != 0;
+      member_route = epi_member_route && rows <= 4u &&
+          encoder.device().compute().binding_limit() >= 9u &&
+          ((x.offset() / x.itemsize()) % 8u) == 0u;
+      for (size_t mi = 0; mi < members.size() && member_route; ++mi) {
+        const auto& member = members[mi];
+        member_route = !member.epilogue && !member.addend &&
+            !member.out_view;
+        // A rope member with its own KV window can't take the member
+        // route: binding 6 is already that rope's epilogue output, so
+        // the member window would have no slot (no such group exists
+        // today — k's window rides the rope contract, v's is a plain
+        // member).
+        member_route = member_route &&
+            !(member.sum_window &&
+              (rope_epi->q.member_index == mi ||
+               rope_epi->k.member_index == mi));
+      }
+      // The token4 mega-dispatch stages each token row's normed values
+      // in epi_block at 128 floats per subgroup: head dims above 128
+      // overwrite the next row's scratch. The member route covers up
+      // to 256; above 128 with no member route the group falls back to
+      // ordinary evals.
+      if (!member_route && epi_d > 128) {
         rope_epi_active = false;
       }
     }
@@ -11068,85 +11150,11 @@ bool dispatch_quantized_gemv_group(
     }
   }
   if (rope_epi_active) {
-    const array& q_view = rope_epi->q.rope.inputs()[0];
-    const array& k_view = rope_epi->k.rope.inputs()[0];
+    // Every refusal for this group already fired in the contract phase
+    // above: the member allocation loop and the values KV-window commit
+    // ran before this point, so nothing here may return false.
     const array& offset = rope_epi->q.rope.inputs()[1];
-    array& q_member = members[rope_epi->q.member_index].node;
-    array& k_member = members[rope_epi->k.member_index].node;
     auto& window = *rope_epi->k.window;
-    if (window.node.data_shared_ptr() != nullptr ||
-        window.base.data_shared_ptr() == nullptr ||
-        window.base.dtype() != bfloat16 ||
-        !window.base.flags().row_contiguous ||
-        window.base.size() != window.base.data_size() ||
-        window.base.offset() % window.base.itemsize() != 0 ||
-        (window.offset & 1u) != 0u ||
-        !input_ready(window.base, stream)) {
-      if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
-        static int trv = 0;
-        if (trv++ < 4) {
-          std::fprintf(
-              stderr,
-              "[epi-ctr] view: qv=%p qm=%p kv=%p km=%p wnode=%p "
-              "wbase=%p wd=%d wrc=%d wsz=%zu/%zu woff=%u wmod=%d wready=%d\n",
-              q_view.data_shared_ptr(),
-              q_member.data_shared_ptr(),
-              k_view.data_shared_ptr(),
-              k_member.data_shared_ptr(),
-              window.node.data_shared_ptr(),
-              window.base.data_shared_ptr(),
-              static_cast<int>(window.base.dtype() == bfloat16),
-              window.base.flags().row_contiguous,
-              window.base.size(),
-              window.base.data_size(),
-              window.offset,
-              static_cast<int>(window.base.offset() % window.base.itemsize()),
-              input_ready(window.base, stream));
-        }
-      }
-      // The skipped ropes would stay unmaterialized: fall back before
-      // anything is committed so the group evaluates ordinarily.
-      return false;
-    }
-    // Per-member route (default on; MLX_OMARCHY_ROPE_EPI_MEMBER=0 keeps
-    // the token4 mega-dispatch for A/B): each member goes through its
-    // own Rows8 dispatch — the kernel the unfused path already picks for
-    // this shape — and the two rope members carry the fused
-    // RMSNorm+RoPE tail on bindings 5-8. Every tail read stays inside
-    // its own dispatch (the rope's rotary is per-tensor, so the sides
-    // never depend on each other's member output), which drops the
-    // 768-workgroup joint dispatch entirely. Members with an Add
-    // epilogue, a sum window, a dual-write view, or an unaligned x base
-    // fall back to the token4 dispatch below. Read live (not cached):
-    // the A/B knob is toggled per eval in tests.
-    const char* epi_member_env = std::getenv("MLX_OMARCHY_ROPE_EPI_MEMBER");
-    const bool epi_member_route = epi_member_env == nullptr ||
-        epi_member_env[0] == '\0' || std::strcmp(epi_member_env, "0") != 0;
-    bool member_route = epi_member_route && rows <= 4u &&
-        encoder.device().compute().binding_limit() >= 9u &&
-        (params.lhs_offset % 8u) == 0u;
-    for (size_t mi = 0; mi < members.size() && member_route; ++mi) {
-      const auto& member = members[mi];
-      member_route = !member.epilogue && !member.addend &&
-          !member.out_view;
-      // A rope member with its own KV window can't take the member
-      // route: binding 6 is already that rope's epilogue output, so the
-      // member window would have no slot (no such group exists today —
-      // k's window rides the rope contract, v's is a plain member).
-      member_route = member_route &&
-          !(member.sum_window &&
-            (rope_epi->q.member_index == mi ||
-             rope_epi->k.member_index == mi));
-    }
-    // The token4 mega-dispatch stages each token row's normed values in
-    // epi_block at 128 floats per subgroup (blk = sub_id * 128u): head
-    // dims above 128 overwrite the next row's scratch. The member route
-    // covers up to 256; above 128 with no member route the group falls
-    // back to ordinary evals. Refuse before binding the window or
-    // allocating the rope outputs: those writes persist past a fallback.
-    if (!member_route && epi_d > 128) {
-      return false;
-    }
     bind_kv_window_storage(window, stream);
     rope_epi->q.rope.set_data(
         allocator().malloc(rope_epi->q.rope.nbytes()));
