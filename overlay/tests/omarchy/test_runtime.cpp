@@ -2420,6 +2420,141 @@ TEST_CASE("cross-stream event ordering is preserved") {
   omarchy::allocator().free(dst);
 }
 
+namespace {
+// RAII pin for defer_commits_test_override so a failing CHECK cannot leak
+// the mode into later cases.
+struct DeferOverride {
+  explicit DeferOverride(long long v) {
+    prev = omarchy::defer_commits_test_override().exchange(v);
+  }
+  ~DeferOverride() {
+    omarchy::defer_commits_test_override().store(prev);
+  }
+  long long prev;
+};
+} // namespace
+
+TEST_CASE("wait-before-signal ordering holds under deferred commits") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  DeferOverride defer(1);
+  Stream a = new_stream(Device::gpu);
+  Stream b = new_stream(Device::gpu);
+
+  constexpr size_t kBytes = 1 << 16;
+  auto src = omarchy::allocator().malloc(kBytes);
+  auto mid = omarchy::allocator().malloc(kBytes);
+  auto dst = omarchy::allocator().malloc(kBytes);
+  auto* src_bytes =
+      static_cast<uint8_t*>(static_cast<omarchy::VulkanBuffer*>(src.ptr())->data);
+  auto* dst_bytes =
+      static_cast<uint8_t*>(static_cast<omarchy::VulkanBuffer*>(dst.ptr())->data);
+  for (size_t i = 0; i < kBytes; ++i) {
+    src_bytes[i] = static_cast<uint8_t>(i % 251);
+  }
+  std::memset(dst_bytes, 0, kBytes);
+
+  // The consumer queues its wait before the producer signals: a deferred
+  // signal must still submit (has_waiters forces it eager, and
+  // enc_b.synchronize()'s flush covers any signal that slipped through).
+  Event e{a};
+  e.set_value(1);
+  e.wait(b);
+
+  auto& enc_a = omarchy::get_command_encoder(a);
+  auto& enc_b = omarchy::get_command_encoder(b);
+  auto* src_buf = static_cast<omarchy::VulkanBuffer*>(src.ptr());
+  auto* mid_buf = static_cast<omarchy::VulkanBuffer*>(mid.ptr());
+  auto* dst_buf = static_cast<omarchy::VulkanBuffer*>(dst.ptr());
+
+  enc_a.copy_buffer(src_buf->buffer, mid_buf->buffer, kBytes);
+  e.signal(a);
+  enc_b.copy_buffer(mid_buf->buffer, dst_buf->buffer, kBytes);
+  enc_b.commit();
+  enc_b.synchronize();
+
+  size_t mismatches = 0;
+  for (size_t i = 0; i < kBytes; ++i) {
+    if (src_bytes[i] != dst_bytes[i]) {
+      mismatches++;
+    }
+  }
+  CHECK(mismatches == 0);
+
+  omarchy::allocator().free(src);
+  omarchy::allocator().free(mid);
+  omarchy::allocator().free(dst);
+}
+
+TEST_CASE("a deferred producer on another thread is flushed by the waiter") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  DeferOverride defer(1);
+  Stream host_s = new_stream(Device::gpu);
+  Event e{host_s};
+  e.set_value(1);
+
+  // The producer stream lives on the worker thread's encoder map: the
+  // waiter's flush cannot see it through get_command_encoders() and must
+  // reach it through the deferred-signal registry. The worker stays alive
+  // until the wait completes so its encoder stays registered.
+  std::atomic<bool> signaled{false};
+  std::atomic<bool> done{false};
+  std::thread producer([&]() {
+    Stream a = new_stream(Device::gpu);
+    auto& enc_a = omarchy::get_command_encoder(a);
+    auto buf = omarchy::allocator().malloc(4096);
+    enc_a.fill_buffer(
+        static_cast<omarchy::VulkanBuffer*>(buf.ptr())->buffer, 0x11, 4096);
+    e.signal(a); // defers: encoder is non-idle, event has no waiters yet
+    omarchy::allocator().free(buf);
+    signaled.store(true, std::memory_order_release);
+    while (!done.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+  });
+  while (!signaled.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  // Without the cross-thread flush this blocks until the watchdog.
+  e.wait();
+  done.store(true, std::memory_order_release);
+  producer.join();
+  CHECK(e.is_signaled());
+}
+
+TEST_CASE("coalesced signals on one event dedup to a single submission") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  DeferOverride defer(1);
+  Stream a = new_stream(Device::gpu);
+  auto& enc_a = omarchy::get_command_encoder(a);
+  auto buf = omarchy::allocator().malloc(4096);
+  auto* vb = static_cast<omarchy::VulkanBuffer*>(buf.ptr());
+
+  Event e{a};
+  e.set_value(1);
+  // Two queued signals for the same semaphore in one batch: the submit
+  // must emit the handle once at the max value, and both on_submit hooks
+  // still fire. A duplicate pSignalSemaphores entry trips validation (and
+  // drivers that reject the submit outright) on real hardware.
+  enc_a.fill_buffer(vb->buffer, 0x22, 4096);
+  e.signal(a);
+  e.set_value(2);
+  e.signal(a);
+  enc_a.commit();
+  enc_a.synchronize();
+
+  CHECK(e.is_signaled());
+  omarchy::allocator().free(buf);
+}
+
 TEST_CASE("handler-only commit runs handlers after prior queue work") {
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");

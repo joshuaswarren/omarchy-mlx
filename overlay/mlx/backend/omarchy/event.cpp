@@ -111,6 +111,10 @@ struct EventImpl {
   uint64_t signaled_completion{0};
   uint64_t signaled_value{0};
   std::atomic<bool> queued_signal{false};
+  // Set by any wait path. A waited-on event cannot defer its signal
+  // commit: the wait may already be queued (or blocking) before signal()
+  // runs, so nothing downstream of it is guaranteed to flush the producer.
+  std::atomic<bool> has_waiters_{false};
 
   void publish_signal(uint64_t value, uint64_t completion) {
     std::lock_guard<std::mutex> lk(signal_mtx);
@@ -182,6 +186,11 @@ void Event::wait() {
   if (value() == 0) {
     return;
   }
+  event.has_waiters_.store(true, std::memory_order_seq_cst);
+  // Deferred commits: a queued signal (or the completed-handler that would
+  // signal a host event) may sit in an uncommitted batch. Flush the
+  // encoders that owe one so this wait always has a submission to observe.
+  omarchy::flush_deferred_signal_encoders();
   if (event.host) {
     event.host->wait(value());
   } else {
@@ -238,6 +247,7 @@ void Event::wait(Stream s) {
   if (value() == 0) {
     return;
   }
+  event.has_waiters_.store(true, std::memory_order_seq_cst);
   if (s.device == Device::gpu) {
     VkSemaphore semaphore = event.host
         ? event.bridge_host_to_gpu(s, value())
@@ -251,10 +261,16 @@ void Event::wait(Stream s) {
               (unsigned long)value(),
               (unsigned long)s.index);
     }
+    // Deferred commits: the signal this wait expects may sit uncommitted.
+    // Flushing first submits it, so the wait lands in a strictly later
+    // submission (a same-submission signal would fire after the wait's
+    // execution began and deadlock the queue).
+    omarchy::flush_deferred_signal_encoders();
     encoder.add_semaphore_wait(semaphore, value(), event_);
   } else if (event.host) {
     uint64_t target_value = value();
     scheduler::wait_event(s, *this, [target_value](Event& self) {
+      omarchy::flush_deferred_signal_encoders();
       self.cast<EventImpl>().host->wait(target_value);
     });
   } else {
@@ -267,6 +283,7 @@ void Event::wait(Stream s) {
               (unsigned long)target_value);
     }
     scheduler::wait_event(s, *this, [target_value](Event& self) {
+      omarchy::flush_deferred_signal_encoders();
       auto& impl = self.cast<EventImpl>();
       omarchy::wait_for_timeline_progress(
           impl.gpu->device.handle(),
@@ -304,7 +321,20 @@ void Event::signal(Stream s) {
       encoder.add_completed_handler([impl, target_value, keepalive]() {
         impl->signal_host(target_value);
       });
-      encoder.commit();
+      if (omarchy::defer_commits_enabled(
+              encoder.device().hardware_capabilities().device_name)) {
+        // Register first, then check for waiters: a wait that lands
+        // between the note and this load is seen here (seq_cst), and a
+        // wait that lands after it finds the registry entry and flushes
+        // the encoder itself. Checking first would leave a gap where the
+        // signal registers after the wait already flushed.
+        encoder.note_deferred_signals();
+        if (event.has_waiters_.load(std::memory_order_seq_cst)) {
+          encoder.commit();
+        }
+      } else {
+        encoder.commit();
+      }
     } else {
       scheduler::signal_event(s, *this, [target_value](Event& self) {
         self.cast<EventImpl>().signal_host(target_value);
@@ -331,9 +361,38 @@ void Event::signal(Stream s) {
       event.publish_signal(value(), encoder.last_submitted_completion());
     } else {
       event.queued_signal.store(true, std::memory_order_release);
-      encoder.add_semaphore_signal(event.gpu->semaphore, value(), event_);
-      encoder.commit();
-      event.publish_signal(value(), encoder.last_submitted_completion());
+      // The carrying submission's completion value is unknown until the
+      // batch submits; the encoder fires the hook with it then.
+      EventImpl* impl = &event;
+      const uint64_t signal_value = value();
+      encoder.add_semaphore_signal(
+          event.gpu->semaphore,
+          signal_value,
+          event_,
+          [impl, signal_value, keepalive = event_](uint64_t completion) {
+            impl->publish_signal(signal_value, completion);
+          });
+      // Deferred commits: the signal rides the open batch to its next
+      // close instead of forcing a submission per eval boundary. Every
+      // wait path flushes deferred-signal encoders before blocking, so the
+      // signal always reaches the queue before a waiter can observe it.
+      // An event that already has waiters cannot defer: its wait may be
+      // queued (or blocking) before this signal runs, leaving no later
+      // point that provably flushes the producer.
+      if (omarchy::defer_commits_enabled(
+              encoder.device().hardware_capabilities().device_name)) {
+        // Register first, then check for waiters: a wait that lands
+        // between the note and this load is seen here (seq_cst), and a
+        // wait that lands after it finds the registry entry and flushes
+        // the encoder itself. Checking first would leave a gap where the
+        // signal registers after the wait already flushed.
+        encoder.note_deferred_signals();
+        if (event.has_waiters_.load(std::memory_order_seq_cst)) {
+          encoder.commit();
+        }
+      } else {
+        encoder.commit();
+      }
     }
   } else {
     uint64_t generation =
@@ -347,10 +406,19 @@ bool Event::is_signaled() const {
   if (!event.is_created()) {
     return false;
   }
-  if (event.host) {
-    return event.host->signaled(value());
+  bool signaled = event.host
+      ? event.host->signaled(value())
+      : event.gpu->counter() >= value();
+  if (!signaled) {
+    // A deferred signal may sit uncommitted in the producer's batch; a
+    // poller is a waiter, so give the flush a chance to submit it before
+    // answering false.
+    omarchy::flush_deferred_signal_encoders();
+    signaled = event.host
+        ? event.host->signaled(value())
+        : event.gpu->counter() >= value();
   }
-  return event.gpu->counter() >= value();
+  return signaled;
 }
 
 std::atomic<Error*>& Event::error() {

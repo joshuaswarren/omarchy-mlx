@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -279,6 +280,39 @@ inline bool batch_over_budget(
 // batch against Honeykrisp's 7.56 GiB heap without this (2026-09-08).
 inline constexpr size_t kBatchByteBudgetDivisor = 16;
 
+// Deferred commits (DEC-23): keep the open batch across graph-eval
+// boundaries so consecutive evals share one command buffer and one
+// submission instead of one submission per eval. Under defer, finalize()
+// returns without committing and Event::signal queues its semaphore signal
+// onto the open batch instead of self-submitting; the batch still closes at
+// the node/byte budgets inside eval() and whenever a waiter needs the work
+// (Event::wait, host reads, GPU-side event waits flush every encoder that
+// owes a deferred signal first). On the M6 (G18G), where each vkQueueSubmit
+// costs driver helper work, the eval-boundary commits were ~4 submissions
+// per decode token; deferral leaves the per-token host read as the single
+// commit point. Default on for G18G; MLX_OMARCHY_DEFER_COMMIT=1 enables it
+// elsewhere and =0 disables it everywhere.
+inline std::atomic<long long>& defer_commits_test_override() {
+  static std::atomic<long long> value{-1};
+  return value;
+}
+
+inline bool defer_commits_enabled(std::string_view device_name) {
+  if (const long long forced = defer_commits_test_override().load(
+          std::memory_order_relaxed);
+      forced >= 0) {
+    return forced != 0;
+  }
+  static const bool have_env =
+      std::getenv("MLX_OMARCHY_DEFER_COMMIT") != nullptr;
+  if (have_env) {
+    static const long long env_value =
+        std::atoll(std::getenv("MLX_OMARCHY_DEFER_COMMIT"));
+    return env_value != 0;
+  }
+  return device_name.find("G18G") != std::string_view::npos;
+}
+
 // Greedy earliest-wave schedule for one batch: level[i] is the smallest
 // wave index such that every earlier tape node that node i hazards sits
 // in a strictly smaller wave. A hazard is RAW (i reads a range an earlier
@@ -290,7 +324,8 @@ inline constexpr size_t kBatchByteBudgetDivisor = 16;
 // can assert the schedule contract without a device.
 MLX_API std::vector<uint32_t> wave_levels(std::span<const WaveNode> nodes);
 
-class MLX_API CommandEncoder {
+class MLX_API CommandEncoder
+    : public std::enable_shared_from_this<CommandEncoder> {
  public:
   explicit CommandEncoder(Device& device);
   ~CommandEncoder();
@@ -305,6 +340,7 @@ class MLX_API CommandEncoder {
   // driver provably finished that submission. No shared_ptr is held:
   // eager donation (is_donatable) must see the input's refcount at 1.
   void add_temporary(const array& arr) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     auto data = arr.data_shared_ptr();
     if (!data) {
       return;
@@ -324,6 +360,7 @@ class MLX_API CommandEncoder {
   // with completion == 0 while the queued commands still reference
   // them, and then be recycled or destroyed mid-flight.
   void note_binding_owner(const void* owner) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     auto* buf = static_cast<VulkanBuffer*>(const_cast<void*>(owner));
     if (!buf) {
       return;
@@ -335,11 +372,24 @@ class MLX_API CommandEncoder {
   // Handlers run on the device completion thread when this submission's
   // GPU work finishes.
   void add_completed_handler(std::function<void()> task) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     completed_handlers_.push_back(std::move(task));
   }
 
   bool needs_commit() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return node_count_ > 0;
+  }
+
+  // Deferred event signals (defer_commits_enabled): an Event::signal that
+  // queued onto this batch without committing. Setting the flag also
+  // registers the encoder in a process-wide set so flush_deferred_signal_
+  // encoders() can reach encoders owned by other threads; the flag clears
+  // at submit() and the entry is dropped by the flush or the destructor.
+  void note_deferred_signals();
+
+  bool deferred_signals_pending() const {
+    return deferred_signals_pending_;
   }
 
   // True while eval_compiled_tape is recording a tape node's dispatches.
@@ -353,12 +403,14 @@ class MLX_API CommandEncoder {
   // kBatchNodeBudget so a long graph cannot pin unbounded temporaries
   // behind one open command buffer.
   int nodes() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return node_count_;
   }
 
   // Summed dispatch work-group counts of the open batch: the bounded
   // GPU-time proxy the work budget flushes on (batch_work_budget).
   uint64_t batch_work() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return batch_work_;
   }
 
@@ -371,6 +423,7 @@ class MLX_API CommandEncoder {
   // still owes a batch flush takes the queued path, which submits and
   // releases.
   bool idle() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return !recording_ && pending_.empty() && wait_semaphores_.empty() &&
         signal_semaphores_.empty() && completed_handlers_.empty() &&
         batch_buffers_.empty();
@@ -434,14 +487,20 @@ class MLX_API CommandEncoder {
       VkSemaphore semaphore,
       uint64_t value,
       std::shared_ptr<void> keepalive) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+    std::lock_guard<std::mutex> lk(pending_sem_mutex_);
     wait_semaphores_.push_back({semaphore, value, std::move(keepalive)});
   }
 
   void add_semaphore_signal(
       VkSemaphore semaphore,
       uint64_t value,
-      std::shared_ptr<void> keepalive) {
-    signal_semaphores_.push_back({semaphore, value, std::move(keepalive)});
+      std::shared_ptr<void> keepalive,
+      std::function<void(uint64_t)> on_submit = {}) {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+    std::lock_guard<std::mutex> lk(pending_sem_mutex_);
+    signal_semaphores_.push_back(
+        {semaphore, value, std::move(keepalive), std::move(on_submit)});
   }
 
   // Submit recorded work, semaphore operations, and completion handlers.
@@ -475,6 +534,7 @@ class MLX_API CommandEncoder {
   // and its handlers have run, and no batch is open with un-submitted
   // work. Host reads of input bytes are then sound.
   bool synchronized() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return node_count_ == 0 &&
         (last_completion_ == 0 ||
          device_.completions().drained_value() >= last_completion_);
@@ -489,6 +549,7 @@ class MLX_API CommandEncoder {
   }
 
   uint64_t last_submitted_completion() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return last_completion_;
   }
 
@@ -501,16 +562,21 @@ class MLX_API CommandEncoder {
   // by many dispatches counts once (pre-binding), so this stays small on
   // weight/KV-heavy graphs.
   size_t open_batch_buffer_count() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return batch_buffers_.size();
   }
 
  private:
   // A semaphore operation pending in this encoder, plus the ownership token
-  // that keeps the semaphore's owner alive until GPU completion.
+  // that keeps the semaphore's owner alive until GPU completion. Signals may
+  // carry an on_submit hook: the encoder fires it with the submission's
+  // completion value so the Event can publish the generation that actually
+  // carries its signal (deferred signals do not know it at queue time).
   struct PendingSemaphore {
     VkSemaphore semaphore;
     uint64_t value;
     std::shared_ptr<void> keepalive;
+    std::function<void(uint64_t)> on_submit;
   };
 
   // One command buffer and one reusable execution-start marker. The event
@@ -666,8 +732,21 @@ class MLX_API CommandEncoder {
   uint64_t last_completion_{0};
   VkDescriptorPool desc_pool_{VK_NULL_HANDLE};
   uint32_t desc_pool_remaining_{0};
+  // Serializes every mutation of encoder state: deferred signals let a
+  // waiter on another thread commit this encoder, and a foreign commit
+  // is only legal when recording, queueing, and submit() cannot overlap
+  // (Vulkan's external-synchronization rule). Recursive because public
+  // entry points nest (synchronize -> commit -> submit, dispatch ->
+  // emit_pending). Readers lock too: a foreign submit() clears the STL
+  // containers these methods walk.
+  mutable std::recursive_mutex op_mutex_;
+  // Guards the pending semaphore lists: deferred signals let a waiter on
+  // another thread commit this encoder, so queueing and submit()'s
+  // snapshot must serialize against each other.
+  std::mutex pending_sem_mutex_;
   std::vector<PendingSemaphore> wait_semaphores_;
   std::vector<PendingSemaphore> signal_semaphores_;
+  std::atomic<bool> deferred_signals_pending_{false};
   // Raw buffers referenced by the open batch, pre-bound once each: a
   // persistent buffer (weights, KV) touched by many dispatches inserts
   // on its first binding and dedups on every later one, so submit() and
@@ -702,8 +781,16 @@ class MLX_API CommandEncoder {
 };
 
 MLX_API CommandEncoder& get_command_encoder(Stream s);
-std::unordered_map<int, CommandEncoder>& get_command_encoders();
-std::unordered_map<int, CommandEncoder>& get_global_command_encoders();
+std::unordered_map<int, std::shared_ptr<CommandEncoder>>&
+get_command_encoders();
+std::unordered_map<int, std::shared_ptr<CommandEncoder>>&
+get_global_command_encoders();
 void synchronize_pending_encoders();
+
+// Commit every encoder holding a deferred event signal. Waiters call this
+// before blocking on a timeline a queued signal could satisfy: the signal
+// rides the owning batch's submission, which must exist for the wait to
+// ever observe it.
+void flush_deferred_signal_encoders();
 
 } // namespace mlx::core::omarchy
