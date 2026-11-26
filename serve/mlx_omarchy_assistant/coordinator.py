@@ -401,7 +401,9 @@ def _refused(what, raw):
 class LocalModels:
     def __init__(self, manager):
         self.manager = manager
-        self.connection = None
+        # Each in-flight call's socket, kept here because http.client hands
+        # the socket of a close-delimited response to the response object.
+        self.sockets = {}
         self.lock = threading.Lock()
         self.tokenizer = None
         self.tokenizer_path = None
@@ -411,21 +413,27 @@ class LocalModels:
         if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "::1", "localhost"):
             raise ValueError("Model workers must use local loopback HTTP")
         connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=90)
+        connection.connect()
         with self.lock:
-            self.connection = connection
+            self.sockets[connection] = connection.sock
         return connection
 
-    def close_connection(self):
+    def _release(self, connection, response):
         with self.lock:
-            if self.connection:
-                if self.connection.sock:
-                    import socket
-                    try:
-                        self.connection.sock.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-                self.connection.close()
-                self.connection = None
+            self.sockets.pop(connection, None)
+        if response is not None:
+            response.close()  # a close-delimited response owns the socket
+        connection.close()
+
+    def close_connection(self):
+        """Unblock every in-flight call; each call's own finally closes it."""
+        import socket
+        with self.lock:
+            for sock in self.sockets.values():
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
 
     def count(self, path, messages):
         if self.tokenizer_path != path:
@@ -446,6 +454,7 @@ class LocalModels:
 
     def decision(self, pair, payload):
         connection = self._connect(pair["decision_url"])
+        response = None
         try:
             connection.request("POST", "/v1/decisions", json.dumps(payload), {"Content-Type": "application/json"})
             response = connection.getresponse()
@@ -463,10 +472,9 @@ class LocalModels:
                 raise _refused("Decision worker sent a response without an answers object", raw)
             return answer
         finally:
-            self.close_connection()
+            self._release(connection, response)
 
     def chat(self, pair, messages, max_tokens, cancel, phases=None, yield_headers=None):
-        connection = self._connect(pair["chat_url"])
         model = str((pair.get("model_paths") or {}).get("chat") or pair["chat_model"])
         # Greedy decoding loops on the 2B model ("Extra socks" until the token cap);
         # a mild penalty removed the loops in the 2026-09-28 card experiment.
@@ -474,7 +482,13 @@ class LocalModels:
                    "stream": True, "temperature": 0, "repetition_penalty": REPETITION_PENALTY,
                    "chat_template_kwargs": {"enable_thinking": False}}
         finish = None
+        if cancel.is_set():
+            return
+        connection = self._connect(pair["chat_url"])
+        response = None
         try:
+            if cancel.is_set():  # cancelled while connecting, before close_connection() could see the socket
+                return
             headers = {"Content-Type": "application/json"}
             if yield_headers:
                 headers.update(yield_headers)
@@ -531,7 +545,7 @@ class LocalModels:
             if not cancel.is_set():
                 yield ("finish", finish)
         finally:
-            self.close_connection()
+            self._release(connection, response)
 
 
 class _RoutingWorker:
