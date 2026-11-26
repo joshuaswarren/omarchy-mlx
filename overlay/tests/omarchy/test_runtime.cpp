@@ -853,13 +853,17 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // into two; receipts/2026-11-24-g14c-batch-work-200000).
   CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 200000);
 
-  // The G13C row carries receipts/2026-10-12-submission-cap-calibration:
-  // the 16-inch M1 Max keeps 40000 (both models at or under 1.6 ms p50).
+  // The G13C row (16-inch M1 Max) takes 80000
+  // (receipts/2026-11-26-g13c-batch-work-80000.md): the 40000 row split every
+  // Qwen3-4B decode token mid-eval at layer 29 (~60k WG, 2 submits/tok);
+  // 80000 keeps one decode step in one submit (decode p50 10.61 ms) while
+  // holding all-submissions (incl. ctx=2048 prefill) at p99 32.05 ms / max
+  // 32.09 ms (under 33.3 ms; 200000 reached 63.72 ms).
   // The 13-inch M1 takes 20000 under the tail rule of the G13S/G14G/G17P
   // rows (receipts/2026-11-21-g13g-batch-work-20000): Qwen3-4B submission
   // p99 24.1 ms (40000 reached 45.5 ms), decode +4.0% (2B) and +1.3% (4B)
   // against 8000, tokens identical.
-  CHECK(omarchy::calibrated_batch_work("Apple M1 Max (G13C)") == 40000);
+  CHECK(omarchy::calibrated_batch_work("Apple M1 Max (G13C)") == 80000);
   CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 20000);
 
   // receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p (tail/ rework): the
@@ -922,14 +926,16 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
 
   // Every calibrated row must sit between the off switch and a receipt-
   // bound ceiling: a calibrated value above 40000 would loosen the
-  // shipped cap on that board without a receipt saying why. G14C sits at
-  // 200000 (receipts/2026-11-24-g14c-batch-work-200000); G17C keeps the
-  // 100000 placeholder pending M5 calibration; G18G is uncapped
-  // (headless, receipts/2026-11-23-g621-batch-budget-submits) — naming
-  // its ceiling here also repairs the stale bound the row introduced.
+  // shipped cap on that board without a receipt saying why. G13C sits at
+  // 80000 (receipts/2026-11-26-g13c-batch-work-80000.md);
+  // G14C sits at 200000 (receipts/2026-11-24-g14c-batch-work-200000);
+  // G17C keeps the 100000 placeholder pending M5 calibration; G18G is
+  // uncapped (headless, receipts/2026-11-23-g621-batch-budget-submits) —
+  // naming its ceiling here also repairs the stale bound the row introduced.
   for (const auto& row : omarchy::kBatchWorkCalibration) {
     if (row.budget > 0) {
-      CHECK(row.budget <= (row.board == "G14C"   ? 200000
+      CHECK(row.budget <= (row.board == "G13C"   ? 80000
+                           : row.board == "G14C" ? 200000
                            : row.board == "G17C" ? 100000
                            : row.board == "G18G" ? UINT64_MAX
                                                  : 40000));
@@ -967,7 +973,7 @@ TEST_CASE("work budget resolves per device name, not per process") {
   // Two calibrated boards with different rows must observe their own
   // budgets however many devices ran before them: the first caller must
   // not pin the value for the process (issue 207).
-  CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 80000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 20000);
   CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == UINT64_MAX);
   CHECK(omarchy::batch_work_budget("Apple M3 Pro (G15S B1)") == 15000);
@@ -975,11 +981,11 @@ TEST_CASE("work budget resolves per device name, not per process") {
 
   // A third name between repeats: a one-entry cache that returns its
   // stored value without re-keying on the name would surface a stale
-  // 40000 or 20000 here.
+  // 80000 or 20000 here.
   CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 200000);
 
   // A repeat call for the same name resolves to the same value.
-  CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 80000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 20000);
 
   // An unknown board keeps the conservative fallback, again per call.
