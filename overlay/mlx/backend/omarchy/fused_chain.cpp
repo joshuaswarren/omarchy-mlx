@@ -2736,6 +2736,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           trio_ok);
     }
     std::vector<const array*> rope_nodes;
+    // The bf16 norm pair is opt-in while the pair kernel trails the
+    // solo dispatches it replaces (MLX_OMARCHY_ROPE_NORM_PAIR=1); off,
+    // norm ropes keep their solo paths and the scan pairs f16 ropes.
+    const bool norm_pair_on = rope_norm_pair_enabled();
     for (const auto& node : tape) {
       if (!is_op(&node, typeid(fast::RoPE)) || !node_trio_enabled(node)) {
         continue;
@@ -2748,8 +2752,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       // claimed norm nodes stay skipped. Plain ropes keep the 2-input
       // f16 contract.
       const bool norm_rope =
-          state->rope_norm_roles.count(node.id()) ||
-          (node.inputs().size() == 3 && node_rope.has_norm());
+          norm_pair_on &&
+          (state->rope_norm_roles.count(node.id()) ||
+           (node.inputs().size() == 3 && node_rope.has_norm()));
       if (node.inputs().size() != 2 && !norm_rope) {
         trace.rej_node_inputs += 1;
         continue;
@@ -3197,6 +3202,12 @@ bool rope_norm_fold_enabled() {
   return fused_chain_enabled() &&
       (omarchy::env_str("MLX_OMARCHY_ROPE_NORM_FOLD") == nullptr ||
        env_flag("MLX_OMARCHY_ROPE_NORM_FOLD"));
+}
+
+bool rope_norm_pair_enabled() {
+  const char* env = omarchy::env_str("MLX_OMARCHY_ROPE_NORM_PAIR");
+  return fused_chain_enabled() && env != nullptr && env[0] != '\0' &&
+      std::strcmp(env, "0") != 0;
 }
 
 KvDirectWindow* find_rope_kv_redirect(const array& out) {

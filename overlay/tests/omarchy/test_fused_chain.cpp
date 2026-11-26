@@ -2368,6 +2368,7 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   auto run_pair = [&](const char* trio) {
     setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
     setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
+    setenv("MLX_OMARCHY_ROPE_NORM_PAIR", trio, 1);
     array qr = fast::rope_rms_norm(
         xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
     array kr = fast::rope_rms_norm(
@@ -2410,6 +2411,7 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   auto run_window = [&](const char* trio) {
     setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
     setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
+    setenv("MLX_OMARCHY_ROPE_NORM_PAIR", trio, 1);
     // Each arm's cache comes straight from host data through astype so
     // its buffer has one owner: a copy() of the evaluated cache can
     // share the source buffer, which blocks the donation the in-place
@@ -2448,6 +2450,7 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   auto [wq_solo, keys_solo, values_solo, in_place_solo] = run_window("0");
   unsetenv("MLX_OMARCHY_FUSED_TRIO");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  unsetenv("MLX_OMARCHY_ROPE_NORM_PAIR");
   CHECK(in_place_pair);
   expect_bit_exact(wq_solo, wq_pair, stream);
   expect_bit_exact(keys_solo, keys_pair, stream);
