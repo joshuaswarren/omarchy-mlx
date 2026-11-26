@@ -51,15 +51,7 @@ def _aot(mlx_vulkan, gm, example_inputs):
         runner = mlx_vulkan.mlx_vulkan_backend(gm2, ex,
                                                return_all_outputs=True)
 
-        def call(*inputs):
-            flat = inputs
-            if (len(inputs) == 1 and isinstance(inputs[0], (list, tuple))
-                    and not torch.is_tensor(inputs[0])):
-                flat = tuple(inputs[0])
-            return runner(*flat)
-
-        call._boxed_call = True
-        return call
+        return mlx_vulkan._boxed(runner)
 
     return aot_autograd(fw_compiler=lower, bw_compiler=lower)(gm, example_inputs)
 
