@@ -77,6 +77,17 @@ TEST_CASE("bf16 name only with the bf16 cooperative-matrix bit") {
   CHECK(!has(names, "VK_KHR_shader_bfloat16"));
 }
 
+TEST_CASE("cooperative-matrix name on any-shape only") {
+  // A driver listing only the 16x16x16 fp16-operand C16 shape sets no
+  // convenience boolean; the extension and feature still enable, or
+  // the dense CMAT16 route claims a device without cooperativeMatrix.
+  omarchy::DeviceExtInput in;
+  in.cooperative_matrix_any_shape = true;
+  auto names = omarchy::device_extension_names(in, false, false);
+  CHECK(has(names, "VK_KHR_cooperative_matrix"));
+  CHECK(!has(names, "VK_KHR_shader_bfloat16"));
+}
+
 TEST_CASE("memory priority and pageable enable as a pair only") {
   auto in = full_caps();
   in.shader_atomic_float_add = false;

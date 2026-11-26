@@ -43,6 +43,7 @@ class WorkerSpec:
     port: int
     context_tokens: int
     max_questions: int
+    prompt_cache_size: int = 0
 
 
 @dataclass

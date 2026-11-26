@@ -13,7 +13,8 @@ std::vector<const char*> device_extension_names(
   if (in.shader_atomic_float_add) {
     names.push_back("VK_EXT_shader_atomic_float");
   }
-  if (in.cooperative_matrix_f32_8 || in.cooperative_matrix_bf16) {
+  if (in.cooperative_matrix_f32_8 || in.cooperative_matrix_bf16 ||
+      in.cooperative_matrix_any_shape) {
     names.push_back("VK_KHR_cooperative_matrix");
   }
   // cooperative_matrix_bf16 reaches the input only when the caller

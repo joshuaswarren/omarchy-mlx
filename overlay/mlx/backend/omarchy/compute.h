@@ -1078,6 +1078,8 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP2BF16Hd128,
   SdpaDecodeSplitP1VBk64R4BF16Hd128,
   SdpaDecodeSplitP2Bk64BF16Hd128,
+  // Single-dispatch value-phase split-K with the pass-2 merge folded into the last block's workgroup (sdpa_decode_split_p1m.comp, head width 128).
+  SdpaDecodeSplitP1MR4BF16Hd128,
   // Head width 256 of the split-K pair (sdpa_decode_split_p1.comp / sdpa_decode_split_p2.comp -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Plain pass 1 only.
   SdpaDecodeSplitP1R1BF16Hd256,
   SdpaDecodeSplitP1R2BF16Hd256,
@@ -1207,6 +1209,59 @@ enum class ComputeKernel : uint16_t {
   // f32 8x8x8 route (shaders/qmm_intel_bf16.comp). Appended to keep
   // profile kernel ids stable.
   QmmPrefillIntelBF16,
+  // 16-lane subgroup build of the fused multi-weight kcont column
+  // (shaders/qmm_vec.comp, QMM_LANES=16; requiredSubgroupSize 16).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiSubgroupBF16R2S16KCONTS16,
+  // Lean contiguous / scalar-broadcast binary add/mul/div/sub
+  // (shaders/binary_simple.comp). Appended to keep profile kernel ids stable.
+  BinarySimpleF32,
+  BinarySimpleF16,
+  BinarySimpleBF16,
+  // Coalesced-W K=64 prefill coopmat builds (64-row SG4 and 128-row SG8,
+  // ragged-M and FULL_M twins, subgroup-private zero-barrier drain,
+  // bit-exact with shipped QmmPrefillCoopmatBF16X32FullNLdsPad). Appended
+  // to keep profile kernel ids stable.
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM,
+  QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64,
+  QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM,
+  // fp16-operand 16x16x16 build of the QMM prefill coopmat kernel for
+  // devices whose coopmat list has no fp32 8x8x8 shape (NVIDIA advertises
+  // only 16-wide f16/bf16 entries): bf16 x staged as fp16, the
+  // dequantized B stored fp16, fp32 accumulator (shaders/qmm_coopmat.comp
+  // -DCMAT16). Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmat16BF16,
+  // Unified 2x8w2 decode QMV builds (2 rows/slot x 8 slots = 256 threads/WG,
+  // 16 cols/WG, hoisted uvec2 loads, dedicated 1-pass interleaved SwiGLU,
+  // 1-pass ResNorm/OutgateResNorm). Appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S8W2,
+  QmmVecQ4MultiSubgroupBF16R2S8W2,
+  QmmVecQ4SwigluBF16R2S8W2,
+  QmmVecQ4ResNormBF16R2S8W2,
+  QmmVecQ4OutgateResNormBF16R2S8W2,
+  // Fused GDN decode conv + gated-delta step for unequal key/value head
+  // counts (gated_delta_decode_perrow_pf.comp -DGDN_CONV_FUSED
+  // -DGDN_NATIVE_GQA_INDEX): the conv prologue reads q and k channels by
+  // the key-head index, the delta body is unchanged. Appended to keep
+  // profile kernel ids stable.
+  GatedDeltaDecodeConvBF16PfGqa,
+  GatedDeltaDecodeConvNormBF16PfGqa,
+  // 16x16x16 dense direct builds (matmul_coopmat_direct.comp -DCMAT16):
+  // same tile geometry as the 8x8x8 family, for drivers whose coopmat
+  // list has no fp32 8x8x8 shape (NVIDIA, ANV, RADV). fp16 operands;
+  // bf16 operands gated on OMARCHY_BF16_DIRECT. Dispatched with a
+  // requiredSubgroupSize 32 pin on drivers whose native subgroup size
+  // differs. Appended to keep profile kernel ids stable.
+  MatmulDirectF16C16Nn,
+  MatmulDirectF16C16Nt,
+  MatmulDirectF16C16Tn,
+  MatmulDirectF16C16Tt,
+  MatmulDirectBF16C16Nn,
+  MatmulDirectBF16C16Nt,
+  MatmulDirectBF16C16Tn,
+  MatmulDirectBF16C16Tt,
+  QmmVecGreedyWordBF16,
   // bf16 twin of the two-tensor SliceUpdate merge (slice_update_pair.comp
   // -DUSE_BF16): verbatim 16-bit copy, so the variant only changes the
   // element type. Appended to keep profile kernel ids stable.
@@ -1224,6 +1279,7 @@ enum class ComputeKernel : uint16_t {
   // Per-member twin of the rope epilogue above: the same tail on the
   // single-weight Rows8 column, one dispatch per group member.
   QmmVecQ4WordSubgroupRows8RopeEpiBF16,
+
   Count,
 };
 
@@ -1299,7 +1355,9 @@ class ComputeRuntime {
   ComputeRuntime(
       VkDevice device,
       uint32_t binding_limit,
-      uint32_t required_subgroup_size);
+      uint32_t required_subgroup_size,
+      bool subgroup_size_16_admitted,
+      bool subgroup_size_32_admitted);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -1359,9 +1417,18 @@ class ComputeRuntime {
       std::span<const uint32_t> spirv,
       const std::string& entry_name,
       const VkSpecializationInfo* spec);
+  // Same, with an explicit requiredSubgroupSize (0 keeps the runtime
+  // default). Used by kernels built for a non-default slot width.
+  VkPipeline create_pipeline(
+      std::span<const uint32_t> spirv,
+      const std::string& entry_name,
+      const VkSpecializationInfo* spec,
+      uint32_t required_subgroup_size);
 
   uint32_t binding_limit_{0};
   uint32_t required_subgroup_size_{0};
+  bool subgroup_size_16_admitted_{false};
+  bool subgroup_size_32_admitted_{false};
   bool push_descriptors_{false};
 
   VkDevice device_;

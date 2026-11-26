@@ -82,6 +82,17 @@ struct SimulationProfile {
   // Axis device_name: the reported name, which the G13-legacy kernel
   // selections key on. nullptr = inherit.
   const char* device_name = nullptr;
+  // Axis cooperative_matrix_fp16_16x16x16: the 16x16x16 fp16-operand
+  // subgroup shape the CMAT16 QMM prefill route emits (NVIDIA-style
+  // coopmat lists that carry only 16-wide f16/bf16 entries). -1 =
+  // inherit, 0/1 = set. The axis moves the advertised-shape list only:
+  // the cooperative-matrix device feature still needs hardware backing
+  // (cooperative_matrix_f32_8 or cooperative_matrix_bf16), and
+  // require_backed refuses a simulated dispatch on hardware lacking the
+  // shape.
+  int cooperative_matrix_f16_16 = -1;
+  // Axis max_storage_buffer_range_bytes. 0 = inherit.
+  uint64_t max_storage_buffer_range = 0;
 };
 
 // The registered profiles, in registry order. docs/new-chip-bringup.md

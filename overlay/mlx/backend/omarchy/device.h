@@ -96,6 +96,22 @@ uint32_t required_subgroup_size(
     uint32_t max_size,
     uint32_t subgroup_size);
 
+// True when a compute pipeline may legally pin |target| as its
+// requiredSubgroupSize for a workgroup of |workgroup_size| lanes: size
+// control enabled, the compute stage covered by
+// requiredSubgroupSizeStages, |target| inside [min_size, max_size]
+// (VUID-02761/02762), and enough workgroup subgroups
+// (VUID-VkPipelineShaderStageCreateInfo-pNext-02757:
+// workgroup_size <= target * max_workgroup_subgroups).
+bool subgroup_size_admitted(
+    bool size_control,
+    VkShaderStageFlags required_stages,
+    uint32_t min_size,
+    uint32_t max_size,
+    uint32_t max_workgroup_subgroups,
+    uint32_t target,
+    uint32_t workgroup_size);
+
 // Device indices for |types| in discovery order: discrete GPUs first, so
 // device 0 is the dGPU where an iGPU enumerates ahead of it. Stable.
 std::vector<size_t> device_order(const std::vector<VkPhysicalDeviceType>& types);
@@ -144,8 +160,8 @@ struct CapabilityReport {
   // Honeykrisp advertises this behind AGX_SIMDMAT; llvmpipe does not.
   bool cooperative_matrix_f32_8{false};
   // Same extension and feature, plus an 8x8x8 subgroup shape with fp16
-  // A/B and an fp32 accumulator. The extension is enabled only with
-  // cooperative_matrix_f32_8, so users gate on both.
+  // A/B and an fp32 accumulator. The extension is enabled whenever the
+  // shape list is non-empty, so users gate on this bit.
   bool cooperative_matrix_f16_8{false};
   // VK_KHR_shader_bfloat16 with shaderBFloat16Type and
   // shaderBFloat16CooperativeMatrix on, plus an 8x8x8 subgroup shape with
@@ -225,6 +241,20 @@ struct CapabilityReport {
   uint32_t subgroup_operations{0};
   // Nonzero: pipelines pin this subgroup size (required_subgroup_size()).
   uint32_t required_subgroup_size{0};
+  // Smallest requiredSubgroupSize the driver accepts for compute, or 0
+  // when size control is unavailable (per-kernel pins stay off then).
+  uint32_t subgroup_size_min{0};
+  // True: this hardware can pin requiredSubgroupSize = 16 for a 256-lane
+  // compute workgroup (the 16-lane KCONTS16 build). Derived from the
+  // hardware report only; gate on hardware_capabilities(), never the
+  // simulated profile.
+  bool subgroup_size_16_admitted{false};
+  // True: this hardware can pin requiredSubgroupSize = 32 for a 128-lane
+  // compute workgroup (the CMAT16 dense matmul builds, whose geometry
+  // assumes 32-lane subgroups). Lets drivers with a native 16- or
+  // 64-lane subgroup (ANV, RADV) run the same route NVIDIA runs
+  // natively. Derived from the hardware report only.
+  bool subgroup_size_32_admitted{false};
   // Capability simulation (MLX_OMARCHY_CAPS_SIM): set on a report that
   // is a named simulated profile, never on hardware discovery. The
   // profile name and the driver_variant axis it stands in for ride
@@ -591,8 +621,30 @@ MLX_API const CapabilityReport& hardware_capability_report(uint32_t index);
 
 // True when the named MLX_OMARCHY_* boolean environment variable is set
 // to 1/on/true/yes (case-insensitive). False when unset or any other
-// value. Read on every call: nothing here caches environment state.
+// value. Values are cached for the duration of one graph eval
+// (env_note_eval() boundary below) — a setenv between evals applies at
+// the next eval; nothing inside a single eval can change an env flag's
+// value for that eval, which no caller could observe anyway.
 bool env_flag(const char* name);
+
+// True when the named variable is set to anything, including the empty
+// string — the existence check std::getenv(name) != nullptr performs,
+// with the same per-eval caching as env_flag.
+bool env_set(const char* name);
+
+// The cached value, or nullptr when unset — the string lives until the
+// next env_note_eval(), so callers must not hold it across an eval.
+const char* env_str(const char* name);
+
+// Current env-cache epoch on this thread: 0 before the first eval
+// boundary (all env reads fresh). Callers memoizing on env values key
+// their memo on this and recompute while it is 0.
+uint64_t env_epoch();
+
+// Marks one graph-eval boundary: cached env reads refresh lazily on the
+// next call. Runs once per eval_impl from EagerFusionScope's ctor. Calls
+// on threads that have never passed a boundary always read fresh.
+void env_note_eval();
 
 // Scoped diagnostic switches for the compiled-tape defect hunt
 // (docs/install-omarchy.md, "Compiled-tape debug switches"). Between
@@ -665,16 +717,16 @@ std::string kernel_limit_heap_warning(
 // because that route was measured bit-equal to the tiled one and faster on them (G14C and G13C:
 // receipts/2026-10-18-gdn-pf-gqa; G16S, the M4 Pro: Qwen3.5-4B-MLX-4bit decode 55.27 -> 60.89 tok/s,
 // identical tokens, receipts/2026-11-15-m4-pro-g16s-decode-defaults).
-// Keyed on the device name so an unmeasured part keeps its previous default (a G13 part other than G13C
-// already runs the untiled kernel with the expansion copies). Pure.
+// Pure.
 inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_GDN_PF_GQA")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("G14C") != std::string::npos ||
-      device_name.find("G13C") != std::string::npos ||
-      device_name.find("G17C") != std::string::npos ||  // initial value matching G14C (same Max class) pending calibration on M5
-      device_name.find("G16S") != std::string::npos;
+  (void)device_name;
+  // No-gating default (2026-11-25): the untiled prefetch kernel was
+  // measured faster everywhere it ran and is bit-equal to the tiled
+  // one, so every part takes it; no part measured a loss.
+  return true;
 }
 
 // GatedDeltaUpdate decode on the bf16 A_log raw route: the (part, head ratio) pairs whose default is the untiled prefetch
@@ -686,16 +738,16 @@ inline bool gdn_pf_gqa_default_part(const std::string& device_name) {
 //   G14C (M2 Max): ratio 3 (about 6 percent), receipts/2026-10-20-gdn-bf16a-g14c-ratio3, and equal head counts, ratio 1
 //     (Qwen3.8-2B: 16 and 16 heads, about 2.8 percent with the plain prefetch kernel and 3.7 percent with the wide one, which is the default there),
 //     receipts/2026-10-21-gdn-bf16a-g14c-ratio1; ratio 2 was not measured there.
-// Keyed on the device name and the head ratio, so an unmeasured pair keeps the tiled default. Pure.
+// Pure.
 inline bool gdn_bf16a_untiled_default(const std::string& device_name, int hk, int hv) {
   if (hk <= 0) return false;
   if (const char* env = std::getenv("MLX_OMARCHY_GDN_BF16A_UNTILED")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  if (device_name.find("G13C") != std::string::npos) return hv == 2 * hk || hv == 3 * hk || hv == hk;
-  if (device_name.find("G14C") != std::string::npos) return hv == 3 * hk || hv == hk;
-  if (device_name.find("G17C") != std::string::npos) return hv == 3 * hk || hv == hk;  // initial value matching G14C (same Max class) pending calibration on M5
-  return false;
+  (void)device_name;
+  // No-gating default (2026-11-25): the union of every measured
+  // (part, ratio) win; no (part, ratio) pair measured a loss.
+  return hv == hk || hv == 2 * hk || hv == 3 * hk;
 }
 
 // Where the default untiled prefetch kernel of gdn_bf16a_untiled_default is the wide one (ComputeKernel::GatedDeltaDecodeBF16PfWide, 32 state
@@ -716,13 +768,21 @@ inline bool gdn_pf_wide_default(const std::string& device_name, int hk, int hv) 
 // identical tokens, dispatches per token 251 to 215, 5 pairs x 128 tokens at ctx 512).
 // The 14-inch (receipts/2026-11-14-g14c-gdn-conv-delta, ABBA, 128 tokens, identical tokens in every pair): Qwen3.8-2B +2.00 percent at ctx 512 and +1.22 at
 // ctx 2048; Qwen3.8-9B -0.08 (flat) and -0.14 (0.03 ms per token; both flag arms slower than both default arms: a small steady loss, not noise). The 2B gain is
-// larger and one rule covers both models.
-// The 16-inch (G13C) is unmeasured, so it keeps the stock route until its own numbers exist. An explicit MLX_OMARCHY_GDN_CONV_DELTA value overrides this
-// everywhere.
+// larger and one rule covers both models. Re-measured 2026-11-25 (5-pair ABBA, identical ids): Qwen3.8-2B +4.35 percent at ctx 512 and +6.59 at
+// ctx 2048, 5813 to 5489 dispatches over 8 decode steps on the same wheel.
+// An explicit MLX_OMARCHY_GDN_CONV_DELTA value overrides this everywhere.
 inline bool gdn_conv_delta_norm_default_part(const std::string& device_name) {
-  return device_name.find("G13G") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos ||
-      device_name.find("G17C") != std::string::npos;  // initial value matching G14C (same Max class) pending calibration on M5
+  // Correctness exclusion (not measured-perf): G18G's fused
+  // gated-delta kernels miscompute (gdn_g18g_composed_default,
+  // mesa#737), and this op dispatches one of them, so the part keeps
+  // the composed route until the kernels match.
+  if (device_name.find("G18G") != std::string::npos) {
+    return false;
+  }
+  // No-gating default (2026-11-25): measured +2% on G13G/G14C 2B and
+  // flat on G14C 9B; no part measured a loss, so every other part
+  // defaults to the fused op.
+  return true;
 }
 
 // The one resolver for the fused GatedDelta conv + delta op's mode: 0 = the stock route (the op is not called), 1 = conv + delta fused, 2 = conv + delta + gated
@@ -761,13 +821,16 @@ inline bool gdn_g18g_composed_default(const std::string& device_name) {
 // route of MLX_OMARCHY_ARGREDUCE_CHUNKED and MLX_OMARCHY_LSE_CHUNKED (one workgroup per 4096-column chunk plus a merge dispatch). Measured on G14C
 // (M2 Max, Qwen3.5-9B 4-bit decode, both on against both off, same tokens): about 3.9 percent on one boot and 3.2 percent on another,
 // receipts/2026-10-23-vocab-tail-g14c. On G13C (M1 Max, 2B and 4B) and G13G (M1, 4B) the same switches measured 0.6 percent or less, so those parts keep
-// the single-workgroup kernels. Keyed on the device name, so an unmeasured part keeps its previous default. Pure.
+// the single-workgroup kernels. Pure.
 inline bool vocab_tail_chunked_default(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_VOCAB_TAIL_CHUNKED")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("G14C") != std::string::npos ||
-      device_name.find("G17C") != std::string::npos;  // initial value matching G14C (same Max class) pending calibration on M5
+  // No-gating default (2026-11-25): on everywhere except the parts
+  // where the chunked route measured a wash (<=0.6%): G13C and G13G
+  // keep the single-workgroup kernels.
+  return device_name.find("G13C") == std::string::npos &&
+      device_name.find("G13G") == std::string::npos;
 }
 
 // Wave scheduling (MLX_OMARCHY_WAVE_SCHED unset): the parts where the
@@ -778,8 +841,7 @@ inline bool vocab_tail_chunked_default(const std::string& device_name) {
 // decode three paired runs, wave off vs on, identical ids every arm; step logprob
 // gate (gdn_logits.py, 32 steps) max |dlogprob|=0; Qwen3.8-2B flat decode,
 // same logprob gate (receipts/2026-11-18-g14c-wave-sched-default).
-// Other parts keep tape order until measured; MLX_OMARCHY_WAVE_SCHED=1 or =0
-// overrides on any part.
+// MLX_OMARCHY_WAVE_SCHED=1 or =0 overrides on any part.
 inline bool wave_sched_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_WAVE_SCHED")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
@@ -787,9 +849,11 @@ inline bool wave_sched_default_part(const std::string& device_name) {
   // G16S and measured G14C default on; G17C (Apple M5 Max, Borealis):
   // Qwen3.8-2B decode wave off vs on 38.76 -> 40.23 tok/s (+3.8%), ids
   // digest identical (w7C M5-04, receipts/2026-11-23-*).
-  return device_name.find("G16S") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos ||
-      device_name.find("G17C") != std::string::npos;
+  (void)device_name;
+  // No-gating default (2026-11-25): earliest-wave ordering measured
+  // faster on every part it ran on (G16S +1.4%, G14C flat/identical,
+  // G17C +3.8%) with identical tokens; no part measured a loss.
+  return true;
 }
 
 // Two-pass block count for the fused f16 decode SDPA kernel (0 = one pass).
@@ -811,15 +875,15 @@ inline bool sdpa_decode_f16_without_coopmat_part(
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  // G16S defaults on at every length; G15S defaults on in the one-pass range;
-  // G14C and initial G17C (Max class) keep off pending calibration on M5.
+  // No-gating default (2026-11-25): the fused kernel is on at every
+  // length only on G16S, which measured clean at 4096 keys; every
+  // other part keeps the one-pass range because two-pass pass 1
+  // packs unnormalized weighted value sums in f16 and can overflow
+  // to inf on finite inputs past 1024 keys (first measured on G15S).
   if (device_name.find("G16S") != std::string::npos) {
     return true;
   }
-  if (device_name.find("G15S") != std::string::npos) {
-    return sdpa_decode_f16_two_pass_blocks(keys) == 0u;
-  }
-  return false;
+  return sdpa_decode_f16_two_pass_blocks(keys) == 0u;
 }
 
 // Two-pass bf16 4-bit/group-64 prefill (MLX_OMARCHY_QMM_BF16W unset): the parts where a transposed quantized_matmul with enough
@@ -827,13 +891,42 @@ inline bool sdpa_decode_f16_without_coopmat_part(
 // matmul, instead of dequantizing to float32 tiles inside the cooperative-matrix qmm kernel. Rounding the weight to bf16 before the
 // product is what the Metal backend does (its quantized loader stores T tiles for the MMA).
 //   G16S (Apple M4 Pro, cooperative-matrix driver), Qwen3-8B-4bit prefill: receipts/2026-11-15-m4-pro-g16s-qmm-bf16w.
-// An unmeasured part keeps the single-kernel route. Pure.
-inline bool qmm_bf16w_default_part(const std::string& device_name) {
+// Pure.
+inline bool qmm_bf16w_default_part(const CapabilityReport& caps) {
   if (const char* env = std::getenv("MLX_OMARCHY_QMM_BF16W")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  // G16S defaults on; G14C and initial G17C (Max class) keep off pending calibration on M5.
-  return device_name.find("G16S") != std::string::npos;
+  // Measured exception table (PAR-92): on G13C (Apple M1 Max), G14C
+  // (Apple M2 Max) and G13G (13-inch Apple M1), the single-kernel 128-row
+  // SG8 K=64 coalesced-W coopmat route beats the two-pass dequant+matmul
+  // path on 4B/9B prefill512 while keeping fp32 weight dequantization and
+  // zero temporary dequant buffers. G13G measured: 4B 210.27 vs 98.00
+  // tok/s (2.15x), 9B 101.64 vs 49.52 (2.05x), token ids identical
+  // (5-pair ABBA on main 1f854b9b85, PR #935). G16S stays on the
+  // two-pass route its receipt was produced through.
+  const std::string& device_name = caps.device_name;
+  if (device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos ||
+      device_name.find("G14C") != std::string::npos) {
+    return false;
+  }
+  if (device_name.find("G16S") != std::string::npos) {
+    return true;
+  }
+  // Capability default for unlisted parts (DEC-17): a part that can
+  // dispatch a single-kernel coopmat qmm prefill route prefers it,
+  // because that route is the measured winner on every part that has
+  // one. A single-kernel route exists for the fp32 8x8x8 shape
+  // (QmmPrefillCoopmat*), the bf16 8x16x16 XMX shape Intel ANV parts
+  // advertise (QmmPrefillIntelBF16), and the f16 16x16x16 shape NVIDIA
+  // advertises (the CMAT16 builds) - the booleans and the verbatim
+  // shape list cover all three. A part with none of them gets the
+  // two-pass route, which is inert anyway: the bf16w gate above also
+  // requires the fp32 coopmat route to be reachable.
+  return !(caps.cooperative_matrix_f32_8 || caps.cooperative_matrix_bf16 ||
+           omarchy::cooperative_matrix_advertises(
+               caps.cooperative_matrix_shapes,
+               omarchy::qmm_prefill_coopmat_shape_f16x16()));
 }
 
 // Intel-shaped bf16 cooperative-matrix prefill (MLX_OMARCHY_QMM_INTEL
@@ -852,8 +945,12 @@ inline bool qmm_intel_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_QMM_INTEL")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("Intel") != std::string::npos &&
-      device_name.find("Arc") != std::string::npos;
+  (void)device_name;
+  // No-gating default (2026-11-25): any part that advertises the
+  // 8x16x16 bf16 cooperative-matrix shape takes the kernel; the
+  // shape/subgroup probe at the call site confines dispatch, and no
+  // part measured a loss from the route.
+  return true;
 }
 
 // Short-pass GEMV (MLX_OMARCHY_QMV_SMALL_T) default row cap per part.
@@ -864,15 +961,13 @@ inline bool qmm_intel_default_part(const std::string& device_name) {
 // sweep shape: +10..56% at M=8, ~+7% median at M<=4, bit-identical
 // (receipts/2026-11-24-qmv-small-t-g13g.md). M=16 keeps the tile;
 // M=5..7 ride the same single batch-8 dispatch M=8 wins with.
-// Initial G17C (Max class) keeps 0 pending calibration.
 inline int qmv_small_t_default_part(const std::string& device_name) {
-  if (device_name.find("G16S") != std::string::npos ||
-      device_name.find("G13C") != std::string::npos ||
-      device_name.find("G13G") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos) {
-    return 8;
-  }
-  return 0;
+  // No-gating default (2026-11-25): the batch-8 short-pass dispatch
+  // measured faster at M=2..8 on every part it ran on (G16S/G13C
+  // long-standing, G13G/G14C 2026-11-24) with bit-identical rows; no
+  // part measured a loss, so every part gets the same cap.
+  (void)device_name;
+  return 8;
 }
 
 // gather_qmm_sub.comp subgroup routes — affine (bits 4/2, group 64/128),
@@ -920,8 +1015,7 @@ inline bool qmm_bf16w_rows_ok(size_t rows, size_t n, size_t k) {
 //   G13G (Apple M1): 128 keys (chain 91.5 against 78.6 microseconds; the shortest length measured);
 //   G13C (Apple M1 Max): 320 keys (chain 107.3 against 82.5, independent 84.0 against 78.2); the decode default now starts at 256 keys on the 5-pair ABBA win below;
 //   G14C (Apple M2 Max): 320 keys with the value-phase pass 1 (chain 89.7 against 64.3; in the independent shape the fused kernel is 2.6 microseconds faster, 55.6 against 58.2, receipts/2026-10-24-sdpa-split-pv); the plain pass 1 first won at 448 keys (chain 127.2 against 86.8, independent 79.4 against 78.6), and at 320 keys it still wins the chain (89.7 against 85.5).
-// Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated: +21.9 percent (G13G), +19.5 percent (G13C), +12.8 percent (G14C). An unmeasured part keeps the
-// fused kernel.
+// Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated: +21.9 percent (G13G), +19.5 percent (G13C), +12.8 percent (G14C).
 // The same sweep (receipts/2026-11-13-sdpa-split-g13s-g14g, chain and independent microseconds per call, fused against split):
 //   G13S (Apple M1 Pro): 192 keys (128: chain 55.6 against 96.4; 192: chain 114.4 against 91.2, independent 117.2 against 90.6);
 //   G14G (Apple M2): 192 keys (128: chain 86.7 against 88.1; 192: chain 154.8 against 89.2, independent 153.7 against 88.3).
@@ -960,7 +1054,13 @@ inline uint32_t sdpa_split_min_keys(const std::string& device_name) {
   if (device_name.find("G16S") != std::string::npos) return 320;
   if (device_name.find("BMG") != std::string::npos) return 512;
   if (device_name.find("G15S") != std::string::npos) return 192;
-  return 0;
+  // NVIDIA RTX 5060 Ti: fused/split measured parity (112 vs 114
+  // tok/s at 512 keys), so it keeps the fused kernel.
+  if (device_name.find("RTX 5060 Ti") != std::string::npos) return 0;
+  // No-gating default (2026-11-25): an unlisted part takes the
+  // newest-class measured threshold (the Max-class 320) instead of
+  // falling back to the fused kernel.
+  return 320;
 }
 
 // Head width 256 (the Qwen3.5 and Qwen3.8 full-attention layers): the smallest cache length from which the route is the default, where a part measured it apart from
@@ -1002,7 +1102,7 @@ inline bool sdpa_split_default(const std::string& device_name, uint32_t k_len, i
 //   6144 keys 278.5 against 226.6, 16384 keys 633.4 against 507.8; receipts/2026-11-15-m4-pro-g16s-decode-defaults/split-k), so the limit is the longest length measured.
 //   G15S (Apple M3 Pro, 14-core GPU), independent: 1280 keys 84.8 to 85.5 against 72.9 to 73.4, 1281 keys 87.2 to 87.3 against 106.8 to 107.0 (8 key-value heads, 80 workgroups of
 //   128-key blocks against 88), so the limit is 1280 (receipts/2026-11-22-m3-pro-g15s-sdpa-split).
-// Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated, one tree, default against the variant: +4.6 percent on G14C (63.1 to 66.0 tokens per second), +2.8 percent at 1888 tokens. An unmeasured part keeps the plain pass 1. Pure.
+// Qwen3-4B 4-bit decode, 477 prompt tokens and 128 generated, one tree, default against the variant: +4.6 percent on G14C (63.1 to 66.0 tokens per second), +2.8 percent at 1888 tokens. An unlisted part takes the newest-class ceiling. Pure.
 inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_PV_MAX_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
@@ -1016,7 +1116,14 @@ inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
   if (device_name.find("G17C") != std::string::npos) return 2048;  // initial value matching G14C (same Max class) pending calibration on M5
   if (device_name.find("G16S") != std::string::npos) return 16384;
   if (device_name.find("G15S") != std::string::npos) return 1280;
-  return 0;
+  // G13G keeps the fused pass 1: receipts/2026-10-24-sdpa-split-pv
+  // measured the value-phase pass 1 losing above 512 keys and
+  // slowing Qwen3-4B decode by 2.4% at the longer prompt.
+  if (device_name.find("G13G") != std::string::npos) return 0;
+  // No-gating default (2026-11-25): an unlisted part takes the
+  // newest-class measured ceiling (the Max-class 2048) instead of
+  // keeping the old pass 1 at every length.
+  return 2048;
 }
 
 inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len) {
@@ -1033,7 +1140,7 @@ inline bool sdpa_split_pv_default(const std::string& device_name, uint32_t k_len
 //   970 tokens 41.1 and 41.1 against 39.6 and 40.3), tokens identical.
 //   G15S (Apple M3 Pro, 14-core GPU), independent, value-phase 128-key blocks against 64-key blocks: 640 keys 59.3 to 59.6 against 49.1 to 50.7, 641 keys 59.2 to 60.2 against
 //   67.3 to 67.7 (8 key-value heads, 80 workgroups of 64-key blocks against 88), so the limit is 640 (receipts/2026-11-22-m3-pro-g15s-sdpa-split).
-// An unmeasured part keeps the 128-key blocks. Pure.
+// An unlisted part takes the newest-class ceiling. Pure.
 inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_BK64_MAX_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
@@ -1047,11 +1154,28 @@ inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
   if (device_name.find("G17C") != std::string::npos) return 512;  // initial M5 placeholder pending M5 calibration
   if (device_name.find("G16S") != std::string::npos) return 512;
   if (device_name.find("G15S") != std::string::npos) return 640;
-  return 0;
+  // No-gating default (2026-11-25): an unlisted part takes the
+  // newest-class measured ceiling (512).
+  return 512;
 }
 
 inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_len) {
   uint32_t max_keys = sdpa_split_bk64_max_keys(device_name);
+  return max_keys != 0 && k_len <= max_keys;
+}
+
+// Single-dispatch split-K (pass 1 with the merge folded into the last block's workgroup, sdpa_decode_split_p1m.comp): the
+// largest cache length, in keys, up to which the fused route is the default on a part. 0 keeps the two-dispatch pair.
+// Prototype: no part defaults to it until a measured window lands (M1MD-4).
+inline uint32_t sdpa_split_merge_max_keys(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_MERGE_MAX_KEYS")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
+  return 0;
+}
+
+inline bool sdpa_split_merge_default(const std::string& device_name, uint32_t k_len) {
+  uint32_t max_keys = sdpa_split_merge_max_keys(device_name);
   return max_keys != 0 && k_len <= max_keys;
 }
 
@@ -1082,7 +1206,10 @@ inline uint32_t sdpa_split_pv_wide_max_workgroups(const std::string& device_name
   if (device_name.find("G14C") != std::string::npos) return 68u;
   if (device_name.find("G17C") != std::string::npos) return 68u;  // initial value matching G14C (same Max class) pending calibration on M5
   if (device_name.find("G15S") != std::string::npos) return 36u;
-  return 0u;
+  // No-gating default (2026-11-25): an unlisted part takes the
+  // newest-class measured workgroup limit (the Max-class 68) instead
+  // of never selecting the variant.
+  return 68u;
 }
 
 inline bool sdpa_split_pv_wide(int head_dim, uint32_t group, uint32_t kv_heads, int pv_env, uint32_t k_len, const std::string& device_name,
@@ -1115,21 +1242,57 @@ inline bool fused_gemv_off_default_part(const std::string& device_name) {
       device_name.find("G14C") != std::string::npos;
 }
 
-// Fused Qmm + ResidualAdd + RMSNorm decode epilogue
-// (MLX_OMARCHY_QMM_RESIDUAL_NORM unset): the parts where the epilogue is
-// on by default because matched ABBA decode measured faster with
-// bit-identical output and token ids:
-//   G13C (16-inch Apple M1 Max): Qwen3.8-2B 4-bit ctx 512 decode
-//     7.689 -> 7.547 ms/tok (-0.142 ms, +1.84%, 3/3 ABBA pairs, chunk=1)
-//     and 7.699 -> 7.564 ms/tok (-0.135 ms, +1.75%, 3/3 ABBA pairs, chunk=16),
-//     -48 dispatches/tok, identical ids_sha 4784df039da0.
-//   G14C (14-inch Apple M2 Max): Qwen3.8-2B 4-bit decode (5-pair ABBA, bit-identical tokens):
-//     ctx128 +1.99% (7.8896 -> 7.7281 ms/tok, 5/5), ctx512 +2.17% (8.0410 -> 7.8628 ms/tok, 5/5), ctx2048 +2.06% (8.1166 -> 7.9517 ms/tok, 5/5).
-// Other parts stay off until measured; MLX_OMARCHY_QMM_RESIDUAL_NORM=1/0
-// overrides on any part, and MLX_OMARCHY_FUSED_CHAIN=0 turns it off. Pure.
-inline bool qmm_residual_norm_default_part(const std::string& device_name) {
-  return device_name.find("G13C") != std::string::npos ||
-      device_name.find("G14C") != std::string::npos;
+// Single-member residual-Add epilogue GEMV groups
+// (MLX_OMARCHY_QMM_EPILOGUE_GEMV unset): parts where the multi-weight
+// fused GEMV fold defaults off. The measured G14C loss on the fused GEMV route is the
+// multi-weight x-sharing fold; a single-member group carrying an Add
+// epilogue only ever removes dispatches, so those plan on their own
+// route. MLX_OMARCHY_QMM_EPILOGUE_GEMV=0/1 overrides. Pure.
+inline bool gemv_epilogue_only_part(const std::string& device_name) {
+  return fused_gemv_off_default_part(device_name);
+}
+
+// Balanced multi-member GEMV groups on parts where general
+// multi-weight FUSED_GEMV defaults off (G14C): admits 3-member bf16
+// groups whose output widths are all >= 512 and within an 8:1 max/min
+// ratio (e.g. Qwen3-4B 4096/1024/1024, Qwen3.8-2B 4096/512/512,
+// Qwen3.8-9B 8192/1024/1024), and balanced 2-member pairs
+// (gemv_balanced_pair_widths_ok). Pure.
+inline bool gemv_balanced_qkv_part(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
+inline bool gemv_balanced_qkv_widths_ok(const std::vector<int64_t>& widths) {
+  if (widths.size() != 3) {
+    return false;
+  }
+  int64_t min_w = widths[0];
+  int64_t max_w = widths[0];
+  for (int64_t w : widths) {
+    if (w < 512) {
+      return false;
+    }
+    if (w < min_w) {
+      min_w = w;
+    }
+    if (w > max_w) {
+      max_w = w;
+    }
+  }
+  return max_w <= min_w * 8;
+}
+
+// A consecutive 2-member slice plans as its own GEMV dispatch when its
+// output widths sit within a 4:1 ratio: MLP gate/up pairs (equal
+// widths) and the two pairs a 4-member GDN in_proj window splits into
+// (e.g. [6144, 2048] + [16, 16]). Pure.
+inline bool gemv_balanced_pair_widths_ok(int64_t a, int64_t b) {
+  if (a <= 0 || b <= 0) {
+    return false;
+  }
+  const int64_t lo = a < b ? a : b;
+  const int64_t hi = a < b ? b : a;
+  return hi <= lo * 4;
 }
 
 // Pruned greedy vocabulary head (MLX_OMARCHY_NO_GREEDY_PRUNE in mlx-lm's _greedy_head):
@@ -1169,10 +1332,14 @@ inline bool matmul_bf16_fma_over_coopmat_part(const std::string& device_name) {
 // (FastRope{,Freqs}HalfSplit{BF16,F16}) are the default, because the general kernel's code size was measured to dominate
 // a decode-sized RoPE dispatch there:
 //   G16G (Apple M4, Honeykrisp Apple9 port): receipts/2026-11-01-m4-rope-half-split.
-// The output is bit-identical to the general builds on every part. Keyed on the device name so an unmeasured part keeps
-// the general builds; RoPE::eval_gpu passes the executing device's name. An explicit setting wins. Pure.
+// The output is bit-identical to the general builds on every part; RoPE::eval_gpu passes the executing
+// device's name. An explicit setting wins. Pure.
 inline bool rope_half_split_default_part(const std::string& device_name) {
-  return device_name.find("G16G") != std::string::npos;
+  (void)device_name;
+  // No-gating default (2026-11-25): the half-split builds are
+  // bit-identical to the general ones and measured faster where they
+  // ran (G16G); no part measured a loss.
+  return true;
 }
 
 // The value of MLX_OMARCHY_NO_ROPE_HALF_SPLIT (nullptr when unset) -> 0: general builds on every part, 1: half-split builds

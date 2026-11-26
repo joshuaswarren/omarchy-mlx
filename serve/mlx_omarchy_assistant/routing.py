@@ -534,7 +534,8 @@ def evaluate_route(text: str, *, worker, model_path=None, policy: RoutingPolicy 
       - `route != None` and `timed_out == False` for a successful call
         whose answer passes the frozen thresholds;
       - `route is None` and `reason != ""` for any skip path, including
-        budget refusal, deadline miss, invalid output, or threshold miss.
+        budget refusal, deadline miss, worker error, invalid output, or
+        threshold miss.
     """
     pol = policy or ROUTING_POLICY
 
@@ -569,11 +570,18 @@ def evaluate_route(text: str, *, worker, model_path=None, policy: RoutingPolicy 
     raw = worker.call(payload, deadline_seconds)
     latency_ms = (time.monotonic() - start) * 1000.0
 
+    if not isinstance(raw, dict):
+        return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
+    if any(not isinstance(raw.get(flag, False), bool) for flag in ("busy", "timed_out")):
+        return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
+
     if raw.get("busy"):
         return RoutingOutcome(reason="previous_call_pending", latency_ms=latency_ms)
     if raw.get("timed_out"):
         return RoutingOutcome(reason="deadline_miss", timed_out=True,
                               latency_ms=latency_ms)
+    if len(raw) == 1 and isinstance(raw.get("error"), str):
+        return RoutingOutcome(reason="worker_error", latency_ms=latency_ms)
 
     answers = raw.get("answers") or {}
     answer = answers.get("route") if isinstance(answers, dict) else None
@@ -585,15 +593,17 @@ def evaluate_route(text: str, *, worker, model_path=None, policy: RoutingPolicy 
         return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
     values = [probs[k] for k in ROUTES]
     if any(isinstance(v, bool) or not isinstance(v, (int, float))
-           or not math.isfinite(v) or not 0 <= v <= 1 for v in values):
+           or not 0 <= v <= 1 for v in values):
         return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
     if not math.isclose(sum(values), 1, abs_tol=0.001):
         return RoutingOutcome(reason="invalid_distribution", latency_ms=latency_ms)
 
-    rl = answer.get("rl_agent") or {}
+    rl = answer.get("rl_agent")
+    if not isinstance(rl, dict):
+        return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
     act = rl.get("act_probability")
     if (isinstance(act, bool) or not isinstance(act, (int, float))
-            or not math.isfinite(act) or not 0 <= act <= 1):
+            or not 0 <= act <= 1):
         return RoutingOutcome(reason="invalid_output", latency_ms=latency_ms)
 
     choice = answer.get("choice")

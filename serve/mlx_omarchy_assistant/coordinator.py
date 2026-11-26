@@ -93,9 +93,10 @@ def validate_decision(answer, options):
     if not isinstance(probabilities, dict) or list(probabilities) != keys:
         raise DecisionInputError("Decision worker changed the option identifiers or order")
     values = list(probabilities.values())
-    act = answer.get("rl_agent", {}).get("act_probability")
+    rl_agent = answer.get("rl_agent")
+    act = rl_agent.get("act_probability") if isinstance(rl_agent, dict) else None
     confidence = answer.get("confidence")
-    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= 1
            for v in values + [act, confidence]):
         raise DecisionInputError("Decision worker returned invalid probabilities")
     if not math.isclose(sum(values), 1, abs_tol=0.001):
@@ -307,7 +308,7 @@ def validate_score_answer(answer, levels):
     if not isinstance(answer, dict) or answer.get("type") != "score":
         raise DecisionInputError("Decision worker returned an invalid score")
     score = answer.get("score")
-    if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= len(levels) - 1:
         raise DecisionInputError("Decision worker returned an invalid score")
     keys = [str(index) for index in range(len(levels))]
     legend = answer.get("legend")
@@ -317,9 +318,10 @@ def validate_score_answer(answer, levels):
     if not isinstance(probabilities, dict) or list(probabilities) != keys:
         raise DecisionInputError("Decision worker changed the score distribution")
     values = list(probabilities.values())
-    act = answer.get("rl_agent", {}).get("act_probability")
+    rl_agent = answer.get("rl_agent")
+    act = rl_agent.get("act_probability") if isinstance(rl_agent, dict) else None
     confidence = answer.get("confidence")
-    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= 1
            for v in values + [act, confidence]):
         raise DecisionInputError("Decision worker returned invalid probabilities")
     if not math.isclose(sum(values), 1, abs_tol=0.001):
@@ -391,10 +393,17 @@ def typed_results(spec, answers, text):
     return {"type": "typed", "model": "laya-mlx", "input_scope": text, "results": results}
 
 
+def _refused(what, raw):
+    """A worker refusal that names the first 200 bytes of the reply, repr-escaped."""
+    return RuntimeError("%s: %r" % (what, raw[:200].decode("utf-8", "replace")))
+
+
 class LocalModels:
     def __init__(self, manager):
         self.manager = manager
-        self.connection = None
+        # Each in-flight call's socket, kept here because http.client hands
+        # the socket of a close-delimited response to the response object.
+        self.sockets = {}
         self.lock = threading.Lock()
         self.tokenizer = None
         self.tokenizer_path = None
@@ -404,21 +413,27 @@ class LocalModels:
         if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "::1", "localhost"):
             raise ValueError("Model workers must use local loopback HTTP")
         connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=90)
+        connection.connect()
         with self.lock:
-            self.connection = connection
+            self.sockets[connection] = connection.sock
         return connection
 
-    def close_connection(self):
+    def _release(self, connection, response):
         with self.lock:
-            if self.connection:
-                if self.connection.sock:
-                    import socket
-                    try:
-                        self.connection.sock.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-                self.connection.close()
-                self.connection = None
+            self.sockets.pop(connection, None)
+        if response is not None:
+            response.close()  # a close-delimited response owns the socket
+        connection.close()
+
+    def close_connection(self):
+        """Unblock every in-flight call; each call's own finally closes it."""
+        import socket
+        with self.lock:
+            for sock in self.sockets.values():
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
 
     def count(self, path, messages):
         if self.tokenizer_path != path:
@@ -439,6 +454,7 @@ class LocalModels:
 
     def decision(self, pair, payload):
         connection = self._connect(pair["decision_url"])
+        response = None
         try:
             connection.request("POST", "/v1/decisions", json.dumps(payload), {"Content-Type": "application/json"})
             response = connection.getresponse()
@@ -446,14 +462,18 @@ class LocalModels:
             if len(raw) > 1024 * 1024:
                 raise ValueError("Decision response is too large")
             if response.status != 200:
-                raise RuntimeError("Decision worker refused the request (HTTP %d): %s"
-                                   % (response.status, raw[:500].decode("utf-8", "replace")))
-            return json.loads(raw)
+                raise _refused("Decision worker refused the request (HTTP %d)" % response.status, raw)
+            try:
+                answer = json.loads(raw)
+            except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, int digit cap, nesting too deep
+                raise _refused("Decision worker sent a response that is not JSON", raw) from exc
+            if not isinstance(answer, dict) or not isinstance(answer.get("answers"), dict):
+                raise _refused("Decision worker sent a response without an answers object", raw)
+            return answer
         finally:
-            self.close_connection()
+            self._release(connection, response)
 
     def chat(self, pair, messages, max_tokens, cancel, phases=None, yield_headers=None):
-        connection = self._connect(pair["chat_url"])
         model = str((pair.get("model_paths") or {}).get("chat") or pair["chat_model"])
         # Greedy decoding loops on the 2B model ("Extra socks" until the token cap);
         # a mild penalty removed the loops in the 2026-09-28 card experiment.
@@ -461,7 +481,13 @@ class LocalModels:
                    "stream": True, "temperature": 0, "repetition_penalty": REPETITION_PENALTY,
                    "chat_template_kwargs": {"enable_thinking": False}}
         finish = None
+        if cancel.is_set():
+            return
+        connection = self._connect(pair["chat_url"])
+        response = None
         try:
+            if cancel.is_set():  # cancelled while connecting, before close_connection() could see the socket
+                return
             headers = {"Content-Type": "application/json"}
             if yield_headers:
                 headers.update(yield_headers)
@@ -473,9 +499,8 @@ class LocalModels:
             if phases is not None:
                 phases["chat_headers"] = time.monotonic()
             if response.status != 200:
-                detail = response.read(8192).decode("utf-8", "replace")
-                raise RuntimeError("Chat worker refused the request (HTTP %d): %s"
-                                   % (response.status, detail[:500]))
+                raise _refused("Chat worker refused the request (HTTP %d)" % response.status,
+                               response.read(8192))
             while not cancel.is_set():
                 line = response.readline(1024 * 1024 + 1)
                 if not line:
@@ -487,22 +512,38 @@ class LocalModels:
                 data = line[5:].strip()
                 if data == b"[DONE]":
                     break
-                event = json.loads(data)
+                try:
+                    event = json.loads(data)
+                except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, int digit cap, nesting too deep
+                    raise _refused("Chat worker sent an event that is not JSON", data) from exc
+                if not isinstance(event, dict):
+                    raise _refused("Chat worker sent a malformed event", data)
                 if event.get("error"):
                     raise RuntimeError("Chat worker returned an inference error")
-                for choice in event.get("choices", []):
+                # A usage chunk has no choices; a role-only or finish chunk has
+                # an absent or null delta or content.
+                choices = event.get("choices")
+                if choices is not None and not isinstance(choices, list):
+                    raise _refused("Chat worker sent a malformed event", data)
+                for choice in choices or ():
+                    if not isinstance(choice, dict):
+                        raise _refused("Chat worker sent a malformed event", data)
                     reason = choice.get("finish_reason")
+                    delta = choice.get("delta")
+                    if delta is not None and not isinstance(delta, dict):
+                        raise _refused("Chat worker sent a malformed event", data)
+                    text = delta.get("content") if delta else None
+                    if (reason is not None and not isinstance(reason, str)) \
+                            or (text is not None and not isinstance(text, str)):
+                        raise _refused("Chat worker sent a malformed event", data)
                     if reason:
                         finish = reason
-                    text = choice.get("delta", {}).get("content", "")
                     if text:
-                        if not isinstance(text, str):
-                            raise ValueError("Chat worker returned invalid text")
                         yield ("delta", text)
             if not cancel.is_set():
                 yield ("finish", finish)
         finally:
-            self.close_connection()
+            self._release(connection, response)
 
 
 class _RoutingWorker:
@@ -531,12 +572,12 @@ class _RoutingWorker:
         return Bound()
 
     def call(self, pair, payload, deadline_seconds):
-        with self.lock:
-            if self.inflight is not None and not self.inflight.done():
-                return {"busy": True}
-            self.inflight = self.pool.submit(self.models.decision, pair, payload)
-            future = self.inflight
         try:
+            with self.lock:
+                if self.inflight is not None and not self.inflight.done():
+                    return {"busy": True}
+                self.inflight = self.pool.submit(self.models.decision, pair, payload)
+                future = self.inflight
             return future.result(timeout=deadline_seconds)
         except concurrent.futures.TimeoutError:
             return {"timed_out": True}
@@ -645,6 +686,8 @@ class Coordinator:
         if not self.gpu.acquire(blocking=False):
             raise BusyError("Another local response is active. Wait or stop it before sending")
         try:
+            if self.closed.is_set():
+                raise RuntimeError("The assistant is shutting down")
             turn = self.store.begin(cid, payload.get("text"))
             job = {"cancel": threading.Event(), "heartbeat": time.monotonic(), "conversation_id": cid,
                    "ttft": {"phases": {"submit": time.monotonic()}}}

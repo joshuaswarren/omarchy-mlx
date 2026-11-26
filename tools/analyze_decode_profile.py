@@ -47,11 +47,28 @@ def kernel_names(path):
     return names
 
 
+def is_honeykrisp_device(device_name):
+    name = (device_name or "").lower()
+    return "apple" in name or "honeykrisp" in name
+
+
+def tick_delta(start, end, valid_bits):
+    if end >= start:
+        return end - start
+    if valid_bits >= 64 or valid_bits == 0:
+        return end - start
+    m = 1 << valid_bits
+    d = (end - start) % m
+    return d if d <= (m >> 1) else d - m
+
+
 ap = argparse.ArgumentParser()
 ap.add_argument("--profile", required=True)
 ap.add_argument("--windows", required=True)
 ap.add_argument("--compute-h", required=True)
 ap.add_argument("--out", default="")
+ap.add_argument("--timing-mode", choices=("auto", "dt1", "t1-t0"), default="auto",
+                help="auto uses dt1=t1[i]-t1[i-1] (same submit) on Apple/Honeykrisp and t1-t0 elsewhere")
 a = ap.parse_args()
 
 names = kernel_names(a.compute_h)
@@ -69,6 +86,7 @@ start = meta["start_monotonic"]
 edges = [start] + [w["t1"] for w in wins]
 period_ns = 1.0
 valid_bits = 64
+device_name = ""
 
 # Pass 1: read all events; keep s/j/b with host times, collect d by sub.
 subs = {}          # sub -> {"t": s-event host time, "d": [drec]}
@@ -85,6 +103,7 @@ for line in open(a.profile):
     if k == "meta":
         period_ns = r["period_ns"]
         valid_bits = r["valid_bits"]
+        device_name = r.get("device", "")
     elif k == "s":
         subs.setdefault(r["s"], {"t": r["t"], "d": []})
     elif k == "d":
@@ -112,19 +131,41 @@ for i in range(len(wins)):
                  "join": 0, "gpu_ns": 0.0, "join_wait_ns": 0,
                  "submit_host_ns": 0, "kern": {}, "kc": {}})
 
+use_dt1 = (
+    a.timing_mode == "dt1"
+    or (a.timing_mode == "auto" and is_honeykrisp_device(device_name))
+)
+
 unassigned = {"disp": 0, "gpu_ns": 0.0}
 for sid, s in subs.items():
     w = win_of(s["t"])
+    prev_t1 = None
+    # Follow producer emission order within each submit so counter wraps
+    # stay ordered and an untimed dispatch breaks the dt1 chain.
     for d in s["d"]:
+        t0, t1 = d.get("t0"), d.get("t1")
+        has_ticks = t0 is not None and t1 is not None
         if w < 0:
             unassigned["disp"] += 1
+            prev_t1 = t1 if has_ticks else None
             continue
         r = rows[w]
         r["disp"] += 1
-        t0, t1 = d.get("t0"), d.get("t1")
         gpu = 0.0
-        if t0 is not None and t1 is not None and t1 >= t0:
-            gpu = (t1 - t0) * period_ns
+        if has_ticks:
+            if use_dt1:
+                dt = (
+                    tick_delta(prev_t1, t1, valid_bits)
+                    if prev_t1 is not None
+                    else tick_delta(t0, t1, valid_bits)
+                )
+                if dt >= 0:
+                    gpu = dt * period_ns
+            elif t1 >= t0:
+                gpu = (t1 - t0) * period_ns
+            prev_t1 = t1
+        else:
+            prev_t1 = None
         r["gpu_ns"] += gpu
         kn = names[d["e"]] if d["e"] < len(names) else f"e{d['e']}"
         key = f"{kn}|n={d['n']}|op={d['op']}"
@@ -162,6 +203,7 @@ for r in steady:
 out = {
     "period_ns": period_ns,
     "valid_bits": valid_bits,
+    "timing_mode": "dt1" if use_dt1 else "t1-t0",
     "tokens": len(wins),
     "steady_tokens": len(steady),
     "steady": {

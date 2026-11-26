@@ -140,24 +140,67 @@ inline bool select_qmm_wide_2x16(
     VkPhysicalDeviceType physical_type,
     const QmmWideCaps& caps,
     bool vram_activations_enabled) {
+  // No-gating default (2026-11-25): the 2x16 geometry selects by the
+  // 512-thread 32-wide-subgroup probe on every part. G13G/G13C/G14C keep
+  // their measured 2x8w2 route; a discrete part still needs VRAM
+  // activations. Any other part that meets the probe gets 2x16.
   if (device_name.find("G13G") != std::string_view::npos ||
-      device_name.find("G13C") != std::string_view::npos) {
-    return true;
+      device_name.find("G13C") != std::string_view::npos ||
+      device_name.find("G14C") != std::string_view::npos) {
+    return false;
   }
-  if (vram_activations_enabled &&
-      physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
-      supports_qmm_2x16(caps)) {
-    return true;
+  if (physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+    return vram_activations_enabled && supports_qmm_2x16(caps);
   }
-  return false;
+  return supports_qmm_2x16(caps);
 }
 
-// G14C (M2 Max) default Qmm decode geometry: 2x4w2 (uvec2 weight loads
-// in the 2-row x 4-subgroup multi kernel). Paired ABBA on G14C B1 atop
-// OUTGATE_FOLD=0: 2B ctx=512 +1.35% (5/5), 2B short +1.69% (3/3),
-// 9B ctx=512 +1.18% (3/3), token digests identical.
-inline bool select_qmm_g14c_2x4w2(std::string_view device_name) {
-  return device_name.find("G14C") != std::string_view::npos;
+// Pure capability check for the 2x8w2 Qmm decode workgroup geometry
+// (SLOTS_PER_GROUP=8, 32-lane subgroups -> 256 threads along local_size_x).
+// The kernels assume subgroupSize == 32 (see shaders/qmm_vec.comp), so a
+// device reporting subgroup_size == 64 can never take this path today: it
+// would need a kernel variant that pins requiredSubgroupSize = 32, which
+// does not exist yet. The probe keeps such parts safely on the wider/2x4
+// checks instead of compiling a wrong-sum kernel.
+inline bool supports_qmm_2x8w2(const QmmWideCaps& caps) {
+  return caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
+      caps.max_workgroup_invocations >= 256u &&
+      caps.max_workgroup_size_x >= 256u;
+}
+
+// G13G (13-inch M1), G13C (16-inch M1 Max), and G14C (14-inch M2 Max) default
+// Qmm decode geometry: 2x8w2 (2 rows/slot x 8 slots = 256 threads/WG,
+// 16 cols/WG, hoisted uvec2 loads across Word, Multi, 1-pass interleaved
+// SwiGLU, ResNorm, and OutgateResNorm).
+inline bool select_qmm_apple_2x8w2(std::string_view device_name) {
+  return device_name.find("G13G") != std::string_view::npos ||
+      device_name.find("G13C") != std::string_view::npos ||
+      device_name.find("G14C") != std::string_view::npos;
+}
+
+// Default 2x8w2 selection when MLX_OMARCHY_QMM_GEOM is unset. The capability
+// probe gates every part; the Apple list stays as the measured exception
+// table for integrated parts (any other integrated part waits for its own
+// A/B). Discrete GPUs qualify by capability: VRAM activations plus the
+// 256-thread 32-wide-subgroup probe. BMG keeps its measured 2x16kcont /
+// 2x16kcs16 route in the next check instead.
+inline bool select_qmm_2x8w2(
+    std::string_view device_name,
+    VkPhysicalDeviceType physical_type,
+    const QmmWideCaps& caps,
+    bool vram_activations_enabled) {
+  if (!supports_qmm_2x8w2(caps)) {
+    return false;
+  }
+  if (select_qmm_apple_2x8w2(device_name)) {
+    return true;
+  }
+  if (device_name.find("BMG") != std::string_view::npos) {
+    return false;
+  }
+  return physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
+      vram_activations_enabled;
 }
 
 // Dispatch-only hazards take a COMPUTE_SHADER to COMPUTE_SHADER barrier

@@ -336,6 +336,7 @@ const array* find_sdpa_transpose_out(const array& out);
 void commit_sdpa_transpose_out(const array& out);
 
 class Device;
+struct CapabilityReport;
 
 // One fused decode route variable (MLX_OMARCHY_FUSED_GEMV or
 // MLX_OMARCHY_FUSED_TRIO) for a device name: the MLX_OMARCHY_FUSED_CHAIN
@@ -362,19 +363,18 @@ const char* qmm_geometry_name();
 bool qmm_vec_q4_word_enabled();
 
 // Returns the chip-keyed default for the out-gate prologue fold: off on G13
-// parts other than G13C and off on G14C, on elsewhere.
+// and G14C, on elsewhere.
 bool outgate_fold_default_for_device(const std::string& device_name);
 
 // MLX_OMARCHY_OUTGATE_FOLD=0/1 overrides; unset falls back to
 // outgate_fold_default_for_device(device().capabilities().device_name).
 bool outgate_fold_enabled();
 
-// MLX_OMARCHY_QMM_RESIDUAL_NORM=1/0 forces folding the trailing single-row
-// bf16 fast::RMSNorm into a 1-member Qmm + ResidualAdd decode dispatch;
-// unset follows qmm_residual_norm_default_part(device_name) (on for G13C and
-// G14C, off elsewhere). MLX_OMARCHY_FUSED_CHAIN=0 turns it off on every part.
-bool qmm_residual_norm_enabled(const std::string& device_name);
-bool qmm_residual_norm_enabled();
+// Residual-norm decode fold: the default depends on width and on the
+// executing device's subgroup and workgroup limits. The override can
+// bypass the width policy, not hardware limits or the fused-chain switch.
+bool qmm_residual_norm_enabled(
+    const CapabilityReport& caps, int norm_cols, bool outgate);
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off

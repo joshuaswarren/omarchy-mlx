@@ -71,20 +71,18 @@ layout(set = 0, binding = 3, std430) writeonly buffer Output {
 } output_data;
 
 #ifdef USE_OUT_GLOBAL_SCALE
-// nvfp4 output global scale as one float32 word. Only the HGS kernel
-// variants bind it: the packed w scale bytes still carry the encode
-// factor 2688 / global_scale_w (quantize.comp folds it in, dequant.comp
-// divides it back out), and this kernel decodes the bytes raw, so the
-// correction is applied to the finished dot product here - the same
-// per-output-row multiply the pinned Metal _hgs variants perform. The
-// scalar view's own storage offset rides in aux_size.
+// nvfp4 output global scale, one float32 word per expert. Only the HGS
+// kernel variants take it: the packed w scale bytes still carry the
+// encode factor 2688 / global_scale_w (quantize.comp folds it in,
+// dequant.comp divides it back out), and this kernel decodes the bytes
+// raw, so the correction is applied to the finished dot product here -
+// the same per-expert multiply the pinned Metal _hgs variants perform.
+// The words stage in the packed buffer after the index regions;
+// aux_size carries their word base and the row's rhs index selects the
+// entry. The bound fifth buffer is the copy source, unused here.
 layout(set = 0, binding = 4, std430) readonly buffer OutGlobalScale {
   uint values[];
 } out_global_scale_data;
-// Staged copy of the bound word: lane 0 loads it so the workgroup reads
-// a shared value instead of every invocation issuing the same buffer
-// word read, which G18G answers with 0.
-shared uint out_global_scale_word;
 #endif
 
 // lhs/rhs index reads: the packed staging buffer (every variant).
@@ -232,14 +230,7 @@ void main() {
   uint lhs_word_base = params.in_strides[0];
   uint rhs_word_base = params.out_strides[0];
   uint total = index_count * matrix;
-#ifdef USE_OUT_GLOBAL_SCALE
-  if (gl_LocalInvocationIndex == 0u) {
-    out_global_scale_word =
-        out_global_scale_data.values[params.aux_size];
-  }
-  barrier();
-  float out_global_dec = uintBitsToFloat(out_global_scale_word) / 2688.0;
-#endif
+
   uint stride = gl_NumWorkGroups.x * 256u;
 
   const bool stage_indices = index_count <= STAGED_INDEX_MAX;
@@ -336,6 +327,9 @@ void main() {
       }
     }
 #ifdef USE_OUT_GLOBAL_SCALE
+    float out_global_dec = uintBitsToFloat(packed_params.values
+        [params.aux_offset + params.aux_size +
+         ((params.flags & 2u) != 0u ? rhs : 0u)]) / 2688.0;
     accumulator *= out_global_dec;
 #endif
     output_data.values[params.output_offset + index] =

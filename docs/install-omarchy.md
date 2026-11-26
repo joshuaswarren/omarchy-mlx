@@ -67,8 +67,11 @@ because upstream checks its presence.
 Development builds use tiled quantized prefill by default. Set
 `MLX_OMARCHY_QMM_TILE=0` to compare with the untiled path. Single-row
 decode still uses GEMV. This change is not in the v0.3.5 wheels. The
-experimental `MLX_OMARCHY_ROPE_BF16_DIRECT` and
-`MLX_OMARCHY_SDPA_BF16_FAST` flags remain off. Both changed generated token
+experimental `MLX_OMARCHY_ROPE_BF16_DIRECT` flag remains off, and
+`MLX_OMARCHY_SDPA_BF16_FAST` remains off on devices that advertise the
+f32 cooperative-matrix shape (it defaults on elsewhere for prefill-shaped
+calls, where no faster composed route exists; single-query decode keeps
+its fused route). Both changed generated token
 IDs on M1. The hardware gate receipt for that A/B is not in this checkout.
 
 Compiled-tape elementwise chains and exact eager SwiGLU graphs
@@ -186,7 +189,9 @@ p50 3.98 ms, and a Qwen3-4B tail that matches 5000 (p99 45.2 ms against 44.8 ms;
 already waits on the stream's previous completion. Splitting preserves
 order, and results are bit-identical (greedy ids digests identical in every
 A/B pair; `receipts/2026-10-02-submission-cap-19`). Measured on the M2 Max
-at 40000 (the table value before 2026-11-13; the G14C row is now 100000,
+at 40000 (the table value before 2026-11-13; the G14C row is now 200000,
+`receipts/2026-11-24-g14c-batch-work-200000`, which keeps a whole 9B decode
+step in one submission; the 100000 row it replaced is
 `receipts/2026-11-13-g14c-batch-work`: decode +0.5 % on 4B, +0.9 % on 2B, +1.4 %
 on 9B against 40000): a 4B decode step drops from p50 20.9 ms to 5.6 ms per
 submission (decode tok/s −0.15 %). The 9B drops from 49.6 ms to 4.4 ms

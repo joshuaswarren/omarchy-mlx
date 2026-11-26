@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include "mlx/backend/gpu/device_info.h"
@@ -29,7 +30,7 @@
 extern "C" int mlx_omarchy_gdn_conv_delta_default(void);
 
 using namespace mlx::core;
-using mlx::core::omarchy::trace::counters;
+using mlx::core::omarchy::trace::MlxOmarchyTraceSnapshot;
 
 namespace {
 constexpr int H = 16, D = 128, KEY_DIM = H * D, C = 3 * KEY_DIM, TAPS = 4;
@@ -61,17 +62,19 @@ struct Inputs {
   array conv_state, qkv, weight, a, b, a_log, dt_bias, delta_state, gate, norm_w;
 };
 
-Inputs make_inputs(uint32_t seed, float state_scale, Stream s) {
+Inputs make_inputs(uint32_t seed, float state_scale, Stream s, int hk = H, int hv = H) {
+  const int kd = hk * D;
+  const int c = 2 * kd + hv * D;
   Inputs in{
-      bf16({1, TAPS - 1, C}, seed + 1, 1.0f, s),
-      bf16({1, 1, C}, seed + 2, 1.0f, s),
-      bf16({C, TAPS, 1}, seed + 3, 0.5f, s),
-      bf16({1, 1, H}, seed + 4, 1.0f, s),
-      bf16({1, 1, H}, seed + 5, 1.0f, s),
-      bf16({H}, seed + 6, 1.0f, s, 1.0f),
-      bf16({H}, seed + 7, 1.0f, s),
-      pattern({1, H, D, D}, seed + 8, state_scale, 0.0f),
-      bf16({1, 1, H, D}, seed + 9, 2.0f, s),
+      bf16({1, TAPS - 1, c}, seed + 1, 1.0f, s),
+      bf16({1, 1, c}, seed + 2, 1.0f, s),
+      bf16({c, TAPS, 1}, seed + 3, 0.5f, s),
+      bf16({1, 1, hv}, seed + 4, 1.0f, s),
+      bf16({1, 1, hv}, seed + 5, 1.0f, s),
+      bf16({hv}, seed + 6, 1.0f, s, 1.0f),
+      bf16({hv}, seed + 7, 1.0f, s),
+      pattern({1, hv, D, D}, seed + 8, state_scale, 0.0f),
+      bf16({1, 1, hv, D}, seed + 9, 2.0f, s),
       bf16({D}, seed + 10, 0.5f, s, 1.0f)};
   eval({in.conv_state, in.qkv, in.weight, in.a, in.b, in.a_log, in.dt_bias, in.delta_state, in.gate, in.norm_w});
   return in;
@@ -85,33 +88,43 @@ struct Run {
   uint64_t dispatches;
 };
 
+uint64_t compute_dispatches() {
+  // When linked to a wheel, the inline counter in this executable is not libmlx's counter.
+  MlxOmarchyTraceSnapshot snapshot{};
+  REQUIRE(mlx_omarchy_trace_snapshot_abi_size() == sizeof(snapshot));
+  mlx_omarchy_trace_snapshot(&snapshot);
+  return snapshot.vk_compute_dispatches;
+}
+
 // The production dispatches the fused op replaces, exactly as the model calls them: conv, delta and, with
 // `norm`, the gated norm (mx.fast.rms_norm_gated(out, z, weight, eps)).
-Run production_pair(const Inputs& in, Stream s, bool norm = false) {
-  uint64_t before = counters().vk_compute_dispatches.load();
+Run production_pair(const Inputs& in, Stream s, bool norm = false, int hk = H, int hv = H) {
+  const int kd = hk * D;
+  const uint64_t before = compute_dispatches();
   auto conv = fast::gdn_conv_update(
-      in.conv_state, in.qkv, in.weight, true, KEY_DIM, INV * INV, INV, EPS, s);
-  auto parts = split(conv[0], {KEY_DIM, 2 * KEY_DIM}, -1, s);
-  Shape heads{1, 1, H, D};
+      in.conv_state, in.qkv, in.weight, true, kd, INV * INV, INV, EPS, s);
+  auto parts = split(conv[0], {kd, 2 * kd}, -1, s);
+  Shape kheads{1, 1, hk, D};
+  Shape vheads{1, 1, hv, D};
   auto delta = fast::gated_delta_update_raw(
-      reshape(parts[0], heads, s), reshape(parts[1], heads, s), reshape(parts[2], heads, s),
+      reshape(parts[0], kheads, s), reshape(parts[1], kheads, s), reshape(parts[2], vheads, s),
       in.a, in.b, in.a_log, in.dt_bias, in.delta_state, std::nullopt, s);
   array y = norm ? fast::rms_norm_gated(delta[0], in.gate, in.norm_w, EPS, s) : delta[0];
   Run r{{y, delta[1], conv[1]}, 0};
   eval(r.out);
-  r.dispatches = counters().vk_compute_dispatches.load() - before;
+  r.dispatches = compute_dispatches() - before;
   return r;
 }
 
-Run fused(const Inputs& in, Stream s, bool norm = false) {
-  uint64_t before = counters().vk_compute_dispatches.load();
+Run fused(const Inputs& in, Stream s, bool norm = false, int hk = H) {
+  const uint64_t before = compute_dispatches();
   Run r{fast::gdn_conv_delta_update(
             in.conv_state, in.qkv, in.weight, in.a, in.b, in.a_log, in.dt_bias, in.delta_state,
-            KEY_DIM, INV * INV, INV, EPS, norm ? std::optional<array>(in.gate) : std::nullopt,
+            hk * D, INV * INV, INV, EPS, norm ? std::optional<array>(in.gate) : std::nullopt,
             norm ? std::optional<array>(in.norm_w) : std::nullopt, norm ? EPS : 0.0f, s),
         0};
   eval(r.out);
-  r.dispatches = counters().vk_compute_dispatches.load() - before;
+  r.dispatches = compute_dispatches() - before;
   return r;
 }
 
@@ -235,8 +248,9 @@ TEST_CASE("the GDN conv + delta default is the 13-inch and the 14-inch, and the 
   // The per-chip default: the fused conv + delta + gated norm route runs by default on the 13-inch (Apple M1, G13G) and the 14-inch (Apple M2 Max, G14C).
   CHECK(omarchy::gdn_conv_delta_norm_default_part("Apple M1 (G13G B1)"));
   CHECK(omarchy::gdn_conv_delta_norm_default_part("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part(""));
+  CHECK(omarchy::gdn_conv_delta_norm_default_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::gdn_conv_delta_norm_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::gdn_conv_delta_norm_default_part(""));
   // The single resolver, host-only (it takes the device name, so every part is observable on any machine): an explicit flag value wins over the
   // per-chip default, "0" and anything else read as the stock route, and UNSET follows the default: 2 on G13G and G14C, 0 elsewhere.
   const std::string m1 = "Apple M1 (G13G B1)";
@@ -245,8 +259,8 @@ TEST_CASE("the GDN conv + delta default is the 13-inch and the 14-inch, and the 
   unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
   CHECK(omarchy::gdn_conv_delta_resolved_mode(m1) == 2);
   CHECK(omarchy::gdn_conv_delta_resolved_mode(m2max) == 2);
-  CHECK(omarchy::gdn_conv_delta_resolved_mode(m1max) == 0);
-  CHECK(omarchy::gdn_conv_delta_resolved_mode("") == 0);
+  CHECK(omarchy::gdn_conv_delta_resolved_mode(m1max) == 2);
+  CHECK(omarchy::gdn_conv_delta_resolved_mode("") == 2);
   setenv("MLX_OMARCHY_GDN_CONV_DELTA", "", 1);  // an empty value counts as unset
   CHECK(omarchy::gdn_conv_delta_resolved_mode(m1) == 2);
   for (const std::string& part : {m1, m1max, m2max}) {
@@ -292,4 +306,91 @@ TEST_CASE("the op's form follows its inputs, not the flag: norm arguments select
     CHECK(got.dispatches == fused(in, s, true).dispatches);
   }
   unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+}
+
+TEST_CASE("the fused conv + delta + gated norm covers unequal key and value head counts") {
+  if (!have_gpu()) return;
+  // The 9B shape: half as many key heads as value heads. The op composes the same
+  // production sequence the model runs and returns its bytes.
+  unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  Stream s = gpu_stream();
+  const char* names[3] = {"delta output", "recurrent state", "conv carry-out state"};
+  for (uint32_t seed : {10u, 20u, 30u}) {
+    for (float state_scale : {0.05f, 2.0f}) {
+      Inputs in = make_inputs(seed, state_scale, s, 8, 16);
+      Run want = production_pair(in, s, true, 8, 16);
+      Run got = fused(in, s, true, 8);
+      REQUIRE(got.out.size() == 3);
+      for (int i = 0; i < 3; ++i) {
+        CHECK_MESSAGE(got.out[i].shape() == want.out[i].shape(), std::string(names[i]), ": shape differs");
+        CHECK_MESSAGE(
+            array_equal(got.out[i], want.out[i], s).item<bool>(), std::string(names[i]),
+            " differs from the production sequence (seed ", seed, ", state scale ", state_scale, ")");
+      }
+    }
+  }
+}
+
+TEST_CASE("the fused conv + delta + gated norm is one dispatch at unequal head counts") {
+  if (!have_gpu()) return;
+  unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  Stream s = gpu_stream();
+  Inputs in = make_inputs(10, 0.05f, s, 8, 16);
+  production_pair(in, s, true, 8, 16);  // warm both routes so one-time setup is not counted
+  fused(in, s, true, 8);
+  Run seq = production_pair(in, s, true, 8, 16);
+  Run one = fused(in, s, true, 8);
+  std::cout << "[gdn_conv_delta_gqa] production sequence " << seq.dispatches << " dispatches, fused " << one.dispatches << "\n";
+  if (one.dispatches == seq.dispatches && std::getenv("GDN_CONV_DELTA_REQUIRE_ENGAGED") == nullptr) {
+    std::cout << "Skipping the engagement check: this device did not admit the GQA fused kernel\n";
+    return;
+  }
+  CHECK_MESSAGE(one.dispatches == 1, "the fused op did not collapse the sequence into one dispatch");
+}
+
+TEST_CASE("the fused GDN op rejects invalid head ratios before dispatch") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  for (int hv : {8, 24}) {
+    INFO("key heads 16, value heads " << hv);
+    Inputs in = make_inputs(10, 0.05f, s, 16, hv);
+    // Do not evaluate the returned graph: a regression must not run the shader.
+    CHECK_THROWS_WITH_AS(
+        fast::gdn_conv_delta_update(
+            in.conv_state, in.qkv, in.weight, in.a, in.b, in.a_log, in.dt_bias,
+            in.delta_state, KEY_DIM, INV * INV, INV, EPS, in.gate, in.norm_w, EPS, s),
+        "[gdn_conv_delta_update] value heads must be a positive multiple of key heads",
+        std::invalid_argument);
+  }
+}
+
+TEST_CASE("the 16:32 GDN path preserves bytes with nonzero input offsets") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  Inputs base = make_inputs(42, 0.05f, s, 16, 32);
+  const auto offset_view = [s](const array& x) {
+    const int size = static_cast<int>(x.size());
+    auto flat = reshape(x, {size}, s);
+    auto padded = concatenate({full({8}, array(-123.0f), x.dtype(), s), flat}, 0, s);
+    auto view = reshape(slice(padded, {8}, {size + 8}, s), x.shape(), s);
+    view.eval();
+    REQUIRE(view.offset() != 0);
+    REQUIRE(view.flags().row_contiguous);
+    return view;
+  };
+  Inputs offset = base;
+  offset.conv_state = offset_view(base.conv_state);
+  offset.qkv = offset_view(base.qkv);
+  offset.weight = offset_view(base.weight);
+  Run want = production_pair(base, s, true, 16, 32);
+  Run stock = production_pair(offset, s, true, 16, 32);
+  fused(offset, s, true, 16);
+  Run got = fused(offset, s, true, 16);
+  for (int i = 0; i < 3; ++i) {
+    CHECK(array_equal(stock.out[i], want.out[i], s).item<bool>());
+    CHECK(array_equal(got.out[i], want.out[i], s).item<bool>());
+  }
+  if (std::getenv("GDN_CONV_DELTA_REQUIRE_ENGAGED") != nullptr) {
+    CHECK_MESSAGE(got.dispatches == 1, "16:32 offset case must engage the fused kernel");
+  }
 }

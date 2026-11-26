@@ -32,9 +32,11 @@
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
+#include "mlx/fast.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 
@@ -462,9 +464,11 @@ TEST_CASE("chunked logsumexp: route gate and fallback bytes") {
 TEST_CASE("vocab tail default: the part rule") {
   CHECK(omarchy::vocab_tail_chunked_default("Apple M2 Max (G14C B1)"));
   CHECK(omarchy::vocab_tail_chunked_default("Apple M5 Max (G17C B1)"));
+  CHECK(omarchy::vocab_tail_chunked_default("Apple M6 (G18G B1)"));
+  CHECK(omarchy::vocab_tail_chunked_default("Apple M3 (G15G B1)"));
+  CHECK(omarchy::vocab_tail_chunked_default(""));
   CHECK_FALSE(omarchy::vocab_tail_chunked_default("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::vocab_tail_chunked_default("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::vocab_tail_chunked_default(""));
 }
 
 // Launches of one ArgMax or one LogSumExp over the row with the flags as the environment holds them.
@@ -529,4 +533,390 @@ TEST_CASE("vocab tail default: bf16 logits preserve serial parity") {
   CHECK(new_err <= old_err + slack);
   CHECK(new_err <= 4.0 * unit * std::max(std::fabs(ref), 1.0));
   set_flags(std::nullopt);
+}
+
+// ---- fused greedy head over the Q4 word column (DEC-46) ----
+// fast::greedy_quantized_argmax answers argmax(logits -
+// logsumexp(logits)) for the tied 4-bit/group-64 lm_head. Where
+// QuantizedMatmul picks the non-subgroup QmmVecQ4Word column the
+// primitive answers in three dispatches (shaders/qmm_vec.comp
+// QMM_VEC_GREEDY_WORD); these cases pin
+// the token to the composed expression's, including argreduce's
+// first-index and first-NaN rules.
+
+namespace {
+
+constexpr int kGreedyK = 2048;
+constexpr int kGreedyWords = kGreedyK / 8;     // 256
+constexpr int kGreedyGroups = kGreedyK / 64;   // 32
+constexpr int kGreedyPlane = kGreedyK * 3 / 32; // 192
+
+struct GreedyInputs {
+  array x;
+  array w;
+  array scales;
+  array biases;
+  array high;
+};
+
+// A synthetic lm_head: `n` rows of packed 4-bit codes over `k`,
+// per-64-group bf16 scales/biases, a bf16 activation row, and the
+// (unused by the word route) high-bits plane the API requires.
+// `duplicates` copies one row's words and parameters over later rows.
+GreedyInputs make_greedy_inputs(
+    int n,
+    uint64_t seed,
+    const std::vector<float>& scale_pattern,
+    const std::vector<float>& bias_pattern,
+    const std::vector<int>& duplicate_sources,
+    const std::vector<int>& duplicate_targets,
+    bool ones_x,
+    const Stream& stream,
+    int k = kGreedyK) {
+  const int words_per = k / 8;
+  const int groups_per = k / 64;
+  const int plane_per = k * 3 / 32;
+  std::mt19937 rng(static_cast<uint32_t>(seed));
+  std::vector<uint32_t> words(n * words_per);
+  for (auto& v : words) {
+    v = rng();
+  }
+  std::vector<float> scales_v(n * groups_per);
+  std::vector<float> biases_v(n * groups_per);
+  for (int r = 0; r < n; ++r) {
+    for (int g = 0; g < groups_per; ++g) {
+      scales_v[r * groups_per + g] =
+          scale_pattern[static_cast<size_t>(r + g) % scale_pattern.size()];
+      biases_v[r * groups_per + g] =
+          bias_pattern[static_cast<size_t>(r + g) % bias_pattern.size()];
+    }
+  }
+  for (size_t d = 0; d < duplicate_sources.size(); ++d) {
+    int src = duplicate_sources[d];
+    int dst = duplicate_targets[d];
+    std::copy(
+        words.begin() + src * words_per,
+        words.begin() + (src + 1) * words_per,
+        words.begin() + dst * words_per);
+    std::copy(
+        scales_v.begin() + src * groups_per,
+        scales_v.begin() + (src + 1) * groups_per,
+        scales_v.begin() + dst * groups_per);
+    std::copy(
+        biases_v.begin() + src * groups_per,
+        biases_v.begin() + (src + 1) * groups_per,
+        biases_v.begin() + dst * groups_per);
+  }
+  std::vector<float> xv(k);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  for (auto& v : xv) {
+    v = ones_x ? 1.0f : dist(rng);
+  }
+  array xf(xv.data(), Shape{1, k}, float32);
+  array wf(words.data(), Shape{n, words_per}, uint32);
+  array sf(scales_v.data(), Shape{n, groups_per}, float32);
+  array bf(biases_v.data(), Shape{n, groups_per}, float32);
+  std::vector<uint32_t> zeros(n * plane_per, 0u);
+  array high(zeros.data(), Shape{n, plane_per}, uint32);
+  return {astype(xf, bfloat16, stream),
+          wf,
+          astype(sf, bfloat16, stream),
+          astype(bf, bfloat16, stream),
+          high};
+}
+
+// The primitive's own fallback expression, evaluated through the normal
+// ops so the reference exercises the composed vocab tail.
+uint32_t composed_argmax(const GreedyInputs& in, const Stream& stream) {
+  auto logits = quantized_matmul(
+      in.x, in.w, in.scales, in.biases, true, 64, 4, "affine", stream);
+  auto logprobs =
+      subtract(logits, logsumexp(logits, -1, true, stream), stream);
+  auto token = astype(argmax(logprobs, -1, false, stream), uint32, stream);
+  token.eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  return token.item<uint32_t>();
+}
+
+struct GreedyRun {
+  uint32_t token;
+  std::vector<uint32_t> stats;
+  uint64_t launched;
+};
+
+GreedyRun fused_argmax(const GreedyInputs& in, const Stream& stream) {
+  // Materialize the lazy astype inputs first so the dispatch window
+  // counts only the head itself (array handles share the node).
+  array x_m = in.x, w_m = in.w, s_m = in.scales, b_m = in.biases,
+        h_m = in.high;
+  x_m.eval();
+  w_m.eval();
+  s_m.eval();
+  b_m.eval();
+  h_m.eval();
+  uint64_t before = dispatches();
+  auto out = fast::greedy_quantized_argmax(
+      in.x, in.w, in.scales, in.biases, in.high, 64, 4, stream);
+  out.at(0).eval();
+  out.at(1).eval();
+  omarchy::get_command_encoder(stream).synchronize();
+  GreedyRun r;
+  r.token = out.at(0).item<uint32_t>();
+  const uint32_t* p = out.at(1).data<uint32_t>();
+  r.stats.assign(p, p + 3);
+  r.launched = dispatches() - before;
+  return r;
+}
+
+// The word route's device terms (K-independent); the same terms
+// primitives.cpp's eval_gpu checks.
+bool word_caps() {
+  const auto& caps = omarchy::device(0).capabilities();
+  const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_Q4_WORD");
+  bool word_enabled = env == nullptr || std::strcmp(env, "1") == 0;
+  return word_enabled && caps.storage_buffer_16bit_access &&
+      caps.shader_int16;
+}
+
+bool subgroup_ready() {
+  const auto& caps = omarchy::device(0).capabilities();
+  return caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
+          0u;
+}
+
+// True when w and high_bits each fit one storage-buffer binding on
+// this device. Every route — fused word, staged subgroup and the
+// composed tail — binds them whole, so a device at the Vulkan minimum
+// maxStorageBufferRange can run none of them above the fitting vocab.
+bool greedy_bindings_fit(int k, int n) {
+  const auto& caps = omarchy::device(0).capabilities();
+  const uint64_t w_bytes = static_cast<uint64_t>(n) * k / 8u * 4u;
+  const uint64_t plane_bytes = static_cast<uint64_t>(n) * k * 3u / 32u * 4u;
+  return caps.max_storage_buffer_range == 0u ||
+      (w_bytes <= caps.max_storage_buffer_range &&
+       plane_bytes <= caps.max_storage_buffer_range);
+}
+
+// True when eval_gpu takes the non-subgroup QMM_VEC_GREEDY_WORD route
+// for this K and row count: the staged QMM_VEC_GREEDY route claims
+// K = 2048 on subgroup devices; every other K takes the word route.
+bool word_route_taken(int k, int n) {
+  const bool bindings_fit = greedy_bindings_fit(k, n);
+  return word_caps() && bindings_fit &&
+      !(subgroup_ready() && k == kGreedyK && bindings_fit);
+}
+
+const std::vector<float> kScales{0.5f, 0.75f, 1.0f, 1.25f, 0.875f};
+const std::vector<float> kBiases{-0.1f, 0.0f, 0.1f, -0.05f, 0.05f};
+
+} // namespace
+
+TEST_CASE("fused greedy word head: token matches the composed argmax") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // K = 2560 forces the word route on subgroup-capable devices too.
+  for (int k : {kGreedyK, 2560}) {
+    for (int n : {2048, 8192, 12289}) {
+      auto in = make_greedy_inputs(
+          n, 0xdec46 + n + k, kScales, kBiases, {}, {}, false, stream, k);
+      auto run = fused_argmax(in, stream);
+      CHECK(run.token == composed_argmax(in, stream));
+      CHECK(run.token < static_cast<uint32_t>(n));
+      // stats[0] = rows evaluated exactly, stats[1] = overflow flag on
+      // the word route; the staged route reports its own stats.
+      if (word_route_taken(k, n)) {
+        CHECK(run.stats[0] == static_cast<uint32_t>(n));
+        CHECK(run.stats[1] == 0u);
+      }
+    }
+  }
+}
+
+TEST_CASE("fused greedy word head: equal max rows pick the first index") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  for (int k : {kGreedyK, 2560}) {
+    const int n = 12289;
+    auto base = make_greedy_inputs(
+        n, 0xdec47 + k, kScales, kBiases, {}, {}, false, stream, k);
+    uint32_t arg = composed_argmax(base, stream);
+    // Duplicate the argmax row at later positions (crossing a chunk edge
+    // when it fits): argreduce's first-index rule keeps the original. A
+    // last-position argmax gets an earlier duplicate instead, which then
+    // becomes the answer.
+    std::vector<int> targets;
+    uint32_t expected = arg;
+    if (arg == static_cast<uint32_t>(n - 1)) {
+      targets = {0};
+      expected = 0;
+    } else {
+      if (arg + 4096 < static_cast<uint32_t>(n)) {
+        targets.push_back(static_cast<int>(arg) + 4096);
+      }
+      if (targets.empty() || targets.back() != n - 1) {
+        targets.push_back(n - 1);
+      }
+    }
+    std::vector<int> sources(targets.size(), static_cast<int>(arg));
+    auto tied = make_greedy_inputs(
+        n, 0xdec47 + k, kScales, kBiases, sources, targets, false, stream,
+        k);
+    CHECK(fused_argmax(tied, stream).token == expected);
+    CHECK(composed_argmax(tied, stream) == expected);
+  }
+}
+
+TEST_CASE("fused greedy word head: NaN row yields the first normalized index") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  for (int k : {kGreedyK, 2560}) {
+    const int n = 8192;
+    const int groups = k / 64;
+    auto in = make_greedy_inputs(
+        n, 0xdec48 + k, kScales, kBiases, {}, {}, false, stream, k);
+    // One NaN scale makes row 37's logit NaN; nan_max propagates it to
+    // the row maximum, so every normalized element is NaN and argreduce
+    // answers index 0.
+    std::vector<float> nan_scales(n * groups, 0.5f);
+    nan_scales[37 * groups] = kNan;
+    array sf(nan_scales.data(), Shape{n, groups}, float32);
+    GreedyInputs nan_in{
+        in.x, in.w, astype(sf, bfloat16, stream), in.biases, in.high};
+    auto run = fused_argmax(nan_in, stream);
+    CHECK(run.token == 0u);
+    CHECK(composed_argmax(nan_in, stream) == 0u);
+  }
+}
+
+TEST_CASE("fused greedy word head: +inf rows pick the first") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  for (int k : {kGreedyK, 2560}) {
+    const int n = 8192;
+    const int groups = k / 64;
+    // x all-ones keeps every row's dot and input_sum positive, so an
+    // infinite scale and bias make that row's logit exactly +inf; the
+    // normalized row is NaN at the +inf logits and -inf elsewhere, and
+    // argreduce's first-NaN rule answers the first +inf row.
+    auto in = make_greedy_inputs(
+        n, 0xdec49 + k, {0.5f}, {0.1f}, {}, {}, true, stream, k);
+    std::vector<float> inf_scales(n * groups, 0.5f);
+    std::vector<float> inf_biases(n * groups, 0.1f);
+    for (int r : {100, 2300}) {
+      for (int g = 0; g < groups; ++g) {
+        inf_scales[r * groups + g] = kInf;
+        inf_biases[r * groups + g] = kInf;
+      }
+    }
+    array sf(inf_scales.data(), Shape{n, groups}, float32);
+    array bf(inf_biases.data(), Shape{n, groups}, float32);
+    GreedyInputs inf_in{in.x,
+                        in.w,
+                        astype(sf, bfloat16, stream),
+                        astype(bf, bfloat16, stream),
+                        in.high};
+    auto run = fused_argmax(inf_in, stream);
+    CHECK(run.token == 100u);
+    CHECK(composed_argmax(inf_in, stream) == 100u);
+  }
+}
+
+TEST_CASE("fused greedy word head: NaN logit row picks index 0") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  for (int k : {kGreedyK, 2560}) {
+    const int n = 8192;
+    const int groups = k / 64;
+    // A NaN scale makes row 2000's logit NaN; lse is NaN, every
+    // normalized element is NaN, and the first-NaN rule answers index 0
+    // on every route.
+    auto in = make_greedy_inputs(
+        n, 0xdec4a + k, {0.5f}, {0.1f}, {}, {}, true, stream, k);
+    std::vector<float> nan_scales(n * groups, 0.5f);
+    for (int g = 0; g < groups; ++g) {
+      nan_scales[2000 * groups + g] = kNan;
+    }
+    array sf(nan_scales.data(), Shape{n, groups}, float32);
+    GreedyInputs nan_in{
+        in.x, in.w, astype(sf, bfloat16, stream), in.biases, in.high};
+    auto run = fused_argmax(nan_in, stream);
+    CHECK(run.token == 0u);
+    CHECK(composed_argmax(nan_in, stream) == 0u);
+  }
+}
+
+TEST_CASE("fused greedy word head: all -inf logits pick index 0") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  for (int k : {kGreedyK, 2560}) {
+    const int n = 8192;
+    // scale 0 and bias -inf: bias_term = input_sum * -inf = -inf, so
+    // every logit is -inf; the normalized row is all-NaN and argreduce
+    // answers index 0.
+    auto in = make_greedy_inputs(
+        n, 0xdec50 + k, {0.0f}, {-kInf}, {}, {}, true, stream, k);
+    auto run = fused_argmax(in, stream);
+    CHECK(run.token == 0u);
+    CHECK(composed_argmax(in, stream) == 0u);
+  }
+}
+
+TEST_CASE("fused greedy word head: three dispatches on the word route") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  auto in = make_greedy_inputs(
+      12289, 0xdec51, kScales, kBiases, {}, {}, false, stream);
+  auto run = fused_argmax(in, stream);
+  if (word_route_taken(kGreedyK, 12289)) {
+    CHECK(run.launched == 3u);
+    CHECK(
+        omarchy::trace::counters().last_dispatched_kernel.load() ==
+        static_cast<int64_t>(
+            omarchy::ComputeKernel::QmmVecGreedyWordBF16));
+  }
+  CHECK(run.token == composed_argmax(in, stream));
+}
+
+TEST_CASE("fused greedy word head: K = 2560 (Qwen3.5-4B) matches") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  // The word column is K-generic over 64-wide groups; K = 2560 is the
+  // 4B head the DEC-46 card serves, and it also crosses to the word
+  // route on subgroup-capable devices (the staged route is K = 2048).
+  // w is bound whole by every route; on a device at the Vulkan-minimum
+  // 128 MiB maxStorageBufferRange the 131,072-row vocab fits no route
+  // (the composed tail binds the same 160 MiB buffer), so the large
+  // leg drops to a floor-fitting vocab there.
+  const int n_large = greedy_bindings_fit(2560, 131072) ? 131072 : 98304;
+  for (int n : {8192, n_large}) {
+    auto in = make_greedy_inputs(
+        n, 0xdec52 + n, kScales, kBiases, {}, {}, false, stream, 2560);
+    auto run = fused_argmax(in, stream);
+    if (word_route_taken(2560, n)) {
+      CHECK(run.launched == 3u);
+      CHECK(
+          omarchy::trace::counters().last_dispatched_kernel.load() ==
+          static_cast<int64_t>(
+              omarchy::ComputeKernel::QmmVecGreedyWordBF16));
+    }
+    CHECK(run.token == composed_argmax(in, stream));
+    CHECK(run.token < static_cast<uint32_t>(n));
+  }
 }

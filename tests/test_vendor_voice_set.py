@@ -10,12 +10,15 @@ without resolving dependencies again.
 
 import base64
 import hashlib
+import importlib.util
+import io
 import re
 import subprocess
 import sys
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -98,6 +101,48 @@ class VoiceSetTest(unittest.TestCase):
 CHECK = PACKAGING / "check-nodeps-closure.py"
 
 
+def zip_bytes(members, compression=zipfile.ZIP_STORED):
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression) as zf:
+        for member, data in members.items():
+            zf.writestr(member, data)
+    return bytearray(out.getvalue())
+
+
+def encrypted_metadata_wheel():
+    """A wheel whose METADATA is flagged encrypted, so reading it needs a password."""
+    raw = zip_bytes({"voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: tqdm\n"})
+    raw[6] |= 1  # local file header flag
+    raw[raw.index(b"PK\x01\x02") + 8] |= 1  # central directory flag
+    return bytes(raw)
+
+
+def corrupt_deflate_wheel():
+    member = "voicepkg-1.0.dist-info/METADATA"
+    raw = zip_bytes({member: "".join(f"Requires-Dist: pkg{i}\n" for i in range(400))}, zipfile.ZIP_DEFLATED)
+    data = 30 + len(member)  # compressed data follows the local file header
+    for i in range(data + 10, data + 30):
+        raw[i] ^= 0xFF
+    return bytes(raw)
+
+
+def parser_rejects(text):
+    """True when the check's Requirement() rejects text itself: packaging < 26 converts most specifier
+    versions while parsing, so an oversized one is reported as an invalid requirement, as on base."""
+    spec = importlib.util.spec_from_file_location("nodeps_closure_parser", CHECK)
+    closure = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(closure)
+    limit = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)  # the limit run_check and run_raw pin
+    try:
+        closure.Requirement(text)
+    except ValueError:
+        return True
+    finally:
+        sys.set_int_max_str_digits(limit)
+    return False
+
+
 class NodepsClosureCheckTest(unittest.TestCase):
     """check-nodeps-closure.py: every Requires-Dist of a --no-deps wheel is in the lock."""
 
@@ -111,14 +156,29 @@ class NodepsClosureCheckTest(unittest.TestCase):
             nodeps.write_text("voicepkg==1.0\n" + nodeps_extra)
             lock = tmp / "lock.txt"
             lock.write_text("\n".join(lock_lines) + "\n")
-            return subprocess.run([sys.executable, str(CHECK), "--nodeps", str(nodeps),
-                                   "--wheels", str(wheels), "--lock", str(lock)],
+            # Pin the default int-digit limit the oversized-version cases rely on.
+            return subprocess.run([sys.executable, "-X", "int_max_str_digits=4300", str(CHECK),
+                                   "--nodeps", str(nodeps), "--wheels", str(wheels), "--lock", str(lock)],
                                   capture_output=True, text=True)
 
     def test_covered_dependencies_pass(self):
         result = self.run_check(["scipy>=1.10", "tqdm"], ["scipy==1.18.1 --hash=sha256:" + "0" * 64,
                                                           "tqdm==4.67.1 --hash=sha256:" + "1" * 64])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_oversized_versions_the_check_never_compares_pass(self):
+        big = "9" * 4301
+        for label, requires, lock_lines, extra in (
+                ("other platform", [f'tqdm>=1.{big}; sys_platform == "win32"'], ["tqdm==1 --hash=sha256:" + "0" * 64],
+                 ""),
+                ("not vendored", [f"mlx>=1.{big}"], ["tqdm==1"], "# not-vendored: mlx  mlx-omarchy provides it\n"),
+                ("lock names it without a pin", [f"tqdm>=1,<=1.{big}"], ["tqdm"], "")):
+            with self.subTest(label):
+                result = self.run_check(requires, lock_lines, nodeps_extra=extra)
+                if parser_rejects(requires[0]):
+                    self.assert_clean_error(result, "Requires-Dist: invalid requirement")
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_a_dependency_missing_from_the_lock_fails_by_name(self):
         result = self.run_check(["scipy>=1.10", "einops>=0.8"], ["scipy==1.18.1 --hash=sha256:" + "0" * 64])
@@ -142,6 +202,178 @@ class NodepsClosureCheckTest(unittest.TestCase):
     def test_specifier_lines_of_the_input_file_count_as_covered(self):
         result = self.run_check(["scipy>=1.10"], ["scipy>=1.10.0"])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def run_raw(self, nodeps, lock, wheels):
+        """nodeps, lock: file bytes (None leaves the file out); wheels: filename -> bytes or {member: bytes}."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "wheels").mkdir()
+            for filename, body in wheels.items():
+                if isinstance(body, bytes):
+                    (tmp / "wheels" / filename).write_bytes(body)
+                    continue
+                with zipfile.ZipFile(tmp / "wheels" / filename, "w") as zf:
+                    for member, data in body.items():
+                        zf.writestr(member, data)
+            for name, data in (("nodeps.in", nodeps), ("lock.txt", lock)):
+                if data is not None:
+                    (tmp / name).write_bytes(data)
+            # Pin the default int-digit limit the oversized-version cases rely on.
+            return subprocess.run([sys.executable, "-X", "int_max_str_digits=4300", str(CHECK),
+                                   "--nodeps", str(tmp / "nodeps.in"),
+                                   "--wheels", str(tmp / "wheels"), "--lock", str(tmp / "lock.txt")],
+                                  capture_output=True, text=True)
+
+    def assert_clean_error(self, result, text):
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertTrue(result.stderr.startswith("error: "), result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn(text, result.stderr)
+
+    def test_an_entry_that_is_not_one_exact_pin_fails_cleanly(self):
+        # An unpinned or URL entry used to raise StopIteration; a range or
+        # compound one checked whichever wheel its first specifier named.
+        lock = f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode()
+        wheels = {f"voicepkg-{v}-py3-none-any.whl": {f"voicepkg-{v}.dist-info/METADATA": meta}
+                  for v, meta in (("1.0", b"Name: voicepkg\nRequires-Dist: tqdm\n"),
+                                  ("2.0", b"Name: voicepkg\nRequires-Dist: einops\n"))}
+        for entry in ("voicepkg", "voicepkg @ https://example.com/voicepkg-1.0-py3-none-any.whl",
+                      "voicepkg>=1.0", "voicepkg!=2.0", "voicepkg~=1.0", "voicepkg==1.0,!=1.0.1",
+                      "voicepkg==1.*", "voicepkg===1.0", "voicepkg[extra]==1.0",
+                      'voicepkg==1.0; sys_platform == "win32"'):
+            with self.subTest(entry=entry):
+                result = self.run_raw(f"{entry}\n".encode(), lock, wheels)
+                self.assert_clean_error(result, f"nodeps.in:1: {entry!r} must pin one version as name==version")
+
+    def test_the_pin_finds_its_wheel_by_normalized_name_and_version(self):
+        lock = f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode()
+        meta = b"Name: voice.pkg\nRequires-Dist: tqdm\n"
+        for entry, filename in (("voice-pkg==1.0.0", "voice_pkg-1.0-py3-none-any.whl"),
+                                ("Voice_Pkg==1.0", "voice.pkg-1.0-py3-none-any.whl")):
+            with self.subTest(entry=entry, wheel=filename):
+                result = self.run_raw(f"{entry}\n".encode(), lock,
+                                      {filename: {f"{filename.split('-')[0]}-1.0.dist-info/METADATA": meta}})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_wheel_filename_with_an_invalid_version_is_skipped(self):
+        # packaging < 23.2 raises InvalidVersion, not InvalidWheelFilename, for
+        # aaa-badver-py3-none-any.whl, which sorts ahead of the pinned wheel.
+        spec = importlib.util.spec_from_file_location("nodeps_closure_under_test", CHECK)
+        closure = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(closure)
+        modern = closure.parse_wheel_filename
+
+        def old_parse(filename):
+            closure.Version(filename.split("-")[1])
+            return modern(filename)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wheels = Path(tmp)
+            (wheels / "aaa-badver-py3-none-any.whl").write_bytes(b"")
+            make_wheel(wheels, "voicepkg", "1.0", requires=["tqdm"])
+            with mock.patch.object(closure, "parse_wheel_filename", old_parse):
+                self.assertEqual(closure.wheel_requires(wheels, closure.Requirement("voicepkg==1.0")), ["tqdm"])
+        result = self.run_raw(b"voicepkg==1.0\n", f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode(),
+                              {"aaa-badver-py3-none-any.whl": b"",
+                               "voicepkg-1.0-py3-none-any.whl": {"voicepkg-1.0.dist-info/METADATA":
+                                                                 b"Requires-Dist: tqdm\n"}})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_only_the_exact_version_with_wheel_tags_is_checked(self):
+        # ==1.0 also contains 1.0+cpu, so a contains() match checked
+        # whichever wheel the directory listed first.
+        lock = f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode()
+        local = {"voicepkg-1.0+cpu-py3-none-any.whl": {"voicepkg-1.0+cpu.dist-info/METADATA":
+                                                       b"Requires-Dist: einops\n"}}
+        untagged = {"voicepkg-1.0-anything.whl": {"voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: einops\n"}}
+        for label, wheels in (("local version only", local), ("no wheel tags", untagged)):
+            with self.subTest(label):
+                self.assert_clean_error(self.run_raw(b"voicepkg==1.0\n", lock, wheels),
+                                        "error: no wheel for voicepkg==1.0")
+        # foo-1.0---.whl sorts first; older packaging parses its empty tags.
+        empty_tags = dict(untagged, **{"voicepkg-1.0---.whl": {"voicepkg-1.0.dist-info/METADATA": b"Name: voicepkg\n"},
+                                       "voicepkg-1.0-py3-none-any.whl": untagged["voicepkg-1.0-anything.whl"]})
+        self.assert_clean_error(self.run_raw(b"voicepkg==1.0\n", lock, empty_tags), "voicepkg needs einops")
+        both = dict(local, **{"voicepkg-1.0-py3-none-any.whl": {"voicepkg-1.0.dist-info/METADATA":
+                                                                 b"Requires-Dist: tqdm\n"}})
+        result = self.run_raw(b"voicepkg==1.0\n", lock, both)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_vendored_dist_info_inside_the_wheel_is_not_its_metadata(self):
+        result = self.run_raw(b"voicepkg==1.0\n", f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode(),
+                              {"voicepkg-1.0-py3-none-any.whl": {
+                                  "voicepkg/_vendor/ghost-9.dist-info/METADATA":
+                                      b"Name: ghost\nRequires-Dist: einops\n",
+                                  "voicepkg-1.0.dist-info/METADATA": b"Name: voicepkg\nRequires-Dist: tqdm\n"}})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_malformed_inputs_fail_with_an_error_line(self):
+        pin, lock = b"voicepkg==1.0\n", f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode()
+        good = {"voicepkg-1.0-py3-none-any.whl": {"voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: tqdm\n"}}
+        big = "9" * 4301
+        # packaging < 26 rejects the oversized nodeps pin while read_nodeps() parses it, before the lock.
+        early = parser_rejects(f"voicepkg==1.{big}") and "nodeps.in:1: invalid requirement"
+        cases = {
+            "invalid nodeps line": (b"voicepkg==\n", lock, good, "nodeps.in:1: invalid requirement 'voicepkg=='"),
+            "invalid compound specifier": (b"voicepkg===1.0,2.0\n", lock, good, "nodeps.in:1: invalid requirement"),
+            "non-UTF-8 nodeps file": (b"voicepkg==1.0  # caf\xe9\n", lock, good, "cannot read"),
+            "missing lock file": (pin, None, good, "cannot read"),
+            "non-UTF-8 lock file": (pin, lock.rstrip() + b" # caf\xe9\n", good, "cannot read"),
+            "invalid lock version": (pin, f"tqdm==x!y --hash=sha256:{'0' * 64}\n".encode(), good,
+                                     "lock.txt:1: Invalid version: 'x!y'"),
+            "invalid lock line": (pin, b"???\n", good, "lock.txt:1: invalid requirement '???'"),
+            "corrupt wheel": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": b"not a zip"}, "cannot read"),
+            "corrupt compressed METADATA": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": corrupt_deflate_wheel()},
+                                            "cannot read"),
+            "encrypted METADATA": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": encrypted_metadata_wheel()},
+                                   "cannot read"),
+            "wheel without METADATA": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {"voicepkg/__init__.py": b""}},
+                                       "has no .dist-info/METADATA"),
+            "non-UTF-8 METADATA": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b"Summary: caf\xe9\n"}}, "cannot read"),
+            "invalid Requires-Dist": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: tqdm>>1\n"}},
+                "Requires-Dist: invalid requirement 'tqdm>>1'"),
+            "METADATA header line without a colon": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b"Name: voicepkg\nRequires-Dist missing\nRequires-Dist: einops\n"}},
+                "METADATA has a malformed header line"),
+            "METADATA starting with a continuation line": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b" Requires-Dist: einops\nName: voicepkg\n"}},
+                "METADATA has a malformed header line"),
+            "Requires-Dist with an invalid compound specifier": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: bar===1.0,2.0\n"}},
+                "Requires-Dist: invalid requirement"),
+            "Requires-Dist with an unterminated quote": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: bar; sys_platform == 'win32\\'\n"}},
+                "Requires-Dist: invalid requirement"),
+            "Requires-Dist marker that cannot be evaluated": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b'Requires-Dist: bar; os_name ~= "1.0"\n'}},
+                "Requires-Dist: cannot evaluate"),
+            "Requires-Dist marker on an unknown variable": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": b'Requires-Dist: bar; "dev" in dependency_groups\n'}},
+                "Requires-Dist: cannot evaluate"),
+            "oversized lock version": (pin, f"tqdm==1.{big} --hash=sha256:{'0' * 64}\n".encode(), good,
+                                       "lock.txt:1: Exceeds the limit"),
+            "oversized nodeps version": (f"voicepkg==1.{big}\n".encode(), lock, good,
+                                         early or "nodeps pin voicepkg: Exceeds the limit"),
+            "oversized nodeps version after a bad lock line": (
+                f"voicepkg==1.{big}\n".encode(), f"tqdm==x!y --hash=sha256:{'0' * 64}\n".encode(), good,
+                early or "lock.txt:1: Invalid version: 'x!y'"),
+            **{f"oversized Requires-Dist version, {kind}": (pin, lock_bytes, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": f"Requires-Dist: tqdm{spec}\n".encode()}},
+                "Requires-Dist: invalid requirement" if parser_rejects(f"tqdm{spec}")
+                else f"voicepkg Requires-Dist 'tqdm{spec}': Exceeds the limit")
+               for kind, spec, lock_bytes in (
+                   ("one specifier", f">=1.{big}", lock),
+                   ("compound specifier", f">=1,<=1.{big}", lock),
+                   ("wildcard specifier", f"==1.{big}.*", lock),
+                   ("compound, not in the lock", f">=0,<=1.{big}", f"other==1 --hash=sha256:{'0' * 64}\n".encode()),
+                   ("compound, lock pin outside it", f">=1,<=1.{big}",
+                    f"tqdm==0.5 --hash=sha256:{'0' * 64}\n".encode()))},
+        }
+        for label, (nodeps, lock_bytes, wheels, text) in cases.items():
+            with self.subTest(label):
+                self.assert_clean_error(self.run_raw(nodeps, lock_bytes, wheels), text)
 
     def test_the_real_nodeps_file_declares_its_exemptions(self):
         text = NODEPS_IN.read_text()

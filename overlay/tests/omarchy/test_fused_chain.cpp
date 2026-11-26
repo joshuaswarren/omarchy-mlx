@@ -2051,13 +2051,48 @@ TEST_CASE("fused gemv default: the part rule") {
   CHECK_FALSE(omarchy::fused_gemv_off_default_part(""));
 }
 
-TEST_CASE("qmm residual norm default: the part rule and overrides") {
-  CHECK(omarchy::qmm_residual_norm_default_part("Apple M1 Max (G13C C0)"));
-  CHECK(omarchy::qmm_residual_norm_default_part("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::qmm_residual_norm_default_part("Apple M4 (G16G B1)"));
-  CHECK_FALSE(omarchy::qmm_residual_norm_default_part(""));
+TEST_CASE("gemv epilogue-only route: the part rule") {
+  CHECK(omarchy::gemv_epilogue_only_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::gemv_epilogue_only_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::gemv_epilogue_only_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::gemv_epilogue_only_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::gemv_epilogue_only_part(""));
+}
 
+TEST_CASE("gemv balanced QKV route: part and width guards") {
+  CHECK(omarchy::gemv_balanced_qkv_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_part(""));
+
+  CHECK(omarchy::gemv_balanced_qkv_widths_ok({4096, 1024, 1024}));
+  CHECK(omarchy::gemv_balanced_qkv_widths_ok({4096, 512, 512}));
+  CHECK(omarchy::gemv_balanced_qkv_widths_ok({8192, 1024, 1024}));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({6144, 2048, 16, 16}));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({8192, 4096, 32, 32}));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({9728, 9728}));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({4096, 256, 256}));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({8192, 512, 512}));
+}
+
+TEST_CASE("gemv balanced pair route: width guard") {
+  // MLP gate/up pairs (equal widths).
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(6144, 6144));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(9728, 9728));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(12288, 12288));
+  // Split-pair GDN in_proj: [6144, 2048] + [16, 16].
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(6144, 2048));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(16, 16));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(8192, 2048));
+  // Pairs beyond the 4:1 ratio stay per-node.
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(6144, 16));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(4096, 512));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(4096, 1023));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(0, 16));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(-1, 16));
+}
+
+TEST_CASE("qmm residual norm default: shape, device capabilities and overrides") {
   const char* names[] = {
       "MLX_OMARCHY_FUSED_CHAIN", "MLX_OMARCHY_QMM_RESIDUAL_NORM"};
   std::vector<std::optional<std::string>> saved;
@@ -2066,28 +2101,58 @@ TEST_CASE("qmm residual norm default: the part rule and overrides") {
     saved.push_back(v ? std::optional<std::string>(v) : std::nullopt);
     unsetenv(var);
   }
-  const std::string g13c = "Apple M1 Max (G13C C0)";
-  const std::string g13g = "Apple M1 (G13G B1)";
-  const std::string g14c = "Apple M2 Max (G14C B1)";
-  CHECK(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK(omarchy::qmm_residual_norm_enabled(g14c));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
+  omarchy::CapabilityReport caps;
+  caps.device_name = "Unlisted Vulkan GPU";
+  caps.subgroup_size = 32;
+  caps.subgroup_operations = VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+  caps.max_compute_work_group_invocations = 512;
+  caps.max_compute_work_group_size[0] = 512;
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 256, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 2048, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 0, false));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4095, false));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4097, false));
+
+  auto dgpu_caps = caps;
+  dgpu_caps.device_name = "NVIDIA GeForce RTX 5060 Ti";
+  CHECK(omarchy::qmm_residual_norm_enabled(dgpu_caps, 2560, false));
+
+  auto apple = caps;
+  apple.unified_memory = true;
+  apple.device_name = "Apple M1 (G13G)";
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2048, false));
+  apple.device_name = "Apple M1 Max (G13C)";
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+  apple.device_name = "Apple M2 Max (G14C B1)";
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+
+  auto limited = caps;
+  limited.device_name = "Apple M2 Max (G14C B1)";
+  limited.subgroup_size = 16;
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, false));
+  limited.subgroup_size = 32;
+  limited.subgroup_operations = 0;
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, false));
+  limited.subgroup_operations = caps.subgroup_operations;
+  limited.max_compute_work_group_invocations = 256;
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(limited, 4096, true));
+  limited.max_compute_work_group_size[0] = 255;
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
-  CHECK(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK(omarchy::qmm_residual_norm_enabled(g13g));
-  CHECK(omarchy::qmm_residual_norm_enabled(g14c));
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 2048, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13c));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g14c));
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   for (size_t i = 0; i < saved.size(); ++i) {
     if (saved[i]) {
@@ -2289,14 +2354,14 @@ TEST_CASE("fused planner leaves CPU-stream nodes to the CPU") {
   }
 }
 
-TEST_CASE("outgate fold default: G13 non-G13C and G14C default off, env overrides") {
+TEST_CASE("outgate fold default: G13 and G14C default off, env overrides") {
   struct EnvReset {
     ~EnvReset() {
       unsetenv("MLX_OMARCHY_OUTGATE_FOLD");
     }
   } env_reset;
 
-  CHECK(omarchy::outgate_fold_default_for_device("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 Pro (G13S C0)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M2 Max (G14C B1)"));

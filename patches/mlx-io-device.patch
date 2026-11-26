@@ -1,7 +1,7 @@
 diff --git a/mlx/io/safetensors.cpp b/mlx/io/safetensors.cpp
 --- a/mlx/io/safetensors.cpp
 +++ b/mlx/io/safetensors.cpp
-@@ -1,11 +1,15 @@
+@@ -1,11 +1,17 @@
  // Copyright © 2023 Apple Inc.
  
 +#include <cstdlib>
@@ -14,23 +14,44 @@ diff --git a/mlx/io/safetensors.cpp b/mlx/io/safetensors.cpp
  #include "mlx/backend/cuda/cuda.h"
 +#include "mlx/backend/cpu/device_info.h"
 +#include "mlx/backend/gpu/device_info.h"
++#include "mlx/backend/omarchy/device.h"
++#include "mlx/backend/omarchy/inference_weights.h"
  #include "mlx/io.h"
  #include "mlx/io/load.h"
  #include "mlx/ops.h"
-@@ -110,9 +114,24 @@
+@@ -110,9 +114,43 @@
  }
  
 +#ifdef MLX_OMARCHY_BACKEND
++// Device-local weight placement is required on a card that cannot map
++// device-local memory into host space (no resizable-bar aperture): its
++// weights reach VRAM through the staged upload path.
++// MLX_OMARCHY_VRAM_WEIGHTS stays the override both ways: an absolute path
++// flags only loads from that checkpoint directory, and any other value
++// disables the route.
 +static bool is_inference_checkpoint(const std::string& file) {
 +  const char* root = std::getenv("MLX_OMARCHY_VRAM_WEIGHTS");
-+  if (!root || !std::filesystem::path(root).is_absolute()) {
++  if (root && *root && !std::filesystem::path(root).is_absolute()) {
 +    return false;
 +  }
-+  auto directory = std::filesystem::path(root).lexically_normal();
-+  if (directory.filename().empty() && directory.has_relative_path()) {
-+    directory = directory.parent_path();
++  if (root && *root) {
++    auto directory = std::filesystem::path(root).lexically_normal();
++    if (directory.filename().empty() && directory.has_relative_path()) {
++      directory = directory.parent_path();
++    }
++    return std::filesystem::absolute(file)
++        .lexically_normal()
++        .parent_path() == directory;
 +  }
-+  return std::filesystem::absolute(file).lexically_normal().parent_path() == directory;
++  static const bool required = []() {
++    try {
++      return !omarchy::mapped_device_local_memory_type(
++          omarchy::device().memory_properties());
++    } catch (...) {
++      return false;
++    }
++  }();
++  return required;
 +}
 +#endif
 +

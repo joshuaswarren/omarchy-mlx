@@ -89,6 +89,8 @@ SERIES_PATCHES=(
   mlx-lm-spec-split-rows.patch
   mlx-lm-kv-host-offset.patch
   mlx-lm-readback-chunk.patch
+  mlx-lm-deferred-token-yield.patch
+  mlx-lm-server-alias-key.patch
 )
 series_already_applied() {
   local name="$1" other i=0 j
@@ -365,6 +367,18 @@ else
   echo "readback-chunk: 0.31.3 series only; skipped on $SERIES"
 fi
 
+# Deferred token yield (MLX_OMARCHY_DEFER_TOKENS=K, default 8): the per-step
+# y.item() join moves to a daemon reader thread so the eval thread keeps
+# recording; the loop stays K steps ahead and yields tokens as the reader
+# materializes them. RTX 5060 Ti decode-only A/B: ~139 vs ~103 tps stock
+# (+34%); the same-thread readback-chunk it supersedes measured flat there.
+# =0 restores the eager loop. 0.31.3 series only.
+if [[ "$SERIES" == "patches" ]]; then
+  apply mlx-lm-deferred-token-yield.patch
+else
+  echo "deferred-token-yield: 0.31.3 series only; skipped on $SERIES"
+fi
+
 # Optional mlx-audio series (applied only when mlx_audio is installed in the
 # same venv; absent audio is a clean skip, an already-guarded module is
 # detected and skipped, and a second run is idempotent). The 0.5.6 wheel
@@ -399,6 +413,11 @@ if [[ -d "$SITE/mlx_audio/sts/models/mossformer2_se" ]]; then
 else
   echo "mlx-audio patch series: mlx_audio not installed; skipped"
 fi
+# omarchy-local-ai runtime contract (#932): --alias serves the recipe id at
+# /v1/models and --api-key gates every route but /health. Both series carry
+# the patch; it applies cleanly last on both pinned trees (verified 0.31.3
+# wheel and the 94cdcae fork tree).
+apply mlx-lm-server-alias-key.patch
 # Every step succeeded: record the series and the mlx-lm version it was applied to (mlx-omarchy serve reads this).
 DIST_DIR="$(basename "$(ls -d "$SITE"/mlx_lm-*.dist-info 2>/dev/null | head -n 1)" .dist-info)"
 printf 'series=%s\nmlx_lm=%s\n' "$SERIES" "${DIST_DIR#mlx_lm-}" > "$RECORD_FILE"

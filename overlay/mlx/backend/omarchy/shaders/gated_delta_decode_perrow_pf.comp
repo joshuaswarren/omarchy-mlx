@@ -42,8 +42,13 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #endif
 
-#if defined(GDN_CONV_FUSED) && (defined(GDN_COMPOSED_ORDER) || defined(GDN_NATIVE_GQA_INDEX))
-#error GDN_CONV_FUSED covers the default-order equal-head build only
+#if defined(GDN_CONV_FUSED) && defined(GDN_COMPOSED_ORDER)
+#error GDN_CONV_FUSED covers the default-order build only
+#endif
+#if defined(GDN_CONV_FUSED) && defined(GDN_NATIVE_GQA_INDEX)
+// The GQA fused build: q and k conv channels index by the key head (in_strides[3] = Hk,
+// 0 = equal heads). Value-head workgroups sharing a key head compute the same conv
+// outputs; the group's lead value head carries out the q/k conv state.
 #endif
 #if defined(GDN_NORM_FUSED) && !defined(GDN_CONV_FUSED)
 #error GDN_NORM_FUSED extends GDN_CONV_FUSED
@@ -595,12 +600,13 @@ void gdn_conv_state_out(uint channel) {
       conv_x.v[params.rhs_offset + channel];
 }
 
-// Replaces the q, k and v reads: this thread owns the q, k and v channel of its value row (equal key
-// and value head counts, head dim 128). Fills sq[row] and sk[row]; returns the value element.
-float gdn_conv_prologue(uint head, uint row) {
+// Replaces the q, k and v reads: this thread owns the q, k and v channel of its value row (head
+// dim 128). With GDN_NATIVE_GQA_INDEX the q and k channels index by the key head khead (equal
+// heads: khead = head). Fills sq[row] and sk[row]; returns the value element.
+float gdn_conv_prologue(uint head, uint khead, uint row) {
   const uint key_dim = params.rhs_size;
-  const uint q_channel = head * 128u + row;
-  const uint k_channel = key_dim + head * 128u + row;
+  const uint q_channel = khead * 128u + row;
+  const uint k_channel = key_dim + khead * 128u + row;
   const uint v_channel = 2u * key_dim + head * params.matrix_n + row;
   uint16_t q_act = gdn_conv_channel(q_channel);
   uint16_t k_act = gdn_conv_channel(k_channel);
@@ -619,8 +625,16 @@ float gdn_conv_prologue(uint head, uint row) {
   sq[row] = bf16_load(gdn_conv_qk_norm(q_act, gdn_norm_block[0], params.out_strides[2]));
   sk[row] = bf16_load(gdn_conv_qk_norm(k_act, gdn_norm_block[128], params.out_strides[3]));
   uint16_t v_act = gdn_conv_channel(v_channel);
-  gdn_conv_state_out(q_channel);
-  gdn_conv_state_out(k_channel);
+  // The value heads sharing this key head would write identical q/k carry-out
+  // state: only the group's lead writes it. v channels are per value head.
+  bool lead = true;
+  if (params.in_strides[3] != 0u) {
+    lead = (head % params.in_strides[2]) % (params.in_strides[2] / params.in_strides[3]) == 0u;
+  }
+  if (lead) {
+    gdn_conv_state_out(q_channel);
+    gdn_conv_state_out(k_channel);
+  }
   gdn_conv_state_out(v_channel);
   return bf16_load(v_act);
 }
@@ -674,31 +688,33 @@ void main() {
   if (head >= hv) {
     return;
   }
-#ifdef GDN_NATIVE_GQA_INDEX
-  // Native GQA (only with GDN_COMPOSED_ORDER, the f32-A_log raw route): q and k keep their Hk heads.
-  // in_strides[3] carries Hk (0 = q and k already carry Hv heads), in_strides[2] carries Hv. Value head j
-  // reads key head j / (Hv / Hk), the order mx.repeat on the head axis produces, per batch row (head runs
-  // over B * Hv). The same index as gated_delta_decode.comp. Every other build keeps the loop below.
+#if defined(GDN_NATIVE_GQA_INDEX)
+  // Native GQA: q and k keep their Hk heads. in_strides[3] carries Hk (0 = q and k already carry
+  // Hv heads), in_strides[2] carries Hv. Value head j reads key head j / (Hv / Hk), the order
+  // mx.repeat on the head axis produces, per batch row (head runs over B * Hv). The same index as
+  // gated_delta_decode.comp. With GDN_CONV_FUSED the conv prologue consumes khead instead.
   uint khead = head;
   if (params.in_strides[3] != 0u) {
     uint hv_b = params.in_strides[2];
     uint hk_b = params.in_strides[3];
     khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
   }
+#else
+  uint khead = head;
+#endif
+#ifdef GDN_CONV_FUSED
+  const float gdn_v_elem = gdn_conv_prologue(head, khead, row);
+#elif defined(GDN_NATIVE_GQA_INDEX)
   for (uint i = row; i < dk; i += 128u) {
     sk[i] = bf16_load(k_buf.v[params.rhs_offset + khead * dk + i]);
     sq[i] = bf16_load(q_buf.v[params.lhs_offset + khead * dk + i]);
   }
-#else
-#ifdef GDN_CONV_FUSED
-  const float gdn_v_elem = gdn_conv_prologue(head, row);
 #else /* GDN_CONV_FUSED */
   for (uint i = row; i < dk; i += 128u) {
     sk[i] = bf16_load(k_buf.v[params.rhs_offset + head * dk + i]);
     sq[i] = bf16_load(q_buf.v[params.lhs_offset + head * dk + i]);
   }
 #endif /* GDN_CONV_FUSED */
-#endif
   barrier();
 
   float g;
@@ -793,6 +809,507 @@ void main() {
   barrier();
 
 #if defined(GDN_PF_WIDE) && !defined(GDN_COMPOSED_ORDER)
+  if (dk == 128u) {
+    // Register-tile route (DEC-30): the row's state words load ONCE into registers and
+    // serve both walks; the old update walk re-loaded from global what the kv walk had
+    // just read. Same element-for-element chains (ascending i, same fma contraction,
+    // same store shapes), so the arithmetic is bit-identical; only the redundant reads
+    // are gone. 32 vec4 registers per thread cost nothing here: the dispatch runs one
+    // workgroup per head, so occupancy is not the constraint.
+    uint q = (params.shape[1] + row_base) >> 2u;
+    vec4 w0 = GDN_SLOAD4(q + 0u);
+    vec4 w1 = GDN_SLOAD4(q + 1u);
+    vec4 w2 = GDN_SLOAD4(q + 2u);
+    vec4 w3 = GDN_SLOAD4(q + 3u);
+    vec4 w4 = GDN_SLOAD4(q + 4u);
+    vec4 w5 = GDN_SLOAD4(q + 5u);
+    vec4 w6 = GDN_SLOAD4(q + 6u);
+    vec4 w7 = GDN_SLOAD4(q + 7u);
+    vec4 w8 = GDN_SLOAD4(q + 8u);
+    vec4 w9 = GDN_SLOAD4(q + 9u);
+    vec4 w10 = GDN_SLOAD4(q + 10u);
+    vec4 w11 = GDN_SLOAD4(q + 11u);
+    vec4 w12 = GDN_SLOAD4(q + 12u);
+    vec4 w13 = GDN_SLOAD4(q + 13u);
+    vec4 w14 = GDN_SLOAD4(q + 14u);
+    vec4 w15 = GDN_SLOAD4(q + 15u);
+    vec4 w16 = GDN_SLOAD4(q + 16u);
+    vec4 w17 = GDN_SLOAD4(q + 17u);
+    vec4 w18 = GDN_SLOAD4(q + 18u);
+    vec4 w19 = GDN_SLOAD4(q + 19u);
+    vec4 w20 = GDN_SLOAD4(q + 20u);
+    vec4 w21 = GDN_SLOAD4(q + 21u);
+    vec4 w22 = GDN_SLOAD4(q + 22u);
+    vec4 w23 = GDN_SLOAD4(q + 23u);
+    vec4 w24 = GDN_SLOAD4(q + 24u);
+    vec4 w25 = GDN_SLOAD4(q + 25u);
+    vec4 w26 = GDN_SLOAD4(q + 26u);
+    vec4 w27 = GDN_SLOAD4(q + 27u);
+    vec4 w28 = GDN_SLOAD4(q + 28u);
+    vec4 w29 = GDN_SLOAD4(q + 29u);
+    vec4 w30 = GDN_SLOAD4(q + 30u);
+    vec4 w31 = GDN_SLOAD4(q + 31u);
+    float kv_acc = 0.0f;
+    kv_acc = fma(w0.x, skg[0u], kv_acc);
+    kv_acc = fma(w0.y, skg[1u], kv_acc);
+    kv_acc = fma(w0.z, skg[2u], kv_acc);
+    kv_acc = fma(w0.w, skg[3u], kv_acc);
+    kv_acc = fma(w1.x, skg[4u], kv_acc);
+    kv_acc = fma(w1.y, skg[5u], kv_acc);
+    kv_acc = fma(w1.z, skg[6u], kv_acc);
+    kv_acc = fma(w1.w, skg[7u], kv_acc);
+    kv_acc = fma(w2.x, skg[8u], kv_acc);
+    kv_acc = fma(w2.y, skg[9u], kv_acc);
+    kv_acc = fma(w2.z, skg[10u], kv_acc);
+    kv_acc = fma(w2.w, skg[11u], kv_acc);
+    kv_acc = fma(w3.x, skg[12u], kv_acc);
+    kv_acc = fma(w3.y, skg[13u], kv_acc);
+    kv_acc = fma(w3.z, skg[14u], kv_acc);
+    kv_acc = fma(w3.w, skg[15u], kv_acc);
+    kv_acc = fma(w4.x, skg[16u], kv_acc);
+    kv_acc = fma(w4.y, skg[17u], kv_acc);
+    kv_acc = fma(w4.z, skg[18u], kv_acc);
+    kv_acc = fma(w4.w, skg[19u], kv_acc);
+    kv_acc = fma(w5.x, skg[20u], kv_acc);
+    kv_acc = fma(w5.y, skg[21u], kv_acc);
+    kv_acc = fma(w5.z, skg[22u], kv_acc);
+    kv_acc = fma(w5.w, skg[23u], kv_acc);
+    kv_acc = fma(w6.x, skg[24u], kv_acc);
+    kv_acc = fma(w6.y, skg[25u], kv_acc);
+    kv_acc = fma(w6.z, skg[26u], kv_acc);
+    kv_acc = fma(w6.w, skg[27u], kv_acc);
+    kv_acc = fma(w7.x, skg[28u], kv_acc);
+    kv_acc = fma(w7.y, skg[29u], kv_acc);
+    kv_acc = fma(w7.z, skg[30u], kv_acc);
+    kv_acc = fma(w7.w, skg[31u], kv_acc);
+    kv_acc = fma(w8.x, skg[32u], kv_acc);
+    kv_acc = fma(w8.y, skg[33u], kv_acc);
+    kv_acc = fma(w8.z, skg[34u], kv_acc);
+    kv_acc = fma(w8.w, skg[35u], kv_acc);
+    kv_acc = fma(w9.x, skg[36u], kv_acc);
+    kv_acc = fma(w9.y, skg[37u], kv_acc);
+    kv_acc = fma(w9.z, skg[38u], kv_acc);
+    kv_acc = fma(w9.w, skg[39u], kv_acc);
+    kv_acc = fma(w10.x, skg[40u], kv_acc);
+    kv_acc = fma(w10.y, skg[41u], kv_acc);
+    kv_acc = fma(w10.z, skg[42u], kv_acc);
+    kv_acc = fma(w10.w, skg[43u], kv_acc);
+    kv_acc = fma(w11.x, skg[44u], kv_acc);
+    kv_acc = fma(w11.y, skg[45u], kv_acc);
+    kv_acc = fma(w11.z, skg[46u], kv_acc);
+    kv_acc = fma(w11.w, skg[47u], kv_acc);
+    kv_acc = fma(w12.x, skg[48u], kv_acc);
+    kv_acc = fma(w12.y, skg[49u], kv_acc);
+    kv_acc = fma(w12.z, skg[50u], kv_acc);
+    kv_acc = fma(w12.w, skg[51u], kv_acc);
+    kv_acc = fma(w13.x, skg[52u], kv_acc);
+    kv_acc = fma(w13.y, skg[53u], kv_acc);
+    kv_acc = fma(w13.z, skg[54u], kv_acc);
+    kv_acc = fma(w13.w, skg[55u], kv_acc);
+    kv_acc = fma(w14.x, skg[56u], kv_acc);
+    kv_acc = fma(w14.y, skg[57u], kv_acc);
+    kv_acc = fma(w14.z, skg[58u], kv_acc);
+    kv_acc = fma(w14.w, skg[59u], kv_acc);
+    kv_acc = fma(w15.x, skg[60u], kv_acc);
+    kv_acc = fma(w15.y, skg[61u], kv_acc);
+    kv_acc = fma(w15.z, skg[62u], kv_acc);
+    kv_acc = fma(w15.w, skg[63u], kv_acc);
+    kv_acc = fma(w16.x, skg[64u], kv_acc);
+    kv_acc = fma(w16.y, skg[65u], kv_acc);
+    kv_acc = fma(w16.z, skg[66u], kv_acc);
+    kv_acc = fma(w16.w, skg[67u], kv_acc);
+    kv_acc = fma(w17.x, skg[68u], kv_acc);
+    kv_acc = fma(w17.y, skg[69u], kv_acc);
+    kv_acc = fma(w17.z, skg[70u], kv_acc);
+    kv_acc = fma(w17.w, skg[71u], kv_acc);
+    kv_acc = fma(w18.x, skg[72u], kv_acc);
+    kv_acc = fma(w18.y, skg[73u], kv_acc);
+    kv_acc = fma(w18.z, skg[74u], kv_acc);
+    kv_acc = fma(w18.w, skg[75u], kv_acc);
+    kv_acc = fma(w19.x, skg[76u], kv_acc);
+    kv_acc = fma(w19.y, skg[77u], kv_acc);
+    kv_acc = fma(w19.z, skg[78u], kv_acc);
+    kv_acc = fma(w19.w, skg[79u], kv_acc);
+    kv_acc = fma(w20.x, skg[80u], kv_acc);
+    kv_acc = fma(w20.y, skg[81u], kv_acc);
+    kv_acc = fma(w20.z, skg[82u], kv_acc);
+    kv_acc = fma(w20.w, skg[83u], kv_acc);
+    kv_acc = fma(w21.x, skg[84u], kv_acc);
+    kv_acc = fma(w21.y, skg[85u], kv_acc);
+    kv_acc = fma(w21.z, skg[86u], kv_acc);
+    kv_acc = fma(w21.w, skg[87u], kv_acc);
+    kv_acc = fma(w22.x, skg[88u], kv_acc);
+    kv_acc = fma(w22.y, skg[89u], kv_acc);
+    kv_acc = fma(w22.z, skg[90u], kv_acc);
+    kv_acc = fma(w22.w, skg[91u], kv_acc);
+    kv_acc = fma(w23.x, skg[92u], kv_acc);
+    kv_acc = fma(w23.y, skg[93u], kv_acc);
+    kv_acc = fma(w23.z, skg[94u], kv_acc);
+    kv_acc = fma(w23.w, skg[95u], kv_acc);
+    kv_acc = fma(w24.x, skg[96u], kv_acc);
+    kv_acc = fma(w24.y, skg[97u], kv_acc);
+    kv_acc = fma(w24.z, skg[98u], kv_acc);
+    kv_acc = fma(w24.w, skg[99u], kv_acc);
+    kv_acc = fma(w25.x, skg[100u], kv_acc);
+    kv_acc = fma(w25.y, skg[101u], kv_acc);
+    kv_acc = fma(w25.z, skg[102u], kv_acc);
+    kv_acc = fma(w25.w, skg[103u], kv_acc);
+    kv_acc = fma(w26.x, skg[104u], kv_acc);
+    kv_acc = fma(w26.y, skg[105u], kv_acc);
+    kv_acc = fma(w26.z, skg[106u], kv_acc);
+    kv_acc = fma(w26.w, skg[107u], kv_acc);
+    kv_acc = fma(w27.x, skg[108u], kv_acc);
+    kv_acc = fma(w27.y, skg[109u], kv_acc);
+    kv_acc = fma(w27.z, skg[110u], kv_acc);
+    kv_acc = fma(w27.w, skg[111u], kv_acc);
+    kv_acc = fma(w28.x, skg[112u], kv_acc);
+    kv_acc = fma(w28.y, skg[113u], kv_acc);
+    kv_acc = fma(w28.z, skg[114u], kv_acc);
+    kv_acc = fma(w28.w, skg[115u], kv_acc);
+    kv_acc = fma(w29.x, skg[116u], kv_acc);
+    kv_acc = fma(w29.y, skg[117u], kv_acc);
+    kv_acc = fma(w29.z, skg[118u], kv_acc);
+    kv_acc = fma(w29.w, skg[119u], kv_acc);
+    kv_acc = fma(w30.x, skg[120u], kv_acc);
+    kv_acc = fma(w30.y, skg[121u], kv_acc);
+    kv_acc = fma(w30.z, skg[122u], kv_acc);
+    kv_acc = fma(w30.w, skg[123u], kv_acc);
+    kv_acc = fma(w31.x, skg[124u], kv_acc);
+    kv_acc = fma(w31.y, skg[125u], kv_acc);
+    kv_acc = fma(w31.z, skg[126u], kv_acc);
+    kv_acc = fma(w31.w, skg[127u], kv_acc);
+    float delta = (GDN_V_ELEM - kv_acc) * beta;
+    sdelta[row] = delta;
+    float sd = delta;
+    uint qo = (params.shape[2] + head_base + row * dk) >> 2u;
+    float o_acc = 0.0f;
+    { // words 0..7
+      float n0 = fma(w0.x, g, gdn_dk_term(sd, sk[0u]));
+      float n1 = fma(w0.y, g, gdn_dk_term(sd, sk[1u]));
+      float n2 = fma(w0.z, g, gdn_dk_term(sd, sk[2u]));
+      float n3 = fma(w0.w, g, gdn_dk_term(sd, sk[3u]));
+      float n4 = fma(w1.x, g, gdn_dk_term(sd, sk[4u]));
+      float n5 = fma(w1.y, g, gdn_dk_term(sd, sk[5u]));
+      float n6 = fma(w1.z, g, gdn_dk_term(sd, sk[6u]));
+      float n7 = fma(w1.w, g, gdn_dk_term(sd, sk[7u]));
+      s_out.v[qo + 0u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 1u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[0u], o_acc);
+      o_acc = fma(n1, sq[1u], o_acc);
+      o_acc = fma(n2, sq[2u], o_acc);
+      o_acc = fma(n3, sq[3u], o_acc);
+      o_acc = fma(n4, sq[4u], o_acc);
+      o_acc = fma(n5, sq[5u], o_acc);
+      o_acc = fma(n6, sq[6u], o_acc);
+      o_acc = fma(n7, sq[7u], o_acc);
+    }
+    { // words 8..15
+      float n0 = fma(w2.x, g, gdn_dk_term(sd, sk[8u]));
+      float n1 = fma(w2.y, g, gdn_dk_term(sd, sk[9u]));
+      float n2 = fma(w2.z, g, gdn_dk_term(sd, sk[10u]));
+      float n3 = fma(w2.w, g, gdn_dk_term(sd, sk[11u]));
+      float n4 = fma(w3.x, g, gdn_dk_term(sd, sk[12u]));
+      float n5 = fma(w3.y, g, gdn_dk_term(sd, sk[13u]));
+      float n6 = fma(w3.z, g, gdn_dk_term(sd, sk[14u]));
+      float n7 = fma(w3.w, g, gdn_dk_term(sd, sk[15u]));
+      s_out.v[qo + 2u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 3u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[8u], o_acc);
+      o_acc = fma(n1, sq[9u], o_acc);
+      o_acc = fma(n2, sq[10u], o_acc);
+      o_acc = fma(n3, sq[11u], o_acc);
+      o_acc = fma(n4, sq[12u], o_acc);
+      o_acc = fma(n5, sq[13u], o_acc);
+      o_acc = fma(n6, sq[14u], o_acc);
+      o_acc = fma(n7, sq[15u], o_acc);
+    }
+    { // words 16..23
+      float n0 = fma(w4.x, g, gdn_dk_term(sd, sk[16u]));
+      float n1 = fma(w4.y, g, gdn_dk_term(sd, sk[17u]));
+      float n2 = fma(w4.z, g, gdn_dk_term(sd, sk[18u]));
+      float n3 = fma(w4.w, g, gdn_dk_term(sd, sk[19u]));
+      float n4 = fma(w5.x, g, gdn_dk_term(sd, sk[20u]));
+      float n5 = fma(w5.y, g, gdn_dk_term(sd, sk[21u]));
+      float n6 = fma(w5.z, g, gdn_dk_term(sd, sk[22u]));
+      float n7 = fma(w5.w, g, gdn_dk_term(sd, sk[23u]));
+      s_out.v[qo + 4u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 5u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[16u], o_acc);
+      o_acc = fma(n1, sq[17u], o_acc);
+      o_acc = fma(n2, sq[18u], o_acc);
+      o_acc = fma(n3, sq[19u], o_acc);
+      o_acc = fma(n4, sq[20u], o_acc);
+      o_acc = fma(n5, sq[21u], o_acc);
+      o_acc = fma(n6, sq[22u], o_acc);
+      o_acc = fma(n7, sq[23u], o_acc);
+    }
+    { // words 24..31
+      float n0 = fma(w6.x, g, gdn_dk_term(sd, sk[24u]));
+      float n1 = fma(w6.y, g, gdn_dk_term(sd, sk[25u]));
+      float n2 = fma(w6.z, g, gdn_dk_term(sd, sk[26u]));
+      float n3 = fma(w6.w, g, gdn_dk_term(sd, sk[27u]));
+      float n4 = fma(w7.x, g, gdn_dk_term(sd, sk[28u]));
+      float n5 = fma(w7.y, g, gdn_dk_term(sd, sk[29u]));
+      float n6 = fma(w7.z, g, gdn_dk_term(sd, sk[30u]));
+      float n7 = fma(w7.w, g, gdn_dk_term(sd, sk[31u]));
+      s_out.v[qo + 6u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 7u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[24u], o_acc);
+      o_acc = fma(n1, sq[25u], o_acc);
+      o_acc = fma(n2, sq[26u], o_acc);
+      o_acc = fma(n3, sq[27u], o_acc);
+      o_acc = fma(n4, sq[28u], o_acc);
+      o_acc = fma(n5, sq[29u], o_acc);
+      o_acc = fma(n6, sq[30u], o_acc);
+      o_acc = fma(n7, sq[31u], o_acc);
+    }
+    { // words 32..39
+      float n0 = fma(w8.x, g, gdn_dk_term(sd, sk[32u]));
+      float n1 = fma(w8.y, g, gdn_dk_term(sd, sk[33u]));
+      float n2 = fma(w8.z, g, gdn_dk_term(sd, sk[34u]));
+      float n3 = fma(w8.w, g, gdn_dk_term(sd, sk[35u]));
+      float n4 = fma(w9.x, g, gdn_dk_term(sd, sk[36u]));
+      float n5 = fma(w9.y, g, gdn_dk_term(sd, sk[37u]));
+      float n6 = fma(w9.z, g, gdn_dk_term(sd, sk[38u]));
+      float n7 = fma(w9.w, g, gdn_dk_term(sd, sk[39u]));
+      s_out.v[qo + 8u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 9u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[32u], o_acc);
+      o_acc = fma(n1, sq[33u], o_acc);
+      o_acc = fma(n2, sq[34u], o_acc);
+      o_acc = fma(n3, sq[35u], o_acc);
+      o_acc = fma(n4, sq[36u], o_acc);
+      o_acc = fma(n5, sq[37u], o_acc);
+      o_acc = fma(n6, sq[38u], o_acc);
+      o_acc = fma(n7, sq[39u], o_acc);
+    }
+    { // words 40..47
+      float n0 = fma(w10.x, g, gdn_dk_term(sd, sk[40u]));
+      float n1 = fma(w10.y, g, gdn_dk_term(sd, sk[41u]));
+      float n2 = fma(w10.z, g, gdn_dk_term(sd, sk[42u]));
+      float n3 = fma(w10.w, g, gdn_dk_term(sd, sk[43u]));
+      float n4 = fma(w11.x, g, gdn_dk_term(sd, sk[44u]));
+      float n5 = fma(w11.y, g, gdn_dk_term(sd, sk[45u]));
+      float n6 = fma(w11.z, g, gdn_dk_term(sd, sk[46u]));
+      float n7 = fma(w11.w, g, gdn_dk_term(sd, sk[47u]));
+      s_out.v[qo + 10u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 11u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[40u], o_acc);
+      o_acc = fma(n1, sq[41u], o_acc);
+      o_acc = fma(n2, sq[42u], o_acc);
+      o_acc = fma(n3, sq[43u], o_acc);
+      o_acc = fma(n4, sq[44u], o_acc);
+      o_acc = fma(n5, sq[45u], o_acc);
+      o_acc = fma(n6, sq[46u], o_acc);
+      o_acc = fma(n7, sq[47u], o_acc);
+    }
+    { // words 48..55
+      float n0 = fma(w12.x, g, gdn_dk_term(sd, sk[48u]));
+      float n1 = fma(w12.y, g, gdn_dk_term(sd, sk[49u]));
+      float n2 = fma(w12.z, g, gdn_dk_term(sd, sk[50u]));
+      float n3 = fma(w12.w, g, gdn_dk_term(sd, sk[51u]));
+      float n4 = fma(w13.x, g, gdn_dk_term(sd, sk[52u]));
+      float n5 = fma(w13.y, g, gdn_dk_term(sd, sk[53u]));
+      float n6 = fma(w13.z, g, gdn_dk_term(sd, sk[54u]));
+      float n7 = fma(w13.w, g, gdn_dk_term(sd, sk[55u]));
+      s_out.v[qo + 12u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 13u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[48u], o_acc);
+      o_acc = fma(n1, sq[49u], o_acc);
+      o_acc = fma(n2, sq[50u], o_acc);
+      o_acc = fma(n3, sq[51u], o_acc);
+      o_acc = fma(n4, sq[52u], o_acc);
+      o_acc = fma(n5, sq[53u], o_acc);
+      o_acc = fma(n6, sq[54u], o_acc);
+      o_acc = fma(n7, sq[55u], o_acc);
+    }
+    { // words 56..63
+      float n0 = fma(w14.x, g, gdn_dk_term(sd, sk[56u]));
+      float n1 = fma(w14.y, g, gdn_dk_term(sd, sk[57u]));
+      float n2 = fma(w14.z, g, gdn_dk_term(sd, sk[58u]));
+      float n3 = fma(w14.w, g, gdn_dk_term(sd, sk[59u]));
+      float n4 = fma(w15.x, g, gdn_dk_term(sd, sk[60u]));
+      float n5 = fma(w15.y, g, gdn_dk_term(sd, sk[61u]));
+      float n6 = fma(w15.z, g, gdn_dk_term(sd, sk[62u]));
+      float n7 = fma(w15.w, g, gdn_dk_term(sd, sk[63u]));
+      s_out.v[qo + 14u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 15u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[56u], o_acc);
+      o_acc = fma(n1, sq[57u], o_acc);
+      o_acc = fma(n2, sq[58u], o_acc);
+      o_acc = fma(n3, sq[59u], o_acc);
+      o_acc = fma(n4, sq[60u], o_acc);
+      o_acc = fma(n5, sq[61u], o_acc);
+      o_acc = fma(n6, sq[62u], o_acc);
+      o_acc = fma(n7, sq[63u], o_acc);
+    }
+    { // words 64..71
+      float n0 = fma(w16.x, g, gdn_dk_term(sd, sk[64u]));
+      float n1 = fma(w16.y, g, gdn_dk_term(sd, sk[65u]));
+      float n2 = fma(w16.z, g, gdn_dk_term(sd, sk[66u]));
+      float n3 = fma(w16.w, g, gdn_dk_term(sd, sk[67u]));
+      float n4 = fma(w17.x, g, gdn_dk_term(sd, sk[68u]));
+      float n5 = fma(w17.y, g, gdn_dk_term(sd, sk[69u]));
+      float n6 = fma(w17.z, g, gdn_dk_term(sd, sk[70u]));
+      float n7 = fma(w17.w, g, gdn_dk_term(sd, sk[71u]));
+      s_out.v[qo + 16u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 17u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[64u], o_acc);
+      o_acc = fma(n1, sq[65u], o_acc);
+      o_acc = fma(n2, sq[66u], o_acc);
+      o_acc = fma(n3, sq[67u], o_acc);
+      o_acc = fma(n4, sq[68u], o_acc);
+      o_acc = fma(n5, sq[69u], o_acc);
+      o_acc = fma(n6, sq[70u], o_acc);
+      o_acc = fma(n7, sq[71u], o_acc);
+    }
+    { // words 72..79
+      float n0 = fma(w18.x, g, gdn_dk_term(sd, sk[72u]));
+      float n1 = fma(w18.y, g, gdn_dk_term(sd, sk[73u]));
+      float n2 = fma(w18.z, g, gdn_dk_term(sd, sk[74u]));
+      float n3 = fma(w18.w, g, gdn_dk_term(sd, sk[75u]));
+      float n4 = fma(w19.x, g, gdn_dk_term(sd, sk[76u]));
+      float n5 = fma(w19.y, g, gdn_dk_term(sd, sk[77u]));
+      float n6 = fma(w19.z, g, gdn_dk_term(sd, sk[78u]));
+      float n7 = fma(w19.w, g, gdn_dk_term(sd, sk[79u]));
+      s_out.v[qo + 18u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 19u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[72u], o_acc);
+      o_acc = fma(n1, sq[73u], o_acc);
+      o_acc = fma(n2, sq[74u], o_acc);
+      o_acc = fma(n3, sq[75u], o_acc);
+      o_acc = fma(n4, sq[76u], o_acc);
+      o_acc = fma(n5, sq[77u], o_acc);
+      o_acc = fma(n6, sq[78u], o_acc);
+      o_acc = fma(n7, sq[79u], o_acc);
+    }
+    { // words 80..87
+      float n0 = fma(w20.x, g, gdn_dk_term(sd, sk[80u]));
+      float n1 = fma(w20.y, g, gdn_dk_term(sd, sk[81u]));
+      float n2 = fma(w20.z, g, gdn_dk_term(sd, sk[82u]));
+      float n3 = fma(w20.w, g, gdn_dk_term(sd, sk[83u]));
+      float n4 = fma(w21.x, g, gdn_dk_term(sd, sk[84u]));
+      float n5 = fma(w21.y, g, gdn_dk_term(sd, sk[85u]));
+      float n6 = fma(w21.z, g, gdn_dk_term(sd, sk[86u]));
+      float n7 = fma(w21.w, g, gdn_dk_term(sd, sk[87u]));
+      s_out.v[qo + 20u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 21u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[80u], o_acc);
+      o_acc = fma(n1, sq[81u], o_acc);
+      o_acc = fma(n2, sq[82u], o_acc);
+      o_acc = fma(n3, sq[83u], o_acc);
+      o_acc = fma(n4, sq[84u], o_acc);
+      o_acc = fma(n5, sq[85u], o_acc);
+      o_acc = fma(n6, sq[86u], o_acc);
+      o_acc = fma(n7, sq[87u], o_acc);
+    }
+    { // words 88..95
+      float n0 = fma(w22.x, g, gdn_dk_term(sd, sk[88u]));
+      float n1 = fma(w22.y, g, gdn_dk_term(sd, sk[89u]));
+      float n2 = fma(w22.z, g, gdn_dk_term(sd, sk[90u]));
+      float n3 = fma(w22.w, g, gdn_dk_term(sd, sk[91u]));
+      float n4 = fma(w23.x, g, gdn_dk_term(sd, sk[92u]));
+      float n5 = fma(w23.y, g, gdn_dk_term(sd, sk[93u]));
+      float n6 = fma(w23.z, g, gdn_dk_term(sd, sk[94u]));
+      float n7 = fma(w23.w, g, gdn_dk_term(sd, sk[95u]));
+      s_out.v[qo + 22u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 23u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[88u], o_acc);
+      o_acc = fma(n1, sq[89u], o_acc);
+      o_acc = fma(n2, sq[90u], o_acc);
+      o_acc = fma(n3, sq[91u], o_acc);
+      o_acc = fma(n4, sq[92u], o_acc);
+      o_acc = fma(n5, sq[93u], o_acc);
+      o_acc = fma(n6, sq[94u], o_acc);
+      o_acc = fma(n7, sq[95u], o_acc);
+    }
+    { // words 96..103
+      float n0 = fma(w24.x, g, gdn_dk_term(sd, sk[96u]));
+      float n1 = fma(w24.y, g, gdn_dk_term(sd, sk[97u]));
+      float n2 = fma(w24.z, g, gdn_dk_term(sd, sk[98u]));
+      float n3 = fma(w24.w, g, gdn_dk_term(sd, sk[99u]));
+      float n4 = fma(w25.x, g, gdn_dk_term(sd, sk[100u]));
+      float n5 = fma(w25.y, g, gdn_dk_term(sd, sk[101u]));
+      float n6 = fma(w25.z, g, gdn_dk_term(sd, sk[102u]));
+      float n7 = fma(w25.w, g, gdn_dk_term(sd, sk[103u]));
+      s_out.v[qo + 24u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 25u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[96u], o_acc);
+      o_acc = fma(n1, sq[97u], o_acc);
+      o_acc = fma(n2, sq[98u], o_acc);
+      o_acc = fma(n3, sq[99u], o_acc);
+      o_acc = fma(n4, sq[100u], o_acc);
+      o_acc = fma(n5, sq[101u], o_acc);
+      o_acc = fma(n6, sq[102u], o_acc);
+      o_acc = fma(n7, sq[103u], o_acc);
+    }
+    { // words 104..111
+      float n0 = fma(w26.x, g, gdn_dk_term(sd, sk[104u]));
+      float n1 = fma(w26.y, g, gdn_dk_term(sd, sk[105u]));
+      float n2 = fma(w26.z, g, gdn_dk_term(sd, sk[106u]));
+      float n3 = fma(w26.w, g, gdn_dk_term(sd, sk[107u]));
+      float n4 = fma(w27.x, g, gdn_dk_term(sd, sk[108u]));
+      float n5 = fma(w27.y, g, gdn_dk_term(sd, sk[109u]));
+      float n6 = fma(w27.z, g, gdn_dk_term(sd, sk[110u]));
+      float n7 = fma(w27.w, g, gdn_dk_term(sd, sk[111u]));
+      s_out.v[qo + 26u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 27u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[104u], o_acc);
+      o_acc = fma(n1, sq[105u], o_acc);
+      o_acc = fma(n2, sq[106u], o_acc);
+      o_acc = fma(n3, sq[107u], o_acc);
+      o_acc = fma(n4, sq[108u], o_acc);
+      o_acc = fma(n5, sq[109u], o_acc);
+      o_acc = fma(n6, sq[110u], o_acc);
+      o_acc = fma(n7, sq[111u], o_acc);
+    }
+    { // words 112..119
+      float n0 = fma(w28.x, g, gdn_dk_term(sd, sk[112u]));
+      float n1 = fma(w28.y, g, gdn_dk_term(sd, sk[113u]));
+      float n2 = fma(w28.z, g, gdn_dk_term(sd, sk[114u]));
+      float n3 = fma(w28.w, g, gdn_dk_term(sd, sk[115u]));
+      float n4 = fma(w29.x, g, gdn_dk_term(sd, sk[116u]));
+      float n5 = fma(w29.y, g, gdn_dk_term(sd, sk[117u]));
+      float n6 = fma(w29.z, g, gdn_dk_term(sd, sk[118u]));
+      float n7 = fma(w29.w, g, gdn_dk_term(sd, sk[119u]));
+      s_out.v[qo + 28u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 29u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[112u], o_acc);
+      o_acc = fma(n1, sq[113u], o_acc);
+      o_acc = fma(n2, sq[114u], o_acc);
+      o_acc = fma(n3, sq[115u], o_acc);
+      o_acc = fma(n4, sq[116u], o_acc);
+      o_acc = fma(n5, sq[117u], o_acc);
+      o_acc = fma(n6, sq[118u], o_acc);
+      o_acc = fma(n7, sq[119u], o_acc);
+    }
+    { // words 120..127
+      float n0 = fma(w30.x, g, gdn_dk_term(sd, sk[120u]));
+      float n1 = fma(w30.y, g, gdn_dk_term(sd, sk[121u]));
+      float n2 = fma(w30.z, g, gdn_dk_term(sd, sk[122u]));
+      float n3 = fma(w30.w, g, gdn_dk_term(sd, sk[123u]));
+      float n4 = fma(w31.x, g, gdn_dk_term(sd, sk[124u]));
+      float n5 = fma(w31.y, g, gdn_dk_term(sd, sk[125u]));
+      float n6 = fma(w31.z, g, gdn_dk_term(sd, sk[126u]));
+      float n7 = fma(w31.w, g, gdn_dk_term(sd, sk[127u]));
+      s_out.v[qo + 30u] = GDN_SSAVE4(n0, n1, n2, n3);
+      s_out.v[qo + 31u] = GDN_SSAVE4(n4, n5, n6, n7);
+      o_acc = fma(n0, sq[120u], o_acc);
+      o_acc = fma(n1, sq[121u], o_acc);
+      o_acc = fma(n2, sq[122u], o_acc);
+      o_acc = fma(n3, sq[123u], o_acc);
+      o_acc = fma(n4, sq[124u], o_acc);
+      o_acc = fma(n5, sq[125u], o_acc);
+      o_acc = fma(n6, sq[126u], o_acc);
+      o_acc = fma(n7, sq[127u], o_acc);
+    }
+#ifdef GDN_NORM_FUSED
+    gdn_norm_epilogue(head, row, o_acc);
+#else /* GDN_NORM_FUSED */
+    y_buf.v[params.output_offset + head * dv + row] = bf16_store(o_acc);
+#endif /* GDN_NORM_FUSED */
+    return;
+  }
   float kv_acc = gdn_kv_walk_wide(params.shape[1] + row_base, dk);
 #elif !defined(GDN_COMPOSED_ORDER)
   float kv_acc = gdn_kv_walk(params.shape[1] + row_base, dk);

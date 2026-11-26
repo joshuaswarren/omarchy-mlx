@@ -26,7 +26,9 @@
 #include <string>
 #include <vector>
 
+#include "mlx/backend/omarchy/allocator.h"
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/device_local_activations.h"
 #include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/ops.h"
@@ -210,11 +212,29 @@ int main(int argc, char** argv) {
   // The reported name follows the chip default (the parent process never
   // sets the override, so the child inherits the unset environment).
   {
-    const auto& dev = mlx::core::omarchy::device().capabilities().device_name;
-    std::string want =
-        (dev.find("G13G") != std::string::npos || dev.find("G13C") != std::string::npos)
-        ? "2x16"
-        : (dev.find("G14C") != std::string::npos ? "2x4w2" : "2x4");
+    const auto& dev_obj = mlx::core::omarchy::device();
+    const auto& caps_ref = dev_obj.capabilities();
+    const std::string& dev = caps_ref.device_name;
+    const mlx::core::omarchy::QmmWideCaps probe_caps{
+        caps_ref.subgroup_size,
+        caps_ref.subgroup_operations,
+        caps_ref.max_compute_work_group_invocations,
+        caps_ref.max_compute_work_group_size[0]};
+    const bool vram = mlx::core::omarchy::device_local_activations_enabled();
+    std::string want = "2x4";
+    if (mlx::core::omarchy::select_qmm_2x8w2(
+            dev, dev_obj.physical_type(), probe_caps, vram)) {
+      want = "2x8w2";
+    } else if (mlx::core::omarchy::select_qmm_wide_2x16(
+                   dev, dev_obj.physical_type(), probe_caps, vram)) {
+      if (dev.find("BMG") != std::string::npos) {
+        want = dev_obj.hardware_capabilities().subgroup_size_16_admitted
+            ? "2x16kcs16"
+            : "2x16kcont";
+      } else {
+        want = "2x16";
+      }
+    }
     int rc = run_child("name", "/tmp/w7p-geom-name.bin");
     std::ifstream f("/tmp/w7p-geom-name.bin");
     std::string got;
@@ -226,7 +246,7 @@ int main(int argc, char** argv) {
     }
   }
   // Every accepted geometry produces the base bytes.
-  for (const char* geometry : {"2x16", "2x4w2", "2x4"}) {
+  for (const char* geometry : {"2x8w2", "2x16", "2x4w2", "2x4"}) {
     for (const char* name : {"single", "group", "swiglu"}) {
       std::string base = "/tmp/w7p-geom-base.bin";
       std::string other = "/tmp/w7p-geom-other.bin";

@@ -1046,6 +1046,36 @@ bool Runtime::init_impl() {
         p13.minSubgroupSize,
         p13.maxSubgroupSize,
         info.caps.subgroup_size);
+    info.caps.subgroup_size_min =
+        info.caps.required_subgroup_size != 0 ? p13.minSubgroupSize : 0;
+    // 16-lane admission follows subgroupSizeControl's enable rule: only a
+    // device that will run pinned pipelines (required_subgroup_size != 0)
+    // gets the bit, so a later KCONTS16 pipeline request can throw instead
+    // of creating a pipeline the driver cannot legally build.
+    info.caps.subgroup_size_16_admitted =
+        info.caps.required_subgroup_size != 0 &&
+        subgroup_size_admitted(
+            f13.subgroupSizeControl == VK_TRUE,
+            p13.requiredSubgroupSizeStages,
+            p13.minSubgroupSize,
+            p13.maxSubgroupSize,
+            p13.maxComputeWorkgroupSubgroups,
+            16u,
+            256u);
+    // 32-lane admission follows the same enable rule, for the CMAT16
+    // dense matmul builds on drivers whose native subgroup is 16 (ANV)
+    // or 64 (RADV) lanes. A native-32 device reports
+    // required_subgroup_size == 0 and needs no pin.
+    info.caps.subgroup_size_32_admitted =
+        info.caps.required_subgroup_size != 0 &&
+        subgroup_size_admitted(
+            f13.subgroupSizeControl == VK_TRUE,
+            p13.requiredSubgroupSizeStages,
+            p13.minSubgroupSize,
+            p13.maxSubgroupSize,
+            p13.maxComputeWorkgroupSubgroups,
+            32u,
+            128u);
     info.caps.icd_path = icd_path;
     info.caps.icd_source = icd_selection.packaged
         ? "packaged"
@@ -1156,16 +1186,68 @@ bool runtime_alive() {
 // Compiled-tape debug switch plumbing (device.h). At omarchy scope, not
 // in the anonymous namespace above: the encoder and allocator call these
 // through the header declarations.
+namespace {
+struct EnvCache {
+  // 0 = no eval boundary seen on this thread yet: every lookup reads
+  // fresh, so pre-eval env mutation keeps full std::getenv semantics.
+  uint64_t epoch = 0;
+  // name -> (epoch read, getenv result copy; nullopt = unset).
+  std::unordered_map<std::string, std::pair<uint64_t, std::optional<std::string>>>
+      values;
+};
+thread_local EnvCache env_cache_;
+
+const char* env_lookup(const char* name) {
+  if (env_cache_.epoch == 0) {
+    return std::getenv(name);
+  }
+  auto it = env_cache_.values.find(name);
+  if (it == env_cache_.values.end() || it->second.first != env_cache_.epoch) {
+    const char* v = std::getenv(name);
+    auto [pos, _] = env_cache_.values.insert_or_assign(
+        name,
+        std::pair{
+            env_cache_.epoch,
+            v == nullptr ? std::nullopt : std::optional<std::string>(v)});
+    it = pos;
+  }
+  const auto& stored = it->second.second;
+  return stored ? stored->c_str() : nullptr;
+}
+} // namespace
+
+void env_note_eval() {
+  ++env_cache_.epoch;
+}
+
+uint64_t env_epoch() {
+  return env_cache_.epoch;
+}
+
+const char* env_str(const char* name) {
+  return env_lookup(name);
+}
+
+bool env_set(const char* name) {
+  return env_lookup(name) != nullptr;
+}
+
 bool env_flag(const char* name) {
-  const char* v = std::getenv(name);
+  const char* v = env_lookup(name);
   if (!v) {
     return false;
   }
-  std::string s = v;
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return s == "1" || s == "on" || s == "true" || s == "yes";
+  auto ieq = [v](const char* word) {
+    size_t i = 0;
+    for (; word[i] != '\0'; ++i) {
+      if (v[i] == '\0' ||
+          std::tolower(static_cast<unsigned char>(v[i])) != word[i]) {
+        return false;
+      }
+    }
+    return v[i] == '\0';
+  };
+  return ieq("1") || ieq("on") || ieq("true") || ieq("yes");
 }
 
 // Heap formula (device.h). max(50%, MemTotal - 16 GiB), 1 MiB-rounded
@@ -1387,6 +1469,21 @@ uint32_t required_subgroup_size(
   return subgroup_size;
 }
 
+bool subgroup_size_admitted(
+    bool size_control,
+    VkShaderStageFlags required_stages,
+    uint32_t min_size,
+    uint32_t max_size,
+    uint32_t max_workgroup_subgroups,
+    uint32_t target,
+    uint32_t workgroup_size) {
+  return size_control &&
+      (required_stages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+      min_size <= target && target <= max_size &&
+      static_cast<uint64_t>(target) * max_workgroup_subgroups >=
+          workgroup_size;
+}
+
 std::vector<size_t> device_order(
     const std::vector<VkPhysicalDeviceType>& types) {
   std::vector<size_t> order(types.size());
@@ -1495,8 +1592,12 @@ Device::Device(uint32_t physical_device_index) {
       hw.shader_atomic_float_add ? VK_TRUE : VK_FALSE;
   VkPhysicalDeviceCooperativeMatrixFeaturesKHR enabled_cm{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+  // Any advertised shape enables the feature: a driver that lists only
+  // the 16x16x16 fp16-operand C16 entry sets neither convenience
+  // boolean, yet the dense CMAT16 route can claim it.
   enabled_cm.cooperativeMatrix =
-      (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16)
+      (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16 ||
+       !hw.cooperative_matrix_shapes.empty())
           ? VK_TRUE
           : VK_FALSE;
   VkPhysicalDevice16BitStorageFeatures enabled16{
@@ -1518,7 +1619,8 @@ Device::Device(uint32_t physical_device_index) {
   enabled16.pNext = &enabled12;
   enabled12.pNext = &enabled13;
   enabled13.pNext = &enabled_fa;
-  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16) {
+  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16 ||
+      !hw.cooperative_matrix_shapes.empty()) {
     enabled_fa.pNext = &enabled_cm;
   }
 #ifdef OMARCHY_BF16_CMAT
@@ -1545,7 +1647,8 @@ Device::Device(uint32_t physical_device_index) {
   // tail exists when both bits are set, matching the extension pair in
   // device_extension_names.
   void** tail = &enabled_fa.pNext;
-  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16) {
+  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16 ||
+      !hw.cooperative_matrix_shapes.empty()) {
     tail = &enabled_cm.pNext;
 #ifdef OMARCHY_BF16_CMAT
     if (hw.cooperative_matrix_bf16_8 || hw.cooperative_matrix_bf16) {
@@ -1627,6 +1730,8 @@ Device::Device(uint32_t physical_device_index) {
   DeviceExtInput ext_in;
   ext_in.shader_atomic_float_add = hw.shader_atomic_float_add;
   ext_in.cooperative_matrix_f32_8 = hw.cooperative_matrix_f32_8;
+  ext_in.cooperative_matrix_any_shape =
+      !hw.cooperative_matrix_shapes.empty();
 #ifdef OMARCHY_BF16_CMAT
   ext_in.cooperative_matrix_bf16_8 = hw.cooperative_matrix_bf16_8;
   ext_in.cooperative_matrix_bf16 = hw.cooperative_matrix_bf16;
@@ -1778,7 +1883,11 @@ Device::Device(uint32_t physical_device_index) {
           caps_.max_per_stage_descriptor_storage_buffers,
           caps_.max_descriptor_set_storage_buffers));
   compute_ = std::make_unique<ComputeRuntime>(
-      device_, binding_limit, hardware_caps_.required_subgroup_size);
+      device_,
+      binding_limit,
+      hardware_caps_.required_subgroup_size,
+      hardware_caps_.subgroup_size_16_admitted,
+      hardware_caps_.subgroup_size_32_admitted);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 

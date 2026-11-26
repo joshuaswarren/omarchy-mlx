@@ -21,6 +21,11 @@ struct DeviceExtInput {
   bool cooperative_matrix_f32_8{false};
   bool cooperative_matrix_bf16_8{false};
   bool cooperative_matrix_bf16{false};
+  // True when the device lists any cooperative-matrix shape at all
+  // (caps.cooperative_matrix_shapes non-empty). Covers a driver that
+  // lists only the 16x16x16 fp16-operand C16 shape: neither convenience
+  // boolean is set, yet the dense CMAT16 route can still claim it.
+  bool cooperative_matrix_any_shape{false};
   // VK_EXT_memory_priority and VK_EXT_pageable_device_local_memory:
   // enabled only as a pair, matching lily's device init on
   // Honeykrisp-M5 - pageable memory is what the priority hint acts on.

@@ -119,6 +119,10 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # (a batched call used to take the per-token composed fallback).
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-gated-delta-prefill-rows.patch"
+# mlx-lm gated-delta route for pip installs: import the wheel's
+# mlx._omarchy_gdn_route hook at mlx.core init (no mlx-lm files patched).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-omarchy-gdn-pyinit-route.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-version-time.patch"
 # GDN decode chain: fused RMSNorm+SwiGLU-gate and RMSNorm+scalar-mul

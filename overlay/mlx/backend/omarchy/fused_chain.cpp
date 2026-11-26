@@ -16,7 +16,6 @@
 #include <typeinfo>
 #include <stdexcept>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -35,7 +34,7 @@
 namespace mlx::core::omarchy {
 
 bool fused_chain_enabled() {
-  return std::getenv("MLX_OMARCHY_FUSED_CHAIN") == nullptr ||
+  return omarchy::env_str("MLX_OMARCHY_FUSED_CHAIN") == nullptr ||
       env_flag("MLX_OMARCHY_FUSED_CHAIN");
 }
 namespace {
@@ -667,7 +666,7 @@ void dispatch_chain(
   // MLX_OMARCHY_FUSED_CHAIN_LANES=128 selects the four-subgroup
   // variants. The 256-lane and 128-lane kernels must produce
   // byte-identical output; the fused-chain test asserts it.
-  const char* lanes_env = std::getenv("MLX_OMARCHY_FUSED_CHAIN_LANES");
+  const char* lanes_env = omarchy::env_str("MLX_OMARCHY_FUSED_CHAIN_LANES");
   const bool lanes128 = lanes_env && std::strcmp(lanes_env, "128") == 0;
   auto kernel = lanes128 ? ComputeKernel::FusedChainF32L128
                          : ComputeKernel::FusedChainF32;
@@ -848,32 +847,75 @@ struct SdpaTransposeFold {
 struct EagerFusionState {
   std::unordered_map<std::uintptr_t, EagerRole> roles;
   std::unordered_map<std::uintptr_t, FusedChain> chains;
-  std::unordered_map<std::uintptr_t, size_t> gemv_roles;
+  TapeIndex<size_t> gemv_roles;
   std::vector<GemvGroup> gemv_groups;
-  std::unordered_map<std::uintptr_t, size_t> res_norm_skip_roles;
+  TapeIndex<size_t> res_norm_skip_roles;
   std::vector<SdpaTransposeFold> sdpa_transpose_folds;
   // attention out array id -> fold index; reshape/view ids -> fold index
   std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_plans;
   std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_skip_roles;
-  std::unordered_map<std::uintptr_t, size_t> dense_gemv_roles;
+  TapeIndex<size_t> dense_gemv_roles;
   std::vector<DenseGemvGroup> dense_gemv_groups;
-  std::unordered_map<std::uintptr_t, size_t> slice_update_roles;
+  TapeIndex<size_t> slice_update_roles;
   std::vector<SliceUpdatePair> slice_update_pairs;
-  std::unordered_map<std::uintptr_t, size_t> rope_redirect_roles;
-  std::unordered_map<std::uintptr_t, size_t> reshape_redirect_roles;
-  std::unordered_map<std::uintptr_t, size_t> rope_pair_roles;
+  TapeIndex<size_t> rope_redirect_roles;
+  TapeIndex<size_t> reshape_redirect_roles;
+  TapeIndex<size_t> rope_pair_roles;
   std::vector<RopePair> rope_pairs;
-  std::unordered_map<std::uintptr_t, size_t> rope_norm_skip_roles;
-  std::unordered_map<std::uintptr_t, size_t> rope_norm_roles;
+  TapeIndex<size_t> rope_norm_skip_roles;
+  TapeIndex<size_t> rope_norm_roles;
   std::vector<RopeNormFold> rope_norms;
-  std::unordered_map<std::uintptr_t, size_t> prologue_skip_roles;
-  std::unordered_map<std::uintptr_t, size_t> prologue_fold_roles;
+  TapeIndex<size_t> prologue_skip_roles;
+  TapeIndex<size_t> prologue_fold_roles;
   std::vector<PrologueFold> prologue_folds;
+
+  void prepare(std::size_t tape_size) {
+    gemv_roles.prepare(tape_size);
+    res_norm_skip_roles.prepare(tape_size);
+    dense_gemv_roles.prepare(tape_size);
+    slice_update_roles.prepare(tape_size);
+    rope_redirect_roles.prepare(tape_size);
+    reshape_redirect_roles.prepare(tape_size);
+    rope_pair_roles.prepare(tape_size);
+    rope_norm_skip_roles.prepare(tape_size);
+    rope_norm_roles.prepare(tape_size);
+    prologue_skip_roles.prepare(tape_size);
+    prologue_fold_roles.prepare(tape_size);
+  }
+
+  // Called when the scope ends and the state returns to the pool: drops
+  // every array reference the plans held so buffers can be reused
+  // between evals. Container capacity is kept for the next scope.
+  void reset() {
+    roles.clear();
+    chains.clear();
+    gemv_groups.clear();
+    dense_gemv_groups.clear();
+    slice_update_pairs.clear();
+    rope_pairs.clear();
+    rope_norms.clear();
+    prologue_folds.clear();
+    sdpa_transpose_folds.clear();
+    sdpa_transpose_plans.clear();
+    sdpa_transpose_skip_roles.clear();
+  }
 };
 
 thread_local EagerFusionState* eager_state = nullptr;
 thread_local double eager_dispatch_us = 0.0;
 thread_local size_t eager_dispatch_calls = 0;
+
+// One spare state per live scope, depth-capped: a decode eval builds the
+// same ~10 role tables every step, and unordered_map pays a node
+// allocation per insert plus bucket growth each time. Reused states keep
+// their bucket/vector capacity so a steady-state eval allocates no map
+// nodes at all for the TapeIndex tables and none for growth elsewhere.
+// Nested scopes (a settle eval inside a dispatch) take distinct pool
+// entries, so live tables are never shared.
+std::vector<std::unique_ptr<EagerFusionState>>& fusion_state_pool() {
+  static thread_local std::vector<std::unique_ptr<EagerFusionState>> pool;
+  return pool;
+}
 
 bool is_op(const array* node, const std::type_info& op) {
   return node && node->has_primitive() && typeid(node->primitive()) == op;
@@ -1035,7 +1077,7 @@ std::optional<DirectGeometry> direct_window_geometry(const array& member) {
 // base handle, which would count as a second holder.
 // MLX_OMARCHY_KV_INPLACE=0 forces the copy.
 bool kv_window_in_place(const array& member) {
-  return (std::getenv("MLX_OMARCHY_KV_INPLACE") == nullptr ||
+  return (omarchy::env_str("MLX_OMARCHY_KV_INPLACE") == nullptr ||
           env_flag("MLX_OMARCHY_KV_INPLACE")) &&
       member.inputs()[0].is_donatable();
 }
@@ -1099,7 +1141,7 @@ DirectPlan plan_values_window(
     const array* update,
     const TapeIndex<size_t>& uses,
     const std::vector<GemvGroup>& groups,
-    const std::unordered_map<std::uintptr_t, size_t>& dense_roles,
+    const TapeIndex<size_t>& dense_roles,
     std::vector<DenseGemvGroup>& dense_groups) {
   DirectPlan plan;
   auto use_count = [&](const array& value) {
@@ -1130,14 +1172,14 @@ DirectPlan plan_values_window(
   // member's output row (no Add epilogue). The group stores it through
   // the same producer-direct window contract.
   auto dense_it = dense_roles.find(sum->id());
-  if (dense_it != dense_roles.end()) {
+  if (dense_it != nullptr) {
     if (use_count(*sum) != 1) {
       return plan;
     }
-    const auto& group_nodes = dense_groups[dense_it->second].nodes;
+    const auto& group_nodes = dense_groups[*dense_it].nodes;
     for (size_t mi = 0; mi < group_nodes.size(); ++mi) {
       if (group_nodes[mi].id() == sum->id()) {
-        plan.group_index = dense_it->second;
+        plan.group_index = *dense_it;
         plan.member_index = mi;
         plan.kind = DirectKind::dense_values;
         found = true;
@@ -1288,6 +1330,26 @@ bool node_gemv_enabled(const array& node) {
   return d != nullptr && fused_gemv_enabled(*d);
 }
 
+// Epilogue-only group route (MLX_OMARCHY_QMM_EPILOGUE_GEMV): on parts where
+// the multi-weight fused GEMV defaults off but the residual-norm epilogue
+// defaults on (G14C), single-member groups carrying an Add epilogue still
+// plan; multi-member x-sharing folds stay off. See device.h.
+bool gemv_epilogue_only_route_enabled(const Device& device) {
+  if (!fused_chain_enabled()) {
+    return false;
+  }
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_EPILOGUE_GEMV");
+  if (env != nullptr && env[0] != '\0') {
+    return std::strcmp(env, "0") != 0;
+  }
+  return gemv_epilogue_only_part(device.capabilities().device_name);
+}
+
+bool node_epilogue_gemv_enabled(const array& node) {
+  const Device* d = stream_device(node);
+  return d != nullptr && gemv_epilogue_only_route_enabled(*d);
+}
+
 bool node_trio_enabled(const array& node) {
   const Device* d = stream_device(node);
   return d != nullptr && fused_trio_enabled(*d);
@@ -1303,6 +1365,7 @@ double* eval_phase_slots() {
 EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     : previous_(eager_state), t0_(std::chrono::steady_clock::now()) {
   eager_state = nullptr;
+  env_note_eval();
   if (!fused_chain_enabled()) {
     return;
   }
@@ -1316,7 +1379,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // plans). Tapes with none of these can fire no plan, so skip the
   // node/use maps and all pattern passes. Set
   // MLX_OMARCHY_NO_FUSION_GATE to restore the unconditional scan.
-  if (std::getenv("MLX_OMARCHY_NO_FUSION_GATE") == nullptr) {
+  if (omarchy::env_str("MLX_OMARCHY_NO_FUSION_GATE") == nullptr) {
     bool anchor = false;
     for (const auto& node : tape) {
       if (is_op(&node, typeid(QuantizedMatmul)) ||
@@ -1333,20 +1396,35 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     }
   }
 
-  auto* state = new EagerFusionState;
+  EagerFusionState* state;
+  auto& pool = fusion_state_pool();
+  if (pool.empty()) {
+    state = new EagerFusionState;
+  } else {
+    state = pool.back().release();
+    pool.pop_back();
+  }
   eager_state = state;
+  state->prepare(tape.size());
   // Tape-index scratch is thread-local and reused across passes. The maps
   // are only live for this planning section, so reuse is safe under nested
   // scopes: a nested scope's eval runs after this constructor returns,
   // never while it still holds the tables.
   static thread_local TapeIndex<const array*> nodes;
   static thread_local TapeIndex<size_t> uses;
+  // consumer_of[input] = last tape node reading input; paired with the
+  // uses count it is the single-consumer map without a second tape pass.
+  static thread_local TapeIndex<const array*> consumer_of;
+  static thread_local TapeIndex<char> claimed;
   nodes.prepare(tape.size());
   uses.prepare(tape.size() * 2);
+  consumer_of.prepare(tape.size() * 2);
+  claimed.prepare(tape.size());
   for (const auto& node : tape) {
     nodes.put_if_absent(node.id(), &node);
     for (const auto& input : node.inputs()) {
       ++uses[input.id()];
+      consumer_of[input.id()] = &node;
     }
   }
   auto lookup = [&](const array& ref) -> const array* {
@@ -1363,7 +1441,6 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     array out;
   };
   std::vector<SwigluPlan> swiglu_plans;
-  std::unordered_set<std::uintptr_t> claimed;
   const bool swiglu_scan_trace =
       std::getenv("MLX_OMARCHY_SWIGLU_TRACE") != nullptr;
   for (const auto& tail : tape) {
@@ -1439,9 +1516,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         inner->id(), EagerRole{group, EagerStep::gate_mul});
     state->roles.emplace(
         tail.id(), EagerRole{group, EagerStep::output_mul});
-    claimed.insert(sigmoid->id());
-    claimed.insert(inner->id());
-    claimed.insert(tail.id());
+    claimed.put_if_absent(sigmoid->id(), 1);
+    claimed.put_if_absent(inner->id(), 1);
+    claimed.put_if_absent(tail.id(), 1);
   }
   // Out-gate prologue plans: tail = Multiply(Sigmoid(gate), out) whose
   // sigmoid the tail alone reads and whose own single consumer is a
@@ -1477,8 +1554,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     outgate_plans.emplace(
         tail.id(),
         OutgatePlan{sigmoid->inputs()[0], out, tail, sigmoid->id()});
-    claimed.insert(sigmoid->id());
-    claimed.insert(tail.id());
+    claimed.put_if_absent(sigmoid->id(), 1);
+    claimed.put_if_absent(tail.id(), 1);
   }
   for (size_t i = 1; i < tape.size(); ++i) {
     const array& first = tape[i - 1];
@@ -1500,11 +1577,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       continue;
     }
     size_t index = state->slice_update_pairs.size();
-    state->slice_update_roles.emplace(first.id(), index);
-    state->slice_update_roles.emplace(second.id(), index);
+    state->slice_update_roles.put_if_absent(first.id(), index);
+    state->slice_update_roles.put_if_absent(second.id(), index);
     state->slice_update_pairs.emplace_back(first, second);
-    claimed.insert(first.id());
-    claimed.insert(second.id());
+    claimed.put_if_absent(first.id(), 1);
+    claimed.put_if_absent(second.id(), 1);
     ++i;
   }
 
@@ -1519,20 +1596,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // and size; its other operand may be any array that is ready when the
   // group dispatches (checked then, refused otherwise). A group of one
   // member without an epilogue gains nothing and is not planned.
-  std::unordered_map<std::uintptr_t, const array*> single_consumer;
-  for (const auto& node : tape) {
-    for (const auto& input : node.inputs()) {
-      if (uses[input.id()] == 1) {
-        single_consumer[input.id()] = &node;
-      }
-    }
-  }
-  std::unordered_map<std::uintptr_t, std::vector<const array*>> by_x;
+  static thread_local TapeIndex<std::vector<const array*>> by_x;
+  by_x.prepare(tape.size());
   std::vector<std::uintptr_t> x_order;
   for (const auto& node : tape) {
     if (!is_op(&node, typeid(QuantizedMatmul)) ||
         node.inputs().size() != 4 || claimed.count(node.id()) ||
-        !node_gemv_enabled(node)) {
+        !(node_gemv_enabled(node) || node_epilogue_gemv_enabled(node))) {
       continue;
     }
     auto [group_size, bits, mode, transpose] =
@@ -1558,14 +1628,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     // until root-caused the token route plans WITHOUT epilogues and the
     // residual/bias adds ride their separate eager dispatches. The fold
     // stays reachable for bisection via MLX_OMARCHY_QMM_VEC_TOKEN_FOLD=1.
-    auto [it, inserted] = by_x.try_emplace(x.id());
-    if (inserted) {
+    auto& group_list = by_x[x.id()];
+    if (group_list.empty()) {
       x_order.push_back(x.id());
     }
-    it->second.push_back(&node);
+    group_list.push_back(&node);
   }
   for (auto x_id : x_order) {
-    const auto& nodes = by_x[x_id];
+    const auto& nodes = *by_x.find(x_id);
     auto plan_it = outgate_plans.find(x_id);
     bool x_has_plan = plan_it != outgate_plans.end();
     // Token rows share the single-token group planner; the out-gate
@@ -1582,7 +1652,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     // residual/bias adds ride their separate eager dispatches. The fold
     // stays reachable for bisection via MLX_OMARCHY_QMM_VEC_TOKEN_FOLD=1.
     const char* token_fold_env =
-        x_rows > 1 ? std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD") : nullptr;
+        x_rows > 1 ? omarchy::env_str("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD") : nullptr;
     const bool fold_ok =
         x_rows == 1 ||
         (token_fold_env != nullptr && std::strcmp(token_fold_env, "0") != 0);
@@ -1594,9 +1664,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
            ++i) {
         const array& node = *nodes[i];
         GemvFusionMember member{node, std::nullopt, std::nullopt};
-        if (auto consumer = single_consumer.find(node.id());
-            consumer != single_consumer.end()) {
-          const array* add = consumer->second;
+        if (auto* uses_p = uses.find(node.id());
+            uses_p != nullptr && *uses_p == 1) {
+          if (auto* consumer = consumer_of.find(node.id())) {
+          const array* add = *consumer;
           if (fold_ok && is_op(add, typeid(Add)) &&
               add->inputs().size() == 2 &&
               add->dtype() == node.dtype() &&
@@ -1630,9 +1701,76 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
               member.addend = *other;
             }
           }
+          }
         }
         worth = worth || member.epilogue.has_value();
         group.members.push_back(std::move(member));
+      }
+      // Epilogue-only route (device.h gemv_epilogue_only_part): general
+      // multi-member folds and epilogue-free singles keep their
+      // per-node path; single-member Add-epilogue groups plan, plus
+      // balanced bf16 groups on G14C unless MLX_OMARCHY_FUSED_GEMV is
+      // explicitly set to 0: balanced 3-member QKV, and balanced
+      // 2-member pairs (MLP gate/up, and the two pairs a 4-member GDN
+      // in_proj window [6144, 2048, 16, 16] splits into).
+      bool balanced_qkv = false;
+      std::vector<GemvGroup> pair_groups;
+      if (!node_gemv_enabled(*nodes[start]) && x_rows == 1 &&
+          group.members.size() >= 2) {
+        bool epilogue_free = true;
+        bool all_bf16 = true;
+        for (const auto& m : group.members) {
+          epilogue_free = epilogue_free && !m.epilogue;
+          all_bf16 = all_bf16 && m.node.dtype() == bfloat16;
+        }
+        const Device* d = stream_device(*nodes[start]);
+        const char* fg_env = omarchy::env_str("MLX_OMARCHY_FUSED_GEMV");
+        const bool explicit_gemv_off =
+            fg_env != nullptr && fg_env[0] != '\0' &&
+            !env_flag("MLX_OMARCHY_FUSED_GEMV");
+        if (d != nullptr && !explicit_gemv_off && epilogue_free &&
+            all_bf16 && gemv_epilogue_only_route_enabled(*d) &&
+            gemv_balanced_qkv_part(d->capabilities().device_name)) {
+          std::vector<int64_t> widths;
+          widths.reserve(group.members.size());
+          for (const auto& m : group.members) {
+            widths.push_back(m.node.inputs()[1].shape(0));
+          }
+          balanced_qkv = group.members.size() == 3 &&
+              gemv_balanced_qkv_widths_ok(widths);
+          if (!balanced_qkv) {
+            // Split-pair admission: each consecutive member pair whose
+            // widths sit within a 4:1 ratio plans as its own dispatch,
+            // so an asymmetric window never folds as one group while
+            // its balanced pairs still fuse (members outside a passing
+            // pair stay on the per-node path).
+            for (size_t p = 0; p + 1 < group.members.size(); p += 2) {
+              if (!gemv_balanced_pair_widths_ok(widths[p], widths[p + 1])) {
+                continue;
+              }
+              GemvGroup pair;
+              pair.members.push_back(std::move(group.members[p]));
+              pair.members.push_back(std::move(group.members[p + 1]));
+              pair_groups.push_back(std::move(pair));
+            }
+          }
+        }
+      }
+      if (!node_gemv_enabled(*nodes[start]) && !balanced_qkv &&
+          pair_groups.empty() &&
+          (group.members.size() != 1 || !group.members[0].epilogue)) {
+        continue;
+      }
+      if (!pair_groups.empty()) {
+        for (auto& pair : pair_groups) {
+          const size_t pair_index = state->gemv_groups.size();
+          for (const auto& member : pair.members) {
+            state->gemv_roles.put_if_absent(member.node.id(), pair_index);
+            claimed.put_if_absent(member.node.id(), 1);
+          }
+          state->gemv_groups.push_back(std::move(pair));
+        }
+        continue;
       }
       if (group.members.size() < 2 && !worth) {
         continue;
@@ -1642,11 +1780,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       size_t index = state->gemv_groups.size();
       for (const auto& member : group.members) {
-        state->gemv_roles.emplace(member.node.id(), index);
-        claimed.insert(member.node.id());
+        state->gemv_roles.put_if_absent(member.node.id(), index);
+        claimed.put_if_absent(member.node.id(), 1);
         if (member.epilogue) {
-          state->gemv_roles.emplace(member.epilogue->id(), index);
-          claimed.insert(member.epilogue->id());
+          state->gemv_roles.put_if_absent(member.epilogue->id(), index);
+          claimed.put_if_absent(member.epilogue->id(), 1);
         }
       }
       state->gemv_groups.push_back(std::move(group));
@@ -1660,12 +1798,6 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // failed contract drops them back onto the ordinary path and the
   // multiply materializes x as before. (EagerRole.group carries the
   // gemv-group index for skip roles.)
-  std::unordered_map<std::uintptr_t, size_t> outgate_reader_count;
-  for (const auto& node : tape) {
-    for (const auto& input : node.inputs()) {
-      ++outgate_reader_count[input.id()];
-    }
-  }
   for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
     auto& group = state->gemv_groups[gi];
     if (!group.outgate) {
@@ -1679,8 +1811,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         (!gate_node ||
          gate_node->primitive().stream() == member_stream) &&
         (!out_node || out_node->primitive().stream() == member_stream);
-    if (!streams_ok || outgate_reader_count[plan.gate.id()] != 1 ||
-        outgate_reader_count[plan.out.id()] != 1) {
+    if (!streams_ok || uses[plan.gate.id()] != 1 ||
+        uses[plan.out.id()] != 1) {
       group.outgate.reset();
       continue;
     }
@@ -1731,22 +1863,26 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         state->gemv_groups.size());
   }
   if (!swiglu_plans.empty()) {
-    std::unordered_map<std::uintptr_t, std::vector<std::uintptr_t>>
-        consumers;
-    for (const auto& node : tape) {
-      for (const auto& input : node.inputs()) {
-        consumers[input.id()].push_back(node.id());
-      }
-    }
+    // Readers of a leaf, collected on demand only for the ~2 ids per
+    // plan: a whole-tape consumer map costs a node+vector allocation per
+    // distinct input every eval to answer a handful of checks.
     auto only_readers = [&](std::uintptr_t leaf,
                             std::vector<std::uintptr_t> want) {
-      auto it = consumers.find(leaf);
-      if (it == consumers.end()) {
+      auto* count = uses.find(leaf);
+      if (count == nullptr || *count != want.size()) {
         return false;
       }
-      std::sort(it->second.begin(), it->second.end());
+      std::vector<std::uintptr_t> got;
+      for (const auto& node : tape) {
+        for (const auto& input : node.inputs()) {
+          if (input.id() == leaf) {
+            got.push_back(node.id());
+          }
+        }
+      }
+      std::sort(got.begin(), got.end());
       std::sort(want.begin(), want.end());
-      return it->second == want;
+      return got == want;
     };
     const bool swiglu_trace =
         std::getenv("MLX_OMARCHY_SWIGLU_TRACE") != nullptr;
@@ -1811,13 +1947,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         for (std::uintptr_t id :
              {plan.sigmoid_id, plan.inner_id, plan.out.id()}) {
           state->roles.erase(id);
-          state->gemv_roles.emplace(id, gi);
+          state->gemv_roles.put_if_absent(id, gi);
         }
         break;
       }
     }
   }
-  std::unordered_map<std::uintptr_t, std::vector<const array*>> dense_by_x;
+  static thread_local TapeIndex<std::vector<const array*>> dense_by_x;
+  dense_by_x.prepare(tape.size());
   std::vector<std::uintptr_t> dense_x_order;
   for (const auto& node : tape) {
     if (!is_op(&node, typeid(Matmul)) || node.inputs().size() != 2 ||
@@ -1831,14 +1968,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       continue;
     }
     const array& source = dense_gemv_source(x);
-    auto [it, inserted] = dense_by_x.try_emplace(source.id());
-    if (inserted) {
+    auto& dense_list = dense_by_x[source.id()];
+    if (dense_list.empty()) {
       dense_x_order.push_back(source.id());
     }
-    it->second.push_back(&node);
+    dense_list.push_back(&node);
   }
   for (auto x_id : dense_x_order) {
-    const auto& nodes = dense_by_x[x_id];
+    const auto& nodes = *dense_by_x.find(x_id);
     for (size_t start = 0; start + 1 < nodes.size();
          start += kDenseVecMultiWeights) {
       DenseGemvGroup group;
@@ -1853,8 +1990,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       const size_t index = state->dense_gemv_groups.size();
       for (const auto& node : group.nodes) {
-        state->dense_gemv_roles.emplace(node.id(), index);
-        claimed.insert(node.id());
+        state->dense_gemv_roles.put_if_absent(node.id(), index);
+        claimed.put_if_absent(node.id(), 1);
       }
       state->dense_gemv_groups.push_back(std::move(group));
     }
@@ -1896,7 +2033,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           plans[1].kind == DirectKind::none ||
           plans[0].kind == plans[1].kind) {
         static int kv_trace = 0;
-        if (std::getenv("MLX_OMARCHY_KV_TRACE") != nullptr && kv_trace < 6) {
+        if (omarchy::env_str("MLX_OMARCHY_KV_TRACE") != nullptr && kv_trace < 6) {
           ++kv_trace;
           std::fprintf(
               stderr,
@@ -1966,10 +2103,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       pair.windows[0] = std::move(plans[rope_side].window);
       pair.windows[1] = std::move(sum_plan.window);
-      state->rope_redirect_roles.emplace(
+      state->rope_redirect_roles.put_if_absent(
           pair.nodes[rope_side].inputs()[1].id(), index);
       for (const auto& view : sum_plan.view_chain) {
-        state->reshape_redirect_roles.emplace(view.id(), index);
+        state->reshape_redirect_roles.put_if_absent(view.id(), index);
       }
       pair.direct = true;
     }
@@ -1979,7 +2116,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // bf16 fast::RMSNorm runs that norm in the last finishing workgroup without
   // an inter-dispatch barrier. Keeps Sum0 materialized so other consumers of
   // the residual sum (e.g., skip connections) read the identical bits.
-  if (qmm_residual_norm_enabled() && !state->gemv_groups.empty()) {
+  if (!state->gemv_groups.empty()) {
     std::unordered_map<std::uintptr_t, const array*> res_norms_by_in;
     for (const auto& node : tape) {
       if (!is_op(&node, typeid(fast::RMSNorm)) || node.inputs().size() != 2 ||
@@ -2012,10 +2149,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         }
         const array& norm = *it->second;
         const array& nw = norm.inputs()[1];
+        const Device* d = stream_device(qmm);
         if (claimed.count(norm.id()) ||
             norm.primitive().stream() != qmm.primitive().stream() ||
             norm.ndim() < 1 || norm.size() != add.size() ||
             norm.shape(-1) != qmm.inputs()[1].shape(0) ||
+            d == nullptr || !qmm_residual_norm_enabled(
+                d->hardware_capabilities(), norm.shape(-1), group.outgate.has_value()) ||
             nw.dtype() != bfloat16 ||
             (nw.size() != 1 &&
              nw.size() != static_cast<size_t>(norm.shape(-1)))) {
@@ -2024,8 +2164,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         const float eps =
             static_cast<const fast::RMSNorm&>(norm.primitive()).state().second;
         group.res_norm = ResNormPlan{norm, nw, eps};
-        state->res_norm_skip_roles.emplace(norm.id(), gi);
-        claimed.insert(norm.id());
+        state->res_norm_skip_roles.put_if_absent(norm.id(), gi);
+        claimed.put_if_absent(norm.id(), 1);
       }
     }
   }
@@ -2215,7 +2355,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       // The keys window must already be planned producer-direct on
       // the pair that claimed the rope's output.
       const size_t pair_index =
-          state->rope_redirect_roles.at(kc->node->id());
+          *state->rope_redirect_roles.find(kc->node->id());
       const auto& pair = state->slice_update_pairs[pair_index];
       if (!pair.direct || !pair.windows[0]) {
         if (epi_trace) {
@@ -2293,10 +2433,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       for (const auto* side : {qc, kc}) {
         state->roles.emplace(
             side->node->id(), EagerRole{gi, EagerStep::skip});
-        claimed.insert(side->node->id());
+        claimed.put_if_absent(side->node->id(), 1);
         for (const auto& view : side->chain) {
           state->roles.emplace(view.id(), EagerRole{gi, EagerStep::skip});
-          claimed.insert(view.id());
+          claimed.put_if_absent(view.id(), 1);
         }
       }
     }
@@ -2408,11 +2548,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       for (const array* view : chain) {
         fold.chain.push_back(*view);
         state->sdpa_transpose_skip_roles.emplace(view->id(), index);
-        claimed.insert(view->id());
+        claimed.put_if_absent(view->id(), 1);
       }
       state->sdpa_transpose_plans.emplace(sdpa.id(), index);
       state->sdpa_transpose_skip_roles.emplace(node.id(), index);
-      claimed.insert(node.id());
+      claimed.put_if_absent(node.id(), 1);
     }
   }
   // Decode RoPE pair plan: two adjacent forward RoPE nodes sharing one
@@ -2512,16 +2652,16 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         continue;
       }
       const size_t index = state->rope_pairs.size();
-      state->rope_pair_roles.emplace(first.id(), index);
-      state->rope_pair_roles.emplace(second.id(), index);
+      state->rope_pair_roles.put_if_absent(first.id(), index);
+      state->rope_pair_roles.put_if_absent(second.id(), index);
       state->rope_pairs.push_back(RopePair{{first, second}});
-      claimed.insert(first.id());
-      claimed.insert(second.id());
+      claimed.put_if_absent(first.id(), 1);
+      claimed.put_if_absent(second.id(), 1);
       trace.pairs += 1;
       i += 2;
     }
     static int trio_trace_plans = 0;
-    if (std::getenv("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
+    if (omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
         trace.rope_nodes > 0 && trio_trace_plans < 3) {
       ++trio_trace_plans;
       std::fprintf(
@@ -2556,7 +2696,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // primitive on the tape rope node itself.
   if (rope_norm_fold_enabled()) {
     static int fold_trace = 0;
-    const bool trace = std::getenv("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr;
+    const bool trace = omarchy::env_str("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr;
     size_t cand = 0;
     for (const array& node : tape) {
       if (!is_op(&node, typeid(fast::RoPE)) || node.inputs().size() != 2 ||
@@ -2645,9 +2785,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         continue;
       }
       const size_t index = state->rope_norms.size();
-      state->rope_norm_skip_roles.emplace(n.id(), index);
-      state->rope_norm_skip_roles.emplace(in.id(), index);
-      state->rope_norm_roles.emplace(node.id(), index);
+      state->rope_norm_skip_roles.put_if_absent(n.id(), index);
+      state->rope_norm_skip_roles.put_if_absent(in.id(), index);
+      state->rope_norm_roles.put_if_absent(node.id(), index);
       state->rope_norms.push_back(RopeNormFold{
           n,
           node,
@@ -2657,9 +2797,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           n.primitive_ptr(),
           view_p != nullptr ? view_p->primitive_ptr() : nullptr,
           static_cast<const fast::RMSNorm&>(n.primitive()).state().second});
-      claimed.insert(n.id());
-      claimed.insert(in.id());
-      claimed.insert(node.id());
+      claimed.put_if_absent(n.id(), 1);
+      claimed.put_if_absent(in.id(), 1);
+      claimed.put_if_absent(node.id(), 1);
     }
     if (trace && fold_trace < 8) {
       ++fold_trace;
@@ -2679,7 +2819,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // own. Word-pack affine dequantize only (bits 2/4/8); anything else
   // keeps the ordinary path. MLX_OMARCHY_PROLOGUE_FOLD=0 disables.
   const bool prologue_fold =
-      std::getenv("MLX_OMARCHY_PROLOGUE_FOLD") == nullptr ||
+      omarchy::env_str("MLX_OMARCHY_PROLOGUE_FOLD") == nullptr ||
       env_flag("MLX_OMARCHY_PROLOGUE_FOLD");
   for (const auto& node : tape) {
     if (!prologue_fold) {
@@ -2780,12 +2920,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
     }
     const size_t index = state->prologue_folds.size();
-    state->prologue_fold_roles.emplace(node.id(), index);
+    state->prologue_fold_roles.put_if_absent(node.id(), index);
     for (const auto& step : replay) {
-      state->prologue_skip_roles.emplace(step.node.id(), index);
-      claimed.insert(step.node.id());
+      state->prologue_skip_roles.put_if_absent(step.node.id(), index);
+      claimed.put_if_absent(step.node.id(), 1);
     }
-    claimed.insert(node.id());
+    claimed.put_if_absent(node.id(), 1);
     state->prologue_folds.push_back(PrologueFold{
         node,
         *ids,
@@ -2854,51 +2994,73 @@ EagerFusionScope::~EagerFusionScope() {
   }
   eager_dispatch_us = 0.0;
   eager_dispatch_calls = 0;
-  delete eager_state;
+  if (eager_state != nullptr) {
+    eager_state->reset();
+    auto& pool = fusion_state_pool();
+    if (pool.size() < 4) {
+      pool.emplace_back(eager_state);
+    } else {
+      delete eager_state;
+    }
+  }
   eager_state = static_cast<EagerFusionState*>(previous_);
 }
 
 // Out-gate prologue fold (sigmoid*multiply recomputed per o_proj workgroup).
-// Chip-keyed like the other decode-path defaults: it gained on G13C (M1 Max),
-// whereas every o_proj workgroup redoes the gate on G13G (decode dropped
-// ~1.7%, H147) and on G14C (M2 Max B1 paired ABBA across Qwen3.8-2B and
-// Qwen3.8-9B gained +0.97% to +1.92% when disabled, 11/11 pair wins).
+// Chip-keyed like the other decode-path defaults: every o_proj workgroup
+// redoes the gate on G13 (G13G dropped ~1.7%, H147; G13C M1 Max gained
+// +2.79% 5/5 at ctx=512 and +2.47% 3/3 at ctx=2048 on Qwen3.5-9B paired ABBA
+// when disabled atop the 2x8w2 QMV path) and on G14C (M2 Max B1 paired ABBA
+// across Qwen3.8-2B and Qwen3.8-9B gained +0.97% to +1.92% when disabled,
+// 11/11 pair wins).
 // MLX_OMARCHY_OUTGATE_FOLD=0/1 forces either arm.
 bool outgate_fold_default_for_device(const std::string& device_name) {
-  bool legacy_g13 = device_name.find("G13") != std::string::npos &&
-      device_name.find("G13C") == std::string::npos;
+  bool g13 = device_name.find("G13") != std::string::npos;
   bool g14c = device_name.find("G14C") != std::string::npos;
-  return !legacy_g13 && !g14c;
+  return !g13 && !g14c;
 }
 
 bool outgate_fold_enabled() {
-  const char* v = std::getenv("MLX_OMARCHY_OUTGATE_FOLD");
+  const char* v = omarchy::env_str("MLX_OMARCHY_OUTGATE_FOLD");
   if (v != nullptr && *v != '\0') {
     return !(v[0] == '0' && v[1] == '\0');
   }
   return outgate_fold_default_for_device(device().capabilities().device_name);
 }
 
-bool qmm_residual_norm_enabled(const std::string& device_name) {
-  if (!fused_chain_enabled()) {
+bool qmm_residual_norm_enabled(
+    const CapabilityReport& caps, int norm_cols, bool outgate) {
+  // The plain and out-gate kernels use 16 and 8 32-lane slots respectively.
+  const uint32_t threads = outgate ? 256u : 512u;
+  if (!fused_chain_enabled() || caps.subgroup_size != 32 ||
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0 ||
+      caps.max_compute_work_group_invocations < threads ||
+      caps.max_compute_work_group_size[0] < threads) {
     return false;
   }
-  const char* env = std::getenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_RESIDUAL_NORM");
   if (env != nullptr && env[0] != '\0') {
     return std::strcmp(env, "0") != 0;
   }
-  return qmm_residual_norm_default_part(device_name);
-}
-
-bool qmm_residual_norm_enabled() {
-  return qmm_residual_norm_enabled(device().capabilities().device_name);
+  // Width allowlist: {256, 2048, 4096} on every part that passed the
+  // subgroup-32 probe above. 2560 stays a measured exception: G13C,
+  // G14C, plus non-unified-memory devices. G13G measured
+  // ResNorm(2560)+2x8w2 at -2.2% (M1D-1c #947, 2x2 factorial: geom-only
+  // +0.5%, fold-only +0.4%, both -2.2%), so G13G keeps the exclusion
+  // while G13C opts in with measured zero-env decode gains.
+  if (norm_cols == 2560) {
+    return caps.device_name.find("G13C") != std::string::npos ||
+        caps.device_name.find("G14C") != std::string::npos ||
+        !caps.unified_memory;
+  }
+  return norm_cols == 256 || norm_cols == 2048 || norm_cols == 4096;
 }
 
 bool fused_route_enabled(const char* variable, const std::string& device_name) {
   if (!fused_chain_enabled()) {
     return false;
   }
-  if (std::getenv(variable) != nullptr) {
+  if (omarchy::env_str(variable) != nullptr) {
     return env_flag(variable);
   }
   if (std::strcmp(variable, "MLX_OMARCHY_FUSED_GEMV") == 0) {
@@ -2916,7 +3078,7 @@ bool fused_gemv_enabled(const Device& device) {
 // (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
 bool fused_gemv_swiglu_enabled(const Device& device) {
   return fused_gemv_enabled(device) &&
-      (std::getenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU") == nullptr ||
+      (omarchy::env_str("MLX_OMARCHY_FUSED_GEMV_SWIGLU") == nullptr ||
        env_flag("MLX_OMARCHY_FUSED_GEMV_SWIGLU"));
 }
 
@@ -2924,7 +3086,7 @@ bool fused_gemv_swiglu_enabled(const Device& device) {
 // rows 2..16 (the token column; OFF by default on AGX pending the
 // data-dependent divergence bisect).
 bool gemv_token_multi_enabled(const Device& device) {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
   return fused_gemv_enabled(device) && env != nullptr && env[0] != '\0' &&
       std::strcmp(env, "0") != 0;
 }
@@ -2936,7 +3098,7 @@ bool fused_trio_enabled(const Device& device) {
 
 bool kv_direct_enabled() {
   return fused_chain_enabled() &&
-      (std::getenv("MLX_OMARCHY_KV_DIRECT") == nullptr ||
+      (omarchy::env_str("MLX_OMARCHY_KV_DIRECT") == nullptr ||
        env_flag("MLX_OMARCHY_KV_DIRECT"));
 }
 
@@ -2948,7 +3110,7 @@ bool rope_epi_enabled() {
 
 bool rope_norm_fold_enabled() {
   return fused_chain_enabled() &&
-      (std::getenv("MLX_OMARCHY_ROPE_NORM_FOLD") == nullptr ||
+      (omarchy::env_str("MLX_OMARCHY_ROPE_NORM_FOLD") == nullptr ||
        env_flag("MLX_OMARCHY_ROPE_NORM_FOLD"));
 }
 
@@ -2957,10 +3119,10 @@ KvDirectWindow* find_rope_kv_redirect(const array& out) {
     return nullptr;
   }
   auto it = eager_state->rope_redirect_roles.find(out.id());
-  if (it == eager_state->rope_redirect_roles.end()) {
+  if (it == nullptr) {
     return nullptr;
   }
-  auto& pair = eager_state->slice_update_pairs[it->second];
+  auto& pair = eager_state->slice_update_pairs[*it];
   if (!pair.direct || pair.state != SliceUpdatePair::State::pending ||
       !pair.values_committed) {
     return nullptr;
@@ -2973,10 +3135,10 @@ void commit_rope_kv_redirect(const array& out) {
     return;
   }
   auto it = eager_state->rope_redirect_roles.find(out.id());
-  if (it == eager_state->rope_redirect_roles.end()) {
+  if (it == nullptr) {
     return;
   }
-  auto& pair = eager_state->slice_update_pairs[it->second];
+  auto& pair = eager_state->slice_update_pairs[*it];
   if (pair.direct && pair.state == SliceUpdatePair::State::pending) {
     pair.state = SliceUpdatePair::State::done;
   }
@@ -3107,7 +3269,7 @@ bool dispatch_rope_norm_fold(
         view->offset() % view->itemsize() != 0 ||
         view->shape(-1) != x.shape(-1)))) {
     static int fold_run_trace = 0;
-    if (std::getenv("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr &&
+    if (omarchy::env_str("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr &&
         fold_run_trace < 4) {
       ++fold_run_trace;
       std::fprintf(
@@ -3283,24 +3445,24 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return false;
   }
   if (auto skip = eager_state->res_norm_skip_roles.find(node.id());
-      skip != eager_state->res_norm_skip_roles.end()) {
-    return eager_state->gemv_groups[skip->second].res_norm_done;
+      skip != nullptr) {
+    return eager_state->gemv_groups[*skip].res_norm_done;
   }
   if (auto skip = eager_state->sdpa_transpose_skip_roles.find(node.id());
       skip != eager_state->sdpa_transpose_skip_roles.end()) {
     return eager_state->sdpa_transpose_folds[skip->second].fired;
   }
   if (auto skip = eager_state->prologue_skip_roles.find(node.id());
-      skip != eager_state->prologue_skip_roles.end()) {
+      skip != nullptr) {
     // The fold's dispatch owns this node while pending or done; on a
     // failed fold the fire arm replays every skipped node before the
     // dequantize runs, so nothing ever falls through unwritten.
-    return eager_state->prologue_folds[skip->second].state !=
+    return eager_state->prologue_folds[*skip].state !=
         PrologueFold::State::failed;
   }
   if (auto fit = eager_state->prologue_fold_roles.find(node.id());
-      fit != eager_state->prologue_fold_roles.end()) {
-    auto& fold = eager_state->prologue_folds[fit->second];
+      fit != nullptr) {
+    auto& fold = eager_state->prologue_folds[*fit];
     if (fold.state == PrologueFold::State::done) {
       return true;
     }
@@ -3333,16 +3495,16 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return true;
   }
   if (auto skip = eager_state->rope_norm_skip_roles.find(node.id());
-      skip != eager_state->rope_norm_skip_roles.end()) {
+      skip != nullptr) {
     // The rope-side fold owns this norm's dispatch; a failed fold runs
     // it in place from the rope arm below, so skip only while the fold
     // can still fire.
-    return eager_state->rope_norms[skip->second].state !=
+    return eager_state->rope_norms[*skip].state !=
         RopeNormFold::State::failed;
   }
   if (auto fold_it = eager_state->rope_norm_roles.find(node.id());
-      fold_it != eager_state->rope_norm_roles.end()) {
-    auto& fold = eager_state->rope_norms[fold_it->second];
+      fold_it != nullptr) {
+    auto& fold = eager_state->rope_norms[*fold_it];
     if (fold.state == RopeNormFold::State::done) {
       return true;
     }
@@ -3374,8 +3536,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return true;
   }
   if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
-      rope_pair != eager_state->rope_pair_roles.end()) {
-    auto& pair = eager_state->rope_pairs[rope_pair->second];
+      rope_pair != nullptr) {
+    auto& pair = eager_state->rope_pairs[*rope_pair];
     if (pair.state == RopePair::State::done) {
       return true;
     }
@@ -3394,7 +3556,7 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     bool fired = dispatch_rope_pair(pair.nodes, stream);
     pair.state = fired ? RopePair::State::done : RopePair::State::failed;
     static int trio_run_trace = 0;
-    if (!fired && std::getenv("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
+    if (!fired && omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
         trio_run_trace < 3) {
       ++trio_run_trace;
       std::fprintf(
@@ -3403,8 +3565,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return pair.state == RopePair::State::done;
   }
   if (auto update = eager_state->slice_update_roles.find(node.id());
-      update != eager_state->slice_update_roles.end()) {
-    auto& pair = eager_state->slice_update_pairs[update->second];
+      update != nullptr) {
+    auto& pair = eager_state->slice_update_pairs[*update];
     if (pair.direct) {
       if (pair.state == SliceUpdatePair::State::done) {
         return true;
@@ -3438,8 +3600,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return false;
   }
   if (auto reshape = eager_state->reshape_redirect_roles.find(node.id());
-      reshape != eager_state->reshape_redirect_roles.end()) {
-    auto& pair = eager_state->slice_update_pairs[reshape->second];
+      reshape != nullptr) {
+    auto& pair = eager_state->slice_update_pairs[*reshape];
     if (!pair.values_committed) {
       return false;
     }
@@ -3454,8 +3616,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return true;
   }
   if (auto dense = eager_state->dense_gemv_roles.find(node.id());
-      dense != eager_state->dense_gemv_roles.end()) {
-    auto& group = eager_state->dense_gemv_groups[dense->second];
+      dense != nullptr) {
+    auto& group = eager_state->dense_gemv_groups[*dense];
     if (group.state == DenseGemvGroup::State::pending) {
       // Producer-direct values windows: same contract as the quantized
       // path. In place, the member's rows land straight in the live
@@ -3494,8 +3656,8 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return group.state == DenseGemvGroup::State::done;
   }
   if (auto gemv = eager_state->gemv_roles.find(node.id());
-      gemv != eager_state->gemv_roles.end()) {
-    auto& group = eager_state->gemv_groups[gemv->second];
+      gemv != nullptr) {
+    auto& group = eager_state->gemv_groups[*gemv];
     if (group.state == GemvGroup::State::pending) {
       group.state = dispatch_quantized_gemv_group(
                         group.members,

@@ -83,4 +83,18 @@ bool cooperative_matrix_advertises(
 // fp32xfp32 shape falls back for both.
 CoopmatShape qmm_prefill_coopmat_shape();
 
+// The 16x16x16 subgroup shape the CMAT16 build of the same shader emits:
+// fp16 A and B operands with an fp32 accumulator and result (the shape
+// NVIDIA's driver lists; fp16 x loads straight, bf16 x converts to fp16 on
+// stage and the dequantized B stores as fp16). Kernel selection takes this
+// route only when the fp32 8x8x8 shape above is absent.
+CoopmatShape qmm_prefill_coopmat_shape_f16x16();
+
+// The exact 16x16x16 subgroup shape the CMAT16 build of the dense direct
+// matmul shader (shaders/matmul_coopmat_direct.comp -DCMAT16) emits: A and
+// B operands of |operand| (Float16 or BFloat16, matching the storage
+// dtype), fp32 accumulator and result. Kernel selection takes this route
+// only when the fp32 8x8x8 direct route is unavailable.
+CoopmatShape matmul_direct_coopmat_shape_c16(CoopmatType operand);
+
 } // namespace mlx::core::omarchy

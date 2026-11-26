@@ -848,8 +848,10 @@ TEST_CASE("discovery classifies supported and unsupported hardware") {
 }
 
 TEST_CASE("submission-cap default resolves per calibrated board") {
-  // The G14C row ships calibrated (receipts/2026-11-13-g14c-batch-work).
-  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 100000);
+  // The G14C row ships calibrated: 200000 keeps one whole Qwen3.8-9B
+  // decode step in a single submission (the 100000 row split it mid-eval
+  // into two; receipts/2026-11-24-g14c-batch-work-200000).
+  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C)") == 200000);
 
   // The G13C row carries receipts/2026-10-12-submission-cap-calibration:
   // the 16-inch M1 Max keeps 40000 (both models at or under 1.6 ms p50).
@@ -874,7 +876,7 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple A18 Pro (G17P B1)") == 5000);
 
   // The M2 base row does not shadow the M2 Max row, nor the reverse.
-  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C B1)") == 100000);
+  CHECK(omarchy::calibrated_batch_work("Apple M2 Max (G14C B1)") == 200000);
 
   // The G18G row (M6) resolves to its own calibrated budget, not the
   // 5000 fallback. The budget is uncapped (UINT64_MAX): on the 4096e
@@ -918,13 +920,19 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // recalibrating the 13-inch M1 leaves the unmeasured boards alone.
   CHECK(omarchy::batch_work_fallback() == 5000);
 
-  // Every calibrated row must sit between the off switch and the old
-  // global default: a calibrated value above 40000 would loosen the
-  // shipped cap on that board without a receipt saying why. G14C is the
-  // one row above it (receipts/2026-11-13-g14c-batch-work), and G17C matches it pending M5 calibration.
+  // Every calibrated row must sit between the off switch and a receipt-
+  // bound ceiling: a calibrated value above 40000 would loosen the
+  // shipped cap on that board without a receipt saying why. G14C sits at
+  // 200000 (receipts/2026-11-24-g14c-batch-work-200000); G17C keeps the
+  // 100000 placeholder pending M5 calibration; G18G is uncapped
+  // (headless, receipts/2026-11-23-g621-batch-budget-submits) — naming
+  // its ceiling here also repairs the stale bound the row introduced.
   for (const auto& row : omarchy::kBatchWorkCalibration) {
     if (row.budget > 0) {
-      CHECK(row.budget <= (row.board == "G14C" || row.board == "G17C" ? 100000 : 40000));
+      CHECK(row.budget <= (row.board == "G14C"   ? 200000
+                           : row.board == "G17C" ? 100000
+                           : row.board == "G18G" ? UINT64_MAX
+                                                 : 40000));
     }
   }
 }
@@ -961,14 +969,14 @@ TEST_CASE("work budget resolves per device name, not per process") {
   // not pin the value for the process (issue 207).
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
   CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 20000);
-  CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == 40000);
+  CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == UINT64_MAX);
   CHECK(omarchy::batch_work_budget("Apple M3 Pro (G15S B1)") == 15000);
   CHECK(omarchy::batch_work_budget("Apple M4 Pro (G16S B1)") == 15000);
 
   // A third name between repeats: a one-entry cache that returns its
   // stored value without re-keying on the name would surface a stale
   // 40000 or 20000 here.
-  CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 100000);
+  CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 200000);
 
   // A repeat call for the same name resolves to the same value.
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 40000);
@@ -989,6 +997,27 @@ TEST_CASE("a variable subgroup size is pinned to the reported size") {
       omarchy::required_subgroup_size(
           true, VK_SHADER_STAGE_FRAGMENT_BIT, 8, 32, 32) == 0);
   CHECK(omarchy::required_subgroup_size(true, compute, 8, 16, 32) == 0);
+}
+
+TEST_CASE("a 16-lane compute pin needs the full Vulkan admission") {
+  constexpr VkShaderStageFlags compute = VK_SHADER_STAGE_COMPUTE_BIT;
+  // Intel ANV ([8, 32]) and any range containing 16 admit the pin when
+  // the workgroup fits (256 lanes = 16 subgroups of 16).
+  CHECK(omarchy::subgroup_size_admitted(true, compute, 8, 32, 16, 16, 256));
+  CHECK(omarchy::subgroup_size_admitted(true, compute, 16, 32, 16, 16, 256));
+  // min above the target (e.g. RDNA [32, 64]) refuses.
+  CHECK(!omarchy::subgroup_size_admitted(true, compute, 32, 64, 32, 16, 256));
+  // max below the target refuses (VUID-02761/02762).
+  CHECK(!omarchy::subgroup_size_admitted(true, compute, 4, 8, 32, 16, 256));
+  // A fixed-32 device is outside the target's range.
+  CHECK(!omarchy::subgroup_size_admitted(true, compute, 32, 32, 32, 16, 256));
+  // Too few workgroup subgroups breaks VUID-02757 (16 * 8 < 256).
+  CHECK(!omarchy::subgroup_size_admitted(true, compute, 8, 32, 8, 16, 256));
+  // No size-control feature or no compute stage coverage: no pin.
+  CHECK(!omarchy::subgroup_size_admitted(false, compute, 8, 32, 16, 16, 256));
+  CHECK(
+      !omarchy::subgroup_size_admitted(
+          true, VK_SHADER_STAGE_FRAGMENT_BIT, 8, 32, 16, 16, 256));
 }
 
 TEST_CASE("discrete GPUs come first, otherwise discovery order") {
@@ -1819,22 +1848,24 @@ TEST_CASE("the OOM retry settles on progress, not global idleness") {
   alloc.free(scratch);
 }
 
-// Wave scheduling defaults on per part: G16S, G14C and G17C;
+// Wave scheduling defaults on for every part (no-gating default); the
+// encoder-side capability checks still confine dispatch.
 // MLX_OMARCHY_WAVE_SCHED overrides either way.
-TEST_CASE("wave scheduling is a per-part default") {
+TEST_CASE("wave scheduling is on for every part") {
   CHECK(omarchy::wave_sched_default_part("Apple M4 Pro (G16S B1)"));
   CHECK(omarchy::wave_sched_default_part("Apple M2 Max (G14C B1)"));
   CHECK(omarchy::wave_sched_default_part("Apple M5 Max (G17C B1)"));
-  CHECK_FALSE(omarchy::wave_sched_default_part("Apple M4 (G16G B1)"));
-  CHECK_FALSE(omarchy::wave_sched_default_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::wave_sched_default_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::wave_sched_default_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
+  CHECK(omarchy::wave_sched_default_part("Apple M4 (G16G B1)"));
+  CHECK(omarchy::wave_sched_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::wave_sched_default_part("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::wave_sched_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::wave_sched_default_part("llvmpipe (LLVM 15.0.6, 256 bits)"));
 }
 
 // The fused f16 decode SDPA arm drops its cooperative-matrix clause on G16S at
 // every length and on G15S in the one-pass range; MLX_OMARCHY_SDPA_F16_NO_COOPMAT
 // overrides either way.
-TEST_CASE("f16 decode sdpa without the cooperative matrix defaults on G16S and G15S one-pass") {
+TEST_CASE("f16 decode sdpa without the cooperative matrix defaults on everywhere except G15S two-pass") {
   struct EnvGuard {
     const char* name;
     bool had_value = false;
@@ -1873,11 +1904,19 @@ TEST_CASE("f16 decode sdpa without the cooperative matrix defaults on G16S and G
   CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 Pro (G16S B1)", 1024u));
   CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 Pro (G16S B1)", 8192u));
 
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 (G15G B1)", 64u));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 (G16G B1)", 64u));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M2 Max (G14C B1)", 64u));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)", 64u));
-  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 (G15G B1)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M4 (G16G B1)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M2 Max (G14C B1)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M1 (G13G B1)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M6 (G18G B1)", 64u));
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)", 64u));
+
+  // An unlisted part gets the fused kernel only in the one-pass
+  // range: two-pass pass 1 can overflow f16 past 1024 keys.
+  CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M6 (G18G B1)", 1023u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M6 (G18G B1)", 1024u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M2 Max (G14C B1)", 2048u));
+  CHECK_FALSE(omarchy::sdpa_decode_f16_without_coopmat_part("llvmpipe (LLVM 15.0.6, 256 bits)", 4096u));
 
   setenv("MLX_OMARCHY_SDPA_F16_NO_COOPMAT", "1", 1);
   CHECK(omarchy::sdpa_decode_f16_without_coopmat_part("Apple M3 Pro (G15S B1)", 8192u));
@@ -2379,6 +2418,141 @@ TEST_CASE("cross-stream event ordering is preserved") {
   omarchy::allocator().free(src);
   omarchy::allocator().free(mid);
   omarchy::allocator().free(dst);
+}
+
+namespace {
+// RAII pin for defer_commits_test_override so a failing CHECK cannot leak
+// the mode into later cases.
+struct DeferOverride {
+  explicit DeferOverride(long long v) {
+    prev = omarchy::defer_commits_test_override().exchange(v);
+  }
+  ~DeferOverride() {
+    omarchy::defer_commits_test_override().store(prev);
+  }
+  long long prev;
+};
+} // namespace
+
+TEST_CASE("wait-before-signal ordering holds under deferred commits") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  DeferOverride defer(1);
+  Stream a = new_stream(Device::gpu);
+  Stream b = new_stream(Device::gpu);
+
+  constexpr size_t kBytes = 1 << 16;
+  auto src = omarchy::allocator().malloc(kBytes);
+  auto mid = omarchy::allocator().malloc(kBytes);
+  auto dst = omarchy::allocator().malloc(kBytes);
+  auto* src_bytes =
+      static_cast<uint8_t*>(static_cast<omarchy::VulkanBuffer*>(src.ptr())->data);
+  auto* dst_bytes =
+      static_cast<uint8_t*>(static_cast<omarchy::VulkanBuffer*>(dst.ptr())->data);
+  for (size_t i = 0; i < kBytes; ++i) {
+    src_bytes[i] = static_cast<uint8_t>(i % 251);
+  }
+  std::memset(dst_bytes, 0, kBytes);
+
+  // The consumer queues its wait before the producer signals: a deferred
+  // signal must still submit (has_waiters forces it eager, and
+  // enc_b.synchronize()'s flush covers any signal that slipped through).
+  Event e{a};
+  e.set_value(1);
+  e.wait(b);
+
+  auto& enc_a = omarchy::get_command_encoder(a);
+  auto& enc_b = omarchy::get_command_encoder(b);
+  auto* src_buf = static_cast<omarchy::VulkanBuffer*>(src.ptr());
+  auto* mid_buf = static_cast<omarchy::VulkanBuffer*>(mid.ptr());
+  auto* dst_buf = static_cast<omarchy::VulkanBuffer*>(dst.ptr());
+
+  enc_a.copy_buffer(src_buf->buffer, mid_buf->buffer, kBytes);
+  e.signal(a);
+  enc_b.copy_buffer(mid_buf->buffer, dst_buf->buffer, kBytes);
+  enc_b.commit();
+  enc_b.synchronize();
+
+  size_t mismatches = 0;
+  for (size_t i = 0; i < kBytes; ++i) {
+    if (src_bytes[i] != dst_bytes[i]) {
+      mismatches++;
+    }
+  }
+  CHECK(mismatches == 0);
+
+  omarchy::allocator().free(src);
+  omarchy::allocator().free(mid);
+  omarchy::allocator().free(dst);
+}
+
+TEST_CASE("a deferred producer on another thread is flushed by the waiter") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  DeferOverride defer(1);
+  Stream host_s = new_stream(Device::gpu);
+  Event e{host_s};
+  e.set_value(1);
+
+  // The producer stream lives on the worker thread's encoder map: the
+  // waiter's flush cannot see it through get_command_encoders() and must
+  // reach it through the deferred-signal registry. The worker stays alive
+  // until the wait completes so its encoder stays registered.
+  std::atomic<bool> signaled{false};
+  std::atomic<bool> done{false};
+  std::thread producer([&]() {
+    Stream a = new_stream(Device::gpu);
+    auto& enc_a = omarchy::get_command_encoder(a);
+    auto buf = omarchy::allocator().malloc(4096);
+    enc_a.fill_buffer(
+        static_cast<omarchy::VulkanBuffer*>(buf.ptr())->buffer, 0x11, 4096);
+    e.signal(a); // defers: encoder is non-idle, event has no waiters yet
+    omarchy::allocator().free(buf);
+    signaled.store(true, std::memory_order_release);
+    while (!done.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+  });
+  while (!signaled.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  // Without the cross-thread flush this blocks until the watchdog.
+  e.wait();
+  done.store(true, std::memory_order_release);
+  producer.join();
+  CHECK(e.is_signaled());
+}
+
+TEST_CASE("coalesced signals on one event dedup to a single submission") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  DeferOverride defer(1);
+  Stream a = new_stream(Device::gpu);
+  auto& enc_a = omarchy::get_command_encoder(a);
+  auto buf = omarchy::allocator().malloc(4096);
+  auto* vb = static_cast<omarchy::VulkanBuffer*>(buf.ptr());
+
+  Event e{a};
+  e.set_value(1);
+  // Two queued signals for the same semaphore in one batch: the submit
+  // must emit the handle once at the max value, and both on_submit hooks
+  // still fire. A duplicate pSignalSemaphores entry trips validation (and
+  // drivers that reject the submit outright) on real hardware.
+  enc_a.fill_buffer(vb->buffer, 0x22, 4096);
+  e.signal(a);
+  e.set_value(2);
+  e.signal(a);
+  enc_a.commit();
+  enc_a.synchronize();
+
+  CHECK(e.is_signaled());
+  omarchy::allocator().free(buf);
 }
 
 TEST_CASE("handler-only commit runs handlers after prior queue work") {

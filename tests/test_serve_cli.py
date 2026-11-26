@@ -7,6 +7,7 @@ catalog commands.
 """
 
 import contextlib
+import errno
 import io
 import json
 import os
@@ -1017,11 +1018,47 @@ class CatalogCommandTests(CliTestBase):
         self.assertIn("qualified", out)
 
     def test_catalog_status_offline_names_bundled_fallback(self):
-        with unittest.mock.patch.object(catalog, "cache_path",
-                                        lambda _h=None: Path(self.tmp.name) / "none.json"):
-            code, out, _ = self.run_cli(["catalog", "status"])
-        self.assertEqual(code, 0)
-        self.assertIn("bundled fallback", out)
+        root = Path(self.tmp.name)
+        (root / "dir.json").mkdir()
+        (root / "file.json").write_bytes(b"")
+        cases = (
+            ("missing", root / "none.json"),
+            ("directory", root / "dir.json"),
+            ("not a regular file", Path(os.devnull)),
+            ("parent is a file", root / "file.json" / "cache.json"),
+        )
+        for label, cache_path in cases:
+            with self.subTest(label):
+                self.stdout = io.StringIO()
+                with unittest.mock.patch.object(
+                        catalog, "cache_path", lambda _h=None, p=cache_path: p):
+                    code, out, _ = self.run_cli(["catalog", "status"])
+                self.assertEqual(code, 0)
+                self.assertIn(f"cache:  none at {cache_path}\n", out)
+                self.assertIn("live:   bundled fallback\n", out)
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses mode bits")
+    def test_catalog_status_unreadable_cache_names_bundled_fallback(self):
+        valid = catalog.bundled_path().read_bytes()
+        for label, lock_dir in (("untraversable dir", True), ("unreadable file", False)):
+            with self.subTest(label):
+                parent = Path(self.tmp.name) / label.replace(" ", "-")
+                parent.mkdir()
+                cache = parent / "cache.json"
+                cache.write_bytes(valid)
+                target = parent if lock_dir else cache
+                self.addCleanup(os.chmod, target, 0o700)
+                os.chmod(target, 0o000)
+                self.stdout = io.StringIO()
+                with unittest.mock.patch.object(
+                        catalog, "cache_path", lambda _h=None, p=cache: p):
+                    code, out, _ = self.run_cli(["catalog", "status"])
+                self.assertEqual(code, 0)
+                self.assertIn(
+                    f"cache:  unreadable at {cache} ({os.strerror(errno.EACCES)})\n",
+                    out,
+                )
+                self.assertIn("live:   bundled fallback\n", out)
 
     def catalog_status_with_cache(self, data: bytes) -> str:
         cache = Path(self.tmp.name) / "cache.json"

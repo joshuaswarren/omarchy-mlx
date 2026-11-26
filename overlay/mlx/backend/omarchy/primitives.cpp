@@ -36,6 +36,7 @@
 #include "mlx/backend/omarchy/device_local_activations.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/inference_weights.h"
+#include "mlx/backend/omarchy/sdpa_prefill_select.h"
 // Per-operation i64/u64 elementwise blobs for the G18G packer
 // fallback in dispatch_int_elementwise_to (aurora-silicon/mesa#739).
 #include "elementwise_i64_g18_op0.h"
@@ -158,25 +159,46 @@ bool apple_norm_shape_selected(size_t row_length, size_t rows) {
 // once): the bf16 subgroup Q4 word and multi kernels run <rows> columns per
 // slot and <slots> 32-lane slots per workgroup. Every column keeps the same
 // per-lane chain, so the bytes are identical in every geometry; only the
-// columns and threads per workgroup change. Unset: 2x16 on G13G and G13C
-// (the measured winners: on G13G, +3.59 percent on the 2B at 512 tokens of
-// context, +3.98 at 2048, +1.41 on the 4B, five of five pairs each, tokens
-// identical; on G13C, 2x16 is 4.12 percent faster over five balanced pairs,
-// tokens identical, and 4x8 was 3.60 percent slower there — #351), 2x4w2 on
-// G14C (uvec2 weight loads in the 2x4 multi kernel: 2B ctx=512 +1.35% 5/5,
-// 2B short +1.69% 3/3, 9B ctx=512 +1.18% 3/3 atop OUTGATE_FOLD=0, tokens
-// identical), and 2x4 on every other chip until its paired A/B lands.
+// columns and threads per workgroup change. Unset: 2x8w2 on G13G, G13C and
+// G14C and on discrete GPUs that meet the capability probe (DEC-18), 2x16 on
+// other discrete parts that pass the 512-thread probe with VRAM activations
+// (BMG takes its 2x16kcont/kcs16 variants), and 2x4 on every other chip
+// until its paired A/B lands.
 // The accepted overrides are 2x4, 2x4w2, 2x16, 2x16w2, and 2x16kcont.
 struct QmmGeometry {
   uint32_t columns;
   omarchy::ComputeKernel word;
   omarchy::ComputeKernel multi;
   const char* name;
+  bool word_w2{false};
+  bool dedicated_swiglu{false};
+  uint32_t swiglu_columns{0u};
+  omarchy::ComputeKernel swiglu{omarchy::ComputeKernel::Count};
+  uint32_t resnorm_columns{32u};
+  omarchy::ComputeKernel resnorm{omarchy::ComputeKernel::QmmVecQ4ResNormBF16};
+  uint32_t outgate_resnorm_columns{16u};
+  omarchy::ComputeKernel outgate_resnorm{
+      omarchy::ComputeKernel::QmmVecQ4OutgateResNormBF16};
 };
 const QmmGeometry& qmm_geometry() {
   static const QmmGeometry geometry = [] {
     using K = omarchy::ComputeKernel;
-    const char* env = std::getenv("MLX_OMARCHY_QMM_GEOM");
+    auto make_2x8w2 = [] {
+      return QmmGeometry{
+          16u,
+          K::QmmVecQ4WordSubgroupBF16R2S8W2,
+          K::QmmVecQ4MultiSubgroupBF16R2S8W2,
+          "2x8w2",
+          true,
+          true,
+          16u,
+          K::QmmVecQ4SwigluBF16R2S8W2,
+          16u,
+          K::QmmVecQ4ResNormBF16R2S8W2,
+          16u,
+          K::QmmVecQ4OutgateResNormBF16R2S8W2};
+    };
+    const char* env = omarchy::env_str("MLX_OMARCHY_QMM_GEOM");
     const std::string v = env == nullptr ? std::string() : std::string(env);
     if (v.empty()) {
       const auto& dev = omarchy::device();
@@ -186,6 +208,13 @@ const QmmGeometry& qmm_geometry() {
           caps.subgroup_operations,
           caps.max_compute_work_group_invocations,
           caps.max_compute_work_group_size[0]};
+      if (omarchy::select_qmm_2x8w2(
+              caps.device_name,
+              dev.physical_type(),
+              wide_caps,
+              omarchy::device_local_activations_enabled())) {
+        return make_2x8w2();
+      }
       if (omarchy::select_qmm_wide_2x16(
               caps.device_name,
               dev.physical_type(),
@@ -193,8 +222,16 @@ const QmmGeometry& qmm_geometry() {
               omarchy::device_local_activations_enabled())) {
         // BMG defaults to the K-contiguous fast-tile load: +3.8% over
         // the uvec2 route at ctx 512 (2 clean interleaved pairs, ids
-        // identical; also +3.4% in the first window).
+        // identical; also +3.4% in the first window). On drivers whose
+        // subgroup size-control range admits 16 the 16-lane build runs
+        // instead: -5.5% median kernel time on the B60 (5/5 interleaved
+        // pairs, PRED_SHA identical).
         if (caps.device_name.find("BMG") != std::string::npos) {
+          if (dev.hardware_capabilities().subgroup_size_16_admitted) {
+            return QmmGeometry{
+                32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+                K::QmmVecQ4MultiSubgroupBF16R2S16KCONTS16, "2x16kcs16"};
+          }
           return QmmGeometry{
               32u, K::QmmVecQ4WordSubgroupBF16R2S16,
               K::QmmVecQ4MultiSubgroupBF16R2S16KCONT, "2x16kcont"};
@@ -203,14 +240,12 @@ const QmmGeometry& qmm_geometry() {
             32u, K::QmmVecQ4WordSubgroupBF16R2S16,
             K::QmmVecQ4MultiSubgroupBF16R2S16, "2x16"};
       }
-      if (omarchy::select_qmm_g14c_2x4w2(caps.device_name)) {
-        return QmmGeometry{
-            8u, K::QmmVecQ4WordSubgroupBF16,
-            K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
-      }
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
           "2x4"};
+    }
+    if (v == "2x8w2") {
+      return make_2x8w2();
     }
     if (v == "2x16") {
       return QmmGeometry{
@@ -229,6 +264,21 @@ const QmmGeometry& qmm_geometry() {
           32u, K::QmmVecQ4WordSubgroupBF16R2S16,
           K::QmmVecQ4MultiSubgroupBF16R2S16KCONT, "2x16kcont"};
     }
+    if (v == "2x16kcs16") {
+      // 16-lane subgroups (16 slots of 16, still 32 columns). Only on
+      // hardware that can legally pin requiredSubgroupSize = 16 for a
+      // 256-lane workgroup; elsewhere the kcont route stands. Hardware
+      // truth, not the (possibly simulated) dispatch report.
+      const auto& hw = omarchy::device().hardware_capabilities();
+      if (hw.subgroup_size_16_admitted) {
+        return QmmGeometry{
+            32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+            K::QmmVecQ4MultiSubgroupBF16R2S16KCONTS16, "2x16kcs16"};
+      }
+      return QmmGeometry{
+          32u, K::QmmVecQ4WordSubgroupBF16R2S16,
+          K::QmmVecQ4MultiSubgroupBF16R2S16KCONT, "2x16kcont"};
+    }
     if (v == "2x4") {
       return QmmGeometry{
           8u, K::QmmVecQ4WordSubgroupBF16, K::QmmVecQ4MultiSubgroupBF16,
@@ -240,19 +290,20 @@ const QmmGeometry& qmm_geometry() {
           K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
     }
     throw std::invalid_argument(
-        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x16 2x16w2 2x16kcont");
+        "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x8w2 2x16 2x16w2 2x16kcont 2x16kcs16");
   }();
   return geometry;
 }
 
 bool apple_norm_2560_allowed(const omarchy::Device& device) {
-  if (std::getenv("MLX_OMARCHY_NORM_APPLE_2560") != nullptr) {
+  if (omarchy::env_str("MLX_OMARCHY_NORM_APPLE_2560") != nullptr) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_2560");
   }
-  const std::string& chip = device.capabilities().device_name;
-  return chip.find("G13C") != std::string::npos ||
-      chip.find("G14C") != std::string::npos ||
-      chip.find("G17C") != std::string::npos;  // initial value matching G14C (same Max class) pending calibration on M5
+  (void)device;
+  // No-gating default (2026-11-25): the 2560 subgroup-tree norm is
+  // allowed on every part; the subgroup-32 probe in apple_norm_enabled
+  // still confines dispatch, and no part measured a loss.
+  return true;
 }
 
 // The width-4096 subgroup-tree norm (sixteen contiguous values per lane of the
@@ -261,20 +312,21 @@ bool apple_norm_2560_allowed(const omarchy::Device& device) {
 // +2.94% at ctx 2048 combined with 2x4w2, bit-identical tokens);
 // MLX_OMARCHY_NORM_APPLE_4096=1 forces it on and =0 forces it off on any chip.
 bool apple_norm_4096_allowed(const omarchy::Device& device) {
-  if (std::getenv("MLX_OMARCHY_NORM_APPLE_4096") != nullptr) {
+  if (omarchy::env_str("MLX_OMARCHY_NORM_APPLE_4096") != nullptr) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_4096");
   }
-  const std::string& chip = device.capabilities().device_name;
-  // G16S and G14C default on; G17C stays off pending M5 calibration.
-  return chip.find("G16S") != std::string::npos ||
-      chip.find("G14C") != std::string::npos;
+  (void)device;
+  // No-gating default (2026-11-25): the 4096 subgroup-tree norm is
+  // allowed on every part; the subgroup-32 probe in apple_norm_enabled
+  // still confines dispatch, and no part measured a loss.
+  return true;
 }
 
 bool apple_norm_enabled(
     const omarchy::Device& device,
     size_t row_length,
     size_t rows) {
-  if (std::getenv("MLX_OMARCHY_NORM_APPLE") != nullptr &&
+  if (omarchy::env_str("MLX_OMARCHY_NORM_APPLE") != nullptr &&
       !omarchy::env_flag("MLX_OMARCHY_NORM_APPLE")) {
     return false;
   }
@@ -557,7 +609,7 @@ array materialize_batched_matrix(
       strides,
       flags,
       0);
-  if (getenv("MLX_OMARCHY_TRACE_MATERIALIZE")) {
+  if (omarchy::env_str("MLX_OMARCHY_TRACE_MATERIALIZE")) {
     std::fprintf(
         stderr,
         "[materialize] %s shape=[", name.c_str());
@@ -710,7 +762,7 @@ void dispatch_matmul(
       a_in, a_transposed, a_gap, a_materialized, name, out, s);
   classify_matmul_operand(
       b_in, b_transposed, b_gap, b_materialized, name, out, s);
-  if (const char* mm_dbg = std::getenv("MLX_OMARCHY_MATMUL_DEBUG");
+  if (const char* mm_dbg = omarchy::env_str("MLX_OMARCHY_MATMUL_DEBUG");
       mm_dbg != nullptr && mm_dbg[0] != '0') {
     std::fprintf(stderr,
         "[mm-dbg] %s a shape=[", name.c_str());
@@ -1049,8 +1101,69 @@ void dispatch_matmul(
       (params.matrix_n & 1u) == 0u &&
       (!a_transposed || (params.matrix_m & 1u) == 0u) && direct_aligned &&
       direct_shape;
-  bf16_fma = bf16_fma && !direct;
+  // 16x16x16 dense direct route (matmul_coopmat_direct.comp -DCMAT16):
+  // the same tile geometry on the 16x16x16 shape for drivers whose
+  // coopmat list has no fp32 8x8x8 shape (NVIDIA, ANV, RADV) and so can
+  // never take the direct route above. The workgroup assumes 32-lane
+  // subgroups: a driver reporting a different native size (ANV 16, RADV
+  // 64) reaches the route only when the hardware report admitted a
+  // requiredSubgroupSize 32 pin for a 128-lane workgroup, and
+  // create_pipeline pins it. Each dtype needs its exact operand shape
+  // advertised; the bf16 arm additionally requires the bf16 extension
+  // gate (cooperative_matrix_bf16) that device creation chained the
+  // cooperative-matrix feature on for an f32_8-less driver.
+  const bool c16_subgroup = caps.subgroup_size == 32u ||
+      caps.subgroup_size_32_admitted;
+  bool direct16_shape = direct_dtype == float16 &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::matmul_direct_coopmat_shape_c16(
+              omarchy::CoopmatType::Float16));
+#ifdef MLX_OMARCHY_BF16_DIRECT
+  if (direct_dtype == bfloat16 && caps.cooperative_matrix_bf16) {
+    direct16_shape = omarchy::cooperative_matrix_advertises(
+        caps.cooperative_matrix_shapes,
+        omarchy::matmul_direct_coopmat_shape_c16(
+            omarchy::CoopmatType::BFloat16));
+  }
+#endif
+  const bool direct16 = !sdpa && !use_c &&
+      causal.second == CausalSkip::None && !direct && !coopmat &&
+      !coopmat_disabled &&
+      c16_subgroup && params.matrix_m >= 32u && params.matrix_n >= 32u &&
+      params.matrix_k > 0u && (params.matrix_k % 16u) == 0u &&
+      (params.matrix_n & 1u) == 0u &&
+      (!a_transposed || (params.matrix_m & 1u) == 0u) && direct_aligned &&
+      direct16_shape;
+  bf16_fma = bf16_fma && !direct && !direct16;
   uint32_t direct_tile_n = 64u;
+  if (direct16) {
+    static constexpr omarchy::ComputeKernel kDirectC16[2][4] = {
+        {omarchy::ComputeKernel::MatmulDirectF16C16Nn,
+         omarchy::ComputeKernel::MatmulDirectF16C16Nt,
+         omarchy::ComputeKernel::MatmulDirectF16C16Tn,
+         omarchy::ComputeKernel::MatmulDirectF16C16Tt},
+        {omarchy::ComputeKernel::MatmulDirectBF16C16Nn,
+         omarchy::ComputeKernel::MatmulDirectBF16C16Nt,
+         omarchy::ComputeKernel::MatmulDirectBF16C16Tn,
+         omarchy::ComputeKernel::MatmulDirectBF16C16Tt}};
+    kernel = kDirectC16[direct_dtype == bfloat16]
+                       [(a_transposed ? 2 : 0) + (b_transposed ? 1 : 0)];
+    const auto& c16_hw = encoder.device().hardware_capabilities();
+    omarchy::capsim::require_backed(
+        encoder.device(),
+        caps,
+        direct16,
+        "MatmulDirectC16",
+        direct_dtype == bfloat16
+            ? "cooperative_matrix_bf16_16x16x16"
+            : "cooperative_matrix_fp16_16x16x16",
+        omarchy::cooperative_matrix_advertises(
+            c16_hw.cooperative_matrix_shapes,
+            omarchy::matmul_direct_coopmat_shape_c16(
+                direct_dtype == bfloat16 ? omarchy::CoopmatType::BFloat16
+                                         : omarchy::CoopmatType::Float16)));
+  }
   if (direct) {
     static constexpr omarchy::ComputeKernel kDirect[3][4] = {
         {omarchy::ComputeKernel::MatmulDirectF16Nn,
@@ -1088,7 +1201,7 @@ void dispatch_matmul(
         hw.cooperative_matrix_f32_8 &&
             (direct_dtype != float16 || hw.cooperative_matrix_f16_8) &&
             (direct_dtype != bfloat16 || hw.cooperative_matrix_bf16_8));
-  } else if (rb) {
+  } else if (rb && !direct16) {
     kernel = rb_f32 ? omarchy::ComputeKernel::MatmulRbF32
                     : omarchy::ComputeKernel::MatmulRbF16;
   }
@@ -1101,7 +1214,7 @@ void dispatch_matmul(
     params.flags |= causal.second == CausalSkip::Columns ? 8u : 16u;
   }
   const uint32_t tile =
-      direct ? 64u : ((coopmat || sdpa) ? 32u : (rb ? 64u : 16u));
+      (direct || direct16) ? 64u : ((coopmat || sdpa) ? 32u : (rb ? 64u : 16u));
   bool bf16_vec_aligned = ((params.lhs_offset | params.rhs_offset |
       params.rhs_gap) & 3u) == 0u;
   for (uint32_t axis = 0; bf16_vec_aligned && axis < params.dims; ++axis) {
@@ -1250,7 +1363,7 @@ void dispatch_float_elementwise_to(
     bool general_broadcast,
     omarchy::CommandEncoder& encoder) {
   uint32_t count = checked_u32(out.size(), name, out);
-  if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
+  if (omarchy::env_str("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
     fprintf(stderr, "[rtmod] FEW name=%s count=%u\n", name.c_str(), count);
     fflush(stderr);
   }
@@ -1293,6 +1406,24 @@ void dispatch_float_elementwise_to(
         bindings,
         params,
         omarchy::compute_dispatch_group_count(count / 4u));
+    return;
+  }
+  const bool simple_binary_op = operation == AddOperation ||
+      operation == MultiplyOperation || operation == DivideOperation ||
+      operation == SubtractOperation;
+  if (simple_binary_op && !general_broadcast &&
+      (params.lhs_size == count || params.lhs_size == 1u) &&
+      (params.rhs_size == count || params.rhs_size == 1u)) {
+    auto kernel = select_float_kernel(
+        out.dtype(),
+        omarchy::ComputeKernel::BinarySimpleF32,
+        omarchy::ComputeKernel::BinarySimpleF16,
+        omarchy::ComputeKernel::BinarySimpleBF16);
+    encoder.dispatch_compute(
+        kernel,
+        std::span<const omarchy::ComputeBinding>(bindings.data(), 3),
+        params,
+        omarchy::compute_dispatch_group_count(count));
     return;
   }
   const bool lite_op = operation <= NegativeOperation;  // ops 0-10 exist in the -DLITE builds
@@ -3603,12 +3734,23 @@ void dispatch_gather_qmm(
   if (lhs.shape() != rhs.shape()) {
     omarchy::unsupported(tag + " index shape", out);
   }
+  // The ops.cpp nvfp4 path validates the scale as float32 with one
+  // entry per expert, but the qqmm callers reach here without that
+  // validation: a narrower dtype would make the staged copy read past
+  // the source buffer, and an empty scale would leave the kernel
+  // indexing words the packed buffer never held.
+  if (out_global_scale &&
+      (out_global_scale->dtype() != float32 ||
+       out_global_scale->size() == 0)) {
+    omarchy::unsupported(tag + " global scale", out);
+  }
   std::optional<array> x_temp;
   std::optional<array> w_temp;
   std::optional<array> scales_temp;
   std::optional<array> lhs_temp;
   std::optional<array> rhs_temp;
   std::optional<array> bias_temp;
+  std::optional<array> gs_temp;
   const array& x_d =
       ensure_dense(x, x.flags().row_contiguous, x_temp, encoder, s);
   const array& w_d =
@@ -3627,6 +3769,14 @@ void dispatch_gather_qmm(
       ensure_dense(lhs, lhs.flags().row_contiguous, lhs_temp, encoder, s);
   const array& rhs_d =
       ensure_dense(rhs, rhs.flags().row_contiguous, rhs_temp, encoder, s);
+  const array* gs_d = out_global_scale.has_value()
+      ? &ensure_dense(
+            *out_global_scale,
+            out_global_scale->flags().row_contiguous,
+            gs_temp,
+            encoder,
+            s)
+      : nullptr;
 
   out.set_data(allocate_omarchy(out.nbytes()));
   if (out.size() == 0) {
@@ -3635,6 +3785,7 @@ void dispatch_gather_qmm(
   size_t index_count = lhs_d.size();
   if (scales_d.offset() % 4 != 0 ||
       (biases_d && biases_d->offset() % 4 != 0) ||
+      (gs_d && gs_d->offset() % 4 != 0) ||
       lhs_d.offset() % 4 != 0 || rhs_d.offset() % 4 != 0) {
     omarchy::unsupported(tag + " byte offset", out);
   }
@@ -3717,7 +3868,7 @@ void dispatch_gather_qmm(
   // the Vulkan minimum maxComputeSharedMemorySize is 16384, so a small-limit
   // driver falls through to the per-row kernels instead of failing pipeline creation.
   constexpr uint32_t kGatherQmmTileSharedBytes = (64u * 34u + 64u * 64u + 32u) * 4u;
-  const char* tile_env = std::getenv("MLX_OMARCHY_GATHER_QMM_TILE");
+  const char* tile_env = omarchy::env_str("MLX_OMARCHY_GATHER_QMM_TILE");
   const uint32_t tile_row_groups = static_cast<uint32_t>((index_count + 31u) / 32u);
   const auto& tile_caps = encoder.device().capabilities();
   // Affine 4-bit group 64 always carries biases (ops.cpp refuses affine without them),
@@ -3768,7 +3919,7 @@ void dispatch_gather_qmm(
   // staged route below copies every scale and bias of every expert
   // (15.9 MB per call at 128 experts) to select a few, which is 212 of
   // 493 us per call on the M2 (notebook H86).
-  const char* direct_env = std::getenv("MLX_OMARCHY_GATHER_QMM_DIRECT");
+  const char* direct_env = omarchy::env_str("MLX_OMARCHY_GATHER_QMM_DIRECT");
   if ((use_sub || use_sub_q3) && !use_tile && !no_bias &&
       (direct_env == nullptr || direct_env[0] != '0') &&
       encoder.device().compute().binding_limit() >= 7) {
@@ -3794,8 +3945,8 @@ void dispatch_gather_qmm(
     // MLX_OMARCHY_GATHER_QMM_WORD=1 (4-bit; its teacher-forced NLL gate gave verdict
     // numerics verdict REJECT) and MLX_OMARCHY_GATHER_QMM_WORD2=1 (2-bit; its
     // hidden-state fidelity gate gave verdict WIDER).
-    const char* word_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD");
-    const char* word2_env = std::getenv("MLX_OMARCHY_GATHER_QMM_WORD2");
+    const char* word_env = omarchy::env_str("MLX_OMARCHY_GATHER_QMM_WORD");
+    const char* word2_env = omarchy::env_str("MLX_OMARCHY_GATHER_QMM_WORD2");
     const bool word4 = bits == 4 && group_size == 64 &&
         word_env != nullptr && word_env[0] == '1';
     const bool word2 = bits == 2 && (group_size == 64 || group_size == 128) &&
@@ -3832,7 +3983,7 @@ void dispatch_gather_qmm(
     // multiple of ROWS so a group never crosses a row, a batch or an expert.
     // MLX_OMARCHY_GATHER_QMM_ROWS = 0 (one output per workgroup), 4 or 8; default 8.
     uint32_t rows_per_wg = 8u;
-    if (const char* rows_env = std::getenv("MLX_OMARCHY_GATHER_QMM_ROWS")) {
+    if (const char* rows_env = omarchy::env_str("MLX_OMARCHY_GATHER_QMM_ROWS")) {
       rows_per_wg = std::strcmp(rows_env, "4") == 0 ? 4u
           : std::strcmp(rows_env, "8") == 0 ? 8u : 0u;
     }
@@ -3871,7 +4022,13 @@ void dispatch_gather_qmm(
   auto align4 = [](size_t value) { return (value + 3) & ~size_t(3); };
   size_t bias_base = align4(scale_bytes);
   size_t index_base = align4(bias_base + bias_bytes);
-  size_t packed_bytes = index_base + 2 * index_count * 4;
+  // The nvfp4 output global scale (one float32 word per expert) stages
+  // after the index regions so the kernel reads it through the packed
+  // buffer like the indices - a bound buffer word read per output row is
+  // the access pattern that returns 0 on G18G.
+  size_t gs_bytes = gs_d ? gs_d->size() * 4 : 0;
+  size_t gs_base = index_base + 2 * index_count * 4;
+  size_t packed_bytes = gs_base + gs_bytes;
   array packed(Shape{static_cast<int>(packed_bytes / 4)}, uint32, nullptr, {});
   array::Flags packed_flags;
   packed_flags.contiguous = true;
@@ -3919,6 +4076,16 @@ void dispatch_gather_qmm(
       index_count * 4,
       static_cast<VkDeviceSize>(rhs_d.offset()),
       static_cast<VkDeviceSize>(index_base + index_count * 4));
+  if (gs_d) {
+    encoder.add_temporary(*gs_d);
+    encoder.add_temporary(packed);
+    encoder.copy_buffer(
+        binding(*gs_d).buffer,
+        binding(packed).buffer,
+        gs_bytes,
+        static_cast<VkDeviceSize>(gs_d->offset()),
+        static_cast<VkDeviceSize>(gs_base));
+  }
 
   params.shape[1] = static_cast<uint32_t>(bias_base);
   params.in_strides[0] = static_cast<uint32_t>(index_base / 4);
@@ -3926,20 +4093,30 @@ void dispatch_gather_qmm(
       static_cast<uint32_t>(index_base / 4 + index_count);
   // fp modes have no bias term; their kernels are the FP_MODE
   // no-bias variants. The bound global scale routes to the HGS
-  // variants, whose fifth binding carries the float32 word.
+  // variants, whose fifth binding carries one float32 entry per expert.
   if (fp_mode && out_global_scale) {
     std::array<omarchy::ComputeBinding, 5> hgs_bindings{
         binding(x_d),
         binding(packed),
         binding(w_d),
         binding(out),
-        binding(*out_global_scale)};
-    // binding() pins the whole buffer at word zero, so the scalar
-    // view's own storage offset rides in aux_size - the same
-    // checked_item_offset routing the quantize/dequantize global-scale
-    // siblings use. Valid aligned scalar views compute; unaligned ones
-    // refuse by name.
-    params.aux_size = checked_item_offset(*out_global_scale, 1, tag, out);
+        binding(*gs_d)};
+    // The staged scale region's word base inside the packed buffer rides
+    // in aux_size; the kernel adds the row's expert index to it - the
+    // same per-expert multiply the pinned Metal _hgs variants perform.
+    // flags bit 1 selects per-expert indexing; a scalar scale (the qqmm
+    // path accepts one) applies to every row.
+    params.aux_size = checked_u32(gs_base / 4, tag, out);
+    if (gs_d->size() > 1) {
+      size_t experts = 1;
+      for (int axis = 0; axis + 2 < w.ndim(); ++axis) {
+        experts *= static_cast<size_t>(w.shape(axis));
+      }
+      if (gs_d->size() < experts) {
+        omarchy::unsupported(tag + " global scale size", out);
+      }
+      params.flags |= 2u;
+    }
     omarchy::ComputeKernel hgs_kernel;
     if (out.dtype() == float32) {
       hgs_kernel = omarchy::ComputeKernel::GatherQmmNbFpHgsF32;
@@ -4362,7 +4539,7 @@ void ArgPartition::eval_gpu(const std::vector<array>& inputs, array& out) {
 // than G13C default to the legacy paths; the env overrides (0/1) force
 // either arm for A/B runs and for unmeasured parts.
 static int decode_path_override(const char* name) {
-  const char* v = std::getenv(name);
+  const char* v = omarchy::env_str(name);
   if (v == nullptr || *v == '\0') {
     return -1;
   }
@@ -4383,7 +4560,7 @@ static int decode_path_override(const char* name) {
 static int qmv_small_t_max_rows() {
   // Unset -> -1 (caller applies the per-part default); an explicit value < 2
   // (e.g. MLX_OMARCHY_QMV_SMALL_T=0) forces the route off; >=2 is clamped to 8.
-  const char* v = std::getenv("MLX_OMARCHY_QMV_SMALL_T");
+  const char* v = omarchy::env_str("MLX_OMARCHY_QMV_SMALL_T");
   if (v == nullptr || *v == '\0') {
     return -1;
   }
@@ -4396,19 +4573,15 @@ static int qmv_small_t_max_rows() {
 
 static int qmv_small_t_device_cap(omarchy::CommandEncoder& encoder, int requested_max) {
   if (requested_max < 2) return 0;
-  if (const char* env = std::getenv("MLX_OMARCHY_QMV_SMALL_T_CAP")) {
+  if (const char* env = omarchy::env_str("MLX_OMARCHY_QMV_SMALL_T_CAP")) {
     return std::min(requested_max, static_cast<int>(std::strtol(env, nullptr, 10)));
   }
-  const std::string& name = encoder.device().capabilities().device_name;
-  // Cap-8 parts: the batch-8 dispatch is a measured win at M=5..8
-  // (G16S/G13C long-standing; G13G/G14C 2026-11-24, receipts/2026-11-24-
-  // qmv-small-t-g13g.md: +4..56% vs the tile at M=8, bit-identical).
-  const bool wide = name.find("G13C") != std::string::npos ||
-      name.find("G16S") != std::string::npos ||
-      name.find("G13G") != std::string::npos ||
-      name.find("G14C") != std::string::npos;
-  int cap = wide ? 8 : 4;
-  return std::min(requested_max, cap);
+  // No-gating default (2026-11-25): the batch-8 dispatch is a
+  // measured win at M=5..8 on every part it ran on (G16S/G13C
+  // long-standing; G13G/G14C 2026-11-24, receipts/2026-11-24-
+  // qmv-small-t-g13g.md: +4..56% vs the tile at M=8, bit-identical);
+  // no part measured a loss, so every part caps at 8.
+  return std::min(requested_max, 8);
 }
 
 static bool g13_legacy_part(omarchy::CommandEncoder& encoder) {
@@ -4446,7 +4619,7 @@ static constexpr size_t kChunkedRowMin = 8192;
 static constexpr size_t kChunkedRowMaxChunks = 256;
 
 static bool chunked_flag_enabled(const char* name, bool default_on) {
-  const char* value = std::getenv(name);
+  const char* value = omarchy::env_str(name);
   if (value == nullptr) {
     return default_on;
   }
@@ -5530,7 +5703,7 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
     const int64_t scratch_bytes =
         static_cast<int64_t>(k) * L_out * co * static_cast<int64_t>(4);
     int64_t cap = 1ll << 30;
-    if (const char* v = std::getenv("MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES")) {
+    if (const char* v = omarchy::env_str("MLX_OMARCHY_CONV_GEMM_MAX_SCRATCH_BYTES")) {
       cap = std::atoll(v);
     }
     if (scratch_bytes > cap) {
@@ -5715,7 +5888,7 @@ void Convolution::eval_gpu(const std::vector<array>& inputs, array& out) {
   // direct kernel, including its chunked partial-reduction path.
   if (groups_ == 1 && kernel_products > 0) {
     int64_t cap = 1ll << 30;
-    if (const char* v = std::getenv("MLX_OMARCHY_CONV_IM2COL_MAX_SCRATCH_BYTES")) {
+    if (const char* v = omarchy::env_str("MLX_OMARCHY_CONV_IM2COL_MAX_SCRATCH_BYTES")) {
       char* end = nullptr;
       const long long parsed = std::strtoll(v, &end, 10);
       if (end != v && *end == '\0' && parsed > 0) {
@@ -7465,21 +7638,28 @@ void GatherQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
         right_sorted_);
     return;
   }
-  // Non-affine inputs: [x, w, scales(uint8), lhs, rhs]; no bias, no
-  // global scale reaches this primitive through gather_qmm.
+  // Non-affine inputs: [x, w, scales(uint8), (global_scale), lhs, rhs];
+  // no bias. ops.cpp inserts the optional nvfp4 output global scale
+  // ahead of the index pair, so the index slots shift by one when it is
+  // present.
+  const bool has_gs =
+      mode_ == QuantizationMode::Nvfp4 && inputs.size() == 6;
+  if (inputs.size() != 5 && !has_gs) {
+    omarchy::unsupported(tag + " operand count", out);
+  }
   dispatch_gather_qmm(
       tag,
       inputs[0],
       inputs[1],
       inputs[2],
       std::nullopt,
-      inputs[3],
-      inputs[4],
+      inputs[3 + (has_gs ? 1 : 0)],
+      inputs[4 + (has_gs ? 1 : 0)],
       group_size_,
       bits_,
       transpose_,
       /* fp_mode = */ true,
-      /* out global scale = */ std::nullopt,
+      has_gs ? std::optional<array>(inputs[3]) : std::nullopt,
       out,
       out.primitive().stream());
 }
@@ -8859,7 +9039,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       }
       return;
     }
-    if (const char* tile_env = std::getenv("MLX_OMARCHY_QMM_TILE");
+    if (const char* tile_env = omarchy::env_str("MLX_OMARCHY_QMM_TILE");
         tile_env == nullptr || std::strcmp(tile_env, "0") != 0) {
       auto tile_kernel = select_float_kernel(
           out.dtype(),
@@ -8956,7 +9136,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (scales.ndim() != w.ndim() || scales.shape() != biases.shape()) {
     omarchy::unsupported(tag + " scales shape", out);
   }
-  const char* q4_word_env = std::getenv("MLX_OMARCHY_QMM_VEC_Q4_WORD");
+  const char* q4_word_env = omarchy::env_str("MLX_OMARCHY_QMM_VEC_Q4_WORD");
   bool q4_g64_transpose = transpose_ && bits_ == 4 && group_size_ == 64;
   // Coopmat prefill formats: the shipped 4-bit group 64, plus 4-bit
   // group 32 and 8-bit groups 64 and 32 on the default routes
@@ -8999,9 +9179,9 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // MLX_OMARCHY_NO_QMM_FMA_BF16=1 restores the tile route for A/B.
   static const bool qmm_fma_bf16_disabled =
       omarchy::env_flag("MLX_OMARCHY_NO_QMM_FMA_BF16");
-  const char* tile_env = std::getenv("MLX_OMARCHY_QMM_TILE");
+  const char* tile_env = omarchy::env_str("MLX_OMARCHY_QMM_TILE");
   bool tile_path = tile_env == nullptr || std::strcmp(tile_env, "0") != 0;
-  const char* rb_env = std::getenv("MLX_OMARCHY_QMM_TILE_RB");
+  const char* rb_env = omarchy::env_str("MLX_OMARCHY_QMM_TILE_RB");
   bool rb_enabled = rb_env == nullptr || std::strcmp(rb_env, "0") != 0;
   constexpr uint32_t kQmmCoopmatSharedBytes =
       (32u * 16u + 16u * 32u) * sizeof(float);
@@ -9022,6 +9202,27 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       coopmat_caps.cooperative_matrix_f32_8 && coopmat_shape_advertised &&
       coopmat_caps.subgroup_size == 32u && !coopmat_disabled &&
       kQmmCoopmatSharedBytes <= coopmat_caps.max_compute_shared_memory_size;
+  // 16x16x16 fp16-operand twin (shaders/qmm_coopmat.comp -DCMAT16): the
+  // route for devices whose coopmat list has no fp32 8x8x8 shape but
+  // lists the subgroup 16x16x16 fp16 x fp16 -> fp32 entry (what NVIDIA's
+  // driver advertises). bf16-hybrid 4-bit group-64 transposed only: bf16
+  // x stages as fp16 in shared and the dequantized B stores fp16, so the
+  // output is not bit-equal to the fp32 routes - generated ids are the
+  // measured contract. Device creation chains the cooperative-matrix
+  // feature behind an advertised bf16 subgroup shape, so
+  // cooperative_matrix_bf16 is the extension-enabled gate here.
+  constexpr uint32_t kQmmCoopmat16SharedBytes =
+      (32u * 16u + 16u * 32u) * 2u + 2u * 16u * 16u * 4u;
+  const bool coopmat16_shape_advertised =
+      omarchy::cooperative_matrix_advertises(
+          coopmat_caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape_f16x16());
+  bool coopmat16_reachable =
+      !coopmat_reachable && tile_path && rb_enabled && q4_g64_transpose &&
+      out.dtype() == bfloat16 && x.ndim() >= 2 && x.shape(-2) > 1 &&
+      coopmat_caps.cooperative_matrix_bf16 && coopmat16_shape_advertised &&
+      coopmat_caps.subgroup_size == 32u && !coopmat_disabled &&
+      kQmmCoopmat16SharedBytes <= coopmat_caps.max_compute_shared_memory_size;
   bool qmm_fma_reachable = false;
   // Driver split, measured (receipts/2026-09-12-prefill-fma-qualify): the
   // scalar-FMA kernel loses to the 8x8x8 cooperative-matrix route wherever
@@ -9031,8 +9232,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // FMA route is therefore only the non-coopmat driver's prefill path; on
   // a coopmat-capable driver the dispatch falls through to the shipped
   // cooperative-matrix pick by name and the FMA kernels stay reserved.
-  if (!qmm_fma_disabled && !coopmat_reachable && tile_path && rb_enabled &&
-      q4_g64_transpose &&
+  if (!qmm_fma_disabled && !coopmat_reachable && !coopmat16_reachable &&
+      tile_path && rb_enabled && q4_g64_transpose &&
       (out.dtype() == float16 ||
        (out.dtype() == bfloat16 && !qmm_fma_bf16_disabled)) &&
       x.ndim() >= 2 && x.shape(-2) > 1) {
@@ -9075,6 +9276,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       (!packed_q4_x || x.offset() % (8 * x.itemsize()) == 0) &&
       (!qmm6_stream || x.offset() % (8 * x.itemsize()) == 0) &&
       (!coopmat_reachable || x.offset() % (2 * x.itemsize()) == 0) &&
+      (!coopmat16_reachable || x.offset() % (2 * x.itemsize()) == 0) &&
       (!qmm_fma_reachable || x.offset() % (8 * x.itemsize()) == 0);
   std::optional<array> x_temp;
   std::optional<array> w_temp;
@@ -9167,7 +9369,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     const int bf16w_env = decode_path_override("MLX_OMARCHY_QMM_BF16W");
     if (bf16w_env > 0 ||
         (bf16w_env < 0 &&
-            omarchy::qmm_bf16w_default_part(coopmat_caps.device_name))) {
+            omarchy::qmm_bf16w_default_part(coopmat_caps))) {
       array deq(Shape{n, k}, bfloat16, nullptr, {});
       dispatch_affine_dequantize(
           tag, w_d, scales_d, biases_d, deq, bits_, group_size_, stream());
@@ -9322,7 +9524,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         out.dtype() == bfloat16 && w.ndim() == 2 && scales.ndim() == 2 &&
         biases.ndim() == 2 && params.matrix_k % 128u == 0u &&
         n_groups_qmm_vec <= omarchy::kMaxComputeGroupCountX) {
-      if (std::getenv("MLX_OMARCHY_TRACE_QMM_VEC")) {
+      if (omarchy::env_str("MLX_OMARCHY_TRACE_QMM_VEC")) {
         std::fprintf(
             stderr, "[qmm_vec] QmmVecQ4WordSubgroupBF16G128 dispatched\n");
       }
@@ -9382,8 +9584,11 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     uint32_t qmm_groups = n_groups_qmm_vec;
     if (vec_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16) {
       const auto& geometry = qmm_geometry();
-      vec_kernel = geometry.word;
-      qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+      if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u &&
+          (params.shape[1] % 2u == 0u))) {
+        vec_kernel = geometry.word;
+        qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+      }
     }
     encoder.dispatch_compute(
         vec_kernel,
@@ -9597,6 +9802,48 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       }
     }
 #endif
+    // 16x16x16 fp16-operand coopmat prefill (shaders/qmm_coopmat.comp
+    // -DCMAT16): the staged-x build on devices whose coopmat list lacks
+    // the fp32 8x8x8 shape (NVIDIA advertises only 16-wide f16/bf16
+    // entries). bf16 x stages straight into shared as fp16 and the
+    // dequantized B stores fp16; the accumulator stays fp32. The x_s
+    // staging zero-fills rows past matrix_m, so unlike the Intel direct
+    // route above the tile height needs no m alignment. Selected ahead
+    // of the scalar-FMA route below (qmm_fma_reachable excludes it); the
+    // tile path stays for the formats it does not cover.
+    if (rb_enabled && out.dtype() == bfloat16 && coopmat16_reachable) {
+      if ((params.lhs_offset | params.output_offset) & 1u) {
+        omarchy::unsupported(tag + " coopmat16 operand alignment", out);
+      }
+      const auto& c16_hw = encoder.device().hardware_capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          coopmat_caps,
+          coopmat16_reachable,
+          "QmmPrefillCoopmat16BF16",
+          "cooperative_matrix_fp16_16x16x16",
+          omarchy::cooperative_matrix_advertises(
+              c16_hw.cooperative_matrix_shapes,
+              omarchy::qmm_prefill_coopmat_shape_f16x16()));
+      dispatch_qmm_out_rows(
+          encoder,
+          out,
+          bindings,
+          params,
+          [&](std::span<const omarchy::ComputeBinding> cb,
+              const omarchy::ComputeParams& cp) {
+            encoder.dispatch_compute(
+                omarchy::ComputeKernel::QmmPrefillCoopmat16BF16,
+                cb,
+                cp,
+                std::min((cp.matrix_n + 31u) / 32u,
+                         omarchy::kMaxComputeGroupCountX),
+                std::min((cp.matrix_m + 31u) / 32u,
+                         omarchy::kMaxComputeGroupCountX),
+                1u);
+          });
+      return;
+    }
     if (rb_enabled && out.dtype() == bfloat16 && qmm_fma_reachable) {
       if ((params.lhs_offset & 7u) != 0u ||
           (params.output_offset & 1u) != 0u) {
@@ -9651,12 +9898,27 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       // formats and non-FullN shapes keep the 32-row tile so the route
       // table below never sees coopmat_rows == 64 (review of #508).
       const bool full_n = (params.matrix_n % 32u) == 0u &&
-          std::getenv("MLX_OMARCHY_QMM_NO_FULLN") == nullptr;
+          omarchy::env_str("MLX_OMARCHY_QMM_NO_FULLN") == nullptr;
+      const char* qmm_pad_env_pre = omarchy::env_str("MLX_OMARCHY_QMM_LDSPAD");
+      const char* qmm_chunk_env_pre = omarchy::env_str("MLX_OMARCHY_QMM_CHUNK");
+      const bool g4_pad_eligible =
+          omarchy::env_str("MLX_OMARCHY_QMM_NO_RASTER") == nullptr &&
+          omarchy::env_str("MLX_OMARCHY_QMM_RASTER") == nullptr &&
+          omarchy::env_str("MLX_OMARCHY_QMM_TWON") == nullptr &&
+          !(qmm_pad_env_pre != nullptr && qmm_pad_env_pre[0] == '0') &&
+          !(qmm_chunk_env_pre != nullptr && qmm_chunk_env_pre[0] == '1');
+      constexpr uint32_t kSg8K64SharedBytes = (64u * 36u + 64u) * 4u;
+      const bool allow_rows128 = g4_pad_eligible &&
+          coopmat_caps.max_compute_work_group_invocations >= 256u &&
+          coopmat_caps.max_compute_work_group_size[0] >= 256u &&
+          kSg8K64SharedBytes <= coopmat_caps.max_compute_shared_memory_size;
       uint32_t coopmat_rows = omarchy::coopmat_tile_rows(
           params.matrix_m,
           n_groups,
-          encoder.device().hardware_capabilities().device_name,
-          omarchy::qmm_prefill_allow_rows64(q4_g64_transpose, full_n));
+          coopmat_caps,
+          omarchy::qmm_prefill_allow_rows64(q4_g64_transpose, full_n) &&
+              g4_pad_eligible,
+          allow_rows128);
       uint32_t m_groups =
           (params.matrix_m + coopmat_rows - 1u) / coopmat_rows;
       // Direct-global-load A: widen bf16 x to f32 once (the widening is
@@ -9753,13 +10015,17 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       uint32_t grid_y = m_groups;
       bool m_axis_x = false;
       bool env_routed = false;
-      const char* twon_env = std::getenv("MLX_OMARCHY_QMM_TWON");
-      const char* raster_env = std::getenv("MLX_OMARCHY_QMM_RASTER");
+      const char* twon_env = omarchy::env_str("MLX_OMARCHY_QMM_TWON");
+      const char* raster_env = omarchy::env_str("MLX_OMARCHY_QMM_RASTER");
       const bool default_g4 =
-          (coopmat_rows == 32u || coopmat_rows == 64u) && full_n &&
-          params.matrix_m > coopmat_rows &&
-          std::getenv("MLX_OMARCHY_QMM_NO_RASTER") == nullptr;
-      if ((coopmat_rows == 32u || coopmat_rows == 64u) && full_n) {
+          (coopmat_rows == 32u || coopmat_rows == 64u ||
+           coopmat_rows == 128u) &&
+          full_n &&
+          (coopmat_rows == 128u ? params.matrix_m >= 128u
+                                : params.matrix_m > coopmat_rows) &&
+          omarchy::env_str("MLX_OMARCHY_QMM_NO_RASTER") == nullptr;
+      if ((coopmat_rows == 32u || coopmat_rows == 64u ||
+           coopmat_rows == 128u) && full_n) {
         if (coopmat_rows == 32u && twon_env != nullptr &&
             twon_env[0] == '1' && (cp.matrix_n % 64u) == 0u) {
           qmm_kernel =
@@ -9803,8 +10069,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         // doctest-pinned, +2-3% G14C / +0.9% G13G model prefill) and
         // MLX_OMARCHY_QMM_LDSPAD=0 is the kill switch back to the
         // unpadded stride. An unpadded chunk arm needs LDSPAD=0 too.
-        const char* chunk_env = std::getenv("MLX_OMARCHY_QMM_CHUNK");
-        const char* pad_env = std::getenv("MLX_OMARCHY_QMM_LDSPAD");
+        const char* chunk_env = omarchy::env_str("MLX_OMARCHY_QMM_CHUNK");
+        const char* pad_env = omarchy::env_str("MLX_OMARCHY_QMM_LDSPAD");
         const bool chunk_on = chunk_env != nullptr && chunk_env[0] == '1';
         const bool pad_on = !(pad_env != nullptr && pad_env[0] == '0');
         if ((chunk_on || pad_on) && default_g4 && raster_env == nullptr &&
@@ -9818,13 +10084,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               : pad_bytes;
           // STEP_K=32 doubles the B-tile (32 x 36 f32); still well
           // under typical max shared. CHUNK stays the 32-row path only.
-          const std::string qmm_dev_name =
-              encoder.device().hardware_capabilities().device_name;
           const bool use_sg4 =
-              omarchy::qmm_coopmat_sg4_requested(qmm_dev_name);
+              omarchy::qmm_coopmat_sg4_requested(coopmat_caps);
           const uint32_t step_k = omarchy::qmm_coopmat_stepk_requested(
-              qmm_dev_name, coopmat_rows, use_sg4);
-          const uint32_t ratio_bytes = step_k * 36u * 4u;
+              coopmat_caps, coopmat_rows, use_sg4);
+          const uint32_t ratio_bytes =
+              (step_k * 36u + (step_k == 64u ? 64u : 0u)) * 4u;
           const uint32_t need_ratio =
               need > ratio_bytes ? need : ratio_bytes;
           if (need_ratio <= coopmat_caps.max_compute_shared_memory_size) {
@@ -9841,7 +10106,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                   coopmat_rows,
                   use_sg4,
                   step_k,
-                  omarchy::qmm_cheap_deq_env());
+                  omarchy::qmm_cheap_deq_env(),
+                  (cp.matrix_m % coopmat_rows) == 0u);
             }
             grid_x = n_groups * gm * ((m_groups + gm - 1u) / gm);
             grid_y = 1u;
@@ -9862,11 +10128,11 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
             m16_dev_name.find("G14C") != std::string::npos;
         const bool default_pad = is_g14c;
         const char* m16_no_pad = m16_fulln
-            ? std::getenv("MLX_OMARCHY_QMM_M16_NO_LDSPAD") : nullptr;
+            ? omarchy::env_str("MLX_OMARCHY_QMM_M16_NO_LDSPAD") : nullptr;
         const char* m16_force_pad = m16_fulln
-            ? std::getenv("MLX_OMARCHY_QMM_M16_LDSPAD") : nullptr;
+            ? omarchy::env_str("MLX_OMARCHY_QMM_M16_LDSPAD") : nullptr;
         const char* m16_chunk = m16_fulln
-            ? std::getenv("MLX_OMARCHY_QMM_M16_CHUNK") : nullptr;
+            ? omarchy::env_str("MLX_OMARCHY_QMM_M16_CHUNK") : nullptr;
         bool m16_use_pad = default_pad;
         if (m16_no_pad != nullptr && m16_no_pad[0] == '1') {
           m16_use_pad = false;
@@ -9899,7 +10165,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                    ? omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32FullN
                    : omarchy::ComputeKernel::QmmPrefillCoopmatBF16X32);
       }
-      const char* persist_env = std::getenv("MLX_OMARCHY_QMM_PERSIST");
+      const char* persist_env = omarchy::env_str("MLX_OMARCHY_QMM_PERSIST");
       if (persist_env != nullptr && persist_env[0] != '\0') {
         // Cap the m-axis launch extent; the shader's grid-stride tile
         // loops cover the remaining tiles (persistent workgroups). The
@@ -10002,7 +10268,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           ? omarchy::coopmat_tile_rows(
                 params.matrix_m,
                 n_groups,
-                encoder.device().hardware_capabilities().device_name)
+                coopmat_caps)
           : 32u;
       uint32_t m_groups =
           (params.matrix_m + coopmat_rows - 1u) / coopmat_rows;
@@ -10091,7 +10357,7 @@ namespace {
 // The single-row Q4 word kernel's eligibility, mirrored for the fused
 // group (QuantizedMatmul::eval_gpu keeps the authoritative copy).
 bool q4_word_enabled() {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_Q4_WORD");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_VEC_Q4_WORD");
   return env == nullptr || std::strcmp(env, "1") == 0;
 }
 
@@ -10192,7 +10458,7 @@ bool dispatch_quantized_gemv_group(
   // set to 0 (or leave unset) to compose at rows>1.
   const bool token_multi_disabled =
       []() {
-        const char* env = std::getenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
+        const char* env = omarchy::env_str("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
         return env == nullptr || env[0] == '\0' || std::strcmp(env, "0") == 0;
       }();
   bool token_route = false;
@@ -10255,7 +10521,7 @@ bool dispatch_quantized_gemv_group(
     }
   }
   if (any_dual_out) {
-    const char* dual_env = std::getenv("MLX_OMARCHY_QMM_DUAL_OUT");
+    const char* dual_env = omarchy::env_str("MLX_OMARCHY_QMM_DUAL_OUT");
     bool dual_enabled = dual_env != nullptr && dual_env[0] != '\0' &&
         std::strcmp(dual_env, "0") != 0;
     // dual bits with a KV-window member mix two store contracts in one
@@ -10543,14 +10809,23 @@ bool dispatch_quantized_gemv_group(
   }
   ComputeParams params;
   uint32_t total_groups = 0;
+  const auto& geom = qmm_geometry();
+  const bool dedicated_swiglu_active = swiglu_out && !token_route &&
+      outgate == nullptr && dtype == bfloat16 && subgroup_ready &&
+      geom.dedicated_swiglu && members.size() == 2;
   // Columns per workgroup of the kernel selected below: the geometry applies
-  // to the bf16 subgroup single-token multi kernel only (or 2x16 / 2x8 for
-  // the fused resnorm epilogue kernels).
+  // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
+  // resnorm epilogue kernels.
   const uint32_t group_columns = res_norm_active
-      ? (token_route ? 8u : (outgate != nullptr ? 16u : 32u))
+      ? (token_route
+             ? 8u
+             : (outgate != nullptr ? geom.outgate_resnorm_columns
+                                   : geom.resnorm_columns))
+      : dedicated_swiglu_active
+      ? geom.swiglu_columns
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
-             ? qmm_geometry().columns
+             ? geom.columns
              : 8u);
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
@@ -11234,7 +11509,7 @@ bool dispatch_quantized_gemv_group(
           binding(outgate->gate),
           binding(outgate->x)};
       encoder.dispatch_compute(
-          ComputeKernel::QmmVecQ4OutgateResNormBF16,
+          geom.outgate_resnorm,
           rn_bindings,
           params,
           total_groups,
@@ -11281,7 +11556,7 @@ bool dispatch_quantized_gemv_group(
           binding(res_norm->out),
           encoder.resnorm_ticket_binding()};
       encoder.dispatch_compute(
-          ComputeKernel::QmmVecQ4ResNormBF16,
+          geom.resnorm,
           rn_bindings,
           params,
           total_groups,
@@ -11291,6 +11566,25 @@ bool dispatch_quantized_gemv_group(
     if (res_norm_done) {
       *res_norm_done = true;
     }
+    return true;
+  }
+  if (dedicated_swiglu_active) {
+    std::array<ComputeBinding, 8> sw_bindings{
+        binding(x),
+        binding(members[0].node.inputs()[1]),
+        binding(members[0].node.inputs()[2]),
+        binding(members[0].node.inputs()[3]),
+        binding(members[1].node.inputs()[1]),
+        binding(members[1].node.inputs()[2]),
+        binding(members[1].node.inputs()[3]),
+        binding(*swiglu_out)};
+    encoder.dispatch_compute(
+        geom.swiglu,
+        sw_bindings,
+        params,
+        total_groups,
+        1u,
+        1u);
     return true;
   }
   for (size_t i = 0; i < members.size(); ++i) {
@@ -11525,7 +11819,7 @@ bool dispatch_rope_pair(
   }
   static int trio_refuse_trace = 0;
   bool trace_refusals =
-      std::getenv("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
+      omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr &&
       trio_refuse_trace < 8;
   auto refuse = [&](const char* why) {
     if (trace_refusals) {
@@ -12068,7 +12362,7 @@ void Real::eval_gpu(const std::vector<array>& inputs, array& out) {
 // The workgroup-per-row suffix reduction is on unless MLX_OMARCHY_ROW_REDUCE=0
 // (read on every call).
 bool omarchy_row_reduce_enabled() {
-  const char* value = std::getenv("MLX_OMARCHY_ROW_REDUCE");
+  const char* value = omarchy::env_str("MLX_OMARCHY_ROW_REDUCE");
   return value == nullptr || std::string(value) != "0";
 }
 
@@ -13975,6 +14269,35 @@ void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
     return;
   }
 
+  // In-place append: a SliceUpdate holding the last handle to a dense
+  // base pastes the update rows into that buffer instead of copying the
+  // whole base first. This is the eager form of the producer-direct KV
+  // window: the compiled tape's pair planner only exists inside a tape
+  // eval, so eager eval (MLX_DISABLE_COMPILE=1) otherwise pays a
+  // full-cache copy per member per token. Same donation rule as
+  // kv_window_in_place; MLX_OMARCHY_KV_INPLACE=0 forces the copy.
+  if (reduce_type_ == SliceUpdate::None && inputs.size() == 2 &&
+      (std::getenv("MLX_OMARCHY_KV_INPLACE") == nullptr ||
+       omarchy::env_flag("MLX_OMARCHY_KV_INPLACE")) &&
+      in.is_donatable() && in.flags().row_contiguous &&
+      in.size() == in.data_size() && in.offset() % in.itemsize() == 0 &&
+      upd.data_shared_ptr() != in.data_shared_ptr()) {
+    out.copy_shared_buffer(in);
+    auto [data_offset, out_strides] =
+        prepare_slice(out, start_indices_, strides_);
+    copy_gpu_inplace(
+        upd,
+        out,
+        upd.shape(),
+        upd.strides(),
+        out_strides,
+        /* i_offset = */ 0,
+        /* o_offset = */ data_offset,
+        CopyType::GeneralGeneral,
+        stream());
+    return;
+  }
+
   // A plain paste rides the strided-copy engine; the reduce modes run
   // the read-modify-write shader against the copied window.
   auto ctype = in.flags().contiguous && in.size() == in.data_size()
@@ -14819,7 +15142,7 @@ void GatedDeltaUpdate::eval_gpu(
     fused_ready = false;
   }
   if (!fused_ready) {
-    if (getenv("GDN_FALLBACK_DEBUG") != nullptr) {
+    if (omarchy::env_str("GDN_FALLBACK_DEBUG") != nullptr) {
       std::fprintf(
           stderr,
           "GDN-FALLBACK T=%d q=%d/%d k=%d v=%d beta=%d h0=%d "
@@ -14930,7 +15253,7 @@ void GatedDeltaUpdate::eval_gpu(
   // hf offsets multiples of 4); outside that the route keeps the previous default. Models with a bf16 A_log
   // (the Qwen3.8 family) never take it: their route is gqa_bf16a below.
   const bool tile_on = gdn_decode_tile_enabled(encoder);
-  const char* pf_gqa_env = std::getenv("MLX_OMARCHY_GDN_PF_GQA");
+  const char* pf_gqa_env = omarchy::env_str("MLX_OMARCHY_GDN_PF_GQA");
   const bool pf_gqa_off = pf_gqa_env != nullptr && pf_gqa_env[0] == '0' && pf_gqa_env[1] == '\0';
   const bool pf_gqa_opt_in = pf_gqa_env != nullptr && pf_gqa_env[0] == '1' && !tile_on;
   const bool pf_gqa_default = !pf_gqa_off && gdn_gqa_decode &&
@@ -14945,7 +15268,7 @@ void GatedDeltaUpdate::eval_gpu(
   // GatedDeltaDecodeBF16Gqa, the default-order kernel with the key-head index
   // of the composed one. q and k keep their Hk heads, so the two expansion
   // copies per linear layer per token are not recorded.
-  const char* gqa_bf16a_env = std::getenv("MLX_OMARCHY_GDN_GQA_BF16A");
+  const char* gqa_bf16a_env = omarchy::env_str("MLX_OMARCHY_GDN_GQA_BF16A");
   const bool gqa_bf16a = gqa_bf16a_env != nullptr && gqa_bf16a_env[0] == '1' &&
       decode_shape && raw_gates_mode && Hk != Hv && A_log.dtype() == bfloat16 &&
       gdn_decode_tile_enabled(encoder);
@@ -15065,7 +15388,7 @@ void GatedDeltaUpdate::eval_gpu(
     // The untiled prefetch kernel with thirty-two state words in flight per round trip (default order only, Dk a multiple of 32).
     // MLX_OMARCHY_GDN_PF_WIDE (read live): 1 selects it, any other set value selects the plain prefetch kernel; unset, it is the
     // default on the (part, head ratio) pairs of gdn_pf_wide_default (equal head counts on G14C and G13C). Other shapes keep the plain kernel.
-    const char* pf_wide_env = std::getenv("MLX_OMARCHY_GDN_PF_WIDE");
+    const char* pf_wide_env = omarchy::env_str("MLX_OMARCHY_GDN_PF_WIDE");
     const bool pf_wide_want = pf_wide_env != nullptr ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
                                                       : wide_default;
     const bool pf_wide = pf_wide_want && !composed && gdn_pf && (params.matrix_m % 32u) == 0u;
@@ -15150,7 +15473,7 @@ void GatedDeltaUpdate::eval_gpu(
   // deployed kernel): restructures staging/barriers only; per-element
   // arithmetic is identical, so kernel_bits hashes must not move.
   static const bool gdn_batch_env =
-      std::getenv("MLX_OMARCHY_GDN_BATCH") == nullptr ||
+      omarchy::env_str("MLX_OMARCHY_GDN_BATCH") == nullptr ||
       omarchy::env_flag("MLX_OMARCHY_GDN_BATCH");
   // kkt/qkt hoist (GdnPrefill2, receipts/2026-10-05-gdn-prefill): pass A
   // computes the state-independent K.K^T / Q.K^T tiles for every chunk in
@@ -15162,7 +15485,7 @@ void GatedDeltaUpdate::eval_gpu(
   // initial state; the 13-inch M1 pins exact). Kill switch MLX_OMARCHY_GDN_HOIST=0
   // restores the shipped single-dispatch route exactly.
   static const bool gdn_hoist_env =
-      std::getenv("MLX_OMARCHY_GDN_HOIST") == nullptr ||
+      omarchy::env_str("MLX_OMARCHY_GDN_HOIST") == nullptr ||
       omarchy::env_flag("MLX_OMARCHY_GDN_HOIST");
   const auto& gdn_caps = encoder.device().capabilities();
   // macOS-shape per-token recurrence (GdnRecur32): one 32-lane subgroup
@@ -15190,7 +15513,7 @@ void GatedDeltaUpdate::eval_gpu(
   // outputs are NOT bit-identical to the scan (subgroup reduction trees), so
   // the env is the A/B lever and the fp64 tolerance test is the numerics
   // gate. T=1 stays on the decode kernel (decode_shape returns above).
-  const char* recur32_env = std::getenv("MLX_OMARCHY_GDN_RECUR32");
+  const char* recur32_env = omarchy::env_str("MLX_OMARCHY_GDN_RECUR32");
   const bool gdn_g13 =
       gdn_caps.device_name.find("G13") != std::string::npos;
   const int gdn_recur32_default =
@@ -15438,7 +15761,7 @@ bool Int8Matmul::use_fallback(Stream s) {
 // two routes): MLX_OMARCHY_INT8_NAIVE=1 dispatches the retired
 // one-thread-per-element shader, kept as shaders/int8_matmul_naive.comp.
 bool int8_naive_forced() {
-  const char* env = std::getenv("MLX_OMARCHY_INT8_NAIVE");
+  const char* env = omarchy::env_str("MLX_OMARCHY_INT8_NAIVE");
   return env != nullptr && env[0] == '1';
 }
 
@@ -15453,7 +15776,7 @@ bool int8_naive_forced() {
 // bitwise-identical to the naive kernel on
 // the same boot (29/29 A/B assertions, forced via MLX_OMARCHY_INT8_COOPMAT=0).
 bool int8_coopmat_enabled() {
-  const char* env = std::getenv("MLX_OMARCHY_INT8_COOPMAT");
+  const char* env = omarchy::env_str("MLX_OMARCHY_INT8_COOPMAT");
   return env != nullptr && env[0] == '1';
 }
 
@@ -15463,12 +15786,12 @@ bool int8_coopmat_enabled() {
 // the shapes its exactness gate admits (it cannot extend the gate; the
 // pin only takes precedence over the coopmat opt-in).
 bool int8_imad_forced() {
-  const char* env = std::getenv("MLX_OMARCHY_INT8_IMAD");
+  const char* env = omarchy::env_str("MLX_OMARCHY_INT8_IMAD");
   return env != nullptr && env[0] == '1';
 }
 
 bool int8_f32fma_forced() {
-  const char* env = std::getenv("MLX_OMARCHY_INT8_F32FMA");
+  const char* env = omarchy::env_str("MLX_OMARCHY_INT8_F32FMA");
   return env != nullptr && env[0] == '1';
 }
 
@@ -15476,7 +15799,7 @@ bool int8_f32fma_forced() {
 // reports the f32 8x8x8 shape; MLX_OMARCHY_INT8_COOPF32=0 pins the
 // scalar f32-FMA route for A/B tests.
 bool int8_coopf32_disabled() {
-  const char* env = std::getenv("MLX_OMARCHY_INT8_COOPF32");
+  const char* env = omarchy::env_str("MLX_OMARCHY_INT8_COOPF32");
   return env != nullptr && env[0] == '0';
 }
 
@@ -16027,7 +16350,7 @@ void exl3_debug_dump_stages(
     int out_features,
     int bits,
     int window) {
-  const char* dir = std::getenv("MLX_OMARCHY_EXL3_DEBUG_DUMP");
+  const char* dir = omarchy::env_str("MLX_OMARCHY_EXL3_DEBUG_DUMP");
   if (dir == nullptr || dir[0] == '\0') {
     return;
   }
@@ -16119,7 +16442,7 @@ void Exl3Decode::eval_gpu(
   // checked_item_offset reports non-zero scratch offsets end to end. The
   // default (unset or 0) keeps the standalone allocations unchanged.
   int scratch_pad = 0;
-  if (const char* pad_env = std::getenv("MLX_OMARCHY_EXL3_SCRATCH_PAD")) {
+  if (const char* pad_env = omarchy::env_str("MLX_OMARCHY_EXL3_SCRATCH_PAD")) {
     scratch_pad = std::atoi(pad_env);
   }
   if (scratch_pad < 0) {
@@ -16320,9 +16643,30 @@ void GreedyQuantizedArgmax::eval_gpu(
        (encoder.device().hardware_capabilities().subgroup_operations &
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
   const array& w = inputs.at(1);
+  const array& x = inputs.at(0);
   uint32_t n = static_cast<uint32_t>(w.shape(0));
-  if (!subgroup_ready || !omarchy::q4_word_enabled() ||
-      !caps.storage_buffer_16bit_access || !caps.shader_int16) {
+  uint32_t k_dim = static_cast<uint32_t>(x.shape(-1));
+  // The subgroup stage's lane-per-group mapping is K = 2048-specific;
+  // the non-subgroup word chain is K-generic over 64-wide groups, so
+  // the word route also serves K != 2048 on subgroup-capable devices.
+  // Both routes bind w and high_bits whole; where a device reports the
+  // Vulkan-minimum maxStorageBufferRange a large vocab does not fit one
+  // binding and the encoder would refuse the dispatch, so compose then
+  // (a 128 MiB range serves n <= 104857 rows at K = 2560).
+  const VkDeviceSize range_limit = caps.max_storage_buffer_range;
+  const uint64_t w_bytes = static_cast<uint64_t>(n) * k_dim / 8u * 4u;
+  const uint64_t plane_bytes = static_cast<uint64_t>(n) * k_dim * 3u / 32u * 4u;
+  const bool bindings_fit =
+      range_limit == 0u ||
+      (w_bytes <= range_limit && plane_bytes <= range_limit);
+  bool subgroup_ok = subgroup_ready && k_dim == 2048u && bindings_fit;
+  bool word_ok = omarchy::q4_word_enabled() &&
+      caps.storage_buffer_16bit_access && caps.shader_int16 &&
+      k_dim % 64u == 0u && bindings_fit &&
+      // The single-workgroup merge reads at most 256 logsumexp
+      // partials, the same bound the chunked route serves.
+      n <= 4096u * 256u;
+  if (!subgroup_ok && !word_ok) {
     auto result = fallback_(inputs);
     settle(result);
     encoder.synchronize("greedy_argmax_fallback");
@@ -16330,10 +16674,148 @@ void GreedyQuantizedArgmax::eval_gpu(
     outputs.at(1).copy_shared_buffer(result.at(1));
     return;
   }
+  if (!subgroup_ok) {
+    // DEC-46: the non-subgroup word column gets the same fused answer in
+    // three dispatches (shaders/qmm_vec.comp QMM_VEC_GREEDY_WORD): op 0
+    // is the lm_head GEMV itself (one row per 32-lane slot, the exact
+    // single-row chain, bf16 logits to scratch); op 1 runs one workgroup
+    // per 4096-element vocab chunk — a logsumexp_chunk-identical (m, s)
+    // partial, an edge partial, and near-max candidates; op 2 merges the
+    // partials (logsumexp_combine verbatim) and picks the lowest index
+    // normalizing to bf16(max - lse). The 0xFFFFFFFF token sentinel is
+    // for candidate-buffer overflow; the python head composes then.
+    std::optional<array> x_temp;
+    std::optional<array> w_temp;
+    std::optional<array> scales_temp;
+    std::optional<array> biases_temp;
+    const array& x_d = ensure_dense(
+        x,
+        x.flags().row_contiguous && x.offset() % (8 * x.itemsize()) == 0,
+        x_temp,
+        encoder,
+        s);
+    const array& w_d =
+        ensure_dense(w, w.flags().row_contiguous, w_temp, encoder, s);
+    const array& scales_d = ensure_dense(
+        inputs.at(2), inputs.at(2).flags().row_contiguous, scales_temp,
+        encoder, s);
+    const array& biases_d = ensure_dense(
+        inputs.at(3), inputs.at(3).flags().row_contiguous, biases_temp,
+        encoder, s);
+    array& token = outputs.at(0);
+    array& stats = outputs.at(1);
+    token.set_data(allocate_omarchy(token.nbytes()));
+    stats.set_data(allocate_omarchy(stats.nbytes()));
+    auto scratch = [&](Dtype dtype, int size) {
+      array a({size}, dtype, nullptr, {});
+      a.set_data(allocate_omarchy(a.nbytes()));
+      encoder.add_temporary(a);
+      return a;
+    };
+    uint32_t chunks = (n + 4095u) / 4096u;
+    // Candidate capacity equals the row count: candidates are emitted
+    // per row, so the counter can never reach the cap and the 0xFFFFFFFF
+    // overflow sentinel can never fire — the python head skips its
+    // per-token device sync on that guarantee.
+    uint32_t cand_cap = n;
+    array logits = scratch(bfloat16, static_cast<int>(n));
+    array partials = scratch(float32, static_cast<int>(chunks) * 2);
+    array partial_ext = scratch(uint32, static_cast<int>(chunks) * 2);
+    array candidates = scratch(uint32, static_cast<int>(cand_cap) * 2);
+    array gstate = scratch(uint32, 4);
+    omarchy::ComputeParams params;
+    params.matrix_n = n;
+    params.matrix_k = static_cast<uint32_t>(x.shape(-1));
+    params.output_size = cand_cap;
+    params.lhs_offset = checked_item_offset(x_d, x_d.size(), tag, token);
+    params.rhs_offset = checked_item_offset(w_d, w_d.size(), tag, token);
+    params.aux_offset =
+        checked_item_offset(scales_d, scales_d.size(), tag, token);
+    params.aux_size =
+        checked_item_offset(biases_d, biases_d.size(), tag, token);
+    std::array<omarchy::ComputeBinding, 11> bindings{
+        binding(x_d),
+        binding(w_d),
+        binding(scales_d),
+        binding(biases_d),
+        binding(partials),
+        binding(partial_ext),
+        binding(candidates),
+        binding(gstate),
+        binding(token),
+        binding(stats),
+        binding(logits)};
+    encoder.fill_buffer(
+        binding(gstate).buffer, 0u, gstate.nbytes(), 0);
+    // The logits GEMV dispatches the same vec kernel the composed
+    // QuantizedMatmul picks for this contract — geometry.word on
+    // subgroup parts, the plain word column elsewhere — so the logits
+    // row is bit- and speed-identical; only the binding's output moves
+    // to the scratch.
+    omarchy::ComputeKernel gemv_kernel =
+        omarchy::ComputeKernel::QmmVecQ4WordBF16;
+    uint32_t gemv_groups = (n + 7u) / 8u;
+    if (subgroup_ready) {
+      const auto& geometry = qmm_geometry();
+      // Same fallback the QMM applies: the w2 word builds need an
+      // even rhs_offset (params.shape[1] is 0 for 2D w).
+      if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u)) {
+        gemv_kernel = geometry.word;
+        gemv_groups = (n + geometry.columns - 1u) / geometry.columns;
+      } else {
+        gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16;
+      }
+    }
+    omarchy::ComputeParams gemv_params;
+    gemv_params.count = n;
+    gemv_params.operation = 4u;    // bits: the vec kernels read it there
+    gemv_params.reduce_size = 64u; // group size
+    gemv_params.output_size = n;
+    gemv_params.lhs_offset = params.lhs_offset;
+    gemv_params.rhs_offset = params.rhs_offset;
+    gemv_params.aux_offset = params.aux_offset;
+    gemv_params.aux_size = params.aux_size;
+    gemv_params.matrix_m = 1u;
+    gemv_params.matrix_n = n;
+    gemv_params.matrix_k = params.matrix_k;
+    gemv_params.shape[0] = 1u;
+    // 2D operands broadcast across the batch: shape[1]/shape[2] stay 0;
+    // flags bit 0 stays clear for the transposed weight.
+    std::array<omarchy::ComputeBinding, 5> gemv_bindings{
+        binding(x_d),
+        binding(w_d),
+        binding(scales_d),
+        binding(biases_d),
+        binding(logits)};
+    encoder.dispatch_compute(
+        gemv_kernel,
+        gemv_bindings,
+        gemv_params,
+        gemv_groups,
+        1u,
+        1u);
+    params.operation = 1u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::QmmVecGreedyWordBF16,
+        bindings,
+        params,
+        chunks,
+        1u,
+        1u);
+    params.operation = 2u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::QmmVecGreedyWordBF16,
+        bindings,
+        params,
+        1u,
+        1u,
+        1u);
+    return;
+  }
   // MLX_OMARCHY_GREEDY_PRUNE_TEST (qualification only): "full" forces the
   // full exact path, "keep" keeps every row as a survivor.
   static const uint32_t test_flags = [] {
-    const char* env = std::getenv("MLX_OMARCHY_GREEDY_PRUNE_TEST");
+    const char* env = omarchy::env_str("MLX_OMARCHY_GREEDY_PRUNE_TEST");
     if (env == nullptr) {
       return 0u;
     }
@@ -16341,7 +16823,6 @@ void GreedyQuantizedArgmax::eval_gpu(
         : std::strcmp(env, "keep") == 0  ? 2u
                                          : 0u;
   }();
-  const array& x = inputs.at(0);
   std::optional<array> x_temp;
   std::optional<array> w_temp;
   std::optional<array> scales_temp;
@@ -16730,12 +17211,12 @@ void GdnConvUpdate::eval_gpu(
   array in_state = inputs.at(0);
   array in_x = inputs.at(1);
   array in_w = inputs.at(2);
-  // Materialize any strided/offset input into a dense temporary (same
-  // trap as the GDN decode kernel: nonzero storage offsets read
-  // garbage through flat bindings).
+  // Materialize any non-row-contiguous input into a dense temporary.
+  // Row-contiguous inputs may carry a nonzero storage offset (sibling
+  // GEMV member views): the decode kernel honors lhs/rhs/aux offsets.
   bool any_strided = false;
   for (const auto& x : inputs) {
-    any_strided = any_strided || !x.flags().row_contiguous || x.offset() != 0;
+    any_strided = any_strided || !x.flags().row_contiguous;
   }
   if (any_strided) {
     std::vector<array> dense;
@@ -16851,13 +17332,15 @@ void GdnConvDeltaUpdate::eval_gpu(
   const int C = inputs.at(1).shape(2);
   const int K = inputs.at(2).shape(1);
   const int Hv = inputs.at(3).shape(2);
+  const int Hk = key_dim() / 128;
+  const bool equal_heads = Hv == Hk;
   const uint32_t dk = 128;
   // The unfused route's kernel choice (GatedDeltaUpdate::eval_gpu), restated for this geometry.
   const std::string& device_name = encoder.device().capabilities().device_name;
   const bool tile_on = gdn_decode_tile_enabled(encoder);
   const bool bf16a_untiled_default =
       decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
-      omarchy::gdn_bf16a_untiled_default(device_name, Hv, Hv);
+      omarchy::gdn_bf16a_untiled_default(device_name, Hk, Hv);
   const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   array h0 = inputs.at(7);
   const bool dense_inputs = [&] {
@@ -16874,7 +17357,11 @@ void GdnConvDeltaUpdate::eval_gpu(
   const bool gdn_pf = gdn_pf_env && dense_inputs && (h0_offset % 4u) == 0u;
   const bool decode_tile = tile_on && !(bf16a_untiled_default && gdn_pf);
   const bool apple_norm = apple_norm_enabled(encoder.device(), size_t{128}, size_t{static_cast<size_t>(B) * C});
-  const bool supported = B == 1 && K == 4 && decode_tile == false && gdn_pf && !apple_norm &&
+  // Equal heads: the fused kernel must byte-match the unfused pair, so it only runs where the
+  // unfused route picks the same untiled prefetch delta kernel. Unequal heads: the GQA fused
+  // variant is the only fused build and the unfused route's kernel choice does not bind it.
+  const bool supported = B == 1 && K == 4 && gdn_pf && !apple_norm &&
+      (equal_heads ? decode_tile == false : true) &&
       encoder.device().compute().binding_limit() >= (with_norm ? 13u : 11u);
   if (!supported) {
     auto result = fallback_(inputs);
@@ -16902,12 +17389,12 @@ void GdnConvDeltaUpdate::eval_gpu(
   hf.set_data(allocate_omarchy(hf.nbytes()));
   conv_state_out.set_data(allocate_omarchy(conv_state_out.nbytes()));
   const bool wide_default = bf16a_untiled_default &&
-      omarchy::gdn_pf_wide_default(device_name, Hv, Hv);
-  const char* pf_wide_env = std::getenv("MLX_OMARCHY_GDN_PF_WIDE");
+      omarchy::gdn_pf_wide_default(device_name, Hk, Hv);
+  const char* pf_wide_env = omarchy::env_str("MLX_OMARCHY_GDN_PF_WIDE");
   const bool pf_wide_want = pf_wide_env != nullptr
       ? (pf_wide_env[0] == '1' && pf_wide_env[1] == '\0')
       : wide_default;
-  const bool pf_wide = pf_wide_want && (dk % 32u) == 0u;
+  const bool pf_wide = pf_wide_want && equal_heads && (dk % 32u) == 0u;
   omarchy::ComputeParams params;
   params.count = dk;
   params.operation = checked_u32(K, tag, out);
@@ -16925,13 +17412,14 @@ void GdnConvDeltaUpdate::eval_gpu(
   params.shape[2] = checked_item_offset(hf, hf.size(), tag, out);
   params.dims = 1u;
   // Raw gates (flag bit 8): a, b, A_log, dt_bias as in the unfused dispatch; A_log and dt_bias are
-  // per model head, so the shader reads head % Hv (in_strides[2]); in_strides[3] = 0 means equal heads.
+  // per model head, so the shader reads head % Hv (in_strides[2]); in_strides[3] = 0 means equal heads,
+  // otherwise it carries Hk and the conv prologue reads q/k channels by the key-head index.
   params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
   params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
   params.in_strides[0] = checked_item_offset(A_log, A_log.size(), tag, out);
   params.in_strides[1] = checked_item_offset(dt_bias, dt_bias.size(), tag, out);
   params.in_strides[2] = checked_u32(Hv, tag, out);
-  params.in_strides[3] = 0u;
+  params.in_strides[3] = equal_heads ? 0u : checked_u32(static_cast<size_t>(Hk), tag, out);
   params.flags |= 8u;
   params.out_strides[0] = checked_item_offset(conv_state_out, conv_state_out.size(), tag, out);
   params.out_strides[1] = std::bit_cast<uint32_t>(qk_eps());
@@ -16959,7 +17447,10 @@ void GdnConvDeltaUpdate::eval_gpu(
       binding(conv_state_out),
       binding(norm_gate),
       binding(norm_weight)};
-  const omarchy::ComputeKernel kernel = with_norm
+  const omarchy::ComputeKernel kernel = !equal_heads
+      ? (with_norm ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16PfGqa
+                   : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfGqa)
+      : with_norm
       ? (pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16PfWide
                  : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Pf)
       : (pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfWide
@@ -17395,7 +17886,7 @@ void rope_trig_gate(
     const bool host_read = !omarchy::env_flag("MLX_OMARCHY_NO_ROPE_FREQS_HOST") &&
         freqs->dtype() == float32 && freqs->flags().row_contiguous &&
         freqs->size() > 0;
-    if (std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
+    if (omarchy::env_str("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
       fprintf(
           stderr,
           "[rtmod] ROPE-FREQS size=%zu status=%d has_primitive=%d host_read=%d\n",
@@ -17695,7 +18186,7 @@ void RoPE::eval_gpu(
   // every part; any other value counts as unset
   // (omarchy::rope_half_split_setting).
   static const int half_split_setting = omarchy::rope_half_split_setting(
-      std::getenv("MLX_OMARCHY_NO_ROPE_HALF_SPLIT"));
+      omarchy::env_str("MLX_OMARCHY_NO_ROPE_HALF_SPLIT"));
   const bool half_split_route = half_split_setting >= 0
       ? half_split_setting == 1
       : omarchy::rope_half_split_default_part(
@@ -17971,10 +18462,15 @@ void ScaledDotProductAttention::eval_gpu(
   // first, so this arm is prefill-shaped traffic only.
   bool bf16_fast = false;
   if (q.dtype() == bfloat16) {
-    if (const char* env = std::getenv("MLX_OMARCHY_SDPA_BF16_FAST");
-        env != nullptr && std::strcmp(env, "0") != 0) {
-      bf16_fast = true;
-    }
+    const auto& sel_caps = encoder.device().capabilities();
+    const bool coopmat_composed_capable =
+        sel_caps.cooperative_matrix_f32_8 &&
+        sel_caps.subgroup_size == 32u &&
+        !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
+    bf16_fast = omarchy::sdpa_bf16_fast_enabled(
+        omarchy::env_str("MLX_OMARCHY_SDPA_BF16_FAST"),
+        coopmat_composed_capable,
+        q_len > 1);
   }
 
   // Decode uses native Metal's 32-key online-softmax order directly over
@@ -17988,7 +18484,7 @@ void ScaledDotProductAttention::eval_gpu(
   // array the two-pass needs cannot fit the workgroup store at the
   // 128-block crossover, and the bf16 parity contract is the f32-score
   // composition below, not native's two-pass partial format.
-  const char* decode_env = std::getenv("MLX_OMARCHY_SDPA_DECODE_NATIVE");
+  const char* decode_env = omarchy::env_str("MLX_OMARCHY_SDPA_DECODE_NATIVE");
   const auto& decode_caps = encoder.device().capabilities();
   constexpr VkSubgroupFeatureFlags kDecodeSubgroupFeatures =
       VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
@@ -18093,7 +18589,7 @@ void ScaledDotProductAttention::eval_gpu(
   // MLX_OMARCHY_SDPA_DECODE_ROWS=0.
   const bool sdpa_rows_disabled =
       []() {
-        const char* env = std::getenv("MLX_OMARCHY_SDPA_DECODE_ROWS");
+        const char* env = omarchy::env_str("MLX_OMARCHY_SDPA_DECODE_ROWS");
         return env != nullptr && std::strcmp(env, "0") == 0;
       }();
   const bool sdpa_rows_route = decode_bf16_probe && !sdpa_rows_disabled &&
@@ -18191,6 +18687,17 @@ void ScaledDotProductAttention::eval_gpu(
         if (bk64) {
           split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1VBk64R4BF16Hd128;
         }
+        // Single-dispatch variant (value-phase pass 1 with the merge folded into the last block's workgroup,
+        // sdpa_decode_split_p1m.comp): MLX_OMARCHY_SDPA_SPLIT_MERGE, same flag contract as the other split switches. Pass-1
+        // workgroups bump a per-head slot in the encoder's persistent counter pool and the last finisher runs the merge
+        // inline and resets the slot, so the route is one dispatch per call. Prototype on the width-128 value-phase
+        // route only, four query heads per key-value head.
+        const int merge_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_MERGE");
+        // An explicit select beats the bk64 default (the merge prototype is its own pass 1); an unset flag keeps
+        // bk64's route because the merge's block counter only covers the 128-key value-phase shape.
+        const bool split_merge = pv && !split_wide && split_group == 4u &&
+            encoder.device().compute().binding_limit() >= 6 &&
+            (merge_env > 0 || (merge_env < 0 && !bk64 && omarchy::sdpa_split_merge_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
         const uint32_t split_rows = split_rows_route ? static_cast<uint32_t>(q_len) : 1u;
         const omarchy::ComputeKernel split_p2 = split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
             : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
@@ -18200,20 +18707,31 @@ void ScaledDotProductAttention::eval_gpu(
         const uint32_t split_out_row = checked_u32(out.strides()[2], tag, out);
         split_params.out_strides[0] = split_rows > 1u ? checked_u32(out.strides()[1], tag, out) : 0u;
         // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
+        // The merge kernel is the 128-key pass 1 even when the bk64 default is on — its grid must count 128-key blocks
+        // or the extra workgroups write out-of-range headers into the next head's block 0.
+        const uint32_t p1_block_keys = split_merge ? 128u : split_block_keys;
         for (uint32_t row = 0; row < split_rows; ++row) {
           const uint32_t row_k = static_cast<uint32_t>(k_len) - (split_rows - 1u - row);
-          const uint32_t row_blocks = (row_k + split_block_keys - 1u) / split_block_keys;
-          const uint64_t scratch_floats = static_cast<uint64_t>(heads) * row_blocks * static_cast<uint64_t>(head_dim + 2);
+          const uint32_t row_blocks = (row_k + p1_block_keys - 1u) / p1_block_keys;
+          const uint64_t scratch_floats = static_cast<uint64_t>(heads) * row_blocks * static_cast<uint64_t>(head_dim + 4);
           array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
           scratch.set_data(allocate_omarchy(scratch.nbytes()));
           encoder.add_temporary(scratch);
           split_params.matrix_k = row_k;
           split_params.lhs_offset = split_q_offset + row * split_q_row;
           split_params.output_offset = split_out_offset + row * split_out_row;
-          std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
-          encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
-          std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
-          encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
+          if (split_merge) {
+            std::array<omarchy::ComputeBinding, 6> merge_bindings{
+                binding(q), binding(k), binding(v), binding(scratch), binding(out),
+                encoder.sdpa_merge_counters(split_params.matrix_m)};
+            encoder.dispatch_compute(omarchy::ComputeKernel::SdpaDecodeSplitP1MR4BF16Hd128,
+                                     merge_bindings, split_params, split_params.matrix_n, row_blocks);
+          } else {
+            std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
+            encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
+            std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
+            encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
+          }
         }
         return;
       }
@@ -18225,7 +18743,7 @@ void ScaledDotProductAttention::eval_gpu(
       batch == 2 && q_len == 1 && head_dim == 128 && decode_bf16_probe &&
       !bf16_fast && encoder.device().compute().binding_limit() >= 5 &&
       omarchy::sdpa_decode_mask_fused_enabled(
-          std::getenv("MLX_OMARCHY_SDPA_DECODE_BOOL_MASK"))) {
+          omarchy::env_str("MLX_OMARCHY_SDPA_DECODE_BOOL_MASK"))) {
     const auto& mask = inputs[3];
     if (mask.dtype() == bfloat16 && mask.ndim() == 4 &&
         mask.shape(0) == batch && mask.shape(1) == heads &&
@@ -18489,9 +19007,9 @@ void ScaledDotProductAttention::eval_gpu(
   // composed, unset/auto prefers composed and keeps flash for
   // non-coopmat devices; MIN_L keeps its meaning as a flash override
   // above a sequence length.
-  const char* prefill_flash_env = std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH");
+  const char* prefill_flash_env = omarchy::env_str("MLX_OMARCHY_SDPA_PREFILL_FLASH");
   const char* prefill_flash_min_l_env =
-      std::getenv("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
+      omarchy::env_str("MLX_OMARCHY_SDPA_PREFILL_FLASH_MIN_L");
   uint32_t prefill_flash_min_l = 0;
   if (prefill_flash_min_l_env != nullptr) {
     unsigned long long parsed = 0;
@@ -18672,40 +19190,25 @@ void ScaledDotProductAttention::eval_gpu(
 #ifdef MLX_OMARCHY_BF16_DIRECT
   // Causal cooperative-matrix flash prefill (MatmulGap H35): scores never
   // reach memory, QK and PV run on the 8x8x8 matrix unit. Default ON for
-  // G16S when the device advertises the bf16 8x8 cooperative-matrix shape
+  // every part that advertises the bf16 8x8 cooperative-matrix shape
   // (receipts/2026-11-15-m4-pro-g16s-sdpa-causal-flash): Qwen3-8B-4bit
-  // pf2060 +6.2% median, ranges disjoint; pf520 and decode flat; 32-token
-  // sha identical. Other parts keep the composed default (G13C pf512
-  // missed the +2% bar, receipts/2026-10-09-causal-flash-gate3).
-  // MLX_OMARCHY_SDPA_CAUSAL_FLASH=0 is the kill switch back to composed;
-  // =1 still forces the route on any eligible part.
+  // pf2060 +6.2% median on G16S, ranges disjoint; pf520 and decode flat;
+  // 32-token sha identical. MLX_OMARCHY_SDPA_CAUSAL_FLASH=0 is the kill
+  // switch back to composed; =1 still forces the route on any eligible
+  // part.
   // Contract: causal, bf16, hd 128, k_len % 8 == 0, k_len >= q_len, no sinks,
   // no logsumexp, no array mask, 8-element aligned strides; anything else
   // keeps the composed route.
   {
-    const char* cf_env = std::getenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+    const char* cf_env = omarchy::env_str("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
     const auto& cf_caps = encoder.device().capabilities();
-    const bool cf_is_g16s =
-        cf_caps.device_name.find("G16S") != std::string::npos;
-    // G13G (13-inch M1) dispatches the same causal flash kernel and measures
-    // +7.1% prefill at ctx2048 / +1.1% at ctx512 with identical outputs on
-    // the 4B (jwm1 ABBA, receipts 2026-11-23). Repo convention: only the
-    // measured part flips; G13S keeps the composed default until it has
-    // its own ABBA rows.
-    // G13C (16-inch M1 Max) has its own rows now (receipts
-    // 2026-11-24-g13c-sdpa-causal-flash-abba): Qwen3-4B-4bit pure prefill
-    // +9.05% at ctx2048 (563.3 vs 516.6 tps, all 5 ABBA blocks +8-9%),
-    // +1.11% at ctx512, 2B pf512 and 4B decode ctx2048 flat, every run
-    // ids-identical. jwm1 re-measure on the same build agrees: +8.28% at
-    // ctx2048, +3.09% at ctx512, decode flat.
-    const bool cf_is_g13g =
-        cf_caps.device_name.find("G13G") != std::string::npos;
-    const bool cf_is_g13c =
-        cf_caps.device_name.find("G13C") != std::string::npos;
+    // No-gating default (2026-11-25): the route defaults on for every
+    // part; the cooperative-matrix/subgroup/workgroup/shared-memory
+    // probe below confines actual dispatch. Measured: G16S, G13G
+    // (+7.1% pf2048), G13C (+9.05% pf2048); no part measured a loss.
     const bool cf_forced_on = cf_env != nullptr && cf_env[0] == '1';
     const bool cf_forced_off = cf_env != nullptr && cf_env[0] == '0';
-    const bool cf_on = cf_forced_on ||
-        ((cf_is_g16s || cf_is_g13g || cf_is_g13c) && !cf_forced_off);
+    const bool cf_on = cf_forced_on || !cf_forced_off;
     if (cf_on &&
         cf_caps.cooperative_matrix_bf16_8 && cf_caps.subgroup_size == 32u &&
         cf_caps.max_compute_work_group_invocations >= 128u &&
@@ -18754,21 +19257,22 @@ void ScaledDotProductAttention::eval_gpu(
       std::array<omarchy::ComputeBinding, 4> cf_bindings{
           binding(q), binding(k), binding(v), binding(out)};
       // Q_CHUNK=8 twin (eight Q panels live, reused across the four
-      // key-blocks of a tile; same add order, so output is bit-identical)
-      // is the G16S default. MLX_OMARCHY_SDPA_FLASH_QCHUNK=0 restores the
-      // 16-panel kernel; other parts keep it. Measurements:
-      // receipts/2026-11-15-m4-pro-g16s-sdpa-flash-qchunk8
+      // key-blocks of a tile; same add order, so output is bit-identical).
+      // MLX_OMARCHY_SDPA_FLASH_QCHUNK=0 restores the 16-panel kernel.
+      // No-gating default (2026-11-25): bit-identical and measured faster
+      // where it ran (G16S, receipts/2026-11-15-m4-pro-g16s-sdpa-flash-
+      // qchunk8); no part measured a loss, so every part takes the twin.
       omarchy::ComputeKernel cf_kernel =
           omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16;
-      const char* qchunk_env = std::getenv("MLX_OMARCHY_SDPA_FLASH_QCHUNK");
+      const char* qchunk_env = omarchy::env_str("MLX_OMARCHY_SDPA_FLASH_QCHUNK");
       const bool qchunk_off = qchunk_env != nullptr && qchunk_env[0] == '0';
-      if (cf_is_g16s && !qchunk_off) {
+      if (!qchunk_off) {
         cf_kernel = omarchy::ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8;
       }
       // Env-gated K/V amortization. Not a default.
       // MLX_OMARCHY_SDPA_FLASH_KV=heads2
       uint32_t cf_grid_y = static_cast<uint32_t>(heads);
-      const char* kv_env = std::getenv("MLX_OMARCHY_SDPA_FLASH_KV");
+      const char* kv_env = omarchy::env_str("MLX_OMARCHY_SDPA_FLASH_KV");
       if (kv_env != nullptr && std::strcmp(kv_env, "heads2") == 0 &&
           !qchunk_off && repeats >= 2 && (repeats % 2 == 0) &&
           (heads % 2 == 0)) {
@@ -18991,7 +19495,7 @@ void ScaledDotProductAttention::eval_gpu(
       uint64_t chunk_bytes_cap = 1ull << 30;
       bool chunk_engaged = false;
       if (const char* chunk_cap_env =
-              std::getenv("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
+              omarchy::env_str("MLX_OMARCHY_SDPA_CHUNK_MAX_BYTES");
           chunk_cap_env != nullptr && chunk_cap_env[0] != '\0') {
         char* endp = nullptr;
         unsigned long long parsed = std::strtoull(chunk_cap_env, &endp, 10);

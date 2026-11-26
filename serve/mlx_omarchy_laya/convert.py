@@ -26,7 +26,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
+import stat
 import sys
 import urllib.request
 from pathlib import Path
@@ -34,6 +36,14 @@ from pathlib import Path
 SOURCE_REPO = "convaiinnovations/laya"
 PINNED_REVISION = "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"
 WORKSPACE_HEADROOM_BYTES = 512 * 1024 * 1024
+# A converted manifest is about 1 KiB; cap reads to bound corrupt or hostile files.
+_MANIFEST_MAX_BYTES = 1 << 20
+_MANIFEST_FIELD_TYPES = (
+    ("catalog_id", str),
+    ("source_revision", str),
+    ("estimated_bytes", int),
+    ("weights_header.weight_bytes", int),
+)
 
 # variant -> (subpath in repo, catalog model id)
 # The catalog id must be the id the serve catalog serves and the pair runtime
@@ -211,12 +221,39 @@ def convert(source: Path, repo: str, revision: str, out: Path, catalog_id: str) 
     return manifest
 
 
-def _read_manifest(model_dir: Path) -> dict:
+def _read_manifest(model_dir: Path) -> dict | None:
     path = Path(model_dir) / "manifest.json"
-    if path.exists():
-        with open(path) as f:
-            return json.load(f)
-    return {}
+    try:
+        with open(
+            path,
+            "rb",
+            opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK),
+        ) as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise ValueError("manifest.json is not a regular file")
+            raw = f.read(_MANIFEST_MAX_BYTES + 1)
+    except OSError as exc:
+        if isinstance(exc, FileNotFoundError):
+            try:
+                os.lstat(path)  # a dangling symlink still has an entry
+            except FileNotFoundError:
+                return None
+            except OSError as lstat_exc:
+                exc = lstat_exc
+        raise ValueError(
+            "manifest.json is unreadable: %s" % (exc.strerror or type(exc).__name__)
+        ) from None
+    if len(raw) > _MANIFEST_MAX_BYTES:
+        raise ValueError("manifest.json exceeds %d bytes" % _MANIFEST_MAX_BYTES)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError) as exc:
+        raise ValueError(
+            "manifest.json is not valid JSON (%s)" % type(exc).__name__
+        ) from None
+    if not isinstance(data, dict):
+        raise ValueError("manifest.json is not a JSON object")
+    return data
 
 
 def checkpoint_state(path: Path) -> tuple:
@@ -228,7 +265,9 @@ def checkpoint_state(path: Path) -> tuple:
       "raw"        — a plain upstream/HF snapshot (model.safetensors +
                      rl_agent_config.json present, no manifest): needs
                      `python -m mlx_omarchy_laya.convert --from-local <dir>`
-      "invalid"    — neither; details say what is missing
+      "invalid"    — neither, or manifest.json is unreadable, not a regular
+                     file, not a JSON object, or has missing or mistyped
+                     required fields
     """
     path = Path(path)
     missing_files = [f for f in ["model.safetensors", "rl_agent_config.json",
@@ -236,12 +275,17 @@ def checkpoint_state(path: Path) -> tuple:
                                  "tokenizer/tokenizer_config.json"] if not (path / f).exists()]
     if missing_files:
         return "invalid", {"missing_files": missing_files}
-    manifest = _read_manifest(path)
-    if not manifest:
+    try:
+        manifest = _read_manifest(path)
+    except ValueError as exc:
+        return "invalid", {"manifest_error": str(exc)}
+    if manifest is None:
         return "raw", {"reason": "no manifest.json — run mlx_omarchy_laya.convert "
                                  "--from-local <snapshot> --out <dir>"}
-    missing_manifest = [k for k in ("catalog_id", "source_revision", "estimated_bytes",
-                                    "weights_header.weight_bytes") if _dget(manifest, k) is None]
+    missing_manifest = [
+        k for k, expected in _MANIFEST_FIELD_TYPES
+        if not (isinstance(v := _dget(manifest, k), expected) and not isinstance(v, bool))
+    ]
     if missing_manifest:
         return "invalid", {"missing_manifest_fields": missing_manifest}
     return "converted", {"catalog_id": manifest["catalog_id"],
