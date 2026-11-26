@@ -1511,14 +1511,15 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           gdn.inputs().size() != 10 || claimed.count(gdn.id())) {
         continue;
       }
-      const Device* d = stream_device(gdn);
-      if (d == nullptr) {
+      const auto& stream = gdn.primitive().stream();
+      if (stream.device.type != mlx::core::Device::gpu) {
         continue;
       }
-      const auto& caps = d->capabilities();
+      auto& dev = device(stream.device.index);
+      const auto& caps = dev.capabilities();
       if (caps.subgroup_size != 32u ||
           (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0 ||
-          d->compute().binding_limit() < 19u) {
+          dev.compute().binding_limit() < 19u) {
         continue;
       }
       const array* a_node = lookup(gdn.inputs()[3]);
