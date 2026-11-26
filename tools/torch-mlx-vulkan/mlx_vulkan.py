@@ -1620,28 +1620,32 @@ def _select_backward(g, sizes, dim, index):
 
 def _bn_backward(dy, x, w, rm, rv, save_mean, save_invstd, training, eps, out_mask):
     """aten.native_batch_norm_backward: (dx, dw, db) honoring output_mask.
-    Same (N*H*W, C) layout as _bn3 (PAR-41)."""
+    Same (N*H*W, C) layout as _bn3 (PAR-41). ATen accumulates in the
+    stats dtype (fp32 for 16-bit inputs), so compute there and cast
+    outputs back; dw/db are output whenever the mask asks, weight or not."""
     dy, x = _mx(dy), _mx(x)
     C = x.shape[1]
     N = x.shape[0]
-    dy2 = mx.moveaxis(dy, 1, -1).reshape(-1, C)
-    x2 = mx.moveaxis(x, 1, -1).reshape(-1, C)
+    acc = mx.float32 if x.dtype in (mx.float16, mx.bfloat16) else x.dtype
+    pdt = _mx(w).dtype if w is not None else x.dtype
+    dy2 = mx.moveaxis(dy, 1, -1).reshape(-1, C).astype(acc)
+    x2 = mx.moveaxis(x, 1, -1).reshape(-1, C).astype(acc)
     if training:
-        mean = _mx(save_mean)
-        invstd = _mx(save_invstd)
+        mean = _mx(save_mean).astype(acc)
+        invstd = _mx(save_invstd).astype(acc)
     else:
-        mean = mx.reshape(_mx(rm), (-1,))
-        invstd = mx.rsqrt(mx.reshape(_mx(rv), (-1,)) + eps)
-    wb = mx.reshape(_mx(w), (1, C)) if w is not None else 1.0
+        mean = mx.reshape(_mx(rm), (-1,)).astype(acc)
+        invstd = mx.rsqrt(mx.reshape(_mx(rv), (-1,)).astype(acc) + eps)
+    wb = mx.reshape(_mx(w), (1, C)).astype(acc) if w is not None else 1.0
     xh = (x2 - mean) * invstd
     if training:
         dx2 = (dy2 - mx.mean(dy2, axis=0)
                - xh * mx.mean(dy2 * xh, axis=0)) * invstd * wb
     else:
         dx2 = dy2 * invstd * wb
-    dw = mx.sum(dy2 * xh, axis=0) if (w is not None and out_mask[1]) else None
-    db = mx.sum(dy2, axis=0) if out_mask[2] else None
-    dx = (mx.moveaxis(dx2.reshape(N, *x.shape[2:], C), -1, 1)
+    dw = mx.sum(dy2 * xh, axis=0).astype(pdt) if out_mask[1] else None
+    db = mx.sum(dy2, axis=0).astype(pdt) if out_mask[2] else None
+    dx = (mx.moveaxis(dx2.reshape(N, *x.shape[2:], C), -1, 1).astype(x.dtype)
           if out_mask[0] else None)
     return dx, dw, db
 
