@@ -17,7 +17,7 @@ Needs the omarchy wheel that ships mx.fast.rope_rms_norm, on hardware
 import numpy as np
 import pytest
 
-mx = pytest.importorskip("mx")
+mx = pytest.importorskip("mlx.core")  # d-review w8E: "mx" never resolves, so the test skipped everywhere
 fast = getattr(mx, "fast", None)
 if fast is None or not hasattr(fast, "rope_rms_norm"):
     pytest.skip("wheel has no mx.fast.rope_rms_norm")
@@ -64,11 +64,14 @@ def test_w128_fused_bit_equal_composed(D, heads, passthrough):
     )
     composed = _composed(a_bf, full, w_bf, eps, base, scale, offset)
 
+    # the bf16 pattern of the float32 upcast: the high half of each 32-bit word
+    # (d-review w8E: uint16 >> 16 shifts each 16-bit word past its width, all
+    # zeros, so the comparison could never fail)
     fused_bits = np.frombuffer(
-        np.asarray(fused).astype(np.float32).tobytes(), dtype=np.uint16
+        np.asarray(fused).astype(np.float32).tobytes(), dtype=np.uint32
     ) >> 16
     composed_bits = np.frombuffer(
-        np.asarray(composed).astype(np.float32).tobytes(), dtype=np.uint16
+        np.asarray(composed).astype(np.float32).tobytes(), dtype=np.uint32
     ) >> 16
     fa = np.asarray(fused).astype(np.float32)
     ca = np.asarray(composed).astype(np.float32)
