@@ -13,8 +13,11 @@ model itself is replaced.
 """
 
 import contextlib
+import errno
+import hashlib
 import json
 import os
+import resource
 import signal
 import socket
 import subprocess
@@ -2565,6 +2568,275 @@ class DamagedDecisionArtifactTests(BasePairTest):
                 self._refused("config.json hidden_size must be an int >= 1")
         path.unlink()
         self._refused("encoder config .* is unreadable")
+
+
+class ArtifactFilesTests(unittest.TestCase):
+    """artifact_files() lists every regular file or raises PairError: a
+    directory or file it cannot read never drops out of the manifest, and a
+    FIFO never blocks the walk."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name) / "artifact"
+        self.outside = Path(tmp.name) / "outside"
+        (self.root / "sub").mkdir(parents=True)
+        self.outside.mkdir()
+        (self.outside / "x.bin").write_bytes(b"outside")
+
+    def _swap_after_listing(self, swap):
+        """os.scandir lists, then swap() changes the tree once before the walk
+        opens anything."""
+        real = os.scandir
+        pending = [swap]
+
+        def scandir(fd):
+            with real(fd) as entries:
+                listed = list(entries)
+            while pending:
+                pending.pop()()
+            return contextlib.nullcontext(iter(listed))
+        return mock.patch.object(os, "scandir", scandir)
+
+    def test_names_sizes_and_hashes_in_rglob_order_skipping_symlinks(self):
+        for name in ("a/z.bin", "a.txt", "a-b", "sub/c/d.bin", "B"):
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / name).write_bytes(name.encode() * 3)
+        (self.root / "file-link").symlink_to(self.outside / "x.bin")
+        (self.root / "dir-link").symlink_to(self.outside)
+        (self.root / "dangling").symlink_to(self.root / "gone")
+        (self.root / "loop").symlink_to(self.root / "loop")
+        expected = [{"name": p.relative_to(self.root).as_posix(),
+                     "bytes": p.stat().st_size,
+                     "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+                    for p in sorted(self.root.rglob("*"))
+                    if p.is_file() and not p.is_symlink()]
+        self.assertEqual([e["name"] for e in expected],
+                         ["B", "a/z.bin", "a-b", "a.txt", "sub/c/d.bin"])
+        fds = os.listdir("/dev/fd")
+        self.assertEqual(pairs.artifact_files(self.root), expected)
+        root_link = self.root.parent / "artifact-link"
+        root_link.symlink_to(self.root)
+        self.assertEqual(pairs.artifact_files(root_link), expected)
+        self.assertEqual(os.listdir("/dev/fd"), fds)  # no descriptor left open
+
+    def test_missing_or_non_directory_root_does_not_exist(self):
+        (self.root / "file").write_bytes(b"x")
+        loop = self.root.parent / "root-loop"
+        loop.symlink_to(loop)
+        for path in (self.root / "gone", self.root / "file", self.root / "nul\0dir", loop):
+            with self.subTest(path=path.name), self.assertRaisesRegex(
+                    pairs.PairError, "artifact path .* does not exist"):
+                pairs.artifact_files(path)
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores permissions")
+    def test_unreadable_directory_or_file_is_pair_error(self):
+        (self.root / "sub" / "w.bin").write_bytes(b"weights")
+        fds = os.listdir("/dev/fd")
+        for path, mode in ((self.root / "sub", 0o000), (self.root / "sub", 0o400),
+                           (self.root / "sub" / "w.bin", 0o000),
+                           (self.root, 0o000), (self.root, 0o300),
+                           (self.root.parent, 0o600)):
+            with self.subTest(path=path.name, mode=oct(mode)):
+                path.chmod(mode)
+                try:
+                    with self.assertRaisesRegex(pairs.PairError, "artifact path .* is unreadable"):
+                        pairs.artifact_files(self.root)
+                finally:
+                    path.chmod(0o755)
+        self.assertEqual(os.listdir("/dev/fd"), fds)  # no descriptor left open
+
+    def test_listing_or_read_failure_is_pair_error(self):
+        (self.root / "sub" / "w.bin").write_bytes(b"weights")
+        failing = OSError(errno.EIO, "Input/output error")
+        real_scandir = os.scandir
+        calls = 0
+
+        def fail_subdir(fd):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                raise failing
+            return real_scandir(fd)
+
+        fds = os.listdir("/dev/fd")
+        for name, call, effect, where in (
+            ("root-scandir", "scandir", failing, "artifact"),
+            ("sub-scandir", "scandir", fail_subdir, "sub"),
+            ("nested-read", "read", failing, "w.bin"),
+        ):
+            with self.subTest(name), mock.patch.object(os, call, side_effect=effect), \
+                    self.assertRaisesRegex(pairs.PairError,
+                                           f"{where} is unreadable: .*Input/output error"):
+                pairs.artifact_files(self.root)
+            self.assertEqual(os.listdir("/dev/fd"), fds)  # no descriptor left open
+
+    def test_deep_tree_past_recursion_limit_is_hashed(self):
+        if resource.getrlimit(resource.RLIMIT_NOFILE)[0] < 4096:
+            self.skipTest("RLIMIT_NOFILE too low for 1100-level walk")
+        depth = 1100
+        fds = [os.open(self.root, os.O_RDONLY)]
+        try:
+            for _ in range(depth):
+                os.mkdir("d", dir_fd=fds[-1])
+                fds.append(os.open("d", os.O_RDONLY, dir_fd=fds[-1]))
+            fd = os.open("leaf.bin", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fds[-1])
+            try:
+                os.write(fd, b"leaf")
+            finally:
+                os.close(fd)
+            self.assertEqual(pairs.artifact_files(self.root), [{
+                "name": "/".join(["d"] * depth + ["leaf.bin"]), "bytes": 4,
+                "sha256": hashlib.sha256(b"leaf").hexdigest()}])
+        finally:  # rmtree() cannot walk a tree deeper than Python's recursion limit
+            with contextlib.suppress(OSError):
+                os.unlink("leaf.bin", dir_fd=fds[-1])
+            for parent in reversed(fds[:-1]):
+                with contextlib.suppress(OSError):
+                    os.rmdir("d", dir_fd=parent)
+            for fd in fds:
+                os.close(fd)
+
+    def test_tree_deeper_than_open_file_limit_is_pair_error(self):
+        deep = self.root / ("d/" * 80)
+        deep.mkdir(parents=True)
+        (deep / "leaf.bin").write_bytes(b"leaf")
+        fds = os.listdir("/dev/fd")
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        limit = len(fds) + 40
+        if hard != resource.RLIM_INFINITY and hard < limit:
+            self.skipTest("hard RLIMIT_NOFILE too low for open-file-limit test")
+        resource.setrlimit(resource.RLIMIT_NOFILE, (limit, hard))
+        try:
+            with self.assertRaisesRegex(pairs.PairError,
+                                        "is unreadable: .*Too many open files"):
+                pairs.artifact_files(self.root)
+        finally:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+        self.assertEqual(os.listdir("/dev/fd"), fds)  # no descriptor left open
+
+    def test_fifo_or_socket_entry_is_refused(self):
+        os.mkfifo(self.root / "sub" / "pipe")
+        with self.assertRaisesRegex(pairs.PairError, "entry .*pipe is not a regular file"):
+            pairs.artifact_files(self.root)
+        (self.root / "sub" / "pipe").unlink()
+        sock = socket.socket(socket.AF_UNIX)
+        self.addCleanup(sock.close)
+        sock.bind(str(self.root / "sub" / "sock"))
+        with self.assertRaisesRegex(pairs.PairError, "entry .*sock is not a regular file"):
+            pairs.artifact_files(self.root)
+
+    def test_entry_swapped_after_listing_is_refused_without_blocking(self):
+        target = self.root / "w.bin"
+
+        def to_fifo():
+            target.unlink()
+            os.mkfifo(target)
+
+        def to_file_link():
+            target.unlink()
+            target.symlink_to(self.outside / "x.bin")
+
+        def to_dir_link():
+            (self.root / "sub").rmdir()
+            (self.root / "sub").symlink_to(self.outside)
+
+        def to_dir_fifo():
+            (self.root / "sub").rmdir()
+            os.mkfifo(self.root / "sub")
+
+        for swap, refusal in ((to_fifo, "artifact entry .*w.bin is not a regular file"),
+                              (to_file_link, "artifact path .*w.bin is unreadable"),
+                              (to_dir_link, "artifact path .*sub is unreadable"),
+                              (to_dir_fifo, "artifact path .*sub is unreadable: .*'sub'")):
+            with self.subTest(swap.__name__):
+                target.write_bytes(b"weights")
+                result = {}
+
+                def run():
+                    try:
+                        result["files"] = pairs.artifact_files(self.root)
+                    except BaseException as exc:  # checked below
+                        result["error"] = exc
+                worker = threading.Thread(target=run, daemon=True)
+                try:
+                    with self._swap_after_listing(swap):
+                        worker.start()
+                        worker.join(timeout=5)
+                    blocked = worker.is_alive()
+                    if blocked:  # a blocked open returns once a writer opens
+                        for path in (target, self.root / "sub"):
+                            with contextlib.suppress(OSError):
+                                os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+                        worker.join(timeout=5)
+                finally:  # a FIFO left behind would block the next write_bytes()
+                    for path in (target, self.root / "sub"):
+                        if path.is_symlink() or path.exists() and not path.is_dir():
+                            path.unlink()
+                    (self.root / "sub").mkdir(exist_ok=True)
+                self.assertFalse(blocked, "blocked on a FIFO artifact entry")
+                self.assertNotIn("files", result)
+                self.assertIsInstance(result["error"], pairs.PairError)
+                self.assertRegex(str(result["error"]), refusal)
+        target.write_bytes(b"weights")
+        with self._swap_after_listing(target.unlink):
+            self.assertEqual(pairs.artifact_files(self.root), [])  # vanished: not listed
+
+    def test_vanished_entry_on_dt_unknown_is_skipped(self):
+        class StubEntry:
+            def __init__(self, name, stat_fn):
+                self.name = name
+                self._stat = stat_fn
+
+            def is_symlink(self):
+                return False
+
+            def is_dir(self, *, follow_symlinks=True):
+                return False
+
+            def is_file(self, *, follow_symlinks=True):
+                return False
+
+            def stat(self, *, follow_symlinks=True):
+                assert not follow_symlinks
+                return self._stat()
+
+        def missing():
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory", "gone.bin")
+
+        stub_missing = StubEntry("gone.bin", missing)
+        with mock.patch.object(
+                os, "scandir", return_value=contextlib.nullcontext(iter([stub_missing]))):
+            self.assertEqual(pairs.artifact_files(self.root), [])
+
+        stub_special = StubEntry("pipe.bin", lambda: os.stat(self.root))
+        with mock.patch.object(
+                os, "scandir", return_value=contextlib.nullcontext(iter([stub_special]))), \
+                self.assertRaisesRegex(pairs.PairError,
+                                       "artifact entry .*pipe.bin is not a regular file"):
+            pairs.artifact_files(self.root)
+
+    def test_file_past_path_max_is_hashed(self):
+        level = "d" * 200
+        fds = [os.open(self.root, os.O_RDONLY)]
+        try:
+            for _ in range(24):  # 24 * 201 bytes is past Linux's 4096 PATH_MAX
+                os.mkdir(level, dir_fd=fds[-1])
+                fds.append(os.open(level, os.O_RDONLY, dir_fd=fds[-1]))
+            fd = os.open("deep.bin", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fds[-1])
+            os.write(fd, b"deep")
+            os.close(fd)
+            self.assertEqual(pairs.artifact_files(self.root), [{
+                "name": "/".join([level] * 24 + ["deep.bin"]), "bytes": 4,
+                "sha256": hashlib.sha256(b"deep").hexdigest()}])
+        finally:  # rmtree() of a path past PATH_MAX is not portable
+            with contextlib.suppress(OSError):
+                os.unlink("deep.bin", dir_fd=fds[-1])
+            for parent in reversed(fds[:-1]):
+                with contextlib.suppress(OSError):
+                    os.rmdir(level, dir_fd=parent)
+            for fd in fds:
+                os.close(fd)
 
 
 if __name__ == "__main__":
