@@ -61,6 +61,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import cache
+import os
 
 import numpy as np
 
@@ -805,6 +806,32 @@ def _control_kernel():
     )
 
 
+_WG128_ENV = "MLX_OMARCHY_TDT_CHAIN_WG128"
+
+
+def _use_wg128_chain() -> bool:
+    """Select the <=128-thread 1-row device-chain path on Apple M6 (G18G).
+
+    ``MLX_OMARCHY_TDT_CHAIN_WG128`` overrides detection (``1``/``true``/``yes``
+    forces it on; ``0``/``false``/``no`` forces the 7-row default).
+    """
+    raw = os.environ.get(_WG128_ENV)
+    if raw is not None and raw.strip():
+        val = raw.strip().lower()
+        if val in ("1", "true", "yes", "on"):
+            return True
+        if val in ("0", "false", "no", "off"):
+            return False
+    try:
+        info = _mx().device_info()
+    except Exception:
+        return False
+    if not isinstance(info, dict):
+        return False
+    dev = str(info.get("device_name", "")).lower()
+    return "g18" in dev or "apple m6" in dev
+
+
 def run_tdt_chain(
     packed,
     encoder,
@@ -822,6 +849,19 @@ def run_tdt_chain(
     state lives in device buffers; the host syncs once per chunk and only
     to decide whether another chunk is needed.
     """
+    if _use_wg128_chain():
+        from .vulkan_tdt_chain_wg128 import run_tdt_chain_wg128
+
+        return run_tdt_chain_wg128(
+            packed=packed,
+            encoder=encoder,
+            valid_frames=valid_frames,
+            config=config,
+            initial_hidden=initial_hidden,
+            initial_cell=initial_cell,
+            slots_per_chunk=slots_per_chunk,
+            max_chunks=max_chunks,
+        )
     mx = _mx()
     blank = int(config.blank_token_id)
     durs = [int(d) for d in config.durations]
