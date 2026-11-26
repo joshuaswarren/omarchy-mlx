@@ -11108,14 +11108,6 @@ bool dispatch_quantized_gemv_group(
       // anything is committed so the group evaluates ordinarily.
       return false;
     }
-    bind_kv_window_storage(window, stream);
-    rope_epi->q.rope.set_data(
-        allocator().malloc(rope_epi->q.rope.nbytes()));
-    encoder.add_temporary(rope_epi->q.rope);
-    encoder.add_temporary(rope_epi->q.rope.inputs()[2]);
-    encoder.add_temporary(rope_epi->k.rope.inputs()[2]);
-    encoder.add_temporary(offset);
-    encoder.add_temporary(rope_epi->k.rope.inputs()[1]);
     // Per-member route (default on; MLX_OMARCHY_ROPE_EPI_MEMBER=0 keeps
     // the token4 mega-dispatch for A/B): each member goes through its
     // own Rows8 dispatch — the kernel the unfused path already picks for
@@ -11125,11 +11117,11 @@ bool dispatch_quantized_gemv_group(
     // never depend on each other's member output), which drops the
     // 768-workgroup joint dispatch entirely. Members with an Add
     // epilogue, a sum window, a dual-write view, or an unaligned x base
-    // fall back to the token4 dispatch below.
-    static const bool epi_member_route = []() {
-      const char* e = std::getenv("MLX_OMARCHY_ROPE_EPI_MEMBER");
-      return e == nullptr || e[0] == '\0' || std::strcmp(e, "0") != 0;
-    }();
+    // fall back to the token4 dispatch below. Read live (not cached):
+    // the A/B knob is toggled per eval in tests.
+    const char* epi_member_env = std::getenv("MLX_OMARCHY_ROPE_EPI_MEMBER");
+    const bool epi_member_route = epi_member_env == nullptr ||
+        epi_member_env[0] == '\0' || std::strcmp(epi_member_env, "0") != 0;
     bool member_route = epi_member_route && rows <= 4u &&
         encoder.device().compute().binding_limit() >= 9u &&
         (params.lhs_offset % 8u) == 0u;
@@ -11150,10 +11142,19 @@ bool dispatch_quantized_gemv_group(
     // epi_block at 128 floats per subgroup (blk = sub_id * 128u): head
     // dims above 128 overwrite the next row's scratch. The member route
     // covers up to 256; above 128 with no member route the group falls
-    // back to ordinary evals.
+    // back to ordinary evals. Refuse before binding the window or
+    // allocating the rope outputs: those writes persist past a fallback.
     if (!member_route && epi_d > 128) {
       return false;
     }
+    bind_kv_window_storage(window, stream);
+    rope_epi->q.rope.set_data(
+        allocator().malloc(rope_epi->q.rope.nbytes()));
+    encoder.add_temporary(rope_epi->q.rope);
+    encoder.add_temporary(rope_epi->q.rope.inputs()[2]);
+    encoder.add_temporary(rope_epi->k.rope.inputs()[2]);
+    encoder.add_temporary(offset);
+    encoder.add_temporary(rope_epi->k.rope.inputs()[1]);
     if (member_route) {
       const RopeEpiSide* route_sides[2] = {&rope_epi->q, &rope_epi->k};
       for (size_t mi = 0; mi < members.size(); ++mi) {
@@ -11392,91 +11393,6 @@ bool dispatch_quantized_gemv_group(
         total_groups,
         1u,
         1u);
-    }
-    if (std::getenv("MLX_OMARCHY_ROPE_EPI_DUMP") != nullptr) {
-      encoder.synchronize("rope-epi debug dump");
-      static int dmp = 0;
-      const int idx = dmp++;
-      const std::string base =
-          "/tmp/ropeepi_" + std::to_string(idx) + "_";
-      auto write_all = [](const std::string& path, const array& a) {
-        std::ofstream f(path, std::ios::binary | std::ios::trunc);
-        f.write(
-            reinterpret_cast<const char*>(a.data<uint8_t>()),
-            static_cast<std::streamsize>(a.nbytes()));
-      };
-      write_all(base + "qmember.bin", q_member);
-      write_all(base + "kmember.bin", k_member);
-      write_all(base + "qropeout.bin", rope_epi->q.rope);
-      write_all(base + "kwindow.bin", window.node);
-      write_all(base + "qoff.bin", offset);
-      write_all(base + "koff.bin", rope_epi->k.rope.inputs()[1]);
-      write_all(base + "qnormw.bin", rope_epi->q.rope.inputs()[2]);
-      write_all(base + "knormw.bin", rope_epi->k.rope.inputs()[2]);
-      std::ofstream mf(base + "meta.txt", std::ios::trunc);
-      mf << "qview id=" << reinterpret_cast<void*>(q_view.id())
-         << " ndim=" << q_view.ndim() << " shape=";
-      for (auto s : q_view.shape()) mf << s << ",";
-      mf << " strides=";
-      for (auto s : q_view.strides()) mf << s << ",";
-      mf << " off=" << q_view.offset() << "\n";
-      mf << "kview ndim=" << k_view.ndim() << " shape=";
-      for (auto s : k_view.shape()) mf << s << ",";
-      mf << " strides=";
-      for (auto s : k_view.strides()) mf << s << ",";
-      mf << " off=" << k_view.offset() << "\n";
-      mf << "qmember shape=";
-      for (auto s : q_member.shape()) mf << s << ",";
-      mf << " off=" << q_member.offset() << "\n";
-      mf << "kmember shape=";
-      for (auto s : k_member.shape()) mf << s << ",";
-      mf << " off=" << k_member.offset() << "\n";
-      mf << "qropeout shape=";
-      for (auto s : rope_epi->q.rope.shape()) mf << s << ",";
-      mf << " strides=";
-      for (auto s : rope_epi->q.rope.strides()) mf << s << ",";
-      mf << " off=" << rope_epi->q.rope.offset() << "\n";
-      mf << "window node_shape=";
-      for (auto s : window.node.shape()) mf << s << ",";
-      mf << " off=" << window.offset << " strides=" << window.strides[0]
-         << "," << window.strides[1] << "," << window.strides[2]
-         << " ndim=" << window.ndim << "\n";
-      for (size_t ci = 0; ci < rope_epi->q.view_chain.size(); ++ci) {
-        const array& ch = rope_epi->q.view_chain[ci];
-        mf << "qchain" << ci << " id=" << reinterpret_cast<void*>(ch.id())
-           << " shape=";
-        for (auto s : ch.shape()) mf << s << ",";
-        mf << " strides=";
-        for (auto s : ch.strides()) mf << s << ",";
-        mf << "\n";
-      }
-      for (size_t ci = 0; ci < rope_epi->k.view_chain.size(); ++ci) {
-        const array& ch = rope_epi->k.view_chain[ci];
-        mf << "kchain" << ci << " id=" << reinterpret_cast<void*>(ch.id())
-           << " shape=";
-        for (auto s : ch.shape()) mf << s << ",";
-        mf << " strides=";
-        for (auto s : ch.strides()) mf << s << ",";
-        mf << "\n";
-      }
-      mf << "qlogical shape=";
-      for (auto s : rope_epi->q.view_shape) mf << s << ",";
-      mf << " strides=";
-      for (auto s : rope_epi->q.view_strides) mf << s << ",";
-      mf << " off=" << rope_epi->q.view_offset << "\n";
-      mf << "klogical shape=";
-      for (auto s : rope_epi->k.view_shape) mf << s << ",";
-      mf << " strides=";
-      for (auto s : rope_epi->k.view_strides) mf << s << ",";
-      mf << " off=" << rope_epi->k.view_offset << "\n";
-      mf << "epi_d=" << epi_d << " dims=" << rope_epi->dims
-         << " heads=" << epi_heads[0] << "," << epi_heads[1]
-         << " pat=" << epi_pattern[0] << "," << epi_pattern[1]
-         << " mi=" << rope_epi->q.member_index << ","
-         << rope_epi->k.member_index << " eps=" << rope_epi->norm_eps
-         << " scale=" << rope_epi->scale << " base=" << rope_epi->base
-         << " count=" << params.count << " rhsoff=" << params.rhs_offset
-         << " rows=" << rows << "\n";
     }
     commit_rope_kv_redirect(rope_epi->k.rope);
     if (rope_epi_done) {
@@ -18228,55 +18144,6 @@ void RoPE::eval_gpu(
       params,
       fuse_norm ? params.count
                 : omarchy::compute_dispatch_group_count(params.count));
-  if (fuse_norm &&
-      std::getenv("MLX_OMARCHY_ROPE_EPI_DUMP") != nullptr) {
-    encoder.synchronize("rope-epi ref dump");
-    static int rmp = 0;
-    const std::string base = "/tmp/roperef_" + std::to_string(rmp++) + "_";
-    auto write_all = [](const std::string& path, const array& a) {
-      std::ofstream f(path, std::ios::binary | std::ios::trunc);
-      f.write(
-          reinterpret_cast<const char*>(a.data<uint8_t>()),
-          static_cast<std::streamsize>(a.nbytes()));
-    };
-    write_all(base + "src.bin", *src);
-    write_all(base + "out.bin", rope_output);
-    write_all(base + "off.bin", offset);
-    write_all(base + "w.bin", norm_weight);
-    std::ofstream mf(base + "meta.txt", std::ios::trunc);
-    mf << "kernel=" << (kernel == omarchy::ComputeKernel::FastRopeNormBF16
-                            ? "std"
-                            : "apple")
-       << " kv_direct=" << kv_direct
-       << " in_id=" << reinterpret_cast<void*>(in.id()) << "\n";
-    mf << "in shape=";
-    for (auto sv : in.shape()) mf << sv << ",";
-    mf << " strides=";
-    for (auto sv : in.strides()) mf << sv << ",";
-    mf << " off=" << in.offset() << "\n";
-    mf << "src shape=";
-    for (auto sv : src->shape()) mf << sv << ",";
-    mf << " strides=";
-    for (auto sv : src->strides()) mf << sv << ",";
-    mf << " off=" << src->offset() << "\n";
-    mf << "out shape=";
-    for (auto sv : rope_output.shape()) mf << sv << ",";
-    mf << " strides=";
-    for (auto sv : rope_output.strides()) mf << sv << ",";
-    mf << " off=" << rope_output.offset() << "\n";
-    mf << "count=" << params.count << " dims=" << params.dims
-       << " flags=" << params.flags << " alpha=" << params.alpha
-       << " beta=" << params.beta << " lho=" << params.lhs_offset
-       << " rho=" << params.rhs_offset << " oo=" << params.output_offset
-       << " mm=" << params.matrix_m << " rs=" << params.reduce_size
-       << " auxo=" << params.aux_offset << " op=" << params.operation
-       << "\n";
-    mf << "shape=" << params.shape[0] << "," << params.shape[1] << ","
-       << params.shape[2] << " instr=" << params.in_strides[0] << ","
-       << params.in_strides[1] << "," << params.in_strides[2]
-       << " outstr=" << params.out_strides[0] << "," << params.out_strides[1]
-       << "," << params.out_strides[2] << "\n";
-  }
   if (kv_direct) {
     omarchy::commit_rope_kv_redirect(out);
   }
