@@ -110,6 +110,17 @@ wheel.
   state or a memory-clock state from the different prefill
   allocation pattern (act_freq covers the GT core only, not GDDR).
   Evidence: `~/scratch/w7t-dec19/freq2/` (freq-*.csv, mk-*, out-*).
+- Decode-phase dispatch attribution (r4 profs, 5 runs pooled per
+  arm, dispatches under submissions whose host timestamps fall
+  inside the marker decode window): total decode GPU-busy
+  20,348 ms base → 22,578 ms prop (+2,229 ms, +11 %), matching
+  the wall premium. Delta concentrates on the most-dispatched
+  kernels: `ElementwiseF32` +1,577 ms (+27 %), `op897988541`
+  +336 ms (+12 %), `CastBoolF32` +276 ms (+2 %) — a broad
+  per-execution overhead signature, not a single-kernel
+  slowdown. Decode buffer VA footprints are the same on both
+  arms (~23-27 distinct MB units in the same region), so
+  allocator placement does not explain it either.
 - ctx512 decode (`45f9937`): both arms ≈ 45 ms/token steady state.
 - Per-kernel (ctx2048 kernel table): `MatmulBF16 n=134217728`
   17.5 ms/35 dispatches → `MatmulBF16CoopmatXe16` 9.8 ms/35;
