@@ -73,9 +73,9 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-shared bfloat16_t x_s[TILE_M * STEP_K]; // 16x16 bf16 staged x tile
-shared bfloat16_t w_s[STEP_K * W_STRIDE]; // 16x32 bf16 dequant tile
-shared float drain_s[MAT_M * MAT_N];    // one 8x16 f32 acc scratch
+shared bfloat16_t x_s[TILE_M * STEP_K];    // 16x16 bf16 staged x tile
+shared bfloat16_t w_s[STEP_K * W_STRIDE];  // 16x32 bf16 dequant tile
+shared float drain_s[2u * MAT_M * MAT_N];  // per-subgroup 8x16 f32 scratch
 
 uint g_lid;
 uint g_sub_rb;
@@ -109,12 +109,14 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
   uint scale_row = scale_slice + column * g_groups_per_row;
   uint bias_row = bias_slice + column * g_groups_per_row;
 
+  // Keep both accumulators as explicit scalars (not an indexed array) so
+  // ANV/NIR keeps them in registers with zero scratch lowering.
   coopmat<float, gl_ScopeSubgroup, MAT_M, MAT_N, gl_MatrixUseAccumulator>
-      acc[NB];
-  for (uint cb = 0u; cb < NB; ++cb) {
-    acc[cb] = coopmat<float, gl_ScopeSubgroup, MAT_M, MAT_N,
-        gl_MatrixUseAccumulator>(0.0);
-  }
+      acc0 = coopmat<float, gl_ScopeSubgroup, MAT_M, MAT_N,
+          gl_MatrixUseAccumulator>(0.0);
+  coopmat<float, gl_ScopeSubgroup, MAT_M, MAT_N, gl_MatrixUseAccumulator>
+      acc1 = coopmat<float, gl_ScopeSubgroup, MAT_M, MAT_N,
+          gl_MatrixUseAccumulator>(0.0);
 
   for (uint chunk = 0u; chunk < g_k_chunks; ++chunk) {
     float scale = 0.0;
@@ -166,43 +168,44 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
           mat_a, x_s, g_sub_rb * MAT_M * STEP_K, STEP_K,
           gl_CooperativeMatrixLayoutRowMajor);
       coopmat<bfloat16_t, gl_ScopeSubgroup, MAT_K, MAT_N, gl_MatrixUseB>
-          mat_b[NB];
-      for (uint cb = 0u; cb < NB; ++cb) {
-        coopMatLoad(
-            mat_b[cb], w_s, cb * MAT_N,
-            W_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
-      }
-      for (uint cb = 0u; cb < NB; ++cb) {
-        acc[cb] = coopMatMulAdd(mat_a, mat_b[cb], acc[cb]);
-      }
+          mat_b0;
+      coopmat<bfloat16_t, gl_ScopeSubgroup, MAT_K, MAT_N, gl_MatrixUseB>
+          mat_b1;
+      coopMatLoad(
+          mat_b0, w_s, 0u, W_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+      coopMatLoad(
+          mat_b1, w_s, MAT_N, W_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+      acc0 = coopMatMulAdd(mat_a, mat_b0, acc0);
+      acc1 = coopMatMulAdd(mat_a, mat_b1, acc1);
       barrier();
     }
   }
 
-  // Each subgroup stores the one 8-row block it owns (g_sub_rb == rb);
-  // lanes then scatter the f32 accumulator elements to the bf16 out.
-  for (uint rb = 0u; rb < TILE_M / MAT_M; ++rb) {
-    for (uint cb = 0u; cb < NB; ++cb) {
-      if (g_sub_rb == rb) {
-        coopMatStore(
-            acc[cb], drain_s, 0u, MAT_N,
-            gl_CooperativeMatrixLayoutRowMajor);
-      }
-      barrier();
-      for (uint idx = g_lid; idx < MAT_M * MAT_N; idx += 64u) {
-        uint r = idx / MAT_N;
-        uint c = idx % MAT_N;
-        uint out_row = row_base + rb * MAT_M + r;
-        uint out_col = col_base + cb * MAT_N + c;
-        if (out_row < params.matrix_m && out_col < params.matrix_n) {
-          output_data.values[
-              out_slice + out_row * params.matrix_n + out_col] =
-              out_store(drain_s[idx]);
-        }
-      }
-      barrier();
-    }
-  }
+  // Both subgroups drain their own 8-row block in parallel through
+  // drain_s[g_sub_rb * MAT_M * MAT_N ..], then scatter f32 to bf16.
+  uint sub_lane = g_lid - g_sub_rb * 32u;
+  uint drain_base = g_sub_rb * MAT_M * MAT_N;
+#define DRAIN_QMM_ACC(ACC, CB_OFF)                                             \
+  coopMatStore(                                                                \
+      ACC, drain_s, drain_base, MAT_N,                                         \
+      gl_CooperativeMatrixLayoutRowMajor);                                     \
+  memoryBarrierShared();                                                       \
+  barrier();                                                                   \
+  for (uint idx = sub_lane; idx < MAT_M * MAT_N; idx += 32u) {                 \
+    uint r = idx / MAT_N;                                                      \
+    uint c = idx % MAT_N;                                                      \
+    uint out_row = row_base + g_sub_rb * MAT_M + r;                            \
+    uint out_col = col_base + (CB_OFF) * MAT_N + c;                            \
+    if (out_row < params.matrix_m && out_col < params.matrix_n) {              \
+      output_data.values[out_slice + out_row * params.matrix_n + out_col] =    \
+          out_store(drain_s[drain_base + idx]);                                \
+    }                                                                          \
+  }                                                                            \
+  barrier()
+
+  DRAIN_QMM_ACC(acc0, 0u);
+  DRAIN_QMM_ACC(acc1, 1u);
+#undef DRAIN_QMM_ACC
 }
 
 void main() {

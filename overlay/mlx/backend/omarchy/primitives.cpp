@@ -1058,7 +1058,7 @@ void dispatch_matmul(
   const bool xe16_shape_advertised = omarchy::cooperative_matrix_advertises(
       caps.cooperative_matrix_shapes, omarchy::matmul_xe16_bf16_shape());
   constexpr uint32_t kMatmulXe16SharedBytes =
-      (32u * 16u + 16u * 32u) * 2u + 8u * 16u * 4u;
+      (32u * 16u + 16u * 32u) * 2u + 2u * 8u * 16u * 4u;
   const bool xe16 = !matmul_xe16_disabled && !sdpa && !coopmat && !use_c &&
       kernel == omarchy::ComputeKernel::MatmulBF16 &&
       caps.cooperative_matrix_bf16 && xe16_shape_advertised &&
@@ -9296,7 +9296,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   static const bool qmm_xe16_disabled =
       omarchy::env_flag("MLX_OMARCHY_NO_QMM_XE16");
   constexpr uint32_t kQmmCoopmat16XeSharedBytes =
-      (16u * 16u + 16u * 32u) * 2u + 8u * 16u * 4u;
+      (16u * 16u + 16u * 32u) * 2u + 2u * 8u * 16u * 4u;
   const bool qmm_xe16_shape_advertised =
       omarchy::cooperative_matrix_advertises(
           coopmat_caps.cooperative_matrix_shapes,

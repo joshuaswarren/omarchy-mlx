@@ -8005,7 +8005,7 @@ TEST_CASE("bf16 Q4 prefill runs the scalar-FMA build without the cooperative rou
       omarchy::cooperative_matrix_advertises(
           caps.cooperative_matrix_shapes,
           omarchy::qmm_prefill_coopmat16_xe_shape()) &&
-      (16u * 16u + 16u * 32u) * 2u + 8u * 16u * 4u <=
+      (16u * 16u + 16u * 32u) * 2u + 2u * 8u * 16u * 4u <=
           caps.max_compute_shared_memory_size;
   std::cout << "[provenance] device=" << caps.device_name
             << " cooperative_matrix_f32_8="
@@ -8138,7 +8138,7 @@ TEST_CASE("bf16 Q4 prefill dispatches the Xe16 coopmat build on ragged rows") {
       omarchy::cooperative_matrix_advertises(
           caps.cooperative_matrix_shapes,
           omarchy::qmm_prefill_coopmat16_xe_shape()) &&
-      (16u * 16u + 16u * 32u) * 2u + 8u * 16u * 4u <=
+      (16u * 16u + 16u * 32u) * 2u + 2u * 8u * 16u * 4u <=
           caps.max_compute_shared_memory_size;
   std::cout << "[provenance] device=" << caps.device_name
             << " xe16_reachable=" << (xe16_reachable ? 1 : 0) << "\n";
