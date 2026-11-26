@@ -2229,10 +2229,37 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         }
         continue;
       }
-      // Both ropes share state: same dims/base/scale/traditional by
-      // the scan above and the shared scalar offset input.
-      const auto& st =
+      // The plan stores the query rope's state and the dispatch
+      // applies it to both sides, so the keys rope must carry the
+      // same parameters: dims, base, scale, and the norm epsilon.
+      // Forward/non-traditional is already required per candidate.
+      const auto& q_state =
           static_cast<const fast::RoPE&>(qc->node->primitive()).state();
+      const auto& k_state =
+          static_cast<const fast::RoPE&>(kc->node->primitive()).state();
+      if (std::get<1>(q_state) != std::get<1>(k_state) ||
+          std::get<3>(q_state) != std::get<3>(k_state) ||
+          std::get<4>(q_state) != std::get<4>(k_state) ||
+          static_cast<const fast::RoPE&>(qc->node->primitive())
+                  .norm_eps() !=
+              static_cast<const fast::RoPE&>(kc->node->primitive())
+                  .norm_eps()) {
+        if (epi_trace) {
+          std::fprintf(
+              stderr,
+              "[rope-epi] group %zu: q/k rope state differs "
+              "(dims %d/%d base %g/%g scale %g/%g)\n",
+              gi,
+              std::get<1>(q_state),
+              std::get<1>(k_state),
+              std::get<3>(q_state),
+              std::get<3>(k_state),
+              std::get<4>(q_state),
+              std::get<4>(k_state));
+        }
+        continue;
+      }
+      const auto& st = q_state;
       auto& group = state->gemv_groups[gi];
       const auto q_layout = compose_view(
           group.members[qc->member_index].node, qc->chain);
