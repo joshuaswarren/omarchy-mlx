@@ -62,4 +62,32 @@ CoopmatShape matmul_direct_coopmat_shape_c16(CoopmatType operand) {
   return shape;
 }
 
+CoopmatShape matmul_xe16_bf16_shape() {
+  CoopmatShape shape;
+  shape.m = 8u;
+  shape.n = 16u;
+  shape.k = 16u;
+  shape.a = CoopmatType::BFloat16;
+  shape.b = CoopmatType::BFloat16;
+  shape.c = CoopmatType::Float32;
+  shape.result = CoopmatType::Float32;
+  shape.scope = CoopmatScope::Subgroup;
+  shape.saturating = false;
+  return shape;
+}
+
+CoopmatShape qmm_prefill_coopmat16_xe_shape() {
+  CoopmatShape shape;
+  shape.m = 8u;
+  shape.n = 16u;
+  shape.k = 16u;
+  shape.a = CoopmatType::BFloat16;
+  shape.b = CoopmatType::BFloat16;
+  shape.c = CoopmatType::Float32;
+  shape.result = CoopmatType::Float32;
+  shape.scope = CoopmatScope::Subgroup;
+  shape.saturating = false;
+  return shape;
+}
+
 } // namespace mlx::core::omarchy
