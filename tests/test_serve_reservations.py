@@ -5,11 +5,13 @@ Stdlib unittest only. Tests use a temporary MLX_OMARCHY_HOME so the real
 plausible bug would break.
 """
 
+import contextlib
 import io
 import json
 import multiprocessing
 import os
 import socket
+import stat
 import subprocess
 import tempfile
 import threading
@@ -199,7 +201,7 @@ class UnreadableReservationsFileTests(unittest.TestCase):
 
     CASES = {
         "invalid_utf8": b'{"x": {"bytes": 1, "note": "\xff"}}',
-        "deep_nesting": b"[" * 200000 + b"]" * 200000,
+        "deep_nesting": b"[" * 200000,
         "huge_int": b'{"x": {"bytes": ' + b"1" * 5000 + b"}}",
     }
 
@@ -219,6 +221,7 @@ class UnreadableReservationsFileTests(unittest.TestCase):
             with self.subTest(label):
                 exc = self._load_on_small_stack(self._home_with(raw))
                 self.assertIsInstance(exc, budget.BudgetError)
+                self.assertIn("reservations file unreadable", str(exc))
                 self.assertIn("refusing to guess", str(exc))
 
     def test_deeply_nested_field_raises_budget_error(self):
@@ -248,8 +251,283 @@ class UnreadableReservationsFileTests(unittest.TestCase):
                      sys.executable, "-m", "mlx_omarchy_serve", "unreserve", "x"],
                     env=env, capture_output=True, text=True, timeout=60)
                 self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertIn("reservations file unreadable", proc.stderr)
                 self.assertIn("refusing to guess", proc.stderr)
                 self.assertNotIn("Traceback", proc.stderr)
+
+
+class ReservationsFileReadBoundsTests(unittest.TestCase):
+    """Reservations file reads are non-blocking, reject non-regular files,
+    and bound reads and writes to RESERVATIONS_MAX_BYTES."""
+
+    def _home_with(self, raw):
+        home, cleanup = _make_home()
+        self.addCleanup(cleanup)
+        budget.reservations_path(home).write_bytes(raw)
+        return home
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires os.mkfifo")
+    def test_fifo_reservations_rejected_without_blocking(self):
+        home, cleanup = _make_home()
+        self.addCleanup(cleanup)
+        path = budget.reservations_path(home)
+        os.mkfifo(path)
+        outcome: dict[str, BaseException] = {}
+
+        def run():
+            try:
+                expected = "reservations file is not a regular file; refusing to guess"
+                with self.assertRaises(budget.BudgetError) as cm:
+                    budget.load_reservations(home)
+                self.assertEqual(str(cm.exception), expected)
+                with self.assertRaises(budget.BudgetError) as cm:
+                    budget.set_reservation("svc", 1024, home=home)
+                self.assertEqual(str(cm.exception), expected)
+            except BaseException as exc:
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(timeout=10.0)
+        self.assertFalse(worker.is_alive(), "FIFO reservations read blocked")
+        if "error" in outcome:
+            raise outcome["error"]
+        self.assertTrue(stat.S_ISFIFO(os.lstat(path).st_mode))
+
+    def test_symlink_to_dev_null_rejected_and_preserved(self):
+        dev_null = Path("/dev/null")
+        try:
+            is_chr = stat.S_ISCHR(os.stat(dev_null).st_mode)
+        except OSError:
+            is_chr = False
+        if not is_chr:
+            self.skipTest("/dev/null is not a character device")
+        home, cleanup = _make_home()
+        self.addCleanup(cleanup)
+        path = budget.reservations_path(home)
+        path.symlink_to(dev_null)
+        expected = "reservations file is not a regular file; refusing to guess"
+        with self.assertRaises(budget.BudgetError) as cm:
+            budget.load_reservations(home)
+        self.assertEqual(str(cm.exception), expected)
+        with self.assertRaises(budget.BudgetError) as cm:
+            budget.set_reservation("svc", 1024, home=home)
+        self.assertEqual(str(cm.exception), expected)
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(os.readlink(path), str(dev_null))
+
+    def test_oversized_sparse_file_rejected_without_reading(self):
+        home, cleanup = _make_home()
+        self.addCleanup(cleanup)
+        size = 64 * 1024 * 1024
+        path = budget.reservations_path(home)
+        with open(path, "wb") as fh:
+            fh.truncate(size)
+        open_ctx, reads = self._short_read_open()
+        with open_ctx:
+            with self.assertRaises(budget.BudgetError) as cm:
+                budget.load_reservations(home)
+        self.assertEqual(
+            str(cm.exception),
+            f"reservations file is {size} bytes, over the "
+            f"{budget.RESERVATIONS_MAX_BYTES}-byte limit; refusing to guess",
+        )
+        self.assertEqual(reads[0], 0)
+
+    def _short_read_open(self, limit=4096):
+        real_open = open
+        reads = [0]
+
+        def short_open(*args, **kwargs):
+            fh = real_open(*args, **kwargs)
+            read = fh.read
+
+            def limited_read(n=-1):
+                reads[0] += 1
+                return read(limit if n < 0 else min(n, limit))
+
+            fh.read = limited_read
+            return fh
+
+        return unittest.mock.patch.object(budget, "open", short_open, create=True), reads
+
+    def test_file_growth_after_fstat_rejected_with_bounded_read(self):
+        cap = budget.RESERVATIONS_MAX_BYTES
+        home = self._home_with(b" " * (cap + 4096))
+        real_fstat = os.fstat
+        expected = (
+            f"reservations file is {cap + 1} bytes, over the "
+            f"{cap}-byte limit; refusing to guess"
+        )
+
+        for label, short_reads in (("full_read", False), ("short_reads", True)):
+            with self.subTest(label):
+                dups = []  # a dup shares the file offset, so it shows how far the read went
+
+                def small_fstat(fd):
+                    dup_fd = os.dup(fd)
+                    self.addCleanup(os.close, dup_fd)
+                    dups.append(dup_fd)
+                    vals = list(real_fstat(fd))
+                    vals[stat.ST_SIZE] = 16
+                    return os.stat_result(vals)
+
+                open_ctx, reads = (
+                    self._short_read_open() if short_reads
+                    else (contextlib.nullcontext(), None)
+                )
+                with unittest.mock.patch.object(
+                    budget.os, "fstat", side_effect=small_fstat
+                ), open_ctx:
+                    with self.assertRaises(budget.BudgetError) as cm:
+                        budget.load_reservations(home)
+                self.assertEqual(str(cm.exception), expected)
+                self.assertEqual(len(dups), 1)
+                self.assertEqual(os.lseek(dups[0], 0, os.SEEK_CUR), cap + 1)
+                if reads is not None:
+                    self.assertGreater(reads[0], 1)
+
+    def test_short_reads_are_joined(self):
+        note = "x" * 12000
+        payload = {"svc": {"bytes": 1024, "note": note, "state": "pending"}}
+        raw = json.dumps(payload).encode("utf-8")
+        home = self._home_with(raw)
+        open_ctx, reads = self._short_read_open()
+        with open_ctx:
+            loaded = budget.load_reservations(home)
+        self.assertGreater(reads[0], 2)
+        self.assertEqual(loaded["svc"]["bytes"], 1024)
+        self.assertEqual(loaded["svc"]["note"], note)
+
+    def test_exact_size_limit_loads_and_cap_plus_one_refused(self):
+        cap = 256 * 1024
+        body = json.dumps({"svc": {"bytes": 2048, "note": "at-cap"}}).encode("utf-8")
+        exact_home = self._home_with(body + b" " * (cap - len(body)))
+        loaded = budget.load_reservations(exact_home)
+        self.assertEqual(loaded["svc"]["bytes"], 2048)
+
+        over_home = self._home_with(body + b" " * (cap + 1 - len(body)))
+        with self.assertRaises(budget.BudgetError) as cm:
+            budget.load_reservations(over_home)
+        self.assertEqual(
+            str(cm.exception),
+            f"reservations file is {cap + 1} bytes, over the "
+            f"{cap}-byte limit; refusing to guess",
+        )
+
+    def test_write_over_size_limit_refused_without_clobbering_file(self):
+        cap = budget.RESERVATIONS_MAX_BYTES
+        home, cleanup = _make_home()
+        self.addCleanup(cleanup)
+        path = budget.reservations_path(home)
+
+        budget.set_reservation("svc-1", 1024, note="", home=home)
+        base_len = len(path.read_bytes())
+        max_note = "x" * (cap - base_len)
+        budget.set_reservation("svc-1", 1024, note=max_note, home=home)
+        before = path.read_bytes()
+        self.assertEqual(len(before), cap)
+
+        with unittest.mock.patch.object(
+            budget.tempfile, "mkstemp", wraps=tempfile.mkstemp
+        ) as mkstemp:
+            with self.assertRaises(budget.BudgetError) as cm:
+                budget.set_reservation("svc-1", 1024, note=max_note + "x", home=home)
+            self.assertEqual(
+                str(cm.exception),
+                f"reservations file would be {cap + 1} bytes, over the "
+                f"{cap}-byte limit; refusing to write",
+            )
+            with self.assertRaises(budget.BudgetError) as cm:
+                budget.set_reservation("svc-2", 1024, note="extra", home=home)
+            self.assertIn(f"over the {cap}-byte limit; refusing to write", str(cm.exception))
+        mkstemp.assert_not_called()
+
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(list(home.glob("*.tmp")), [])
+        loaded = budget.load_reservations(home)
+        self.assertEqual(set(loaded), {"svc-1"})
+        self.assertEqual(loaded["svc-1"]["note"], max_note)
+        self.assertTrue(budget.clear_reservation("svc-1", home=home))
+        self.assertEqual(budget.load_reservations(home), {})
+
+    def test_kept_path_behaviors_pin(self):
+        """Pin kept behavior: valid symlink loads; missing file and dangling
+        symlink return {}; directory raises BudgetError ('refusing to guess')."""
+        with self.subTest("missing_file"):
+            home, cleanup = _make_home()
+            self.addCleanup(cleanup)
+            self.assertEqual(budget.load_reservations(home), {})
+
+        with self.subTest("dangling_symlink"):
+            home, cleanup = _make_home()
+            self.addCleanup(cleanup)
+            budget.reservations_path(home).symlink_to(home / "does-not-exist.json")
+            self.assertEqual(budget.load_reservations(home), {})
+
+        with self.subTest("symlink_to_valid_file"):
+            home, cleanup = _make_home()
+            self.addCleanup(cleanup)
+            target = home / "real-reservations.json"
+            target.write_text(
+                json.dumps({"svc": {"bytes": 4096, "note": "via-link"}}),
+                encoding="utf-8",
+            )
+            budget.reservations_path(home).symlink_to(target)
+            loaded = budget.load_reservations(home)
+            self.assertEqual(loaded["svc"]["bytes"], 4096)
+            self.assertEqual(loaded["svc"]["note"], "via-link")
+
+        with self.subTest("directory"):
+            home, cleanup = _make_home()
+            self.addCleanup(cleanup)
+            budget.reservations_path(home).mkdir()
+            with self.assertRaisesRegex(
+                budget.BudgetError,
+                r"^reservations file unreadable \(.*\); refusing to guess$",
+            ):
+                budget.load_reservations(home)
+
+    def test_nonblocking_would_block_read_rejected_without_clobbering_file(self):
+        home, cleanup = _make_home()
+        self.addCleanup(cleanup)
+        budget.set_reservation("existing", 1024, note="keep", home=home)
+        path = budget.reservations_path(home)
+        before = path.read_bytes()
+        real_open = open
+
+        def would_block_open(file, *args, **kwargs):
+            fh = real_open(file, *args, **kwargs)
+            if Path(file) == path:
+                chunks = iter((b"{}", None, b" "))
+                fh.read = lambda _n=-1: next(chunks, b"")
+            return fh
+
+        expected = "reservations file read would block; refusing to guess"
+        with unittest.mock.patch.object(budget, "open", would_block_open, create=True):
+            with self.assertRaises(budget.BudgetError) as cm:
+                budget.load_reservations(home)
+            self.assertEqual(str(cm.exception), expected)
+            with self.assertRaises(budget.BudgetError) as cm:
+                budget.set_reservation("svc", 2048, home=home)
+            self.assertEqual(str(cm.exception), expected)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_file_not_found_after_open_rejected_without_clobbering_file(self):
+        home, cleanup = _make_home()
+        self.addCleanup(cleanup)
+        budget.set_reservation("existing", 1024, note="keep", home=home)
+        path = budget.reservations_path(home)
+        before = path.read_bytes()
+        pattern = r"^reservations file unreadable \(.*\); refusing to guess$"
+        with unittest.mock.patch.object(
+            budget.os, "fstat", side_effect=FileNotFoundError("vanished")
+        ):
+            with self.assertRaisesRegex(budget.BudgetError, pattern):
+                budget.load_reservations(home)
+            with self.assertRaisesRegex(budget.BudgetError, pattern):
+                budget.set_reservation("svc", 2048, home=home)
+        self.assertEqual(path.read_bytes(), before)
 
 
 GOOD_CLAIM = {"name": "chat", "claim_token": "pid1-0123456789ab",

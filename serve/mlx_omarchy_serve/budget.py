@@ -127,6 +127,8 @@ def prefill_scratch_bytes(step: int, context_tokens: int) -> int:
     return int(raw * PREFILL_MARGIN)
 
 RESERVATIONS_FILE = "reservations.json"
+# A real file holds a few entries of a few hundred bytes each; 256 KiB bounds reads and writes.
+RESERVATIONS_MAX_BYTES = 256 * 1024
 RESERVATION_STATES = ("pending", "resident")
 
 # Managed pair runtime: claims travel on a private inherited pipe (fd number
@@ -234,9 +236,40 @@ def reservations_path(home: Path | None = None) -> Path:
 
 def _load_reservations_file(path: Path) -> dict[str, dict]:
     try:
-        obj = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
+        try:
+            fh = open(
+                path,
+                "rb",
+                buffering=0,  # a buffered read would read ahead past the cap
+                opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK),
+            )
+        except FileNotFoundError:
+            return {}
+        with fh:
+            st = os.fstat(fh.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                raise BudgetError("reservations file is not a regular file; refusing to guess")
+            if st.st_size > RESERVATIONS_MAX_BYTES:
+                raise BudgetError(
+                    f"reservations file is {st.st_size} bytes, over the "
+                    f"{RESERVATIONS_MAX_BYTES}-byte limit; refusing to guess"
+                )
+            raw = bytearray()
+            while len(raw) <= RESERVATIONS_MAX_BYTES:  # a short read is not EOF; stop at cap + 1
+                chunk = fh.read(RESERVATIONS_MAX_BYTES + 1 - len(raw))
+                if chunk is None:
+                    raise BudgetError("reservations file read would block; refusing to guess")
+                if not chunk:
+                    break
+                raw += chunk
+        if len(raw) > RESERVATIONS_MAX_BYTES:
+            raise BudgetError(
+                f"reservations file is {len(raw)} bytes, over the "
+                f"{RESERVATIONS_MAX_BYTES}-byte limit; refusing to guess"
+            )
+        obj = json.loads(raw.decode("utf-8"))
+    except BudgetError:
+        raise
     except (OSError, ValueError, RecursionError) as exc:
         # ValueError covers JSONDecodeError, UnicodeDecodeError and the
         # int-digit limit; RecursionError covers deeply nested JSON.
@@ -315,10 +348,16 @@ def _transaction(mutate, home: Path | None, available_bytes: int | None = None):
         data = _load_reservations_file(path)
         available = available_bytes if available_bytes is not None else mem_available()
         result = mutate(data, available)
+        payload = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        if len(payload) > RESERVATIONS_MAX_BYTES:
+            raise BudgetError(
+                f"reservations file would be {len(payload)} bytes, over the "
+                f"{RESERVATIONS_MAX_BYTES}-byte limit; refusing to write"
+            )
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps(data, indent=2, sort_keys=True) + "\n")
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(payload)
             os.replace(tmp, path)
         except BaseException:
             try:
