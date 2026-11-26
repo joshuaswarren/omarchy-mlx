@@ -8114,7 +8114,8 @@ TEST_CASE("bf16 Q4 prefill runs the scalar-FMA build without the cooperative rou
 // through shared, so a ragged matrix_m tile zero-fills - the route
 // claims the q4-g64 bf16 prefill calls the Intel direct kernel's m%16
 // gate declines on a driver whose shape list has no M16 entry. Pin the
-// dispatch on m not a multiple of 16, then check the value class: fp16
+// dispatch on m not a multiple of 16 and above the m<=8 batch-8 short
+// pass (qmv_small_t_default_part), then check the value class: fp16
 // operand staging bounds the call at roughly one 2^-11 rounding per
 // operand on top of the f32 accumulation chain and the bf16 store.
 TEST_CASE("bf16 Q4 prefill dispatches the Xe16 coopmat build on ragged rows") {
@@ -8155,7 +8156,7 @@ TEST_CASE("bf16 Q4 prefill dispatches the Xe16 coopmat build on ragged rows") {
   array w_words(host.words.begin(), Shape{n, k * bits / 32}, uint32);
   array scales(rounded.scales.begin(), Shape{n, k / group_size}, bfloat16);
   array biases(rounded.biases.begin(), Shape{n, k / group_size}, bfloat16);
-  for (int m : {5, 77}) {
+  for (int m : {17, 77}) {
     std::vector<float> x_values(static_cast<size_t>(m) * k);
     for (auto& v : x_values) {
       v = dist(gen);
