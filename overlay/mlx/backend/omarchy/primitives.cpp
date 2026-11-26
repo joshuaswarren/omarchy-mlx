@@ -18920,6 +18920,73 @@ void ScaledDotProductAttention::eval_gpu(
   const bool decode_batch_ok = batch == 1 ||
       (decode_bf16_probe && q_len == 1 &&
           decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
+  // Single-dispatch online-softmax bf16 decode route (HD=128, batch 1, q_len 1):
+  // one 1024-thread (32-subgroup) workgroup per query head, coalesced 256-byte
+  // uvec2 K/V loads, zero scratch/atomics/pass-2. MLX_OMARCHY_SDPA_ONLINE: "0"
+  // disables, any other non-empty value forces; unset defers to explicit
+  // split-K overrides if set, otherwise follows omarchy::sdpa_online_default.
+  {
+    const int online_env = decode_path_override("MLX_OMARCHY_SDPA_ONLINE");
+    const bool explicit_split_override =
+        decode_path_override("MLX_OMARCHY_SDPA_DECODE_SPLIT") >= 0 ||
+        decode_path_override("MLX_OMARCHY_SDPA_SPLIT_PV") >= 0 ||
+        decode_path_override("MLX_OMARCHY_SDPA_SPLIT_BK64") >= 0 ||
+        decode_path_override("MLX_OMARCHY_SDPA_SPLIT_MERGE") >= 0 ||
+        decode_path_override("MLX_OMARCHY_SDPA_SPLIT_P1KV") >= 0;
+    const bool online_wanted = online_env > 0 ||
+        (online_env < 0 && !explicit_split_override &&
+         omarchy::sdpa_online_default(
+             decode_caps.device_name, static_cast<uint32_t>(k_len)));
+    if (online_wanted) {
+      constexpr VkSubgroupFeatureFlags kOnlineSubgroupFeatures =
+          VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+          VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
+      const bool online_device_ready = decode_caps.subgroup_size == 32u &&
+          decode_caps.max_compute_work_group_invocations >= 1024u &&
+          decode_caps.max_compute_work_group_size[0] >= 1024u &&
+          decode_caps.max_compute_shared_memory_size >= 16640u &&
+          (decode_caps.subgroup_operations & kOnlineSubgroupFeatures) ==
+              kOnlineSubgroupFeatures;
+      if (online_device_ready &&
+          (decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
+          q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
+          v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
+          inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ &&
+          batch == 1 && q_len == 1 && head_dim == 128 && v_dim == 128 &&
+          k_len > 0 && kv_heads > 0 && heads % kv_heads == 0 &&
+          q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1 &&
+          k.strides()[1] % 4 == 0 && k.strides()[2] % 4 == 0 &&
+          v.strides()[1] % 4 == 0 && v.strides()[2] % 4 == 0) {
+        omarchy::ComputeParams online_params;
+        online_params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
+        online_params.aux_offset = checked_item_offset(v, v.size(), tag, out);
+        if (online_params.rhs_offset % 4u == 0u &&
+            online_params.aux_offset % 4u == 0u) {
+          out.set_data(allocate_omarchy(out.nbytes()));
+          online_params.count = checked_u32(out.size(), tag, out);
+          online_params.matrix_m = checked_u32(heads, tag, out);
+          online_params.matrix_n = checked_u32(kv_heads, tag, out);
+          online_params.matrix_k = checked_u32(k_len, tag, out);
+          online_params.alpha = scale_;
+          online_params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
+          online_params.output_offset =
+              checked_item_offset(out, out.size(), tag, out);
+          online_params.shape[0] = checked_u32(q.strides()[1], tag, out);
+          online_params.shape[1] = checked_u32(k.strides()[1], tag, out);
+          online_params.shape[2] = checked_u32(k.strides()[2], tag, out);
+          online_params.in_strides[1] = checked_u32(v.strides()[1], tag, out);
+          online_params.in_strides[2] = checked_u32(v.strides()[2], tag, out);
+          online_params.out_strides[0] = checked_u32(out.strides()[1], tag, out);
+          std::array<omarchy::ComputeBinding, 4> online_bindings{
+              binding(q), binding(k), binding(v), binding(out)};
+          encoder.dispatch_compute(
+              omarchy::ComputeKernel::SdpaDecodeOnlineSg32BF16Hd128,
+              online_bindings, online_params, online_params.matrix_m);
+          return;
+        }
+      }
+    }
+  }
   // Split-K decode route (bf16, head width 128 or 256, one query token, batch 1): pass 1 per (key-value head, block of 128 keys) for the
   // query heads that share the key-value head, pass 2 per query head (sdpa_decode_split_p1.comp, sdpa_decode_split_p2.comp). The
   // fused kernel above is one 256-thread workgroup per query head, a serial chain at decode lengths; this route spreads the keys over
