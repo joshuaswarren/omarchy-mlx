@@ -284,8 +284,16 @@ const QmmGeometry& qmm_geometry() {
     }
     if (v == "2x4w2") {
       return QmmGeometry{
-          8u, K::QmmVecQ4WordSubgroupBF16,
-          K::QmmVecQ4MultiSubgroupBF16R2S4W2, "2x4w2"};
+          8u,
+          K::QmmVecQ4WordSubgroupBF16R2S4W2,
+          K::QmmVecQ4MultiSubgroupBF16R2S4W2,
+          "2x4w2",
+          true,
+          true,
+          8u,
+          K::QmmVecQ4SwigluBF16R2S4W2,
+          8u,
+          K::QmmVecQ4ResNormBF16R2S4W2};
     }
     throw std::invalid_argument(
         "[mlx-omarchy] MLX_OMARCHY_QMM_GEOM must be one of 2x4 2x4w2 2x8w2 2x16 2x16w2 2x16kcont 2x16kcs16");
@@ -9701,8 +9709,14 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       const auto& geometry = qmm_geometry();
       if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u &&
           (params.shape[1] % 2u == 0u))) {
-        vec_kernel = geometry.word;
-        qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+        const bool smalln_s4 = geometry.word_w2 && geometry.columns == 16u &&
+            params.matrix_n <= 2048u &&
+            omarchy::env_flag("MLX_OMARCHY_QMM_SMALLN_S4");
+        vec_kernel = smalln_s4
+            ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2
+            : geometry.word;
+        const uint32_t cols = smalln_s4 ? 8u : geometry.columns;
+        qmm_groups = (params.matrix_n + cols - 1u) / cols;
       }
     }
     encoder.dispatch_compute(
@@ -11049,11 +11063,16 @@ bool dispatch_quantized_gemv_group(
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
   // resnorm epilogue kernels.
+  const bool smalln_resnorm_s4 = res_norm_active && !token_route &&
+      outgate == nullptr && geom.resnorm_columns == 16u &&
+      members[0].node.inputs()[1].shape(0) <= 2048 &&
+      omarchy::env_flag("MLX_OMARCHY_QMM_SMALLN_S4");
   const uint32_t group_columns = res_norm_active
       ? (token_route
              ? 8u
-             : (outgate != nullptr ? geom.outgate_resnorm_columns
-                                   : geom.resnorm_columns))
+             : (outgate != nullptr
+                    ? geom.outgate_resnorm_columns
+                    : (smalln_resnorm_s4 ? 8u : geom.resnorm_columns)))
       : dedicated_swiglu_active
       ? geom.swiglu_columns
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
@@ -11631,7 +11650,9 @@ bool dispatch_quantized_gemv_group(
           binding(res_norm->out),
           encoder.resnorm_ticket_binding()};
       encoder.dispatch_compute(
-          geom.resnorm,
+          smalln_resnorm_s4
+              ? ComputeKernel::QmmVecQ4ResNormBF16R2S4W2
+              : geom.resnorm,
           rn_bindings,
           params,
           total_groups,
@@ -19230,23 +19251,43 @@ void ScaledDotProductAttention::eval_gpu(
         online_params.aux_offset = checked_item_offset(v, v.size(), tag, out);
         if (online_params.rhs_offset % online_align == 0u &&
             online_params.aux_offset % online_align == 0u) {
-          out.set_data(allocate_omarchy(out.nbytes()));
-          online_params.count = checked_u32(out.size(), tag, out);
+          const array* transpose_plan =
+              omarchy::env_flag("MLX_OMARCHY_SDPA_TRANSPOSE_ONLINE")
+                  ? omarchy::find_sdpa_transpose_out(out)
+                  : nullptr;
+          const bool adopt_transpose = transpose_plan != nullptr &&
+              transpose_plan->shape() == Shape{1, 1, heads * head_dim} &&
+              transpose_plan->dtype() == bfloat16 &&
+              transpose_plan->primitive().stream() == s &&
+              transpose_plan->data_shared_ptr() == nullptr &&
+              out.flags().contiguous;
+          array* dst_out = &out;
+          if (adopt_transpose) {
+            array& transpose_out = const_cast<array&>(*transpose_plan);
+            transpose_out.set_data(allocate_omarchy(transpose_out.nbytes()));
+            encoder.add_temporary(transpose_out);
+            dst_out = &transpose_out;
+          } else {
+            out.set_data(allocate_omarchy(out.nbytes()));
+          }
+          online_params.count = checked_u32(dst_out->size(), tag, out);
           online_params.matrix_m = checked_u32(heads, tag, out);
           online_params.matrix_n = checked_u32(kv_heads, tag, out);
           online_params.matrix_k = checked_u32(k_len, tag, out);
           online_params.alpha = scale_;
           online_params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
           online_params.output_offset =
-              checked_item_offset(out, out.size(), tag, out);
+              checked_item_offset(*dst_out, dst_out->size(), tag, out);
           online_params.shape[0] = checked_u32(q.strides()[1], tag, out);
           online_params.shape[1] = checked_u32(k.strides()[1], tag, out);
           online_params.shape[2] = checked_u32(k.strides()[2], tag, out);
           online_params.in_strides[1] = checked_u32(v.strides()[1], tag, out);
           online_params.in_strides[2] = checked_u32(v.strides()[2], tag, out);
-          online_params.out_strides[0] = checked_u32(out.strides()[1], tag, out);
+          online_params.out_strides[0] = adopt_transpose
+              ? checked_u32(head_dim, tag, out)
+              : checked_u32(out.strides()[1], tag, out);
           std::array<omarchy::ComputeBinding, 4> online_bindings{
-              binding(q), binding(k), binding(v), binding(out)};
+              binding(q), binding(k), binding(v), binding(*dst_out)};
           const auto online_kernel = head_dim == 256
               ? (online_sg16
                      ? omarchy::ComputeKernel::SdpaDecodeOnlineSg16BF16Hd256
@@ -19255,6 +19296,9 @@ void ScaledDotProductAttention::eval_gpu(
           encoder.dispatch_compute(
               online_kernel, online_bindings, online_params,
               online_params.matrix_m);
+          if (adopt_transpose) {
+            omarchy::commit_sdpa_transpose_out(out);
+          }
           return;
         }
       }
@@ -19392,11 +19436,33 @@ void ScaledDotProductAttention::eval_gpu(
             }
           }
         }
+        const array* split_transpose_plan =
+            (split_rows == 1u && !split_merge &&
+             omarchy::env_flag("MLX_OMARCHY_SDPA_TRANSPOSE_ONLINE"))
+                ? omarchy::find_sdpa_transpose_out(out)
+                : nullptr;
+        const bool split_adopt_transpose = split_transpose_plan != nullptr &&
+            split_transpose_plan->shape() == Shape{1, 1, heads * head_dim} &&
+            split_transpose_plan->dtype() == bfloat16 &&
+            split_transpose_plan->primitive().stream() == s &&
+            split_transpose_plan->data_shared_ptr() == nullptr &&
+            out.flags().contiguous;
+        array* split_dst_out = &out;
+        if (split_adopt_transpose) {
+          array& transpose_out = const_cast<array&>(*split_transpose_plan);
+          transpose_out.set_data(allocate_omarchy(transpose_out.nbytes()));
+          encoder.add_temporary(transpose_out);
+          split_dst_out = &transpose_out;
+        }
         const uint32_t split_q_offset = split_params.lhs_offset;
-        const uint32_t split_out_offset = split_params.output_offset;
+        const uint32_t split_out_offset = split_adopt_transpose
+            ? checked_item_offset(*split_dst_out, split_dst_out->size(), tag, out)
+            : split_params.output_offset;
         const uint32_t split_q_row = checked_u32(q.strides()[2], tag, out);
         const uint32_t split_out_row = checked_u32(out.strides()[2], tag, out);
-        split_params.out_strides[0] = split_rows > 1u ? checked_u32(out.strides()[1], tag, out) : 0u;
+        split_params.out_strides[0] = split_adopt_transpose
+            ? checked_u32(head_dim, tag, out)
+            : (split_rows > 1u ? checked_u32(out.strides()[1], tag, out) : 0u);
         // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
         // The merge kernel is the 128-key pass 1 even when the bk64 default is on — its grid must count 128-key blocks
         // or the extra workgroups write out-of-range headers into the next head's block 0.
@@ -19420,9 +19486,12 @@ void ScaledDotProductAttention::eval_gpu(
           } else {
             std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
             encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
-            std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
+            std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(*split_dst_out)};
             encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
           }
+        }
+        if (split_adopt_transpose) {
+          omarchy::commit_sdpa_transpose_out(out);
         }
         return;
       }

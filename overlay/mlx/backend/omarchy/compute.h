@@ -1329,6 +1329,12 @@ enum class ComputeKernel : uint16_t {
   // (+0.0)-neutral on every element the 128-thread build computes.
   FastRopeNormBF16W128,
   FastRopeNormAppleBF16W128,
+  // Unified 2x4w2 decode QMV builds (2 rows/slot x 4 slots = 128 threads/WG,
+  // 8 cols/WG, hoisted uvec2 loads, bit-identical to 2x8w2 / 2x4). Appended
+  // to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S4W2,
+  QmmVecQ4SwigluBF16R2S4W2,
+  QmmVecQ4ResNormBF16R2S4W2,
   Count,
 };
 
