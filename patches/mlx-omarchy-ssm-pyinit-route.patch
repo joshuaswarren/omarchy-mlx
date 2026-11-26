@@ -1,0 +1,12 @@
+--- a/python/src/mlx.cpp
++++ b/python/src/mlx.cpp
+@@ -33,6 +33,9 @@ NB_MODULE(core, m) {
+   // Ships with the wheel; wraps pip mlx-lm's gated_delta_update onto
+   // mx.fast.gated_delta_update when the model file lacks the route.
+   nb::module_::import_("mlx._omarchy_gdn_route");
++  // Ships with the wheel; wraps pip mlx-lm's ssm_update decode step onto
++  // mx.fast.metal_kernel("ssm_kernel") (custom_kernel_ssm.h Vulkan port).
++  nb::module_::import_("mlx._omarchy_ssm_route");
+ 
+   auto array_namespace_info = nb::module_::import_("mlx.__array_api_info");
+   m.attr("__array_namespace_info__") =

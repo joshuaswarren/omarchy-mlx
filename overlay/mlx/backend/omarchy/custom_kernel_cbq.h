@@ -347,7 +347,8 @@ bool cbq_array_matches(const array& a, Dtype dtype, std::initializer_list<int> d
 bool cbq_dispatch_matches(
     const CbqDispatch& plan, const std::vector<array>& inputs,
     const std::vector<array>& outputs, bool initialized) {
-  const auto [port, k, o, r] = plan;
+  const auto port = plan.port;
+  const int k = plan.k, o = plan.o, r = plan.r;
   const bool gd = port == CbqGradD, gx = port == CbqGradX;
   const bool glu = port == CbqGlu, situ = port == CbqSitu;
   const size_t expected = gd || gx ? 7 : glu ? 10 : situ ? 8 : 7;
