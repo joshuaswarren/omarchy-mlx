@@ -182,6 +182,10 @@ void Event::wait() {
   if (value() == 0) {
     return;
   }
+  // Deferred commits: a queued signal (or the completed-handler that would
+  // signal a host event) may sit in an uncommitted batch. Flush the
+  // encoders that owe one so this wait always has a submission to observe.
+  omarchy::flush_deferred_signal_encoders();
   if (event.host) {
     event.host->wait(value());
   } else {
@@ -251,10 +255,16 @@ void Event::wait(Stream s) {
               (unsigned long)value(),
               (unsigned long)s.index);
     }
+    // Deferred commits: the signal this wait expects may sit uncommitted.
+    // Flushing first submits it, so the wait lands in a strictly later
+    // submission (a same-submission signal would fire after the wait's
+    // execution began and deadlock the queue).
+    omarchy::flush_deferred_signal_encoders();
     encoder.add_semaphore_wait(semaphore, value(), event_);
   } else if (event.host) {
     uint64_t target_value = value();
     scheduler::wait_event(s, *this, [target_value](Event& self) {
+      omarchy::flush_deferred_signal_encoders();
       self.cast<EventImpl>().host->wait(target_value);
     });
   } else {
@@ -267,6 +277,7 @@ void Event::wait(Stream s) {
               (unsigned long)target_value);
     }
     scheduler::wait_event(s, *this, [target_value](Event& self) {
+      omarchy::flush_deferred_signal_encoders();
       auto& impl = self.cast<EventImpl>();
       omarchy::wait_for_timeline_progress(
           impl.gpu->device.handle(),
@@ -304,7 +315,12 @@ void Event::signal(Stream s) {
       encoder.add_completed_handler([impl, target_value, keepalive]() {
         impl->signal_host(target_value);
       });
-      encoder.commit();
+      if (omarchy::defer_commits_enabled(
+              encoder.device().hardware_capabilities().device_name)) {
+        encoder.note_deferred_signals();
+      } else {
+        encoder.commit();
+      }
     } else {
       scheduler::signal_event(s, *this, [target_value](Event& self) {
         self.cast<EventImpl>().signal_host(target_value);
@@ -331,9 +347,27 @@ void Event::signal(Stream s) {
       event.publish_signal(value(), encoder.last_submitted_completion());
     } else {
       event.queued_signal.store(true, std::memory_order_release);
-      encoder.add_semaphore_signal(event.gpu->semaphore, value(), event_);
-      encoder.commit();
-      event.publish_signal(value(), encoder.last_submitted_completion());
+      // The carrying submission's completion value is unknown until the
+      // batch submits; the encoder fires the hook with it then.
+      EventImpl* impl = &event;
+      const uint64_t signal_value = value();
+      encoder.add_semaphore_signal(
+          event.gpu->semaphore,
+          signal_value,
+          event_,
+          [impl, signal_value](uint64_t completion) {
+            impl->publish_signal(signal_value, completion);
+          });
+      // Deferred commits: the signal rides the open batch to its next
+      // close instead of forcing a submission per eval boundary. Every
+      // wait path flushes deferred-signal encoders before blocking, so the
+      // signal always reaches the queue before a waiter can observe it.
+      if (omarchy::defer_commits_enabled(
+              encoder.device().hardware_capabilities().device_name)) {
+        encoder.note_deferred_signals();
+      } else {
+        encoder.commit();
+      }
     }
   } else {
     uint64_t generation =

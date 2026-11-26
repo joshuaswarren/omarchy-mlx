@@ -1812,6 +1812,7 @@ void CommandEncoder::submit() {
       wait_semaphores_.clear();
       signal_semaphores_.clear();
       completed_handlers_.clear();
+      deferred_signals_pending_ = false;
       reset_dependency_tracking();
       // The reserved completion value can never signal GPU-side: without
       // a pending entry, later joins would block on drained_value_
@@ -1844,6 +1845,14 @@ void CommandEncoder::submit() {
         was_recording ? slots_[current_slot_].started : VK_NULL_HANDLE);
     last_completion_ = completion_value;
     submitted = completion_value;
+    // Publish the carrying completion value to every queued signal's
+    // owner: deferred signals (defer_commits_enabled) could not name it at
+    // queue time.
+    for (auto& pending : signal_semaphores_) {
+      if (pending.on_submit) {
+        pending.on_submit(completion_value);
+      }
+    }
     if (resnorm_ticket_slot_ >= 0) {
       resnorm_ticket_in_flight_[resnorm_ticket_slot_] = completion_value;
       resnorm_ticket_slot_ = -1;
@@ -1873,6 +1882,7 @@ void CommandEncoder::submit() {
   wait_semaphores_.clear();
   signal_semaphores_.clear();
   completed_handlers_.clear();
+  deferred_signals_pending_ = false;
   // The submission's in-order wait (last_completion_) provides the
   // cross-submission dependency, so the open batch's unsynced ranges
   // die here either way.
@@ -1930,6 +1940,19 @@ void synchronize_pending_encoders() {
   for (auto& [idx, enc] : get_global_command_encoders()) {
     if (enc.needs_commit()) {
       enc.synchronize("vram readback");
+    }
+  }
+}
+
+void flush_deferred_signal_encoders() {
+  for (auto& [idx, enc] : get_command_encoders()) {
+    if (enc.deferred_signals_pending()) {
+      enc.commit();
+    }
+  }
+  for (auto& [idx, enc] : get_global_command_encoders()) {
+    if (enc.deferred_signals_pending()) {
+      enc.commit();
     }
   }
 }

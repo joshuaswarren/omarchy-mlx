@@ -181,15 +181,15 @@ void eval(array& arr) {
 void finalize(Stream s) {
   omarchy::trace::counters().omarchy_finalize_calls++;
   // MLX_OMARCHY_DEFER_COMMIT: keep the open batch across graph-eval
-  // boundaries so consecutive custom-kernel dispatches (Parakeet TDT step:
-  // 5 dispatches, one mx.eval per step) share one command buffer and one
-  // submit instead of one submit per dispatch. Batches still close at the
-  // node/byte budgets inside eval() and at every host-read sync; Event
-  // flushes self-submit (encoder flush contract). Opt-in via env; off by
-  // default everywhere.
-  static const bool defer_commits =
-      std::getenv("MLX_OMARCHY_DEFER_COMMIT") != nullptr;
-  if (defer_commits) {
+  // boundaries so consecutive evals share one command buffer and one
+  // submit instead of one submit per eval. Batches still close at the
+  // node/byte budgets inside eval() and whenever a waiter needs the work:
+  // Event::signal queues onto the batch under defer, and every host and
+  // GPU-side wait flushes the encoders that owe it first. Default on for
+  // G18G (defer_commits_enabled); =1 opts in elsewhere, =0 opts out.
+  auto& encoder = omarchy::get_command_encoder(s);
+  if (omarchy::defer_commits_enabled(
+          encoder.device().hardware_capabilities().device_name)) {
     return;
   }
   // Flush contract: the evaluator calls finalize at task-throttle points
@@ -204,7 +204,6 @@ void finalize(Stream s) {
     }
   }
   g_first_state = 0;
-  auto& encoder = omarchy::get_command_encoder(s);
   omarchy::timeline::ScopedEvent tl_fin(
       omarchy::timeline::Kind::StepEnd,
       omarchy::timeline::SubKind::Finalize,

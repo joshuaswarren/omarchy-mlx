@@ -279,6 +279,39 @@ inline bool batch_over_budget(
 // batch against Honeykrisp's 7.56 GiB heap without this (2026-09-08).
 inline constexpr size_t kBatchByteBudgetDivisor = 16;
 
+// Deferred commits (DEC-23): keep the open batch across graph-eval
+// boundaries so consecutive evals share one command buffer and one
+// submission instead of one submission per eval. Under defer, finalize()
+// returns without committing and Event::signal queues its semaphore signal
+// onto the open batch instead of self-submitting; the batch still closes at
+// the node/byte budgets inside eval() and whenever a waiter needs the work
+// (Event::wait, host reads, GPU-side event waits flush every encoder that
+// owes a deferred signal first). On the M6 (G18G), where each vkQueueSubmit
+// costs driver helper work, the eval-boundary commits were ~4 submissions
+// per decode token; deferral leaves the per-token host read as the single
+// commit point. Default on for G18G; MLX_OMARCHY_DEFER_COMMIT=1 enables it
+// elsewhere and =0 disables it everywhere.
+inline std::atomic<long long>& defer_commits_test_override() {
+  static std::atomic<long long> value{-1};
+  return value;
+}
+
+inline bool defer_commits_enabled(std::string_view device_name) {
+  if (const long long forced = defer_commits_test_override().load(
+          std::memory_order_relaxed);
+      forced >= 0) {
+    return forced != 0;
+  }
+  static const bool have_env =
+      std::getenv("MLX_OMARCHY_DEFER_COMMIT") != nullptr;
+  if (have_env) {
+    static const long long env_value =
+        std::atoll(std::getenv("MLX_OMARCHY_DEFER_COMMIT"));
+    return env_value != 0;
+  }
+  return device_name.find("G18G") != std::string_view::npos;
+}
+
 // Greedy earliest-wave schedule for one batch: level[i] is the smallest
 // wave index such that every earlier tape node that node i hazards sits
 // in a strictly smaller wave. A hazard is RAW (i reads a range an earlier
@@ -340,6 +373,17 @@ class MLX_API CommandEncoder {
 
   bool needs_commit() const {
     return node_count_ > 0;
+  }
+
+  // Deferred event signals (defer_commits_enabled): an Event::signal that
+  // queued onto this batch without committing. Waiters flush every encoder
+  // carrying the flag so the signal reaches the queue before they block.
+  void note_deferred_signals() {
+    deferred_signals_pending_ = true;
+  }
+
+  bool deferred_signals_pending() const {
+    return deferred_signals_pending_;
   }
 
   // True while eval_compiled_tape is recording a tape node's dispatches.
@@ -440,8 +484,10 @@ class MLX_API CommandEncoder {
   void add_semaphore_signal(
       VkSemaphore semaphore,
       uint64_t value,
-      std::shared_ptr<void> keepalive) {
-    signal_semaphores_.push_back({semaphore, value, std::move(keepalive)});
+      std::shared_ptr<void> keepalive,
+      std::function<void(uint64_t)> on_submit = {}) {
+    signal_semaphores_.push_back(
+        {semaphore, value, std::move(keepalive), std::move(on_submit)});
   }
 
   // Submit recorded work, semaphore operations, and completion handlers.
@@ -501,11 +547,15 @@ class MLX_API CommandEncoder {
 
  private:
   // A semaphore operation pending in this encoder, plus the ownership token
-  // that keeps the semaphore's owner alive until GPU completion.
+  // that keeps the semaphore's owner alive until GPU completion. Signals may
+  // carry an on_submit hook: the encoder fires it with the submission's
+  // completion value so the Event can publish the generation that actually
+  // carries its signal (deferred signals do not know it at queue time).
   struct PendingSemaphore {
     VkSemaphore semaphore;
     uint64_t value;
     std::shared_ptr<void> keepalive;
+    std::function<void(uint64_t)> on_submit;
   };
 
   // One command buffer and one reusable execution-start marker. The event
@@ -663,6 +713,7 @@ class MLX_API CommandEncoder {
   uint32_t desc_pool_remaining_{0};
   std::vector<PendingSemaphore> wait_semaphores_;
   std::vector<PendingSemaphore> signal_semaphores_;
+  bool deferred_signals_pending_{false};
   // Raw buffers referenced by the open batch, pre-bound once each: a
   // persistent buffer (weights, KV) touched by many dispatches inserts
   // on its first binding and dedups on every later one, so submit() and
@@ -698,5 +749,11 @@ MLX_API CommandEncoder& get_command_encoder(Stream s);
 std::unordered_map<int, CommandEncoder>& get_command_encoders();
 std::unordered_map<int, CommandEncoder>& get_global_command_encoders();
 void synchronize_pending_encoders();
+
+// Commit every encoder holding a deferred event signal. Waiters call this
+// before blocking on a timeline a queued signal could satisfy: the signal
+// rides the owning batch's submission, which must exist for the wait to
+// ever observe it.
+void flush_deferred_signal_encoders();
 
 } // namespace mlx::core::omarchy
