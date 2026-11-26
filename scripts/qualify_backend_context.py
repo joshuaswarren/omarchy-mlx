@@ -42,10 +42,12 @@ def filler(count):
 def per_sentence_tokens(url):
     """Tokens per filler sentence, from the server's own usage count (two probes, so the fixed part cancels)."""
     def used(count):
-        _, reply, _ = post(url, {"messages": [{"role": "user", "content": filler(count)}], "max_tokens": 1}, 120)
+        status, reply, _ = post(url, {"messages": [{"role": "user", "content": filler(count)}], "max_tokens": 1}, 120)
+        if status != 200 or not isinstance(reply, dict):
+            raise RuntimeError(f"per_sentence_tokens({count}) failed: HTTP {status}: {str(reply)[:200]}")
         return reply["usage"]["prompt_tokens"]
-    low, high = used(100), used(400)
-    return (high - low) / 300
+    low, high = used(50), used(200)
+    return (high - low) / 150
 
 
 def tool_schemas(count):
@@ -122,8 +124,10 @@ def main():
     parser.add_argument("--tokens", type=int, required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--margin", type=int, default=512)
+    parser.add_argument("--omp-tools", type=int, default=52)
+    parser.add_argument("--omp-max-tokens", type=int, default=30)
     args = parser.parse_args()
-    from mlx_omarchy_assistant.pairs import PAIR_DEV_QUALIFICATION_ENV, PairManager
+    from mlx_omarchy_assistant.pairs import PAIR_DEV_QUALIFICATION_ENV, PairError, PairManager
 
     if os.environ.get(PAIR_DEV_QUALIFICATION_ENV) != "1":
         sys.exit(f"{PAIR_DEV_QUALIFICATION_ENV} must be set by the caller: the catalog cap is what this run lifts")
@@ -134,11 +138,16 @@ def main():
     sampler.start()
     receipt["mem_available_kb_baseline"] = mem_available_kb()  # before any worker of this run
     try:
-        manager.adopt_saved(args.pair)
+        try:
+            manager.adopt_saved(args.pair)
+        except PairError:
+            manager.setup(args.pair, approve_download=False, context_tokens=4096)
         manager.start()
         receipt["context_before"] = manager.status().get("context_tokens")
         receipt["mem_available_kb_at_4096"] = mem_available_kb()
         receipt["ensure_context"] = manager.ensure_context(args.tokens)
+        if not receipt["ensure_context"].get("ok"):
+            raise RuntimeError(f"ensure_context({args.tokens}) refused: {receipt['ensure_context']}")
         status = manager.status()
         url = status["chat_url"]
         receipt["context_after"] = status.get("context_tokens")
@@ -153,7 +162,7 @@ def main():
         system = ("You are a coding agent. Follow the project rules and use the tools when needed. " * 100)[:8600]
         status_code, reply, seconds = post(url, {"messages": [
             {"role": "system", "content": system}, {"role": "user", "content": "Say ok."}],
-            "tools": tool_schemas(52), "max_tokens": 30}, 900)
+            "tools": tool_schemas(args.omp_tools), "max_tokens": args.omp_max_tokens}, 900)
         receipt["steps"]["omp_shaped"] = {"http": status_code, "seconds": seconds,
                                           "prompt_tokens": reply["usage"]["prompt_tokens"] if status_code == 200 else None,
                                           "reply": (reply["choices"][0]["message"].get("content") or "")[:80] if status_code == 200 else reply}

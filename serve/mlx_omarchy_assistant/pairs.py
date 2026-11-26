@@ -106,7 +106,8 @@ def admissible_context(chat_entry: dict, *, other_bytes: int, preference: str,
     reserve = desktop_reserve(available)
 
     def fits(tokens: int) -> bool:
-        total = chat_estimate(chat_entry, tokens).total
+        total = chat_estimate(chat_entry, tokens,
+                              ignore_peak_override=backend_override).total
         return total + other_bytes + reserved_bytes + reserve <= available
 
     def largest_fitting(upper: int) -> int | None:
@@ -501,14 +502,59 @@ def _boot_id() -> str | None:
 
 # ------------------------------------------------------------------ workers
 
+def _peak_override_bytes(chat_entry: dict, tokens: int) -> int | None:
+    """Measured worker peak bytes governing `tokens` (> DEFAULT_CONTEXT_TOKENS).
+
+    When `extension.backend_context_peak_bytes_by_tokens` lists measured tiers
+    (e.g. {"8192": ..., "16384": ...}), select the smallest qualified tier >=
+    `tokens` so a smaller context (8192 on 16 GiB) uses its own measured peak
+    while larger contexts keep the higher-tier peak. Falls back to scalar
+    `extension.backend_context_peak_bytes` when absent or above all tiers.
+    """
+    if tokens <= budget.DEFAULT_CONTEXT_TOKENS:
+        return None
+    extension = chat_entry.get("extension") or {}
+    by_tokens = extension.get("backend_context_peak_bytes_by_tokens")
+    if by_tokens is not None:
+        if not isinstance(by_tokens, dict):
+            raise PairError(
+                "catalog extension.backend_context_peak_bytes_by_tokens must be a dict or absent")
+        tiers: list[tuple[int, int]] = []
+        for raw_tok, raw_peak in by_tokens.items():
+            try:
+                tok = int(raw_tok)
+            except (TypeError, ValueError) as exc:
+                raise PairError(
+                    f"catalog extension.backend_context_peak_bytes_by_tokens key {raw_tok!r} "
+                    "must be a positive int") from exc
+            if isinstance(raw_tok, bool) or tok <= 0:
+                raise PairError(
+                    f"catalog extension.backend_context_peak_bytes_by_tokens key {raw_tok!r} "
+                    "must be a positive int")
+            peak = _opt_int(raw_peak, f"backend_context_peak_bytes_by_tokens[{raw_tok}]")
+            if peak is None:
+                raise PairError(
+                    f"catalog extension.backend_context_peak_bytes_by_tokens[{raw_tok}] "
+                    "must be a positive int")
+            tiers.append((tok, peak))
+        tiers.sort()
+        for tier_tok, tier_peak in tiers:
+            if tokens <= tier_tok:
+                return tier_peak
+    return _opt_int(extension.get("backend_context_peak_bytes"),
+                    "backend_context_peak_bytes")
+
+
 def chat_estimate(chat_entry: dict, tokens: int,
-                  prompt_cache_size: int = 0) -> budget.Estimate:
+                  prompt_cache_size: int = 0,
+                  *, ignore_peak_override: bool = False) -> budget.Estimate:
     """What the chat worker needs at `tokens`. _chat_worker_argv launches mlx-lm with the
     prefill chunk serve_cli.server_argv pins, so its scratch is part of the estimate (issue
     #240); every admission, reservation and claim of the chat worker goes through here.
     Above the default context, an entry that names a measured worker peak
-    (extension.backend_context_peak_bytes, taken at its qualified limit) needs at least that peak:
-    the scratch formula alone read 7.7 GiB where the 4B worker peaked at 16.9 GiB.
+    (extension.backend_context_peak_bytes_by_tokens or extension.backend_context_peak_bytes)
+    needs at least that peak: the scratch formula alone read 7.7 GiB where the 4B worker
+    peaked at 16.9 GiB at 16384.
     When prompt_cache_size > 0, each retained cache slot adds one full-context KV allocation
     on top of the active-request requirement (matching mlx_omarchy_serve.__main__)."""
     if isinstance(prompt_cache_size, bool) or not isinstance(prompt_cache_size, int) \
@@ -517,8 +563,7 @@ def chat_estimate(chat_entry: dict, tokens: int,
     estimate = budget.estimate_required(
         chat_entry["memory"], tokens,
         budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, tokens))
-    peak = _opt_int((chat_entry.get("extension") or {}).get("backend_context_peak_bytes"),
-                    "backend_context_peak_bytes")
+    peak = None if ignore_peak_override else _peak_override_bytes(chat_entry, tokens)
     if peak is not None and tokens > budget.DEFAULT_CONTEXT_TOKENS and peak > estimate.total:
         estimate = dataclasses.replace(
             estimate, workspace=peak - estimate.weights - estimate.kv,
@@ -538,7 +583,8 @@ def chat_estimate(chat_entry: dict, tokens: int,
 def chat_prompt_cache_size(chat_entry: dict, tokens: int, *,
                            other_bytes: int,
                            available_bytes: int,
-                           reserved_bytes: int = 0) -> int:
+                           reserved_bytes: int = 0,
+                           ignore_peak_override: bool = False) -> int:
     """Enable one retained KV cache slot on the chat worker when KV facts are
     known and the extra slot fits inside the pair memory budget; fall back to
     0 on tight-RAM hosts so caching never causes a pair refusal."""
@@ -546,7 +592,8 @@ def chat_prompt_cache_size(chat_entry: dict, tokens: int, *,
         return 0
     reserve = desktop_reserve(available_bytes)
     cached_total = chat_estimate(chat_entry, tokens,
-                                 prompt_cache_size=CHAT_PROMPT_CACHE_SIZE).total
+                                 prompt_cache_size=CHAT_PROMPT_CACHE_SIZE,
+                                 ignore_peak_override=ignore_peak_override).total
     if cached_total + other_bytes + reserved_bytes + reserve <= available_bytes:
         return CHAT_PROMPT_CACHE_SIZE
     return 0
@@ -1543,23 +1590,34 @@ class PairManager:
             decision = self.catalog_models[prepared["decision_id"]]
             decision_bytes = decision_requirement_bytes(prepared["decision_path"],
                                                         prepared["max_questions"])
-            sizing = self._admissible(chat, other_bytes=decision_bytes,
+            reservations = budget.load_reservations(self.home)
+            decision_rec = reservations.get(decision["id"])
+            if (decision_rec is not None
+                    and decision_rec.get("pair_id") == prepared["pair_id"]):
+                decision_remaining = budget._contribution(decision_rec)
+            else:
+                decision_remaining = decision_bytes
+            available = self._available_bytes()
+            sizing = self._admissible(chat, other_bytes=decision_remaining,
                                       preference=prepared["preference"],
-                                        available_bytes=self._available_bytes())
+                                      available_bytes=available)
             if required_tokens > sizing["context_tokens"]:
                 return {"ok": False, "changed": False,
                         "reason": sizing["binding"], "limits": sizing["limits"],
                         "context_tokens": current, "requested": required_tokens}
-            available = self._available_bytes()
+            dev_smoke = self._dev_smoke()
             current_cache = self._chat_prompt_cache_size
             new_cache = chat_prompt_cache_size(
                 chat, required_tokens,
-                other_bytes=decision_bytes + prepared["voice_bytes"],
-                available_bytes=available)
+                other_bytes=decision_remaining + prepared["voice_bytes"],
+                available_bytes=available,
+                ignore_peak_override=dev_smoke)
             new_bytes = chat_estimate(chat, required_tokens,
-                                      prompt_cache_size=new_cache).total
+                                      prompt_cache_size=new_cache,
+                                      ignore_peak_override=dev_smoke).total
             current_bytes = chat_estimate(chat, current,
-                                          prompt_cache_size=current_cache).total
+                                          prompt_cache_size=current_cache,
+                                          ignore_peak_override=dev_smoke).total
             record = self._records[chat["id"]]
             log_path = (self.home / "assistant" / "logs"
                         / f"{prepared['pair_id']}-chat.log")
@@ -1571,7 +1629,8 @@ class PairManager:
                 if new_cache > 0:
                     new_cache = 0
                     new_bytes = chat_estimate(chat, required_tokens,
-                                              prompt_cache_size=0).total
+                                              prompt_cache_size=0,
+                                              ignore_peak_override=dev_smoke).total
                     try:
                         budget.resize_reservation(chat["id"], new_bytes,
                                                   owner=record["owner"],
@@ -1593,7 +1652,8 @@ class PairManager:
                 payload = {"name": chat["id"],
                            "claim_token": record["claim_token"],
                            "bytes": chat_estimate(chat, tokens,
-                                                  prompt_cache_size=cache_size).total,
+                                                  prompt_cache_size=cache_size,
+                                                  ignore_peak_override=dev_smoke).total,
                            "pair_id": prepared["pair_id"]}
                 return managed.spawn_claiming_worker(
                     _chat_worker_argv(spec), payload,
