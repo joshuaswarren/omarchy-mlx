@@ -36,11 +36,18 @@ uint16_t bf16_store(float value) {
 }
 #define STORE_VALUE(f) bf16_store(f)
 
-layout(local_size_x = 256) in;
+#ifndef LOCAL_THREADS
+#define LOCAL_THREADS 256u
+#endif
+layout(local_size_x = LOCAL_THREADS) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer Input {
   STORAGE_TYPE values[];
 } input_data;
+// packed bf16 pair view (2 storage values per u32) for coalesced IO
+layout(set = 0, binding = 0, std430) readonly buffer InputU32 {
+  uint values[];
+} input_u32;
 layout(set = 0, binding = 1, std430) readonly buffer Weight {
   STORAGE_TYPE values[];
 } weight_data;
@@ -52,6 +59,13 @@ layout(set = 0, binding = 2, std430) readonly buffer Bias {
 layout(set = 0, binding = 3, std430) writeonly buffer Output {
   STORAGE_TYPE values[];
 } output_data;
+layout(set = 0, binding = 3, std430) writeonly buffer OutputU32 {
+  uint values[];
+} output_u32;
+
+uint pack_pair(float lo, float hi) {
+  return (uint(bf16_store(hi)) << 16u) | uint(bf16_store(lo));
+}
 
 layout(push_constant) uniform Params {
   uint count;
@@ -73,8 +87,8 @@ layout(push_constant) uniform Params {
   float beta;
 } params;
 
-const uint SIMD = 32u;
-const uint MAX_READS = 16u;      // 256 * 8 = 2048, 256 * 10 = 2560 and 256 * 16 = 4096 take the register path
+const uint SIMD = LOCAL_THREADS;
+const uint MAX_READS = 32u;      // 256 * 8 = 2048, 256 * 10 = 2560 and 256 * 16 = 4096 take the register path
 shared float s_partial[8u];        // 8 subgroups -> 8 partial sums
 
 void main() {
@@ -94,20 +108,14 @@ void main() {
     bool reg_path = (row_length == 2048u || row_length == 2560u || row_length == 4096u);
     if (reg_path) {
       uint base = thread * n_reads;
-      for (uint i = 0u; i < 8u; ++i) {
-        reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
-        reg_sq += reg_x[i] * reg_x[i];
-      }
-      if (n_reads == 10u) {
-        for (uint i = 8u; i < 10u; ++i) {
-          reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
-          reg_sq += reg_x[i] * reg_x[i];
-        }
-      } else if (n_reads == 16u) {
-        for (uint i = 8u; i < 16u; ++i) {
-          reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
-          reg_sq += reg_x[i] * reg_x[i];
-        }
+      uint pairs = n_reads / 2u;
+      uint base_u32 = start / 2u + thread * pairs;
+      for (uint i = 0u; i < pairs; ++i) {
+        uint pair = input_u32.values[base_u32 + i];
+        reg_x[2u * i] = LOAD_VALUE(uint16_t(pair & 0xffffu));
+        reg_x[2u * i + 1u] = LOAD_VALUE(uint16_t(pair >> 16u));
+        reg_sq += reg_x[2u * i] * reg_x[2u * i] +
+                  reg_x[2u * i + 1u] * reg_x[2u * i + 1u];
       }
     } else {
       for (uint index = thread; index < row_length; index += 256u) {
@@ -135,41 +143,16 @@ void main() {
 
     if (reg_path) {
       uint base = thread * n_reads;
-      for (uint i = 0u; i < 8u; ++i) {
-        uint index = base + i;
-        float weight =
-            (params.lhs_size == 1u)
-                ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-        precise float norm_weight = norm * weight;
-        precise float result = reg_x[i] * norm_weight;
-        output_data.values[params.output_offset + row * row_length + index] =
-            STORE_VALUE(result);
-      }
-      if (n_reads == 10u) {
-        for (uint i = 8u; i < 10u; ++i) {
-          uint index = base + i;
-          float weight =
-              (params.lhs_size == 1u)
-                  ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                  : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-          precise float norm_weight = norm * weight;
-          precise float result = reg_x[i] * norm_weight;
-          output_data.values[params.output_offset + row * row_length + index] =
-              STORE_VALUE(result);
-        }
-      } else if (n_reads == 16u) {
-        for (uint i = 8u; i < 16u; ++i) {
-          uint index = base + i;
-          float weight =
-              (params.lhs_size == 1u)
-                  ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                  : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-          precise float norm_weight = norm * weight;
-          precise float result = reg_x[i] * norm_weight;
-          output_data.values[params.output_offset + row * row_length + index] =
-              STORE_VALUE(result);
-        }
+      uint pairs = n_reads / 2u;
+      uint out_u32 = (params.output_offset + row * row_length) / 2u + thread * pairs;
+      for (uint i = 0u; i < pairs; ++i) {
+        float r0 = reg_x[2u * i];
+        float r1 = reg_x[2u * i + 1u];
+        float w0 = LOAD_VALUE(weight_data.values[params.rhs_offset + base + 2u * i]);
+        float w1 = LOAD_VALUE(weight_data.values[params.rhs_offset + base + 2u * i + 1u]);
+        precise float nw0 = norm * w0;
+        precise float nw1 = norm * w1;
+        output_u32.values[out_u32 + i] = pack_pair(r0 * nw0, r1 * nw1);
       }
     } else {
       for (uint index = thread; index < row_length; index += 256u) {
@@ -184,6 +167,8 @@ void main() {
             STORE_VALUE(result);
       }
     }
-    barrier();
+    if (params.output_size > 1u) {
+      barrier();
+    }
   }
 }
