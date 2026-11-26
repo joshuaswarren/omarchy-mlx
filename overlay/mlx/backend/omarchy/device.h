@@ -160,8 +160,8 @@ struct CapabilityReport {
   // Honeykrisp advertises this behind AGX_SIMDMAT; llvmpipe does not.
   bool cooperative_matrix_f32_8{false};
   // Same extension and feature, plus an 8x8x8 subgroup shape with fp16
-  // A/B and an fp32 accumulator. The extension is enabled only with
-  // cooperative_matrix_f32_8, so users gate on both.
+  // A/B and an fp32 accumulator. The extension is enabled whenever the
+  // shape list is non-empty, so users gate on this bit.
   bool cooperative_matrix_f16_8{false};
   // VK_KHR_shader_bfloat16 with shaderBFloat16Type and
   // shaderBFloat16CooperativeMatrix on, plus an 8x8x8 subgroup shape with
