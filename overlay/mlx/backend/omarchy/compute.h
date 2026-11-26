@@ -1291,6 +1291,17 @@ enum class ComputeKernel : uint16_t {
   // Per-member twin of the rope epilogue above: the same tail on the
   // single-weight Rows8 column, one dispatch per group member.
   QmmVecQ4WordSubgroupRows8RopeEpiBF16,
+  // Dense bf16 matmul on the Intel/ANV 8x16x16 bf16 x bf16 -> f32
+  // subgroup shape (shaders/matmul_coopmat_xe16.comp), for devices
+  // without the fp32 8x8x8 shape the staged coopmat routes require.
+  // Appended to keep profile kernel ids stable.
+  MatmulBF16CoopmatXe16,
+  // bf16-operand 8x16x16 build of the QMM prefill coopmat16 kernel for
+  // Intel/ANV, whose coopmat list carries no M16 entry
+  // (shaders/qmm_coopmat16_xe.comp): staged x_s tile, so ragged
+  // matrix_m is covered where QmmPrefillIntelBF16's m%16 gate is not.
+  // Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmat16XeBF16,
   Count,
 };
 
