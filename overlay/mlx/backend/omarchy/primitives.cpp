@@ -10219,7 +10219,6 @@ struct QmmWideWeights {
   array w;
   array scales;
   array biases;
-  std::vector<array> sources;
 };
 
 std::mutex qmm_wide_mutex;
@@ -10853,8 +10852,9 @@ bool dispatch_quantized_gemv_wide(
         (k % 512 == 0 && n % 8 != 0) ||
         // VkBufferCopy wants 4-byte-aligned offsets; aux_dst accumulates
         // each member's scales span, so an unaligned member misaligns
-        // every copy after it.
-        scales.nbytes() % 4 != 0 ||
+        // every copy after it. biases sits at the same per-member offset
+        // in its own slab and must clear the same bound.
+        scales.nbytes() % 4 != 0 || biases.nbytes() % 4 != 0 ||
         !whole_dense(w, w.size()) || !whole_dense(scales, scales.size()) ||
         !whole_dense(biases, biases.size()) || !input_ready(w, stream) ||
         !input_ready(scales, stream) || !input_ready(biases, stream)) {
@@ -10889,8 +10889,7 @@ bool dispatch_quantized_gemv_wide(
     QmmWideWeights built{
         array({static_cast<int>(total_n), k / 8}, uint32, nullptr, {}),
         array({static_cast<int>(total_n), k / 64}, dtype, nullptr, {}),
-        array({static_cast<int>(total_n), k / 64}, dtype, nullptr, {}),
-        {}};
+        array({static_cast<int>(total_n), k / 64}, dtype, nullptr, {})};
     built.w.set_data(allocate_omarchy(built.w.nbytes()));
     built.scales.set_data(allocate_omarchy(built.scales.nbytes()));
     built.biases.set_data(allocate_omarchy(built.biases.nbytes()));
@@ -10926,9 +10925,6 @@ bool dispatch_quantized_gemv_wide(
           aux_dst);
       w_dst += w.nbytes();
       aux_dst += scales.nbytes();
-      built.sources.push_back(member.node.inputs()[1]);
-      built.sources.push_back(member.node.inputs()[2]);
-      built.sources.push_back(member.node.inputs()[3]);
     }
     it = qmm_wide_cache.emplace(std::move(key), std::move(built)).first;
   }
