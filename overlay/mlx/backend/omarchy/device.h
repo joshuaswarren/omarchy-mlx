@@ -1287,6 +1287,19 @@ inline bool gemv_balanced_qkv_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// The 128-wide subgroup norm at the fused rope+norm dispatch
+// (FastRopeNormAppleBF16) defaults on only where its paired ABBA
+// landed. The rope site is the one 128 consumer the shared shape guard
+// never serves: the gated/scaled kernels and the GDN epilogue measured
+// slower at 128 on G13C (NormApple3, the note at
+// apple_norm_shape_selected), so this predicate is consulted only where
+// RoPE::eval_gpu fuses the norm. G13C (16-inch M1 Max): measured for
+// receipts/20261125T-w7T-m1md5. MLX_OMARCHY_NORM_APPLE_128=1/0
+// overrides on any part. Pure.
+inline bool norm_apple_128_default_part(const std::string& device_name) {
+  return device_name.find("G13C") != std::string::npos;
+}
+
 inline bool gemv_balanced_qkv_widths_ok(const std::vector<int64_t>& widths) {
   if (widths.size() != 3) {
     return false;

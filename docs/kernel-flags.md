@@ -66,6 +66,8 @@ A/B gating and qualification, not for normal operation.
 
 | Variable | Since | Effect |
 | --- | --- | --- |
+| `MLX_OMARCHY_NORM_APPLE_128` | unset (off except on the parts of `omarchy::norm_apple_128_default_part`, G13C) | Read live at the fused rope+norm dispatch only. `1` selects the subgroup `FastRopeNormAppleBF16` build at 128-wide rows up to 64 rows on any part with 32-lane subgroup arithmetic, `0` keeps the shared-tree kernel, and unset follows the part predicate. The standalone/gated norm family at width 128 is not covered: it measured 13-31% slower at 128 on G13C and stays on the shared shape guard. `MLX_OMARCHY_NORM_APPLE=0` still kills every Apple norm leg, this one included. Receipt: `receipts/20261125T-w7T-m1md5` (private lane receipt). |
+
 | `HK_SUBMIT_POLL_US` | v0.7.38: the backend no longer sets it | The backend used to hand Honeykrisp a 2000 us submit poll at device init. That poll cost about 5.4 s of process CPU and about 1 W of system power on a 13-inch M1, and 1.7 s of process CPU and about 1.6 W of package power on a 16-inch M1 Max (vote off), at the same tokens per second; a value the user sets in the environment still reaches the driver unchanged. See `receipts/2026-11-03-hk-submit-poll/README.md` (#345). |
 
 ## mlx-lm serve patches (vendored in `patches/`, applied by

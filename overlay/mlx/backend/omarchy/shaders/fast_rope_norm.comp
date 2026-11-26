@@ -32,12 +32,19 @@
 // The description above governs the default build (FastRopeNormBF16, used
 // with MLX_OMARCHY_NORM_APPLE=0, without 32-lane subgroup arithmetic, or on
 // row shapes the dispatch guard excludes — see apple_norm_shape_selected in
-// primitives.cpp).
+// primitives.cpp; at width 128 the fused dispatch site also admits the
+// subgroup build on the parts of norm_apple_128_default_part).
 // APPLE_REDUCTION (FastRopeNormAppleBF16) instead copies the
 // strided-row reduction of shaders/fast_norm_apple.comp: one element per
 // thread, a 32-lane subgroup sum, eight shared partials, and a second
 // subgroup sum. The composed rms_norm then selects FastRmsNormAppleBF16, so
 // the fused output stays bit-identical to the composed chain.
+// Row length 128 is the exception: the composed chain runs the
+// shared-memory tree there, so the APPLE_REDUCTION block reproduces the
+// tree association instead — one lane-local bracket
+// (sq[L]+sq[L+64]) + (sq[L+32]+sq[L+96]) and a single 32-lane subgroup sum
+// that replays the stride-16..1 halving — keeping bit-identity while
+// dropping the tree's eight barriers.
 //
 // Push-constant mapping (ComputeParams fields), identical to fast_rope.comp
 // plus two reused fields — ComputeParams is pushed whole (128 bytes, the
@@ -171,6 +178,56 @@ void main() {
   uint out_row = t * params.out_strides[1] + mat * params.out_strides[0];
 
 #ifdef APPLE_REDUCTION
+  if (row_length == 128u) {
+  // The composed chain never selects the Apple norm at 128
+  // (apple_norm_shape_selected keeps it on the shared-memory tree), so
+  // this route must reproduce the TREE association bit-for-bit, not the
+  // blocked subgroup order below. At stride 64/32 the tree folds
+  //   p[L] = (sq[L] + sq[L+64]) + (sq[L+32] + sq[L+96])   L < 32
+  // and strides 16..1 finish as a 32-wide halving. Lane L of subgroup 0
+  // brackets the same four squares and one subgroupAdd runs the same
+  // pairing (lane 0's total is identical under xor- or down-shuffle
+  // implementations), so the sum is bit-identical while skipping the
+  // tree's eight shared-memory barriers.
+  precise float pa = 0.0;
+  precise float pb = 0.0;
+  if (gl_SubgroupID == 0u) {
+    uint lane = gl_SubgroupInvocationID;
+    precise float s0 = rope_load(params.lhs_offset + in_base + lane);
+    s0 = s0 * s0;
+    precise float s1 = rope_load(params.lhs_offset + in_base + lane + 32u);
+    s1 = s1 * s1;
+    precise float s2 = rope_load(params.lhs_offset + in_base + lane + 64u);
+    s2 = s2 * s2;
+    precise float s3 = rope_load(params.lhs_offset + in_base + lane + 96u);
+    s3 = s3 * s3;
+    pa = s0 + s2;
+    pb = s1 + s3;
+  }
+  precise float psum = pa + pb;
+  float row_sum = subgroupAdd(psum);
+  if (gl_LocalInvocationIndex == 0u) {
+    block_values[0] = row_sum;
+  }
+  barrier();
+  float mean_square = block_values[0] / float(row_length);
+  // Same barrier placement as the tree path: NIR must not fold the divide
+  // into the (value * norm) chain below.
+  barrier();
+  precise float norm = inversesqrt(mean_square + eps);
+  // Re-load the input like the tree path (see its comment): a fresh load
+  // keeps NIR from contracting the chain into an ffma 1-ULP drift.
+  precise float value = (thread < row_length)
+      ? rope_load(params.lhs_offset + in_base + thread)
+      : 0.0;
+  precise float weight = (thread < row_length)
+      ? weight_load(params.aux_offset + thread)
+      : 0.0;
+  precise float weight_norm = weight * norm;
+  rounded[thread] = (thread < row_length) ? rope_round(value * weight_norm)
+                                          : 0.0;
+  barrier();
+  } else {
   precise float value = (thread < row_length)
       ? rope_load(params.lhs_offset + in_base + thread)
       : 0.0;
@@ -198,6 +255,7 @@ void main() {
   rounded[thread] = (thread < row_length) ? rope_round(value * weight_norm)
                                           : 0.0;
   barrier();
+  }
 #else
   // fast_norm.comp reduction tree, verbatim: one f32 sum-of-squares per
   // thread (threads past the row length contribute exactly the same 0.0 the
