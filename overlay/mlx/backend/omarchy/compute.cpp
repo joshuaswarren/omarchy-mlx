@@ -385,6 +385,8 @@
 #include "sdpa_decode_split_p1kv_hd256_bk128_g4.h"
 #include "sdpa_decode_split_p2_hd256_bk32.h"
 #include "sdpa_decode_split_p2_hd256_bk64.h"
+#include "sdpa_decode_online_sg16_bf16_hd128.h"
+#include "sdpa_decode_online_sg32_bf16_hd128.h"
 #include "partition_smallk_f32.h"
 #include "partition_smallk_f16.h"
 #include "partition_smallk_bf16.h"
@@ -1441,6 +1443,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::FastRopeNormPairAppleBF16:
       return {fast_rope_norm_pair_apple_bf16,
               fast_rope_norm_pair_apple_bf16_size};
+    case ComputeKernel::SdpaDecodeOnlineSg16BF16Hd128:
+      return {sdpa_decode_online_sg16_bf16_hd128,
+              sdpa_decode_online_sg16_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeOnlineSg32BF16Hd128:
+      return {sdpa_decode_online_sg32_bf16_hd128,
+              sdpa_decode_online_sg32_bf16_hd128_size};
     case ComputeKernel::CrossEntropyBF16:
       return {fast_cross_entropy_bf16, fast_cross_entropy_bf16_size};
     case ComputeKernel::Fp8ToF32:
