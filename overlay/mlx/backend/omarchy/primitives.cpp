@@ -19075,12 +19075,16 @@ void ScaledDotProductAttention::eval_gpu(
   const bool decode_batch_ok = batch == 1 ||
       (decode_bf16_probe && q_len == 1 &&
           decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
-  // Single-dispatch online-softmax bf16 decode route (HD=128, batch 1, q_len 1):
-  // one 1024-thread (32-subgroup) workgroup per query head, coalesced 256-byte
-  // uvec2 K/V loads, zero scratch/atomics/pass-2. MLX_OMARCHY_SDPA_ONLINE: "0"
-  // disables, any other non-empty value forces; unset defers to explicit
-  // split-K overrides if set, otherwise follows omarchy::sdpa_online_default.
+  // Single-dispatch online-softmax bf16 decode route (HD=128 or HD=256,
+  // batch 1, q_len 1): one 1024-thread (32-subgroup) or 512-thread (16-subgroup
+  // for HD=256 when MLX_OMARCHY_SDPA_ONLINE=16) workgroup per query head,
+  // coalesced K/V loads (uvec2 for HD=128, uvec4 for HD=256), zero scratch /
+  // atomics / pass-2. MLX_OMARCHY_SDPA_ONLINE: "0" disables, "16" forces the
+  // 16-subgroup HD=256 kernel, any other non-empty value forces 32-subgroup;
+  // unset defers to explicit split-K overrides if set, otherwise follows
+  // omarchy::sdpa_online_default.
   {
+    const char* online_raw = omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE");
     const int online_env = decode_path_override("MLX_OMARCHY_SDPA_ONLINE");
     const bool explicit_split_override =
         decode_path_override("MLX_OMARCHY_SDPA_DECODE_SPLIT") >= 0 ||
@@ -19090,33 +19094,44 @@ void ScaledDotProductAttention::eval_gpu(
         decode_path_override("MLX_OMARCHY_SDPA_SPLIT_P1KV") >= 0;
     const bool online_wanted = online_env > 0 ||
         (online_env < 0 && !explicit_split_override &&
+         (head_dim == 128 || head_dim == 256) &&
          omarchy::sdpa_online_default(
-             decode_caps.device_name, static_cast<uint32_t>(k_len)));
+             decode_caps.device_name,
+             static_cast<uint32_t>(k_len),
+             static_cast<int>(head_dim)));
     if (online_wanted) {
+      const bool online_sg16 = head_dim == 256 && online_raw != nullptr &&
+          std::strcmp(online_raw, "16") == 0;
+      const uint32_t min_threads = online_sg16 ? 512u : 1024u;
+      const uint32_t min_shared = online_sg16 ? 8320u : 16640u;
       constexpr VkSubgroupFeatureFlags kOnlineSubgroupFeatures =
           VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
           VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
       const bool online_device_ready = decode_caps.subgroup_size == 32u &&
-          decode_caps.max_compute_work_group_invocations >= 1024u &&
-          decode_caps.max_compute_work_group_size[0] >= 1024u &&
-          decode_caps.max_compute_shared_memory_size >= 16640u &&
+          decode_caps.max_compute_work_group_invocations >= min_threads &&
+          decode_caps.max_compute_work_group_size[0] >= min_threads &&
+          decode_caps.max_compute_shared_memory_size >= min_shared &&
           (decode_caps.subgroup_operations & kOnlineSubgroupFeatures) ==
               kOnlineSubgroupFeatures;
+      const uint32_t online_align = head_dim == 256 ? 8u : 4u;
       if (online_device_ready &&
           (decode_env == nullptr || std::strcmp(decode_env, "0") != 0) &&
           q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
           v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
           inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ &&
-          batch == 1 && q_len == 1 && head_dim == 128 && v_dim == 128 &&
+          batch == 1 && q_len == 1 &&
+          (head_dim == 128 || head_dim == 256) && v_dim == head_dim &&
           k_len > 0 && kv_heads > 0 && heads % kv_heads == 0 &&
           q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1 &&
-          k.strides()[1] % 4 == 0 && k.strides()[2] % 4 == 0 &&
-          v.strides()[1] % 4 == 0 && v.strides()[2] % 4 == 0) {
+          k.strides()[1] % online_align == 0 &&
+          k.strides()[2] % online_align == 0 &&
+          v.strides()[1] % online_align == 0 &&
+          v.strides()[2] % online_align == 0) {
         omarchy::ComputeParams online_params;
         online_params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
         online_params.aux_offset = checked_item_offset(v, v.size(), tag, out);
-        if (online_params.rhs_offset % 4u == 0u &&
-            online_params.aux_offset % 4u == 0u) {
+        if (online_params.rhs_offset % online_align == 0u &&
+            online_params.aux_offset % online_align == 0u) {
           out.set_data(allocate_omarchy(out.nbytes()));
           online_params.count = checked_u32(out.size(), tag, out);
           online_params.matrix_m = checked_u32(heads, tag, out);
@@ -19134,9 +19149,14 @@ void ScaledDotProductAttention::eval_gpu(
           online_params.out_strides[0] = checked_u32(out.strides()[1], tag, out);
           std::array<omarchy::ComputeBinding, 4> online_bindings{
               binding(q), binding(k), binding(v), binding(out)};
+          const auto online_kernel = head_dim == 256
+              ? (online_sg16
+                     ? omarchy::ComputeKernel::SdpaDecodeOnlineSg16BF16Hd256
+                     : omarchy::ComputeKernel::SdpaDecodeOnlineSg32BF16Hd256)
+              : omarchy::ComputeKernel::SdpaDecodeOnlineSg32BF16Hd128;
           encoder.dispatch_compute(
-              omarchy::ComputeKernel::SdpaDecodeOnlineSg32BF16Hd128,
-              online_bindings, online_params, online_params.matrix_m);
+              online_kernel, online_bindings, online_params,
+              online_params.matrix_m);
           return;
         }
       }
