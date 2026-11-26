@@ -471,7 +471,7 @@ layout(set = 0, binding = 7, std430) readonly buffer OffsetBuf {
 layout(set = 0, binding = 8, std430) coherent buffer Ticket {
   uint values[];
 } ticket;
-shared uint s_epi_prev;
+shared uint s_epi_is_last;
 // epi_rounded is epi_block: the reduce tree's row sum is consumed
 // into |norm| before the rounded pass overwrites the same range, so
 // one 2KB scratch serves both (occupancy cost measured on jw16:
@@ -3074,13 +3074,12 @@ void main() {
   // COLUMNS_PER_GROUP contiguous columns of ONE member's output, all
   // inside a single rope head (whose per-head element span is the mat
   // stride is0), so is0/COLUMNS_PER_GROUP workgroups finish each head.
-  // The last min(rope_t, wgs_per_head) finishers each norm and rotate
-  // one token row of that head, exactly
-  // like the standalone FastRopeNormBF16 dispatch pair it replaces —
-  // the same math the multi-token epilogue carries, with the member
-  // fixed (this dispatch's Output) and side in flag bit 0. Flag bit 2
-  // skips the tail and bit 3 stops after the election (debug timing;
-  // results are wrong when set).
+  // The LAST finisher of each head norms and rotates all rope_t token
+  // rows, exactly like the standalone FastRopeNormBF16 dispatch pair
+  // it replaces — the same math the multi-token epilogue carries, with
+  // the member fixed (this dispatch's Output) and side in flag bit 0.
+  // Flag bit 2 skips the tail and bit 3 stops after the election
+  // (debug timing; results are wrong when set).
   if ((params.flags & 4u) == 0u) {
     const uint row_length = params.reduce_size;
     const uint half_dims = params.dims;
@@ -3102,21 +3101,19 @@ void main() {
     const uint wgs_per_head = is0 / COLUMNS_PER_GROUP;
     const uint head = gl_WorkGroupID.x / wgs_per_head;
     const uint tix = head;
-    // One elected workgroup per token row: the LAST min(rope_t,
-    // wgs_per_head) finishers of this head each take row
-    // t_rank + j*winners, so the head's rope work is spread across
-    // up to rope_t workgroups (128 lanes each) instead of one.
+    // Only the LAST finisher of this head reads its tiles: the head
+    // row spans every producer's column slice, so an earlier elected
+    // workgroup could read tiles that are still unwritten. The same
+    // last-arrival protocol the multi-token epilogue runs.
     if (lane == 0u) {
-      s_epi_prev = atomicAdd(ticket.values[tix], 1u);
+      const uint prev = atomicAdd(ticket.values[tix], 1u);
+      s_epi_is_last = (prev == wgs_per_head - 1u) ? 1u : 0u;
     }
     barrier();
-    const uint prev = s_epi_prev;
-    const uint winners = min(rope_t, wgs_per_head);
-    if (prev < wgs_per_head - winners) {
+    if (s_epi_is_last == 0u) {
       return;
     }
-    const uint t_rank = prev - (wgs_per_head - winners);
-    if (prev == wgs_per_head - 1u && lane == 0u) {
+    if (lane == 0u) {
       ticket.values[tix] = 0u;
     }
     memoryBarrierBuffer();
@@ -3124,12 +3121,12 @@ void main() {
     if ((params.flags & 8u) != 0u) {
       return;
     }
-    // The norm keeps the 256-thread tree's exact pairing — partials
-    // v[i]^2 (+v[i+128]^2) then the 64..1 shared tree — so every
-    // reduction order matches the serial path bit-for-bit; only the
-    // row-to-workgroup assignment changed.
+    // The norm keeps the serial path's exact pairing: each of the 128
+    // lanes folds v[i]^2 (+v[i+128]^2) into one scratch slot, then the
+    // 64..1 shared tree runs the same order — bit-for-bit with the
+    // standalone path; only the row-to-workgroup assignment changed.
     const uint mat = head;
-    for (uint t = t_rank; t < rope_t; t += winners) {
+    for (uint t = 0u; t < rope_t; ++t) {
       const uint in_base = in_off + t * is1 + mat * is0;
       // v_reg keeps this lane's pass-1 load for the weighted pass:
       // the two walks hit the same indices below row_length.
