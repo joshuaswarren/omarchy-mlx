@@ -2144,14 +2144,17 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 2048, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
 
   for (size_t i = 0; i < saved.size(); ++i) {
@@ -2161,6 +2164,7 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
       unsetenv(names[i]);
     }
   }
+  omarchy::env_note_eval();
 }
 
 TEST_CASE("greedy prune default: the part rule and overrides") {
@@ -2212,6 +2216,7 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
   }
   const std::string m4 = "Apple M4 (G16G B1)";
   const std::string m1 = "Apple M1 (G13G B1)";
+  omarchy::env_note_eval();
   for (const char* var : {"MLX_OMARCHY_FUSED_GEMV", "MLX_OMARCHY_FUSED_TRIO"}) {
     INFO(var);
     const bool m4_unset = std::strcmp(var, "MLX_OMARCHY_FUSED_TRIO") == 0;
@@ -2220,22 +2225,28 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
     CHECK_EQ(omarchy::fused_route_enabled(var, m4), m4_unset);
     CHECK(omarchy::fused_route_enabled(var, m1));
     setenv(var, "1", 1);
+    omarchy::env_note_eval();
     CHECK(omarchy::fused_route_enabled(var, m4));
     CHECK(omarchy::fused_route_enabled(var, m1));
     setenv(var, "0", 1);
+    omarchy::env_note_eval();
     CHECK_FALSE(omarchy::fused_route_enabled(var, m1));
     CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
     setenv(var, "1", 1);
     setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+    omarchy::env_note_eval();
     CHECK_FALSE(omarchy::fused_route_enabled(var, m4));
     CHECK_FALSE(omarchy::fused_route_enabled(var, m1));
     unsetenv("MLX_OMARCHY_FUSED_CHAIN");
     unsetenv(var);
+    omarchy::env_note_eval();
   }
   // The trio gate does not depend on the GEMV gate, set or unset.
   setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::fused_route_enabled("MLX_OMARCHY_FUSED_TRIO", m4));
   setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::fused_route_enabled("MLX_OMARCHY_FUSED_TRIO", m4));
   for (size_t i = 0; i < saved.size(); ++i) {
     if (saved[i]) {
@@ -2244,6 +2255,7 @@ TEST_CASE("fused gemv and trio defaults: per device, either order, a setting win
       unsetenv(names[i]);
     }
   }
+  omarchy::env_note_eval();
 }
 
 // MLX_OMARCHY_FUSED_TRIO=1 reaches the RoPE-pair planner with the GEMV
@@ -2517,8 +2529,10 @@ TEST_CASE("outgate fold default: G13 and G14C default off, env overrides") {
       "llvmpipe (LLVM 19.1.7, 256 bits)"));
 
   setenv("MLX_OMARCHY_OUTGATE_FOLD", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::outgate_fold_enabled());
   setenv("MLX_OMARCHY_OUTGATE_FOLD", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::outgate_fold_enabled());
 }
 
