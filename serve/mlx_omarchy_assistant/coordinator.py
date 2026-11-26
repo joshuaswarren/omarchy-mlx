@@ -591,6 +591,7 @@ class _RoutingWorker:
 
 # The fenced assistant-ui envelope marker, shared by the _run phase helpers.
 _UI_MARKER = "```assistant-ui\n"
+_SHUTTING_DOWN = "The assistant is shutting down"
 
 
 class _TurnSetup:
@@ -648,6 +649,7 @@ class Coordinator:
         self.gpu = threading.Lock()
         self.speech = SpeechYieldScheduler(self.gpu)
         self.lock = threading.RLock()
+        self._lifecycle = threading.RLock()  # held across pair starts; close() drains it after setting closed
         self.turns = {}
         self.actions = set()
         self.closed = threading.Event()
@@ -655,11 +657,22 @@ class Coordinator:
         self.watch = threading.Thread(target=self._watch, daemon=True)
         self.watch.start()
 
+    def _start_pair(self):
+        """Start the worker pair unless shutdown has started.
+
+        close() sets `closed` first and then waits for (cancelling) any start
+        that already passed the check; every later start is refused.
+        """
+        with self._lifecycle:
+            if self.closed.is_set():
+                raise RuntimeError(_SHUTTING_DOWN)
+            return self.manager.start()
+
     def submit(self, cid, payload):
         if self.failure:
             raise RuntimeError(self.failure)
         if self.closed.is_set():
-            raise RuntimeError("The assistant is shutting down")
+            raise RuntimeError(_SHUTTING_DOWN)
         if set(payload) - {"text", "mode", "options", "criteria", "questions",
                            "max_tokens", "routing_evidence"}:
             raise ValueError("Unknown turn field")
@@ -686,16 +699,20 @@ class Coordinator:
         if not self.gpu.acquire(blocking=False):
             raise BusyError("Another local response is active. Wait or stop it before sending")
         try:
-            if self.closed.is_set():
-                raise RuntimeError("The assistant is shutting down")
-            turn = self.store.begin(cid, payload.get("text"))
-            job = {"cancel": threading.Event(), "heartbeat": time.monotonic(), "conversation_id": cid,
-                   "ttft": {"phases": {"submit": time.monotonic()}}}
             with self.lock:
+                if self.closed.is_set():
+                    raise RuntimeError(_SHUTTING_DOWN)
+                turn = self.store.begin(cid, payload.get("text"))
+                job = {"cancel": threading.Event(), "heartbeat": time.monotonic(), "conversation_id": cid,
+                       "ttft": {"phases": {"submit": time.monotonic()}}}
+                thread = threading.Thread(target=self._run, args=(cid, turn, payload, maximum, job), daemon=True)
+                job["thread"] = thread
+                try:
+                    thread.start()
+                except BaseException:
+                    self.store.finish(cid, turn, stopped=True)
+                    raise
                 self.turns[turn] = job
-            thread = threading.Thread(target=self._run, args=(cid, turn, payload, maximum, job), daemon=True)
-            job["thread"] = thread
-            thread.start()
             return turn
         except BaseException:
             self.gpu.release()
@@ -715,7 +732,7 @@ class Coordinator:
         needs criteria too, otherwise the turn becomes `clarify`.
         """
         try:
-            pair = self.manager.start()
+            pair = self._start_pair()
         except Exception as error:
             # Pair start refused; ordinary chat still has to work.
             routing = {"policy_version": ROUTING_POLICY.version,
@@ -862,7 +879,7 @@ class Coordinator:
         Returns a _TurnSetup, or None when the turn ends before streaming
         (cancel before start, or a draft turn completed by _run_draft)."""
         from .components import SCHEMA_PROMPT
-        pair = self.manager.start()
+        pair = self._start_pair()
         phase("pair_start")
         if cancel.is_set():
             return None
@@ -1478,6 +1495,12 @@ class Coordinator:
             jobs = list(self.turns.items())
         for turn, job in jobs:
             self.cancel(job["conversation_id"], turn)
+        # A pair start that saw `closed` unset still holds _lifecycle. Cancel it
+        # instead of waiting out a cold start; PairManager.start() clears its
+        # cancel flag on entry, so keep cancelling until the start lets go.
+        while not self._lifecycle.acquire(timeout=0.1):
+            self.manager.cancel()
+        self._lifecycle.release()
         for turn, job in jobs:
             job["thread"].join(timeout=10)
         survivors = [turn for turn, job in jobs if job["thread"].is_alive()]

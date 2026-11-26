@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "serve"))
 
+from mlx_omarchy_assistant import coordinator as coordinator_module
 from mlx_omarchy_assistant.coordinator import Coordinator, ConversationStore, BusyError, DecisionInputError, LocalModels, _RoutingWorker, validate_decision, validate_score_answer, explanation_disagrees, format_decision_event
 
 
@@ -163,6 +164,36 @@ class DecisionTests(unittest.TestCase):
 
 
 class WorkerLifetimeTests(unittest.TestCase):
+    STUB_PAIR = {
+        "decision_url": "http://127.0.0.1:1",
+        "chat_url": "http://127.0.0.1:1",
+        "chat_model": "stub-chat",
+        "context_tokens": 4096,
+        "model_paths": {"decision": "/nonexistent/decision", "chat": "/nonexistent/chat"},
+    }
+
+    class _RecordingManager:
+        def __init__(self):
+            self.events = []
+
+        def status(self):
+            return None
+
+        def start(self):
+            self.events.append("start")
+            return dict(WorkerLifetimeTests.STUB_PAIR)
+
+        def stop(self):
+            self.events.append("stop")
+            return {"stopped": True}
+
+    def _make_coordinator(self, manager):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        app = Coordinator(Path(directory.name), manager)
+        self.addCleanup(app.close)
+        return app
+
     def test_failed_shutdown_finishes_turn_but_blocks_new_work(self):
         class FailedManager:
             def start(self):
@@ -254,6 +285,275 @@ class WorkerLifetimeTests(unittest.TestCase):
         self.assertIn("stop", events)
         self.assertNotIn("start", events[events.index("stop") + 1:], events)
         self.assertEqual(app.routing_status()["last_reason"], "worker_error")
+        self.assertIsNone(app.store.get(cid)["active_turn"])
+        self.assertTrue(app.gpu.acquire(blocking=False))
+        app.gpu.release()
+
+    def test_close_before_pair_start_blocks_worker_launch(self):
+        closed_at = {}
+
+        class StatusHookManager(self._RecordingManager):
+            def __init__(self):
+                super().__init__()
+                self.on_status = None
+
+            def status(self):
+                if self.on_status is not None:
+                    hook, self.on_status = self.on_status, None
+                    hook()
+                return None
+
+        manager = StatusHookManager()
+        app = self._make_coordinator(manager)
+        cid = app.store.create()["id"]
+
+        def close_once():
+            app.close()
+            closed_at["index"] = len(manager.events)
+
+        manager.on_status = close_once
+        with unittest.mock.patch.dict("os.environ", {"MLX_OMARCHY_ROUTING": ""}), \
+                unittest.mock.patch("mlx_omarchy_assistant.routing.fit_route_question",
+                                    return_value=(True, None)):
+            with self.assertRaisesRegex(RuntimeError, "shutting down"):
+                app.submit(cid, {
+                    "mode": "auto",
+                    "text": "Help me choose between the tram and the ferry.",
+                })
+
+        self.assertIn("index", closed_at)
+        self.assertNotIn("start", manager.events[closed_at["index"]:], manager.events)
+        self.assertIsNone(app.store.get(cid)["active_turn"])
+        self.assertTrue(app.gpu.acquire(blocking=False))
+        app.gpu.release()
+
+    def test_close_before_turn_lock_refuses_without_writing_store(self):
+        manager = self._RecordingManager()
+        app = self._make_coordinator(manager)
+        cid = app.store.create()["id"]
+
+        caller = threading.current_thread()
+        real_lock = app.lock
+        triggered = [False]
+
+        class RacingLock:
+            def __enter__(self):
+                if not triggered[0] and threading.current_thread() is caller:
+                    triggered[0] = True
+                    app.close()
+                return real_lock.__enter__()
+
+            def __exit__(self, *args):
+                return real_lock.__exit__(*args)
+
+            def __getattr__(self, name):
+                return getattr(real_lock, name)
+
+        app.lock = RacingLock()
+        with self.assertRaisesRegex(RuntimeError, "shutting down"):
+            app.submit(cid, {"mode": "chat", "text": "hello"})
+
+        self.assertTrue(triggered[0])
+        self.assertIn("stop", manager.events)
+        self.assertNotIn("start", manager.events)
+        record = app.store.get(cid)
+        self.assertEqual(record["messages"], [])
+        self.assertIsNone(record["active_turn"])
+        self.assertTrue(app.gpu.acquire(blocking=False))
+        app.gpu.release()
+
+    def test_close_cancels_inflight_auto_route_pair_start(self):
+        start_entered = threading.Event()
+        second_cancel = threading.Event()
+        release_start = threading.Event()
+        close_done = threading.Event()
+
+        class BlockingManager(self._RecordingManager):
+            def __init__(self):
+                super().__init__()
+                self._cancel = threading.Event()
+
+            def start(self):
+                self._cancel.clear()
+                pair = super().start()
+                start_entered.set()
+                release_start.wait(timeout=5)
+                self.events.append("started")
+                return pair
+
+            def cancel(self):
+                self.events.append("cancel")
+                self._cancel.set()
+                if self.events.count("cancel") >= 2:
+                    second_cancel.set()
+                return True
+
+        manager = BlockingManager()
+        app = self._make_coordinator(manager)
+        self.addCleanup(release_start.set)
+        self.addCleanup(close_done.set)
+        cid = app.store.create()["id"]
+        other_cid = app.store.create()["id"]
+
+        submit_outcome = {}
+        close_outcome = {}
+
+        def run_submit():
+            try:
+                submit_outcome["turn"] = app.submit(cid, {
+                    "mode": "auto",
+                    "text": "Help me choose between the tram and the ferry.",
+                })
+            except Exception as exc:
+                submit_outcome["error"] = exc
+
+        def run_close():
+            try:
+                app.close()
+            except Exception as exc:
+                close_outcome["error"] = exc
+            finally:
+                close_done.set()
+
+        def wait_for_close_then_fit(*args, **kwargs):
+            close_done.wait(timeout=5)
+            return (True, None)
+
+        with unittest.mock.patch.dict("os.environ", {"MLX_OMARCHY_ROUTING": ""}), \
+                unittest.mock.patch("mlx_omarchy_assistant.routing.fit_route_question",
+                                    side_effect=wait_for_close_then_fit):
+            submit_thread = threading.Thread(target=run_submit, daemon=True)
+            submit_thread.start()
+            self.assertTrue(start_entered.wait(timeout=5), "manager.start() was not reached")
+
+            close_thread = threading.Thread(target=run_close, daemon=True)
+            close_thread.start()
+            try:
+                self.assertTrue(second_cancel.wait(timeout=2), "close() did not repeat cancel for in-flight start")
+                self.assertTrue(manager._cancel.is_set())
+                self.assertTrue(close_thread.is_alive(), "close() returned while manager.start() was still in flight")
+                self.assertTrue(app.closed.is_set(), "close() did not set closed before waiting")
+                with self.assertRaisesRegex(RuntimeError, "shutting down"):
+                    app.submit(other_cid, {"mode": "chat", "text": "hello"})
+            finally:
+                release_start.set()
+                close_thread.join(timeout=5)
+                submit_thread.join(timeout=5)
+
+        self.assertFalse(close_thread.is_alive(), "close thread did not finish")
+        self.assertFalse(submit_thread.is_alive(), "submit thread did not finish")
+        self.assertNotIn("error", close_outcome)
+        self.assertIsInstance(submit_outcome.get("error"), RuntimeError)
+        self.assertRegex(str(submit_outcome["error"]), "shutting down")
+        self.assertGreaterEqual(manager.events.count("cancel"), 2, manager.events)
+        self.assertGreater(manager.events.index("stop"), manager.events.index("started"), manager.events)
+        self.assertNotIn("start", manager.events[manager.events.index("stop") + 1:], manager.events)
+        self.assertIsNone(app.store.get(cid)["active_turn"])
+        self.assertIsNone(app.store.get(other_cid)["active_turn"])
+        self.assertTrue(app.gpu.acquire(blocking=False))
+        app.gpu.release()
+
+    def test_close_during_turn_start_does_not_join_unstarted_thread(self):
+        manager = self._RecordingManager()
+        app = self._make_coordinator(manager)
+        cid = app.store.create()["id"]
+
+        close_outcome = {}
+        close_threads = []
+        closer_waited = []
+        triggered = [False]
+
+        def run_close():
+            try:
+                app.close()
+            except Exception as exc:
+                close_outcome["error"] = exc
+
+        class RacingThread(threading.Thread):
+            def start(self):
+                if not triggered[0]:
+                    triggered[0] = True
+                    closer = threading.Thread(target=run_close, daemon=True)
+                    close_threads.append(closer)
+                    closer.start()
+                    app.closed.wait(timeout=5)
+                    closer.join(timeout=0.35)
+                    closer_waited.append(closer.is_alive())
+                super().start()
+
+        with unittest.mock.patch.object(coordinator_module, "threading",
+                                        wraps=threading) as mock_threading:
+            mock_threading.Thread = RacingThread
+            app.submit(cid, {"mode": "chat", "text": "hello"})
+
+        self.assertEqual(len(close_threads), 1)
+        closer = close_threads[0]
+        closer.join(timeout=5)
+        self.assertFalse(closer.is_alive(), "close thread did not finish")
+        self.assertEqual(closer_waited, [True], "close() did not wait for turn thread start")
+        self.assertNotIn("error", close_outcome)
+        self.assertIn("stop", manager.events)
+        self.assertNotIn("start", manager.events)
+        self.assertIsNone(app.store.get(cid)["active_turn"])
+        self.assertTrue(app.gpu.acquire(blocking=False))
+        app.gpu.release()
+
+    def test_submit_thread_start_failure_finishes_turn_and_releases_gpu(self):
+        manager = self._RecordingManager()
+        app = self._make_coordinator(manager)
+        cid = app.store.create()["id"]
+
+        class FailingThread(threading.Thread):
+            def start(self):
+                raise RuntimeError("can't start new thread")
+
+        with unittest.mock.patch.object(coordinator_module, "threading",
+                                        wraps=threading) as mock_threading:
+            mock_threading.Thread = FailingThread
+            with self.assertRaisesRegex(RuntimeError, "can't start new thread"):
+                app.submit(cid, {"mode": "chat", "text": "hello"})
+
+        self.assertIsNone(app.store.get(cid)["active_turn"])
+        self.assertEqual(app.turns, {})
+        self.assertTrue(app.gpu.acquire(blocking=False))
+        app.gpu.release()
+
+    def test_close_during_turn_pair_start_emits_no_error_event(self):
+        start_entered = threading.Event()
+        cancel_called = threading.Event()
+        turn_stopped = threading.Event()
+
+        class AbortOnCancelManager(self._RecordingManager):
+            def start(self):
+                super().start()
+                start_entered.set()
+                cancel_called.wait(timeout=2)
+                raise RuntimeError("pair start cancelled")
+
+            def cancel(self):
+                self.events.append("cancel")
+                cancel_called.set()
+                turn_stopped.wait(timeout=2)
+                return True
+
+            def stop(self):
+                turn_stopped.set()
+                return super().stop()
+
+        manager = AbortOnCancelManager()
+        app = self._make_coordinator(manager)
+        self.addCleanup(cancel_called.set)
+        self.addCleanup(turn_stopped.set)
+        cid = app.store.create()["id"]
+
+        app.submit(cid, {"mode": "chat", "text": "hello"})
+        self.assertTrue(start_entered.wait(timeout=5), "manager.start() was not reached")
+
+        app.close()
+
+        self.assertIn("cancel", manager.events)
+        event_types = [event["type"] for event in app.store.events(cid, 0)]
+        self.assertNotIn("error", event_types, event_types)
         self.assertIsNone(app.store.get(cid)["active_turn"])
         self.assertTrue(app.gpu.acquire(blocking=False))
         app.gpu.release()
