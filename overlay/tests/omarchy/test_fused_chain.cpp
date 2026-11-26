@@ -2443,7 +2443,8 @@ TEST_CASE("rope norm pair picks the narrow build on 128-wide rows") {
   bool narrow_seen = last == n128_pair;
   bool wide_seen = last == apple_pair;
   bool plain_seen = last == plain_pair;
-  CHECK(narrow_seen || wide_seen || plain_seen);
+  const bool paired_route_seen = narrow_seen || wide_seen || plain_seen;
+  CHECK(paired_route_seen);
   // Bit-exact vs the composed rms_norm -> rope chain, either build.
   array ref_q = fast::rope(
       fast::rms_norm(xq, wq, 1e-5f, stream), D, false, 10000.0f, 1.0f,
