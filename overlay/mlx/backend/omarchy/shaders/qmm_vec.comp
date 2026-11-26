@@ -1521,6 +1521,20 @@ void main() {
   uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint workgroup = gl_WorkGroupID.x;
+  // DEC-44 dispatch-order probe: flag bit 17 remaps the linear WG ->
+  // row-block walk to a 64-wide transpose, so concurrently resident WGs
+  // read weight regions ~groups/64 blocks apart instead of adjacent
+  // blocks. Pure permutation of which WG computes which row block:
+  // bit-identical output. Applied only when the grid is an exact
+  // multiple of 64 so the remap is a bijection.
+  if ((params.flags & 131072u) != 0u) {
+    uint groups3 = (n3 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+    uint groups_total = groups0 + groups1 + groups2 + groups3;
+    if (groups_total >= 64u && (groups_total & 63u) == 0u) {
+      workgroup = (gl_WorkGroupID.x % 64u) * (groups_total / 64u) +
+                  gl_WorkGroupID.x / 64u;
+    }
+  }
   uint which;
   uint n;
   if ((params.flags & 65536u) != 0u) {
@@ -2115,6 +2129,20 @@ void main() {
   uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
 #endif
   uint workgroup = gl_WorkGroupID.x;
+  // DEC-44 dispatch-order probe: flag bit 17 remaps the linear WG ->
+  // row-block walk to a 64-wide transpose, so concurrently resident WGs
+  // read weight regions ~groups/64 blocks apart instead of adjacent
+  // blocks. Pure permutation of which WG computes which row block:
+  // bit-identical output. Applied only when the grid is an exact
+  // multiple of 64 so the remap is a bijection.
+  if ((params.flags & 131072u) != 0u) {
+    uint groups3 = (n3 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+    uint groups_total = groups0 + groups1 + groups2 + groups3;
+    if (groups_total >= 64u && (groups_total & 63u) == 0u) {
+      workgroup = (gl_WorkGroupID.x % 64u) * (groups_total / 64u) +
+                  gl_WorkGroupID.x / 64u;
+    }
+  }
   uint which;
   uint n;
 #ifdef QMM_MULTI_3M_PLAIN

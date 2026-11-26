@@ -791,6 +791,30 @@ int main(int argc, char** argv) {
       } else {
         std::cout << "ok: " << name << "_g13c_resnorm_vec_fast identical\n";
       }
+  // DEC-44: the fused-multi dispatch-order probe (MLX_OMARCHY_QMM_ORDER=
+  // stride, qmm_vec.comp flag bit 17) is a pure WG -> row-block permutation,
+  // so every scenario must stay byte-identical with the probe on.
+  for (const char* name : {"single", "group", "swiglu"}) {
+    std::string base = "/tmp/w7p-geom-order-base.bin";
+    std::string other = "/tmp/w7p-geom-order-stride.bin";
+    unsetenv("MLX_OMARCHY_QMM_ORDER");
+    int rc = run_child(name, base.c_str());
+    setenv("MLX_OMARCHY_QMM_ORDER", "stride", 1);
+    int rc2 = run_child(name, other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_ORDER");
+    if (rc != 0 || rc2 != 0) {
+      std::cout << "FAIL: order " << name << " child rc " << rc << "/"
+                << rc2 << "\n";
+      ++failures;
+      continue;
+    }
+    if (fnv(base) != fnv(other)) {
+      std::cout << "FAIL: order " << name << " bytes differ\n";
+      ++failures;
+    } else {
+      std::cout << "ok: order " << name << " identical\n";
+    }
+  }
     }
   }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")
