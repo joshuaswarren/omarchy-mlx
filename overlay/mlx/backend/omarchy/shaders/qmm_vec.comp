@@ -258,7 +258,7 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 #if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_ROPE_EPI)
 // The fused-norm rope epilogue reads the Q/K members' materialized
 // outputs back inside the same dispatch, so their stores upgrade to
-// coherent like the resnorm variant's Sum slot. Measured on jw16:
+// coherent like the resnorm variant's Sum slot. Measured on the M1 Max:
 // an unqualified decl produces stale reads (wrong ids) — coherent is
 // load-bearing for cross-workgroup visibility on this stack.
 #define QMM_VEC_OUTPUT_ACCESS coherent
@@ -317,7 +317,7 @@ layout(set = 0, binding = 25, std430) coherent buffer Ticket {
 shared uint s_rope_is_last;
 // epi_rounded is epi_block: the reduce tree's row sum is consumed
 // into |norm| before the rounded pass overwrites the same range, so
-// one 2KB scratch serves both (occupancy cost measured on jw16:
+// one 2KB scratch serves both (occupancy cost measured on the M1 Max:
 // +4KB static shared slowed the member-dot ~2ms/30-step).
 shared float epi_block[512u];
 float epi_member_load(uint member, uint index) {
@@ -560,7 +560,7 @@ layout(set = 0, binding = 8, std430) coherent buffer Ticket {
 shared uint s_epi_is_last;
 // epi_rounded is epi_block: the reduce tree's row sum is consumed
 // into |norm| before the rounded pass overwrites the same range, so
-// one 2KB scratch serves both (occupancy cost measured on jw16:
+// one 2KB scratch serves both (occupancy cost measured on the M1 Max:
 // +4KB static shared slowed the member-dot ~2ms/30-step).
 shared float epi_block[512u];
 float epi_member_load(uint index) {
