@@ -55,27 +55,44 @@ MLX_OMARCHY_NO_QMM_XE16=1`).
 
 ### Timing (steady state, per run, `dd8e63866`)
 
-Per-block (A-B-B-A) marker spans; drift cancelled by the interleave:
+Two guard-run cells on the same boot: r3 (shared host, post-reboot
+churn) and r4 (Main-ordered quiet-host re-measure of decode). Both
+5 A-B-B-A pairs + 3 propoff, ctx2048, greedy, 128-token decode.
 
-| blk | base prefill | prop prefill | Δ | base ms/tok | prop ms/tok | Δ |
-|-----|--------------|--------------|---|-------------|-------------|---|
-| 1 | 20.5 s | 17.6 s | −14.2 % | 33.1 | 35.2 | +6.3 % |
-| 2 | 19.5 | 17.5 | −10.3 % | 31.0 | 35.2 | +13.6 % |
-| 3 | 23.3 | 21.9 | −6.1 % | 39.9 | 44.2 | +10.6 % |
-| 4 | 23.7 | 21.8 | −8.0 % | 40.1 | 44.2 | +10.3 % |
-| 5 | 23.6 | 21.8 | −7.5 % | 40.0 | 44.5 | +11.2 % |
+r4 decode per block (base avg → prop avg, ms/tok):
 
-- ctx2048 prefill: prop faster in every block, median ≈ −8.5 %
-  (base ≈ 23.2 s, prop ≈ 21.8 s, propoff ≈ 23.5 s — the kill-switch
-  arm matches base, so the gain is the new route).
-- ctx2048 decode: prop runs +6–14 % slower per block (median ≈ +10 %).
-  GPU kernel-time totals tell the opposite story — prop total ≈ 187 ms
-  vs base ≈ 213 ms of GPU work per run — and the decode-path kernels
-  are identical (`QmmVecQ4MultiSubgroupBF16R2S16KCONTS16` family on
-  both arms), so the wall-clock delta is host-side overhead, not kernel
-  throughput. The r3 run shared the host with post-reboot churn and a
-  foreign job overlapping the tail; at `45f9937` decode measured
-  matched (~39.4 vs ~39.9 ms/tok). Flagged for a clean re-measure.
+| blk | base | prop | Δ |
+|-----|------|------|---|
+| 1 | 37.7 | 44.4 | +17.9 % |
+| 2 | 40.0 | 44.5 | +11.3 % |
+| 3 | 34.8 | 37.9 | +8.7 % |
+| 4 | 35.9 | 38.7 | +7.9 % |
+| 5 | 33.7 | 34.6 | +2.6 % |
+
+propoff 31.2 / 35.3 / 31.1 ≈ base — the same wheel with both routes
+env-disabled pays no premium, so the effect tracks routes-on, not the
+wheel.
+
+- ctx2048 prefill: prop faster in every block on both runs (r4:
+  prop ≈ 18.4–21.9 s vs base ≈ 19.3–23.6 s; r3 medians prop ≈ 21.8 s
+  vs base ≈ 23.2 s, ≈ −8 %).
+- ctx2048 decode: prop carries a real premium (median +8.7 %),
+  reproduced on the quiet host, fading with job time (+17.9 % →
+  +2.6 % across blocks as the host settled post-reboot).
+- Mechanism (per-dispatch GPU profile, r4): dispatch count identical
+  (49703) and dependency-barrier count identical (44017); submission
+  host costs equal (s ≈ 12–16 ms, b ≈ 75–92 ms, q ≈ 4.4 ms per run).
+  The premium is on-device: prop's decode kernels run uniformly slower
+  at identical counts — +16 % on the bandwidth-bound
+  `QmmVecQ4MultiSubgroupBF16R2S16KCONTS16`, +58–68 % on the
+  latency-bound `SdpaDecodeSplit*`/`FastRmsNormApple` kernels — a GPU
+  core-clock/DVFS signature following the denser coopmat prefill, not
+  host-side work. Decode dispatches zero Xe16 kernels (identical
+  kernel table both arms); the regression is a second-order physical
+  side-effect of the faster prefill, not a decode-path code
+  difference. Net per request still favors prop at 128 tokens
+  (−1.7 s prefill vs ≤ +0.6 s decode); a >500-token decode could net
+  negative if the premium sustains.
 - ctx512 decode (`45f9937`): both arms ≈ 45 ms/token steady state.
 - Per-kernel (ctx2048 kernel table): `MatmulBF16 n=134217728`
   17.5 ms/35 dispatches → `MatmulBF16CoopmatXe16` 9.8 ms/35;
