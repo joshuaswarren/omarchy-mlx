@@ -1382,8 +1382,10 @@ inline bool gemv_balanced_pair_widths_ok(int64_t a, int64_t b) {
 // Pruned greedy vocabulary head (MLX_OMARCHY_NO_GREEDY_PRUNE in mlx-lm's _greedy_head):
 // historically defaulted off on G14C when K=2048 ran the 8-stage QmmVecGreedyBF16
 // kernel; G14C now routes through the 3-dispatch QmmVecGreedyWordBF16 path
-// (greedy_word_over_staged_part), which beats the composed tail on Qwen3.8-2B
-// (+8.08%, 5/5 wins, bit-identical tokens). No part defaults off now. Pure.
+// (greedy_word_over_staged_part), which beats the 8-stage K=2048 path by +8.08%
+// (5/5 wins) and stacks with balanced-pair SwiGLU for +4.72% at ctx512 and
+// +4.48% at ctx2048 over origin/main's composed tail (5/5 wins, bit-identical).
+// No part defaults off now. Pure.
 inline bool greedy_prune_off_default_part(const std::string& device_name) {
   (void)device_name;
   return false;
@@ -1404,10 +1406,9 @@ inline bool greedy_prune_enabled(const std::string& device_name) {
 // 3-dispatch QmmVecGreedyWordBF16 over the 8-stage K=2048 QmmVecGreedyBF16 path
 // inside GreedyQuantizedArgmax::eval_gpu: on G14C (Apple M2 Max) the 3-dispatch
 // word route runs geometry.word (QmmVecQ4WordSubgroupBF16R2S8W2) plus two tiny
-// chunk/combine dispatches and beats both the 5-dispatch composed tail (+8.08%,
-// 5/5 wins) and the 8-stage staged path on Qwen3.8-2B 4-bit decode with
-// bit-identical token IDs. MLX_OMARCHY_GREEDY_WORD=1/0 overrides on any part.
-// Pure.
+// chunk/combine dispatches, beating the 8-stage staged path by +8.08% (5/5 wins)
+// and matching/edging the 5-dispatch composed tail with bit-identical token IDs.
+// MLX_OMARCHY_GREEDY_WORD=1/0 overrides on any part. Pure.
 inline bool greedy_word_over_staged_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
