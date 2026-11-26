@@ -2130,6 +2130,7 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   CHECK(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
 
   auto g13g_caps = caps;
+  g13g_caps.unified_memory = true;
   g13g_caps.device_name = "Apple M1 (G13G B1)";
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g13g_caps, 2560, false));
   CHECK(omarchy::qmm_residual_norm_enabled(g13g_caps, 2048, false));
