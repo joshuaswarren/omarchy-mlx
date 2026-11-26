@@ -1755,11 +1755,12 @@ class ResolveTargetTests(CliTestBase):
         deep = base.joinpath(*parts)
         self.assertEqual(len(os.fsencode(deep)), 4095)
         try:
-            fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+            o_dir = getattr(os, "O_DIRECTORY", 0)
+            fd = os.open(base, os.O_RDONLY | o_dir)
             try:
                 for part in parts:
                     os.mkdir(part, dir_fd=fd)
-                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+                    child = os.open(part, os.O_RDONLY | o_dir, dir_fd=fd)
                     fd, prev = child, fd
                     os.close(prev)
             finally:

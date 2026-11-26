@@ -331,7 +331,7 @@ def resolve_target(target: str | None, cat: dict) -> Resolved:
         path = path.expanduser()
         is_dir = stat.S_ISDIR(path.stat().st_mode)
         if is_dir:  # list and search it without lengthening the path
-            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)  # listing needs read permission
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))  # listing needs read permission
             try:
                 os.stat(".", dir_fd=fd)  # a lookup inside it needs search permission
             finally:
