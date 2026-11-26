@@ -7,14 +7,12 @@ Intel Xe2 where the M16 and 8x8x8 shape lists are empty.
 
 ## Environment
 
-- Source commits: `cc3756a39` (implementation), `45f9937a7` + `df89dbce2`
-  (test coverage), `1c43b95ad` (review: gate capability + shared-memory
-  bound), `ac4d2554e` (review: qmm Xe16 emits bf16 operands, matching
-  `qmm_intel_bf16`'s contract), `dd8e63866` (review: qmm
-  `require_backed` parity terms + 64-lane workgroup caps + stale
-  comments). Wheels: base `0.32.4.dev…+diag.cc74e7a` (origin/main),
-  prop `0.32.4.dev…+diag.dd8e638`. Early cells ran the fp16-operand
-  build `+diag.45f9937`; every number below is the bf16-operand head.
+- Source commits: rebased onto `origin/main` (`037fd3d0a`); implementation
+  and review fixes (`4ce54161d`..`b56a1e26b`) plus `ea5cbfe6e` (scalarize
+  Xe16 coopmat accumulators and drain per subgroup to eliminate NIR
+  scratch spills). Wheels: base `0.32.4.dev…+diag.037fd3d`, prop
+  `0.32.4.dev…+diag.ea5cbfe`. Early cells (`r3`/`r4`/`r5`) ran the
+  pre-rebase head `dd8e638` vs `cc74e7a`.
 - Kernel: `7.1.12-2`. Mesa (ANV): 26.2.6.
 - Device: `Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)`, eGPU over USB4,
   driver `xe`, subgroupSize 32 (pinned via requiredSubgroupSize).
@@ -53,81 +51,103 @@ MLX_OMARCHY_NO_QMM_XE16=1`).
   `GPU-TIMEOUTS delta=0`, `FOREIGN-GPU-USED count=0`.
 - 0 GPU hangs across all runs; no engine resets.
 
-### Timing (steady state, per run, `dd8e63866`)
+### Decode regression root cause & fix (`dd8e638` → `ea5cbfe`)
 
-Two guard-run cells on the same boot: r3 (shared host, post-reboot
-churn) and r4 (Main-ordered quiet-host re-measure of decode). Both
-5 A-B-B-A pairs + 3 propoff, ctx2048, greedy, 128-token decode.
+On the pre-rebase head (`dd8e638` vs `cc74e7a`), ctx2048 decode regressed
++8.7 % over 5 ABBA blocks while `propoff` matched base, GT clock stayed
+pinned at 2400 MHz, a 3 s post-prefill idle did not recover, and decode
+dispatched identical kernel counts (371 dispatches/token, 0 Xe16
+dispatches). Per-dispatch profiling (indexed by `ComputeKernel` id `e`),
+`INTEL_DEBUG=cs`, and `INTEL_DEBUG=bat` isolated the exact cause:
 
-r4 decode per block (base avg → prop avg, ms/tok):
+1. **Unrolled-array spills in `matmul_coopmat_xe16.comp`**: indexing
+   `acc[2][2]` across barriers (`acc[rb % 2u][cb]`) prevented NIR from
+   scalarizing the four `coopmat` accumulators, producing **56 NIR scratch
+   ops, 32:24 spills:fills, 1,272 SIMD32 instructions, 22,960 bytes** (vs
+   `MatmulBF16`: 326 insns, 0:0 spills, 5,760 bytes) and bumping
+   `CFE_STATE.Scratch Space Buffer` from 2 to 3.
+2. **ANV `anv_shader_heap` `Kernel Start Pointer` (KSP) shift on Xe2**:
+   every Qwen3-4B decode pipeline is lazily compiled on decode token 1
+   *after* prefill. ANV packs shader binaries contiguously at 64-byte
+   alignment in `device->shader_heap` (`anv_pipeline_cache.c:144`).
+   Replacing `MatmulBF16` (`0x1680` B) + `QmmPrefillFmaBF16` (`0x7680` B)
+   with `MatmulBF16CoopmatXe16` (`0x59c0` B) +
+   `QmmPrefillCoopmat16XeBF16` (`0x5fe0` B) shifted every decode shader's
+   KSP by `+0x2ca0` (`mod 0x800 = +0x4a0`). Controlled checks proved this
+   placement shift — not coopmat/DPAS execution, buffer VAs, submission
+   count, or `CFE_STATE` — caused the entire decode delta:
+   - Executing `MatmulBF16CoopmatXe16` (10× `32×2048×2048`) and
+     `QmmPrefillCoopmat16XeBF16` *after* decode pipelines are compiled
+     changed `SdpaDecodeSplitP2` by 0.0 % (`17.2 → 17.3 → 17.4 µs`).
+   - Compiling two unrelated non-coopmat shaders (`ElementwiseI32` +
+     `ElementwiseLiteF32`, zero Xe16 shaders) before Qwen3-4B prefill
+     reproduced the exact per-kernel fingerprint (`SdpaP2` layer 0
+     `22.8 → 61.7 µs` vs prop `63.8 µs`; `FastRmsNormApple` +22 %;
+     `SdpaP1` +11 %; `BinarySimple` −28 %; `LogSumExpChunk` −19 %; net
+     decode GPU +6.3 %).
+   - Diffing the full 10,252-line `INTEL_DEBUG=bat` command stream on a
+     warmed 2400 MHz micro-loop showed bit-for-bit identical
+     `COMPUTE_WALKER`s, shader ISA, `STATE_BASE_ADDRESS`, `CFE_STATE`,
+     and binding tables — differing only in KSP — while KSP mod `0x800`
+     (2 KiB) deterministically swung `SdpaP2` (`17.6 ↔ 23.6 ↔ 40.9 µs`,
+     `0.1 µs` run-to-run repeatability; two allocations 30 KiB apart with
+     the same `mod 0x800 = 0x780` gave `23.7` vs `23.6 µs`).
+3. **Fix (`ea5cbfe6e`, rebased onto `037fd3d0a`)**: scalarized
+   `acc00..acc11` and `mat_a0/a1`/`mat_b0/b1` in
+   `matmul_coopmat_xe16.comp` (and `acc0/acc1` in
+   `qmm_coopmat16_xe.comp`) with a per-subgroup `drain_s[2 * 8 * 16]`
+   (1 KiB) so both subgroups drain in parallel. Under `INTEL_DEBUG=cs`,
+   `MatmulBF16CoopmatXe16` drops from **32:24 spills:fills / 56 NIR
+   scratch ops** to **0:0 spills:fills / 0 NIR scratch ops** (top-down
+   scheduled), cutting prefill GPU time further and moving decode shader
+   KSPs out of the slow `dd8e638` slot. (Because the residual decode
+   gain also rides ANV's 64-byte-packed `anv_shader_heap` KSP placement
+   on Xe2, the durable algorithmic gain of this PR is the ~30 % prefill
+   GPU speedup; decode shows no regression.)
 
-| blk | base | prop | Δ |
-|-----|------|------|---|
-| 1 | 37.7 | 44.4 | +17.9 % |
-| 2 | 40.0 | 44.5 | +11.3 % |
-| 3 | 34.8 | 37.9 | +8.7 % |
-| 4 | 35.9 | 38.7 | +7.9 % |
-| 5 | 33.7 | 34.6 | +2.6 % |
+### Timing — 5-pair ABBA on rebased head (`037fd3d` vs `ea5cbfe`, solo B60)
 
-propoff 31.2 / 35.3 / 31.1 ≈ base — the same wheel with both routes
-env-disabled pays no premium, so the effect tracks routes-on, not the
-wheel.
+5 A-B-B-A blocks (10 `base`, 10 `prop`) + 3 `propoff` per cell,
+Qwen3-4B-Instruct-2507-4bit, greedy (`temp=0`, `seed=0`), 128 decode
+tokens, per-dispatch GPU profiling (`period_ns = 52.083332`). 46 runs
+total; `dmesg` reset-keyword count unchanged (222→222), 0 hangs.
 
-- ctx2048 prefill: prop faster in every block on both runs (r4:
-  prop ≈ 18.4–21.9 s vs base ≈ 19.3–23.6 s; r3 medians prop ≈ 21.8 s
-  vs base ≈ 23.2 s, ≈ −8 %).
-- ctx2048 decode: prop carries a real premium (median +8.7 %),
-  reproduced on the quiet host, fading with job time (+17.9 % →
-  +2.6 % across blocks as the host settled post-reboot).
-- Mechanism (per-dispatch GPU profile, r4): dispatch count identical
-  (49703) and dependency-barrier count identical (44017); submission
-  host costs equal (s ≈ 12–16 ms, b ≈ 75–92 ms, q ≈ 4.4 ms per run).
-  The premium is on-device: prop's decode kernels run uniformly slower
-  at identical counts — +16 % on the bandwidth-bound
-  `QmmVecQ4MultiSubgroupBF16R2S16KCONTS16`, +58–68 % on the
-  latency-bound `SdpaDecodeSplit*`/`FastRmsNormApple` kernels — a GPU
-  core-clock/DVFS signature following the denser coopmat prefill, not
-  host-side work. Decode dispatches zero Xe16 kernels (identical
-  kernel table both arms); the regression is a second-order physical
-  side-effect of the faster prefill, not a decode-path code
-  difference. Net per request still favors prop at 128 tokens
-  (−1.7 s prefill vs ≤ +0.6 s decode); a >500-token decode could net
-  negative if the premium sustains.
-- Main-ordered cause measurement (r5, 20 Hz `tile0/gt0/freq0/act_freq`
-  + hwmon card/pkg energy, arms base/prop/propidle, 2 runs each, same
-  wheels and boot): decode runs pinned at 2400 MHz GT clock on every
-  arm (mean 2395–2400, max 2400; propidle's only sub-max samples are
-  the post-idle ramp) — the slowdown is not GT core-clock DVFS, and
-  the `min_freq` lever (root-writable, currently 1200) could only
-  constrain. Decode card power 57–65 W, pkg 38–43 W, no arm
-  separation; `power_profile=power_saving`. Decode medians: base
-  30.8–32.9 ms/tok, prop 35.7–38.6, propidle 36.2–36.3 — propidle
-  (prop prefill → 3 s idle → decode) does NOT recover to base speed,
-  so the state left by the prop prefill is persistent across a 3 s
-  idle, not a decaying thermal/clock transient. Combined with the
-  identical dispatch/barrier counts and uniform per-kernel
-  inflation, the remaining candidates are VRAM layout / allocator
-  state or a memory-clock state from the different prefill
-  allocation pattern (act_freq covers the GT core only, not GDDR).
-  Evidence: `~/scratch/w7t-dec19/freq2/` (freq-*.csv, mk-*, out-*).
-- Decode-phase dispatch attribution (r4 profs, 5 runs pooled per
-  arm, dispatches under submissions whose host timestamps fall
-  inside the marker decode window): total decode GPU-busy
-  20,348 ms base → 22,578 ms prop (+2,229 ms, +11 %), matching
-  the wall premium. Delta concentrates on the most-dispatched
-  kernels: `ElementwiseF32` +1,577 ms (+27 %), `op897988541`
-  +336 ms (+12 %), `CastBoolF32` +276 ms (+2 %) — a broad
-  per-execution overhead signature, not a single-kernel
-  slowdown. Decode buffer VA footprints are the same on both
-  arms (~23-27 distinct MB units in the same region), so
-  allocator placement does not explain it either.
-- ctx512 decode (`45f9937`): both arms ≈ 45 ms/token steady state.
-- Per-kernel (ctx2048 kernel table): `MatmulBF16 n=134217728`
-  17.5 ms/35 dispatches → `MatmulBF16CoopmatXe16` 9.8 ms/35;
-  `QmmPrefillFmaBF16 n=1740800` (propoff arm) →
-  `QmmPrefillCoopmat16XeBF16` 6.5 ms/70 on prop. The FMA fallback lines
-  appear only on the propoff arm, i.e. the Xe16 route is the only
-  non-FMA path for those shapes.
+**ctx2048** (23/23 runs bit-identical greedy `ids_sha256`
+`e683dade…afb0`, `base == prop == propoff`):
+
+| metric | base med (n=10) | prop med (n=10) | propoff med (n=3) | 5-pair ABBA Δ (blocks) | median Δ |
+|---|---|---|---|---|---|
+| prefill GPU | 7.58 s | 5.00 s | 7.11 s | −20.70, −29.69, −29.67, −22.81, −34.65 % | **−29.67 %** |
+| prefill wall | 29.42 s | 23.41 s | 23.74 s | −3.70, −7.90, −7.92, +0.59, −21.15 % | **−7.90 %** |
+| decode wall (med) | 48.22 ms/tok | 45.56 ms/tok | 47.63 ms/tok | −10.38, −5.50, −5.56, −3.09, −5.39 % | **−5.50 %** |
+| decode GPU (med) | 40.48 ms/tok | 37.67 ms/tok | 39.88 ms/tok | −11.11, −6.53, −6.61, −0.92, −6.87 % | **−6.61 %** |
+| total wall (128 tok) | 38.06 s | 29.40 s | 29.96 s | −6.38, −7.36, −13.73, −0.82, −18.35 % | **−7.36 %** |
+
+**ctx512** (`base == propoff` `c387642c…18de`; `prop` deterministic
+`a473cb22…1b49` — known accumulation-order split documented below):
+
+| metric | base med (n=10) | prop med (n=10) | propoff med (n=3) | 5-pair ABBA Δ (blocks) | median Δ |
+|---|---|---|---|---|---|
+| prefill GPU | 1.30 s | 1.19 s | 1.29 s | −6.34, −8.18, −7.77, −7.87, −7.88 % | **−7.87 %** |
+| decode wall (med) | 81.49 ms/tok | 74.25 ms/tok | 81.65 ms/tok | −12.22, −9.00, −8.93, −9.28, −9.17 % | **−9.17 %** |
+| decode GPU (med) | 73.63 ms/tok | 66.40 ms/tok | 73.87 ms/tok | −8.15, −9.99, −9.91, −10.28, −10.22 % | **−9.99 %** |
+| total wall (128 tok) | 27.66 s | 26.54 s | 27.63 s | −4.99, −4.14, −3.92, −4.06, −4.03 % | **−4.06 %** |
+
+Per-kernel prefill GPU time (`ctx2048`, `base-3` vs `prop-3` vs
+`propoff-1`):
+
+- `MatmulBF16` (140 dispatches): `2,469.0 ms` (`propoff`: `2,470.1 ms`) →
+  `MatmulBF16CoopmatXe16` (140 dispatches): **`1,140.0 ms`** (**2.17×**,
+  −53.8 %).
+- `QmmPrefillFmaBF16` (247 dispatches): `1,852.0 ms` (`propoff`:
+  `1,864.1 ms`) → `QmmPrefillCoopmat16XeBF16` (247 dispatches):
+  **`1,061.1 ms`** (**1.75×**, −42.7 %).
+- `QmmPrefillIntelBF16` (247 dispatches): `2,320.2 ms` vs `2,320.6 ms`
+  (`propoff`: `2,319.7 ms`), unchanged.
+- `tests/qmm_intel_parity.py` on `+diag.ea5cbfe`: 3/3 tests passed in
+  0.807 s; dense matmul parity vs base FMA: `max_abs_diff = 0` on
+  `(32,32,32)`, `(33,65,48)`, `(64,128,64)`, `(128,256,128)` and `0.125`
+  on `(2048,128,2048)`.
 
 ### Per-op error vs fp32 reference (prop wheel `+diag.dd8e638`, B60)
 
