@@ -1605,35 +1605,69 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         group.members.push_back(std::move(member));
       }
       // Epilogue-only route (device.h gemv_epilogue_only_part): general
-      // multi-member folds (such as asymmetric 4-way GDN in_proj) and
-      // epilogue-free singles keep their per-node path; single-member
-      // Add-epilogue groups plan, plus balanced 3-member bf16 QKV groups
-      // on G14C unless MLX_OMARCHY_FUSED_GEMV is explicitly set to 0.
+      // multi-member folds and epilogue-free singles keep their
+      // per-node path; single-member Add-epilogue groups plan, plus
+      // balanced bf16 groups on G14C unless MLX_OMARCHY_FUSED_GEMV is
+      // explicitly set to 0: balanced 3-member QKV, and balanced
+      // 2-member pairs (MLP gate/up, and the two pairs a 4-member GDN
+      // in_proj window [6144, 2048, 16, 16] splits into).
       bool balanced_qkv = false;
+      std::vector<GemvGroup> pair_groups;
       if (!node_gemv_enabled(*nodes[start]) && x_rows == 1 &&
-          group.members.size() == 3 && !group.members[0].epilogue &&
-          !group.members[1].epilogue && !group.members[2].epilogue) {
+          group.members.size() >= 2) {
+        bool epilogue_free = true;
+        bool all_bf16 = true;
+        for (const auto& m : group.members) {
+          epilogue_free = epilogue_free && !m.epilogue;
+          all_bf16 = all_bf16 && m.node.dtype() == bfloat16;
+        }
         const Device* d = stream_device(*nodes[start]);
         const char* fg_env = omarchy::env_str("MLX_OMARCHY_FUSED_GEMV");
         const bool explicit_gemv_off =
             fg_env != nullptr && fg_env[0] != '\0' &&
             !env_flag("MLX_OMARCHY_FUSED_GEMV");
-        if (d != nullptr && !explicit_gemv_off &&
-            gemv_epilogue_only_route_enabled(*d) &&
-            gemv_balanced_qkv_part(d->capabilities().device_name) &&
-            group.members[0].node.dtype() == bfloat16 &&
-            group.members[1].node.dtype() == bfloat16 &&
-            group.members[2].node.dtype() == bfloat16) {
+        if (d != nullptr && !explicit_gemv_off && epilogue_free &&
+            all_bf16 && gemv_epilogue_only_route_enabled(*d) &&
+            gemv_balanced_qkv_part(d->capabilities().device_name)) {
           std::vector<int64_t> widths;
-          widths.reserve(3);
+          widths.reserve(group.members.size());
           for (const auto& m : group.members) {
             widths.push_back(m.node.inputs()[1].shape(0));
           }
-          balanced_qkv = gemv_balanced_qkv_widths_ok(widths);
+          balanced_qkv = group.members.size() == 3 &&
+              gemv_balanced_qkv_widths_ok(widths);
+          if (!balanced_qkv) {
+            // Split-pair admission: each consecutive member pair whose
+            // widths sit within a 4:1 ratio plans as its own dispatch,
+            // so an asymmetric window never folds as one group while
+            // its balanced pairs still fuse (members outside a passing
+            // pair stay on the per-node path).
+            for (size_t p = 0; p + 1 < group.members.size(); p += 2) {
+              if (!gemv_balanced_pair_widths_ok(widths[p], widths[p + 1])) {
+                continue;
+              }
+              GemvGroup pair;
+              pair.members.push_back(std::move(group.members[p]));
+              pair.members.push_back(std::move(group.members[p + 1]));
+              pair_groups.push_back(std::move(pair));
+            }
+          }
         }
       }
       if (!node_gemv_enabled(*nodes[start]) && !balanced_qkv &&
+          pair_groups.empty() &&
           (group.members.size() != 1 || !group.members[0].epilogue)) {
+        continue;
+      }
+      if (!pair_groups.empty()) {
+        for (auto& pair : pair_groups) {
+          const size_t pair_index = state->gemv_groups.size();
+          for (const auto& member : pair.members) {
+            state->gemv_roles.put_if_absent(member.node.id(), pair_index);
+            claimed.put_if_absent(member.node.id(), 1);
+          }
+          state->gemv_groups.push_back(std::move(pair));
+        }
         continue;
       }
       if (group.members.size() < 2 && !worth) {
@@ -2428,9 +2462,15 @@ bool qmm_residual_norm_enabled(
   if (env != nullptr && env[0] != '\0') {
     return std::strcmp(env, "0") != 0;
   }
-  if (norm_cols == 2560 &&
-      caps.device_name.find("G14C") != std::string::npos) {
-    return true;
+  // Width allowlist: {256, 2048, 4096} on every part that passed the
+  // subgroup-32 probe above. 2560 stays a measured exception: G14C (the
+  // original carve-in) plus non-unified-memory devices. G13G measured
+  // ResNorm(2560)+2x8w2 at -2.2% (M1D-1c #947, 2x2 factorial: geom-only
+  // +0.5%, fold-only +0.4%, both -2.2%), so the G13 family keeps the
+  // pre-DEC-18 exclusion rather than inheriting the uniform admit.
+  if (norm_cols == 2560) {
+    return caps.device_name.find("G14C") != std::string::npos ||
+        !caps.unified_memory;
   }
   return norm_cols == 256 || norm_cols == 2048 || norm_cols == 4096;
 }

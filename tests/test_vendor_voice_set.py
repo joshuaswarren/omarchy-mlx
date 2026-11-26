@@ -126,6 +126,23 @@ def corrupt_deflate_wheel():
     return bytes(raw)
 
 
+def parser_rejects(text):
+    """True when the check's Requirement() rejects text itself: packaging < 26 converts most specifier
+    versions while parsing, so an oversized one is reported as an invalid requirement, as on base."""
+    spec = importlib.util.spec_from_file_location("nodeps_closure_parser", CHECK)
+    closure = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(closure)
+    limit = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)  # the limit run_check and run_raw pin
+    try:
+        closure.Requirement(text)
+    except ValueError:
+        return True
+    finally:
+        sys.set_int_max_str_digits(limit)
+    return False
+
+
 class NodepsClosureCheckTest(unittest.TestCase):
     """check-nodeps-closure.py: every Requires-Dist of a --no-deps wheel is in the lock."""
 
@@ -139,14 +156,29 @@ class NodepsClosureCheckTest(unittest.TestCase):
             nodeps.write_text("voicepkg==1.0\n" + nodeps_extra)
             lock = tmp / "lock.txt"
             lock.write_text("\n".join(lock_lines) + "\n")
-            return subprocess.run([sys.executable, str(CHECK), "--nodeps", str(nodeps),
-                                   "--wheels", str(wheels), "--lock", str(lock)],
+            # Pin the default int-digit limit the oversized-version cases rely on.
+            return subprocess.run([sys.executable, "-X", "int_max_str_digits=4300", str(CHECK),
+                                   "--nodeps", str(nodeps), "--wheels", str(wheels), "--lock", str(lock)],
                                   capture_output=True, text=True)
 
     def test_covered_dependencies_pass(self):
         result = self.run_check(["scipy>=1.10", "tqdm"], ["scipy==1.18.1 --hash=sha256:" + "0" * 64,
                                                           "tqdm==4.67.1 --hash=sha256:" + "1" * 64])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_oversized_versions_the_check_never_compares_pass(self):
+        big = "9" * 4301
+        for label, requires, lock_lines, extra in (
+                ("other platform", [f'tqdm>=1.{big}; sys_platform == "win32"'], ["tqdm==1 --hash=sha256:" + "0" * 64],
+                 ""),
+                ("not vendored", [f"mlx>=1.{big}"], ["tqdm==1"], "# not-vendored: mlx  mlx-omarchy provides it\n"),
+                ("lock names it without a pin", [f"tqdm>=1,<=1.{big}"], ["tqdm"], "")):
+            with self.subTest(label):
+                result = self.run_check(requires, lock_lines, nodeps_extra=extra)
+                if parser_rejects(requires[0]):
+                    self.assert_clean_error(result, "Requires-Dist: invalid requirement")
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_a_dependency_missing_from_the_lock_fails_by_name(self):
         result = self.run_check(["scipy>=1.10", "einops>=0.8"], ["scipy==1.18.1 --hash=sha256:" + "0" * 64])
@@ -186,7 +218,9 @@ class NodepsClosureCheckTest(unittest.TestCase):
             for name, data in (("nodeps.in", nodeps), ("lock.txt", lock)):
                 if data is not None:
                     (tmp / name).write_bytes(data)
-            return subprocess.run([sys.executable, str(CHECK), "--nodeps", str(tmp / "nodeps.in"),
+            # Pin the default int-digit limit the oversized-version cases rely on.
+            return subprocess.run([sys.executable, "-X", "int_max_str_digits=4300", str(CHECK),
+                                   "--nodeps", str(tmp / "nodeps.in"),
                                    "--wheels", str(tmp / "wheels"), "--lock", str(tmp / "lock.txt")],
                                   capture_output=True, text=True)
 
@@ -276,6 +310,9 @@ class NodepsClosureCheckTest(unittest.TestCase):
     def test_malformed_inputs_fail_with_an_error_line(self):
         pin, lock = b"voicepkg==1.0\n", f"tqdm==1 --hash=sha256:{'0' * 64}\n".encode()
         good = {"voicepkg-1.0-py3-none-any.whl": {"voicepkg-1.0.dist-info/METADATA": b"Requires-Dist: tqdm\n"}}
+        big = "9" * 4301
+        # packaging < 26 rejects the oversized nodeps pin while read_nodeps() parses it, before the lock.
+        early = parser_rejects(f"voicepkg==1.{big}") and "nodeps.in:1: invalid requirement"
         cases = {
             "invalid nodeps line": (b"voicepkg==\n", lock, good, "nodeps.in:1: invalid requirement 'voicepkg=='"),
             "invalid compound specifier": (b"voicepkg===1.0,2.0\n", lock, good, "nodeps.in:1: invalid requirement"),
@@ -315,6 +352,24 @@ class NodepsClosureCheckTest(unittest.TestCase):
             "Requires-Dist marker on an unknown variable": (pin, lock, {"voicepkg-1.0-py3-none-any.whl": {
                 "voicepkg-1.0.dist-info/METADATA": b'Requires-Dist: bar; "dev" in dependency_groups\n'}},
                 "Requires-Dist: cannot evaluate"),
+            "oversized lock version": (pin, f"tqdm==1.{big} --hash=sha256:{'0' * 64}\n".encode(), good,
+                                       "lock.txt:1: Exceeds the limit"),
+            "oversized nodeps version": (f"voicepkg==1.{big}\n".encode(), lock, good,
+                                         early or "nodeps pin voicepkg: Exceeds the limit"),
+            "oversized nodeps version after a bad lock line": (
+                f"voicepkg==1.{big}\n".encode(), f"tqdm==x!y --hash=sha256:{'0' * 64}\n".encode(), good,
+                early or "lock.txt:1: Invalid version: 'x!y'"),
+            **{f"oversized Requires-Dist version, {kind}": (pin, lock_bytes, {"voicepkg-1.0-py3-none-any.whl": {
+                "voicepkg-1.0.dist-info/METADATA": f"Requires-Dist: tqdm{spec}\n".encode()}},
+                "Requires-Dist: invalid requirement" if parser_rejects(f"tqdm{spec}")
+                else f"voicepkg Requires-Dist 'tqdm{spec}': Exceeds the limit")
+               for kind, spec, lock_bytes in (
+                   ("one specifier", f">=1.{big}", lock),
+                   ("compound specifier", f">=1,<=1.{big}", lock),
+                   ("wildcard specifier", f"==1.{big}.*", lock),
+                   ("compound, not in the lock", f">=0,<=1.{big}", f"other==1 --hash=sha256:{'0' * 64}\n".encode()),
+                   ("compound, lock pin outside it", f">=1,<=1.{big}",
+                    f"tqdm==0.5 --hash=sha256:{'0' * 64}\n".encode()))},
         }
         for label, (nodeps, lock_bytes, wheels, text) in cases.items():
             with self.subTest(label):

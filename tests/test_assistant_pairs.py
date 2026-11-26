@@ -1719,9 +1719,14 @@ class PairManagerTests(BasePairTest):
         self.manager.setup("everyday", approve_download=True, context_tokens=4096)
         self.manager.start()
         self.addCleanup(self.manager.stop)
-        chat_memory = self.manager.catalog_models[CHAT_SMALL_ID]["memory"]
+        chat_entry = self.manager.catalog_models[CHAT_SMALL_ID]
         current = self.manager._context_tokens
-        current_bytes = chat_total(chat_memory, current)
+        current_bytes = pairs.chat_estimate(
+            chat_entry, current,
+            prompt_cache_size=self.manager._chat_prompt_cache_size).total
+        self.assertEqual(
+            budget.load_reservations(self.home)[CHAT_SMALL_ID]["bytes"],
+            current_bytes)
         old_chat = self.manager._children["chat"]
         with mock.patch.object(managed, "terminate", return_value=False):
             result = self.manager.ensure_context(current + 8192)
@@ -1743,9 +1748,14 @@ class PairManagerTests(BasePairTest):
         self.manager.setup("everyday", approve_download=True, context_tokens=4096)
         self.manager.start()
         self.addCleanup(self.manager.stop)
-        chat_memory = self.manager.catalog_models[CHAT_SMALL_ID]["memory"]
+        chat_entry = self.manager.catalog_models[CHAT_SMALL_ID]
         current = self.manager._context_tokens
-        current_bytes = chat_total(chat_memory, current)
+        current_bytes = pairs.chat_estimate(
+            chat_entry, current,
+            prompt_cache_size=self.manager._chat_prompt_cache_size).total
+        self.assertEqual(
+            budget.load_reservations(self.home)[CHAT_SMALL_ID]["bytes"],
+            current_bytes)
         old_chat = self.manager._children["chat"]
         decision_pid = self.manager._children["decision"].popen.pid
         events = []
@@ -1938,6 +1948,84 @@ class PairManagerTests(BasePairTest):
         self.assertIsNotNone(held[CHAT_SMALL_ID]["claimed"])
         self.assertIsNotNone(held[DECISION_ID]["claimed"])
         self.assertTrue(stopped["stopped"])
+
+    def test_chat_worker_enables_prompt_cache_size_1_when_budget_allows(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        seen_specs = []
+        base_builder = stub_argv_builder("chat")
+
+        def recording_chat_argv(spec):
+            seen_specs.append(spec)
+            return base_builder(spec)
+
+        with mock.patch.object(pairs, "_chat_worker_argv", recording_chat_argv):
+            self.manager.setup("everyday", approve_download=True)
+            status = self.manager.start()
+            self.addCleanup(self.manager.stop)
+        self.assertEqual(status["state"], "ready")
+        self.assertEqual(status["chat_prompt_cache_size"], 1)
+        self.assertEqual(len(seen_specs), 1)
+        self.assertEqual(seen_specs[0].prompt_cache_size, 1)
+        chat = self.manager.catalog_models[CHAT_SMALL_ID]
+        expected_cached = pairs.chat_estimate(
+            chat, status["context_tokens"], prompt_cache_size=1).total
+        expected_uncached = pairs.chat_estimate(
+            chat, status["context_tokens"], prompt_cache_size=0).total
+        self.assertGreater(expected_cached, expected_uncached)
+        held = budget.load_reservations(self.home)
+        self.assertEqual(held[CHAT_SMALL_ID]["bytes"], expected_cached)
+        # Real _chat_worker_argv forwards --prompt-cache-size 1
+        real_argv = self._old_builders[0](seen_specs[0])
+        idx = real_argv.index("--prompt-cache-size")
+        self.assertEqual(real_argv[idx + 1], "1")
+
+    def test_chat_worker_falls_back_to_prompt_cache_size_0_when_memory_is_tight(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        chat = self.manager.catalog_models[CHAT_SMALL_ID]
+        decision_bytes = pairs.decision_requirement_bytes(
+            self.home / "models" / DECISION_ID, 8)
+        uncached = pairs.chat_estimate(chat, 4096, prompt_cache_size=0).total
+        cached = pairs.chat_estimate(chat, 4096, prompt_cache_size=1).total
+        self.assertGreater(cached, uncached)
+        # Pick an available_bytes where uncached fits with desktop_reserve
+        # (10% or 2 GiB), while cached (+1 KV slot) does not.
+        tight = uncached + decision_bytes + budget.SAFETY_RESERVE_BYTES + (cached - uncached) // 2
+        self.assertEqual(
+            pairs.chat_prompt_cache_size(chat, 4096, other_bytes=decision_bytes,
+                                         available_bytes=tight),
+            0,
+        )
+        self.manager._available_bytes_override = tight
+        seen_specs = []
+        base_builder = stub_argv_builder("chat")
+
+        def recording_chat_argv(spec):
+            seen_specs.append(spec)
+            return base_builder(spec)
+
+        with mock.patch.object(pairs, "_chat_worker_argv", recording_chat_argv):
+            self.manager.setup("everyday", approve_download=True, context_tokens=4096,
+                               available_bytes=tight)
+            status = self.manager.start()
+            self.addCleanup(self.manager.stop)
+        self.assertEqual(status["state"], "ready")
+        self.assertEqual(status["chat_prompt_cache_size"], 0)
+        self.assertEqual(seen_specs[0].prompt_cache_size, 0)
+        held = budget.load_reservations(self.home)
+        self.assertEqual(held[CHAT_SMALL_ID]["bytes"], uncached)
+
+    def test_chat_estimate_rejects_prompt_cache_when_kv_is_unknown(self):
+        chat = dict(self.manager.catalog_models[CHAT_SMALL_ID])
+        chat["memory"] = dict(chat["memory"], kv_bytes_per_token=None)
+        self.assertEqual(
+            pairs.chat_prompt_cache_size(chat, 4096, other_bytes=0,
+                                         available_bytes=64 * GiB),
+            0,
+        )
+        with self.assertRaises(pairs.PairError):
+            pairs.chat_estimate(chat, 4096, prompt_cache_size=1)
 
 
 def _on_pinned_stack(fn):

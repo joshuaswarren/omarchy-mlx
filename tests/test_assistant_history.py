@@ -8,6 +8,7 @@ that replaced per-token fsync. Hardware and generation behavior live elsewhere.
 """
 
 import codecs
+import errno
 import json
 import os
 import stat
@@ -362,6 +363,65 @@ class CorruptLoadTest(HistoryTest):
             restored = ConversationStore(self.home)
         self.assertIn(good, restored.records)
         self.assertNotIn(bad, restored.records)
+
+    def test_memory_error_while_loading_entry_is_skipped(self):
+        good = self.new_conversation()
+        self.complete_turn(good)
+        bad = "2" * 32
+        payload = '{"id": "' + bad + '"}'
+        (self.home / HISTORY_DIR / (bad + ".json")).write_bytes(payload.encode("utf-8"))
+        real_loads = json.loads
+
+        def fake_loads(text, *args, **kwargs):
+            if text == payload:
+                raise MemoryError("synthetic memory limit")
+            return real_loads(text, *args, **kwargs)
+
+        with mock.patch("mlx_omarchy_assistant.history.json.loads", side_effect=fake_loads):
+            restored = ConversationStore(self.home)
+        self.assertIn(good, restored.records)
+        self.assertNotIn(bad, restored.records)
+
+    def test_stream_allocation_memory_error_leaves_no_partial_record(self):
+        cid = self.new_conversation()
+        self.complete_turn(cid)
+        cases = (
+            ("stream", "mlx_omarchy_assistant.history.deque"),
+            ("checkpoint", "mlx_omarchy_assistant.history.time.monotonic"),
+        )
+        for label, target in cases:
+            with self.subTest(case=label):
+                with mock.patch(target, side_effect=MemoryError):
+                    restored = ConversationStore(self.home)
+                self.assertEqual(restored.records, {})
+                self.assertEqual(restored.streams, {})
+                self.assertEqual(restored.pending, {})
+                self.assertEqual(restored.list(), [])
+
+    def test_untraversable_assistant_dir_starts_empty(self):
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        cid = self.new_conversation()
+        self.complete_turn(cid)
+        assistant_dir = self.home / "assistant"
+        self.addCleanup(os.chmod, assistant_dir, 0o700)
+        os.chmod(assistant_dir, 0o600)
+        restored = ConversationStore(self.home)
+        self.assertEqual(restored.records, {})
+
+    def test_history_listing_os_error_starts_empty(self):
+        cid = self.new_conversation()
+        self.complete_turn(cid)
+        real_glob = Path.glob
+
+        def failing_glob(directory, pattern, *args, **kwargs):
+            if directory == self.home / HISTORY_DIR:
+                raise OSError(errno.EIO, "Input/output error")
+            yield from real_glob(directory, pattern, *args, **kwargs)
+
+        with mock.patch.object(Path, "glob", failing_glob):
+            restored = ConversationStore(self.home)
+        self.assertEqual(restored.records, {})
 
     def test_vanished_file_between_glob_and_open_is_skipped(self):
         good = self.new_conversation()

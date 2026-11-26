@@ -2075,6 +2075,23 @@ TEST_CASE("gemv balanced QKV route: part and width guards") {
   CHECK_FALSE(omarchy::gemv_balanced_qkv_widths_ok({8192, 512, 512}));
 }
 
+TEST_CASE("gemv balanced pair route: width guard") {
+  // MLP gate/up pairs (equal widths).
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(6144, 6144));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(9728, 9728));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(12288, 12288));
+  // Split-pair GDN in_proj: [6144, 2048] + [16, 16].
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(6144, 2048));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(16, 16));
+  CHECK(omarchy::gemv_balanced_pair_widths_ok(8192, 2048));
+  // Pairs beyond the 4:1 ratio stay per-node.
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(6144, 16));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(4096, 512));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(4096, 1023));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(0, 16));
+  CHECK_FALSE(omarchy::gemv_balanced_pair_widths_ok(-1, 16));
+}
+
 TEST_CASE("qmm residual norm default: shape, device capabilities and overrides") {
   const char* names[] = {
       "MLX_OMARCHY_FUSED_CHAIN", "MLX_OMARCHY_QMM_RESIDUAL_NORM"};
@@ -2092,15 +2109,25 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   caps.max_compute_work_group_size[0] = 512;
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 256, false));
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 2048, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 4096, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 0, false));
-  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4095, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(caps, 4097, false));
 
-  auto g14c_caps = caps;
-  g14c_caps.device_name = "Apple M2 Max (G14C B1)";
-  CHECK(omarchy::qmm_residual_norm_enabled(g14c_caps, 2560, false));
+  auto dgpu_caps = caps;
+  dgpu_caps.device_name = "NVIDIA GeForce RTX 5060 Ti";
+  CHECK(omarchy::qmm_residual_norm_enabled(dgpu_caps, 2560, false));
+
+  auto apple = caps;
+  apple.unified_memory = true;
+  apple.device_name = "Apple M1 (G13G)";
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2048, false));
+  apple.device_name = "Apple M1 Max (G13C)";
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
+  apple.device_name = "Apple M2 Max (G14C B1)";
+  CHECK(omarchy::qmm_residual_norm_enabled(apple, 2560, false));
 
   auto limited = caps;
   limited.device_name = "Apple M2 Max (G14C B1)";

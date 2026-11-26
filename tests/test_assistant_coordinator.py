@@ -2,6 +2,7 @@ import json
 import sys
 import threading
 import tempfile
+import time
 import unittest
 import unittest.mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -9,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "serve"))
 
-from mlx_omarchy_assistant.coordinator import Coordinator, ConversationStore, BusyError, DecisionInputError, LocalModels, validate_decision, validate_score_answer, explanation_disagrees, format_decision_event
+from mlx_omarchy_assistant.coordinator import Coordinator, ConversationStore, BusyError, DecisionInputError, LocalModels, _RoutingWorker, validate_decision, validate_score_answer, explanation_disagrees, format_decision_event
 
 
 class ConversationTests(unittest.TestCase):
@@ -184,13 +185,86 @@ class WorkerLifetimeTests(unittest.TestCase):
             app.closed.set()
             app.watch.join(3)
 
+    def test_closed_routing_worker_returns_error_dict(self):
+        class StubModels:
+            def decision(self, pair, payload):
+                return {"answers": {}}
+
+            def close_connection(self):
+                pass
+
+        worker = _RoutingWorker(manager=None)
+        worker.models = StubModels()
+        worker.close()
+        reply = worker.call({}, {}, 1.0)
+        self.assertIsInstance(reply, dict)
+        self.assertEqual(list(reply.keys()), ["error"])
+        self.assertIsInstance(reply["error"], str)
+        self.assertTrue(reply["error"])
+
+    def test_auto_submit_racing_close_does_not_restart_workers(self):
+        events = []
+
+        class RacingManager:
+            def __init__(self):
+                self.coordinator = None
+
+            def status(self):
+                return None
+
+            def start(self):
+                events.append("start")
+                if events.count("start") == 1:
+                    self.coordinator.close()
+                return {
+                    "decision_url": "http://127.0.0.1:1",
+                    "chat_url": "http://127.0.0.1:1",
+                    "chat_model": "stub-chat",
+                    "model_paths": {"decision": "/nonexistent/decision", "chat": "/nonexistent/chat"},
+                }
+
+            def stop(self):
+                events.append("stop")
+                return {"stopped": True}
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        manager = RacingManager()
+        app = Coordinator(Path(directory.name), manager)
+        manager.coordinator = app
+        self.addCleanup(app.close)
+        cid = app.store.create()["id"]
+
+        with unittest.mock.patch.dict("os.environ", {"MLX_OMARCHY_ROUTING": ""}), \
+                unittest.mock.patch("mlx_omarchy_assistant.routing.fit_route_question",
+                                    return_value=(True, None)) as fit_mock:
+            with self.assertRaisesRegex(RuntimeError, "shutting down"):
+                app.submit(cid, {
+                    "mode": "auto",
+                    "text": "Help me choose between the tram and the ferry.",
+                })
+
+        fit_mock.assert_called_once()
+        with app.lock:
+            threads = [job["thread"] for job in app.turns.values() if "thread" in job]
+        for thread in threads:
+            thread.join(timeout=2)
+        time.sleep(0.05)
+
+        self.assertIn("stop", events)
+        self.assertNotIn("start", events[events.index("stop") + 1:], events)
+        self.assertEqual(app.routing_status()["last_reason"], "worker_error")
+        self.assertIsNone(app.store.get(cid)["active_turn"])
+        self.assertTrue(app.gpu.acquire(blocking=False))
+        app.gpu.release()
+
 
 class WorkerReplyTests(unittest.TestCase):
     """LocalModels refuses a malformed worker reply with a RuntimeError that
     names it, never a raw decoder, AttributeError or TypeError."""
 
-    def serve(self, *bodies):
-        """One loopback worker; request N gets status 200 and bodies[N]."""
+    def serve(self, *bodies, status=200):
+        """One loopback worker; request N gets `status` and bodies[N]."""
         pending = iter(bodies)
 
         class Handler(BaseHTTPRequestHandler):
@@ -200,7 +274,7 @@ class WorkerReplyTests(unittest.TestCase):
             def do_POST(self):
                 self.rfile.read(int(self.headers["Content-Length"]))
                 body = next(pending)
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 try:
@@ -339,6 +413,249 @@ class WorkerReplyTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "not JSON") as caught:
                     call(url)
                 self.assertIsInstance(caught.exception.__cause__, RecursionError)
+
+    def test_non_200_worker_reply_escapes_and_bounds_body(self):
+        body = b"overloaded\r\n\x1b[31mfake log\x07\x7f" + b"x" * 240
+        url = self.serve(body, body, status=503)
+        expected_tail = ": %r" % body[:200].decode("utf-8", "replace")
+        for label, call, prefix in (
+            ("decision", self.decision, "Decision worker refused the request (HTTP 503): "),
+            ("chat", self.chat, "Chat worker refused the request (HTTP 503): "),
+        ):
+            with self.subTest(worker=label):
+                with self.assertRaises(RuntimeError) as caught:
+                    call(url)
+                message = str(caught.exception)
+                self.assertTrue(message.startswith(prefix), message[:300])
+                self.assertFalse(any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in message),
+                                 repr(message[:300]))
+                self.assertTrue(message.endswith(expected_tail), message[:300])
+
+
+class NestedChatConnectionTests(unittest.TestCase):
+    """A nested LocalModels.chat() (the mid-stream component repair) must not
+    hide the outer stream from cancel or leak its socket. Both framings: the
+    pinned mlx-lm server sends close-delimited HTTP/1.0 SSE."""
+
+    FRAMINGS = ("HTTP/1.0", "HTTP/1.1")
+
+    def serve(self, protocol, hold_inner=False, decision=b'{"answers": {}}'):
+        """Request 0 sends one delta and waits; with hold_inner, so do later ones.
+        /v1/decisions answers `decision` at once. self.paths lists every POST."""
+        release = threading.Event()
+        lock = threading.Lock()
+        state = {"count": 0}
+        chunked = protocol == "HTTP/1.1"
+        self.paths = paths = []
+
+        def write(handler, payload):
+            if chunked:
+                payload = b"%x\r\n%s\r\n" % (len(payload), payload)
+            handler.wfile.write(payload)
+            handler.wfile.flush()
+
+        def sse(text):
+            return b"data: " + json.dumps({"choices": [{"delta": {"content": text}}]}).encode() + b"\n\n"
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = protocol
+
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                paths.append(self.path)
+                if self.path == "/v1/decisions":
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(decision)))
+                    self.end_headers()
+                    try:
+                        self.wfile.write(decision)
+                    except OSError:
+                        pass
+                    self.close_connection = True
+                    return
+                with lock:
+                    index = state["count"]
+                    state["count"] += 1
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                if chunked:
+                    self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                try:
+                    write(self, sse("outer" if index == 0 else "inner"))
+                    if index == 0 or hold_inner:
+                        release.wait(10)
+                    write(self, b"data: [DONE]\n\n")
+                    if chunked:
+                        write(self, b"")
+                except OSError:
+                    pass
+                self.close_connection = True
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(release.set)
+        return {"chat_url": "http://127.0.0.1:%d" % server.server_port, "chat_model": "m"}, release
+
+    def tracked_sockets(self, connected=None):
+        """Every client socket opened from here on; fileno() is -1 once closed.
+        connected() runs as each socket finishes connecting."""
+        import socket
+        opened = []
+        real = socket.create_connection
+
+        def create(*args, **kwargs):
+            opened.append(real(*args, **kwargs))
+            if connected:
+                connected()
+            return opened[-1]
+
+        patcher = unittest.mock.patch("socket.create_connection", create)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return opened
+
+    def blocked_reader(self, stream):
+        """A thread already blocked in next(stream), as the turn thread is when cancel arrives."""
+        outcome = {}
+
+        def read_next():
+            try:
+                outcome["value"] = next(stream)
+            except Exception as exc:  # keep no traceback: it would pin the stream's socket
+                outcome["error"] = repr(exc)
+
+        reader = threading.Thread(target=read_next, daemon=True)
+        reader.start()
+        reader.join(0.3)
+        self.assertTrue(reader.is_alive(), "reader should be waiting on the worker")
+        return reader, outcome
+
+    def assert_cancel_unblocks(self, models, release, readers):
+        started = time.monotonic()
+        models.close_connection()
+        for reader, _ in readers:
+            reader.join(max(0.0, 3 - (time.monotonic() - started)))
+        unblocked = (not any(reader.is_alive() for reader, _ in readers)
+                     and time.monotonic() - started < 3)
+        if not unblocked:
+            release.set()
+            for reader, _ in readers:
+                reader.join(5)
+        self.assertTrue(unblocked, "a reader stayed blocked after close_connection()")
+        # _run treats any error after cancel as a stop; which one depends on the framing.
+        for _, outcome in readers:
+            self.assertIn("error", outcome)
+
+    def test_cancel_after_nested_repair_unblocks_outer(self):
+        for protocol in self.FRAMINGS:
+            with self.subTest(protocol=protocol):
+                pair, release = self.serve(protocol)
+                opened = self.tracked_sockets()
+                models = LocalModels(None)
+                outer = models.chat(pair, [], 8, threading.Event())
+                self.assertEqual(next(outer), ("delta", "outer"))
+                self.assertEqual(list(models.chat(pair, [], 8, threading.Event())),
+                                 [("delta", "inner"), ("finish", None)])
+                self.assert_cancel_unblocks(models, release, [self.blocked_reader(outer)])
+                self.assertEqual([sock.fileno() for sock in opened], [-1, -1])
+                self.assertFalse(models.sockets)
+
+    def test_cancel_while_both_streams_open_unblocks_both(self):
+        for protocol in self.FRAMINGS:
+            with self.subTest(protocol=protocol):
+                pair, release = self.serve(protocol, hold_inner=True)
+                opened = self.tracked_sockets()
+                models = LocalModels(None)
+                outer = models.chat(pair, [], 8, threading.Event())
+                self.assertEqual(next(outer), ("delta", "outer"))
+                inner = models.chat(pair, [], 8, threading.Event())
+                self.assertEqual(next(inner), ("delta", "inner"))
+                self.assert_cancel_unblocks(models, release,
+                                            [self.blocked_reader(outer), self.blocked_reader(inner)])
+                self.assertEqual([sock.fileno() for sock in opened], [-1, -1])
+                self.assertFalse(models.sockets)
+
+    def test_nested_repair_does_not_leak_outer_socket(self):
+        for protocol in self.FRAMINGS:
+            with self.subTest(protocol=protocol):
+                pair, release = self.serve(protocol)
+                opened = self.tracked_sockets()
+                models = LocalModels(None)
+                outer = models.chat(pair, [], 8, threading.Event())
+                self.assertEqual(next(outer), ("delta", "outer"))
+                self.assertEqual(list(models.chat(pair, [], 8, threading.Event())),
+                                 [("delta", "inner"), ("finish", None)])
+                release.set()
+                self.assertEqual(list(outer), [("finish", None)])
+                self.assertEqual([sock.fileno() for sock in opened], [-1, -1])
+                self.assertFalse(models.sockets)
+
+    def test_a_decision_during_a_stream_closes_only_its_own_socket(self):
+        for protocol in self.FRAMINGS:
+            with self.subTest(protocol=protocol):
+                pair, release = self.serve(protocol)
+                opened = self.tracked_sockets()
+                models = LocalModels(None)
+                outer = models.chat(pair, [], 8, threading.Event())
+                self.assertEqual(next(outer), ("delta", "outer"))
+                self.assertEqual(models.decision({"decision_url": pair["chat_url"]}, {}), {"answers": {}})
+                self.assertEqual(opened[1].fileno(), -1)
+                release.set()
+                self.assertEqual(list(outer), [("finish", None)])
+                self.assertEqual(opened[0].fileno(), -1)
+                self.assertFalse(models.sockets)
+
+    def test_a_failed_call_closes_its_socket_while_its_error_is_held(self):
+        # A finished routing future keeps the exception, its traceback and the response.
+        for protocol in self.FRAMINGS:
+            with self.subTest(protocol=protocol):
+                pair, _ = self.serve(protocol, decision=b"x" * (1024 * 1024 + 2))
+                opened = self.tracked_sockets()
+                held = []  # assertRaises would drop the traceback
+                try:
+                    LocalModels(None).decision({"decision_url": pair["chat_url"]}, {})
+                except ValueError as error:
+                    held.append(error)
+                self.assertIn("too large", str(held[0]))
+                self.assertIsNotNone(held[0].__traceback__)
+                self.assertEqual([sock.fileno() for sock in opened], [-1])
+
+    def test_an_already_cancelled_turn_opens_no_socket(self):
+        pair, _ = self.serve("HTTP/1.0")
+        opened = self.tracked_sockets()
+        cancel = threading.Event()
+        cancel.set()
+        self.assertEqual(list(LocalModels(None).chat(pair, [], 8, cancel)), [])
+        self.assertEqual((opened, self.paths), ([], []))
+
+    def test_a_turn_cancelled_while_connecting_never_sends_its_request(self):
+        for protocol in self.FRAMINGS:
+            with self.subTest(protocol=protocol):
+                pair, _ = self.serve(protocol)
+                models = LocalModels(None)
+                cancel = threading.Event()
+
+                def cancel_turn():  # Coordinator.cancel, before the socket is recorded
+                    cancel.set()
+                    models.close_connection()
+
+                opened = self.tracked_sockets(connected=cancel_turn)
+                self.assertEqual(list(models.chat(pair, [], 8, cancel)), [])
+                self.assertEqual(self.paths, [])
+                self.assertEqual([sock.fileno() for sock in opened], [-1])
+                self.assertFalse(models.sockets)
+
+    def test_a_malformed_pair_opens_no_socket(self):
+        opened = self.tracked_sockets()
+        with self.assertRaises(KeyError):
+            next(LocalModels(None).chat({"chat_url": "http://127.0.0.1:9"}, [], 8, threading.Event()))
+        self.assertEqual(opened, [])
 
 if __name__ == '__main__':
     unittest.main()

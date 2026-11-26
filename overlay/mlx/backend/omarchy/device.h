@@ -892,7 +892,7 @@ inline bool sdpa_decode_f16_without_coopmat_part(
 // product is what the Metal backend does (its quantized loader stores T tiles for the MMA).
 //   G16S (Apple M4 Pro, cooperative-matrix driver), Qwen3-8B-4bit prefill: receipts/2026-11-15-m4-pro-g16s-qmm-bf16w.
 // Pure.
-inline bool qmm_bf16w_default_part(const std::string& device_name) {
+inline bool qmm_bf16w_default_part(const CapabilityReport& caps) {
   if (const char* env = std::getenv("MLX_OMARCHY_QMM_BF16W")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
@@ -902,13 +902,31 @@ inline bool qmm_bf16w_default_part(const std::string& device_name) {
   // path on 4B/9B prefill512 while keeping fp32 weight dequantization and
   // zero temporary dequant buffers. G13G measured: 4B 210.27 vs 98.00
   // tok/s (2.15x), 9B 101.64 vs 49.52 (2.05x), token ids identical
-  // (5-pair ABBA on main 1f854b9b85, PR #935).
+  // (5-pair ABBA on main 1f854b9b85, PR #935). G16S stays on the
+  // two-pass route its receipt was produced through.
+  const std::string& device_name = caps.device_name;
   if (device_name.find("G13G") != std::string::npos ||
       device_name.find("G13C") != std::string::npos ||
       device_name.find("G14C") != std::string::npos) {
     return false;
   }
-  return true;
+  if (device_name.find("G16S") != std::string::npos) {
+    return true;
+  }
+  // Capability default for unlisted parts (DEC-17): a part that can
+  // dispatch a single-kernel coopmat qmm prefill route prefers it,
+  // because that route is the measured winner on every part that has
+  // one. A single-kernel route exists for the fp32 8x8x8 shape
+  // (QmmPrefillCoopmat*), the bf16 8x16x16 XMX shape Intel ANV parts
+  // advertise (QmmPrefillIntelBF16), and the f16 16x16x16 shape NVIDIA
+  // advertises (the CMAT16 builds) - the booleans and the verbatim
+  // shape list cover all three. A part with none of them gets the
+  // two-pass route, which is inert anyway: the bf16w gate above also
+  // requires the fp32 coopmat route to be reachable.
+  return !(caps.cooperative_matrix_f32_8 || caps.cooperative_matrix_bf16 ||
+           omarchy::cooperative_matrix_advertises(
+               caps.cooperative_matrix_shapes,
+               omarchy::qmm_prefill_coopmat_shape_f16x16()));
 }
 
 // Intel-shaped bf16 cooperative-matrix prefill (MLX_OMARCHY_QMM_INTEL
@@ -1146,6 +1164,21 @@ inline bool sdpa_split_bk64_default(const std::string& device_name, uint32_t k_l
   return max_keys != 0 && k_len <= max_keys;
 }
 
+// Single-dispatch split-K (pass 1 with the merge folded into the last block's workgroup, sdpa_decode_split_p1m.comp): the
+// largest cache length, in keys, up to which the fused route is the default on a part. 0 keeps the two-dispatch pair.
+// Prototype: no part defaults to it until a measured window lands (M1MD-4).
+inline uint32_t sdpa_split_merge_max_keys(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_MERGE_MAX_KEYS")) {
+    return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+  }
+  return 0;
+}
+
+inline bool sdpa_split_merge_default(const std::string& device_name, uint32_t k_len) {
+  uint32_t max_keys = sdpa_split_merge_max_keys(device_name);
+  return max_keys != 0 && k_len <= max_keys;
+}
+
 // Width-256 value-phase pass 1 (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Four query heads per
 // key-value head only (the partial-sum tile for eight would not fit in shared memory), and V element offset, head stride and key stride multiples of 8 (16-byte
 // loads). Flag values: unset follows the per-chip default below; "0" keeps the old pass 1 at every length; any other non-empty value selects the variant.
@@ -1219,13 +1252,12 @@ inline bool gemv_epilogue_only_part(const std::string& device_name) {
   return fused_gemv_off_default_part(device_name);
 }
 
-// Balanced 3-member attention QKV GEMV groups on parts where general
+// Balanced multi-member GEMV groups on parts where general
 // multi-weight FUSED_GEMV defaults off (G14C): admits 3-member bf16
 // groups whose output widths are all >= 512 and within an 8:1 max/min
 // ratio (e.g. Qwen3-4B 4096/1024/1024, Qwen3.8-2B 4096/512/512,
-// Qwen3.8-9B 8192/1024/1024) while excluding 4-member asymmetric GDN
-// in_proj groups (tiny 16/32-row a/b tails) and 2-member MLP gate/up
-// pairs. Pure.
+// Qwen3.8-9B 8192/1024/1024), and balanced 2-member pairs
+// (gemv_balanced_pair_widths_ok). Pure.
 inline bool gemv_balanced_qkv_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
@@ -1248,6 +1280,19 @@ inline bool gemv_balanced_qkv_widths_ok(const std::vector<int64_t>& widths) {
     }
   }
   return max_w <= min_w * 8;
+}
+
+// A consecutive 2-member slice plans as its own GEMV dispatch when its
+// output widths sit within a 4:1 ratio: MLP gate/up pairs (equal
+// widths) and the two pairs a 4-member GDN in_proj window splits into
+// (e.g. [6144, 2048] + [16, 16]). Pure.
+inline bool gemv_balanced_pair_widths_ok(int64_t a, int64_t b) {
+  if (a <= 0 || b <= 0) {
+    return false;
+  }
+  const int64_t lo = a < b ? a : b;
+  const int64_t hi = a < b ? b : a;
+  return hi <= lo * 4;
 }
 
 // Pruned greedy vocabulary head (MLX_OMARCHY_NO_GREEDY_PRUNE in mlx-lm's _greedy_head):

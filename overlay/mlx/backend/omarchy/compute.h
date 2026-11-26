@@ -1078,6 +1078,8 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP2BF16Hd128,
   SdpaDecodeSplitP1VBk64R4BF16Hd128,
   SdpaDecodeSplitP2Bk64BF16Hd128,
+  // Single-dispatch value-phase split-K with the pass-2 merge folded into the last block's workgroup (sdpa_decode_split_p1m.comp, head width 128).
+  SdpaDecodeSplitP1MR4BF16Hd128,
   // Head width 256 of the split-K pair (sdpa_decode_split_p1.comp / sdpa_decode_split_p2.comp -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Plain pass 1 only.
   SdpaDecodeSplitP1R1BF16Hd256,
   SdpaDecodeSplitP1R2BF16Hd256,

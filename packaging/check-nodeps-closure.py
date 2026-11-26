@@ -80,7 +80,7 @@ def read_lock(path):
         if pinned:
             try:
                 lock[norm(pinned.group(1))] = Version(pinned.group(2))
-            except InvalidVersion as exc:
+            except ValueError as exc:  # InvalidVersion or Python's int-digit limit
                 raise SystemExit(f"error: {path}:{number}: {exc}")
         else:
             lock.setdefault(norm(parse(line, f"{path}:{number}").name), None)
@@ -89,7 +89,10 @@ def read_lock(path):
 
 def wheel_requires(wheels, pin):
     """The Requires-Dist lines of the wheel for pin, a name==version pin from read_nodeps()."""
-    version = Version(next(iter(pin.specifier)).version)
+    try:
+        version = Version(next(iter(pin.specifier)).version)
+    except ValueError as exc:  # Python's int-digit limit
+        raise SystemExit(f"error: nodeps pin {pin.name}: {exc}")
     for wheel in sorted(Path(wheels).glob("*.whl")):
         try:
             name, found, _, tags = parse_wheel_filename(wheel.name)
@@ -140,10 +143,13 @@ def main():
             name = norm(dep.name)
             if name in exempt:
                 continue
-            if name not in lock:
-                problems.append(f"{pin.name} needs {dep}, which the lock does not carry")
-            elif lock[name] is not None and not dep.specifier.contains(lock[name], prereleases=True):
-                problems.append(f"{pin.name} needs {dep}, but the lock pins {name}=={lock[name]}")
+            try:  # comparing or printing a version over Python's int-digit limit raises ValueError
+                if name not in lock:
+                    problems.append(f"{pin.name} needs {dep}, which the lock does not carry")
+                elif lock[name] is not None and not dep.specifier.contains(lock[name], prereleases=True):
+                    problems.append(f"{pin.name} needs {dep}, but the lock pins {name}=={lock[name]}")
+            except ValueError as exc:
+                raise SystemExit(f"error: {pin.name} Requires-Dist {text!r}: {exc}")
     for line in problems:
         print(f"error: {line}", file=sys.stderr)
     if problems:
