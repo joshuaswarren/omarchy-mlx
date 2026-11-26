@@ -800,14 +800,7 @@ TEST_CASE("fused greedy word head: +inf rows pick the first") {
     return;
   }
   Stream stream = gpu_stream();
-  // The staged subgroup route (K = 2048 on subgroup devices) diverges
-  // from the composed contract on +inf logits — pre-existing, reported
-  // separately — so this test exercises legs where the word route
-  // actually fires (K = 2560 always; K = 2048 only without subgroup).
   for (int k : {kGreedyK, 2560}) {
-    if (!word_route_taken(k, 8192)) {
-      continue;
-    }
     const int n = 8192;
     const int groups = k / 64;
     // x all-ones keeps every row's dot and input_sum positive, so an
@@ -834,6 +827,32 @@ TEST_CASE("fused greedy word head: +inf rows pick the first") {
     auto run = fused_argmax(inf_in, stream);
     CHECK(run.token == 100u);
     CHECK(composed_argmax(inf_in, stream) == 100u);
+  }
+}
+
+TEST_CASE("fused greedy word head: NaN logit row picks index 0") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  for (int k : {kGreedyK, 2560}) {
+    const int n = 8192;
+    const int groups = k / 64;
+    // A NaN scale makes row 2000's logit NaN; lse is NaN, every
+    // normalized element is NaN, and the first-NaN rule answers index 0
+    // on every route.
+    auto in = make_greedy_inputs(
+        n, 0xdec4a + k, {0.5f}, {0.1f}, {}, {}, true, stream, k);
+    std::vector<float> nan_scales(n * groups, 0.5f);
+    for (int g = 0; g < groups; ++g) {
+      nan_scales[2000 * groups + g] = kNan;
+    }
+    array sf(nan_scales.data(), Shape{n, groups}, float32);
+    GreedyInputs nan_in{
+        in.x, in.w, astype(sf, bfloat16, stream), in.biases, in.high};
+    auto run = fused_argmax(nan_in, stream);
+    CHECK(run.token == 0u);
+    CHECK(composed_argmax(nan_in, stream) == 0u);
   }
 }
 

@@ -2451,11 +2451,17 @@ if (stage == 10u) {
   float value = isinf(row_max) ? row_max : row_max + log(row_sum);
   float lse = LOAD_VALUE(STORE_VALUE(value));
   barrier();
+  // ArgMaxBF16's first-NaN rule, as in stage 7: a NaN challenger beats
+  // any non-NaN incumbent, NaN incumbents lose only to an earlier NaN,
+  // equal non-NaN values keep the lower index.
   float local_value = NEG_INF;
   uint local_index = 0u;
   for (uint index = lane; index < n; index += 256u) {
     float next = LOAD_VALUE(STORE_VALUE(row_values.values[index] - lse));
-    if (next > local_value) {
+    bool wins = isnan(next)
+        ? !isnan(local_value)
+        : (!isnan(local_value) && next > local_value);
+    if (wins) {
       local_value = next;
       local_index = index;
     }
@@ -2467,12 +2473,15 @@ if (stage == 10u) {
     if (lane < stride) {
       float mine = greedy_values[lane];
       float theirs = greedy_values[lane + stride];
-      bool wins = theirs > mine;
-      bool ties = theirs == mine &&
-          greedy_rows[lane + stride] < greedy_rows[lane];
-      if (wins || ties) {
+      uint mine_i = greedy_rows[lane];
+      uint theirs_i = greedy_rows[lane + stride];
+      bool wins = isnan(theirs)
+          ? (!isnan(mine) || theirs_i < mine_i)
+          : (!isnan(mine) && (theirs > mine ||
+                              (theirs == mine && theirs_i < mine_i)));
+      if (wins) {
         greedy_values[lane] = theirs;
-        greedy_rows[lane] = greedy_rows[lane + stride];
+        greedy_rows[lane] = theirs_i;
       }
     }
     barrier();
@@ -2522,11 +2531,19 @@ if (stage == 10u) {
   float value = isinf(row_max) ? row_max : row_max + log(row_sum);
   float lse = LOAD_VALUE(STORE_VALUE(value));
   barrier();
+  // ArgMaxBF16's first-NaN rule (argreduce_suffix.comp AR_CHALLENGES_AT):
+  // a NaN challenger beats any non-NaN incumbent, a NaN incumbent loses
+  // only to an earlier NaN, and equal non-NaN values keep the lower
+  // index. Plain `next > local_value` drops the NaN a +inf logit
+  // produces here (+inf - lse) and falls back to index 0.
   float local_value = NEG_INF;
   uint local_index = 0u;
   for (uint index = lane; index < n; index += 256u) {
     float next = LOAD_VALUE(STORE_VALUE(row_values.values[index] - lse));
-    if (next > local_value) {
+    bool wins = isnan(next)
+        ? !isnan(local_value)
+        : (!isnan(local_value) && next > local_value);
+    if (wins) {
       local_value = next;
       local_index = index;
     }
@@ -2538,12 +2555,15 @@ if (stage == 10u) {
     if (lane < stride) {
       float mine = greedy_values[lane];
       float theirs = greedy_values[lane + stride];
-      bool wins = theirs > mine;
-      bool ties = theirs == mine &&
-          greedy_rows[lane + stride] < greedy_rows[lane];
-      if (wins || ties) {
+      uint mine_i = greedy_rows[lane];
+      uint theirs_i = greedy_rows[lane + stride];
+      bool wins = isnan(theirs)
+          ? (!isnan(mine) || theirs_i < mine_i)
+          : (!isnan(mine) && (theirs > mine ||
+                              (theirs == mine && theirs_i < mine_i)));
+      if (wins) {
         greedy_values[lane] = theirs;
-        greedy_rows[lane] = greedy_rows[lane + stride];
+        greedy_rows[lane] = theirs_i;
       }
     }
     barrier();
