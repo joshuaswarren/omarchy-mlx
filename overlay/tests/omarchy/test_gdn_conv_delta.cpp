@@ -404,13 +404,15 @@ TEST_CASE("GdnConvUpdate reads offset-carrying inputs, not flat bindings") {
   Stream s = gpu_stream();
   const int PAD = 8;
   auto offset_view = [&](const array& a) {
-    Shape ps = a.shape();
-    ps.back() = PAD;
-    array big = concatenate({zeros(ps, a.dtype(), s), a}, -1, s);
-    Shape begin(ps.size(), 0), end = a.shape();
-    begin.back() = PAD;
-    array v = slice(big, begin, end, s);
+    const int n = static_cast<int>(a.size());
+    auto flat = reshape(a, {n}, s);
+    auto padded =
+        concatenate({full({PAD}, array(-123.0f), a.dtype(), s), flat}, 0, s);
+    auto v = reshape(
+        slice(padded, {PAD}, {n + PAD}, s), a.shape(), s);
     v.eval();
+    REQUIRE(v.offset() != 0);
+    REQUIRE(v.flags().row_contiguous);
     return v;
   };
   for (uint32_t seed : {10u, 20u}) {
