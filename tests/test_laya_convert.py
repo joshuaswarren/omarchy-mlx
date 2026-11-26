@@ -23,6 +23,8 @@ sys.path.insert(0, str(REPO / "serve"))
 from mlx_omarchy_laya import convert  # noqa: E402
 
 _PINNED_STACK = 4 * 1024 * 1024
+# Longer than Linux PATH_MAX, so the kernel refuses it before any filesystem lookup.
+_OVER_PATH_MAX = "x" * 4096
 DEEP_JSON = b"[" * 200_000 + b"]" * 200_000
 DEEP_CATALOG_ID_MANIFEST = (
     b'{"catalog_id": ' + b"[" * 20_000 + b"]" * 20_000
@@ -210,6 +212,91 @@ class CheckpointStateTests(unittest.TestCase):
                 if name == "deep-catalog-id":  # 3.11 stops at decode, 3.14 at the type check
                     self.assertTrue(out.get("missing_manifest_fields") == ["catalog_id"]
                                     or "manifest_error" in out, out)
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores mode 000 permissions")
+    def test_untraversable_dir_is_invalid(self):
+        cases = [
+            ("dir-000", None, 0, "model.safetensors"),
+            ("dir-0400", None, 0o400, "model.safetensors"),
+            ("parent-000", "parent", 0, "model.safetensors"),
+            ("encoder-000", "encoder", 0, "encoder/config.json"),
+            ("tokenizer-000", "tokenizer", 0, "tokenizer/tokenizer.json"),
+        ]
+        for label, target, mode, expected_name in cases:
+            with self.subTest(label):
+                if target == "parent":
+                    parent = self._tmp()
+                    d = _make_checkpoint_dir(parent / "model")
+                    lock_path = parent
+                else:
+                    d = self._new_dir()
+                    lock_path = d if target is None else d / target
+                lock_path.chmod(mode)
+                self.addCleanup(lock_path.chmod, 0o700)
+                self.assertEqual(
+                    self._state(d),
+                    ("invalid", {"unreadable_file": "%s is unreadable: %s"
+                                 % (expected_name, os.strerror(errno.EACCES))}),
+                )
+
+    def test_unstatable_path_is_invalid(self):
+        with self.subTest("name-too-long"):
+            d = self._tmp() / _OVER_PATH_MAX
+            self.assertEqual(
+                self._state(d),
+                ("invalid", {"unreadable_file": "model.safetensors is unreadable: "
+                             + os.strerror(errno.ENAMETOOLONG)}),
+            )
+        with self.subTest("symlink-loop"):
+            d = self._new_dir()
+            weights = d / "model.safetensors"
+            weights.unlink()
+            os.symlink("model.safetensors", weights)
+            self.assertEqual(
+                self._state(d),
+                ("invalid", {"unreadable_file": "model.safetensors is unreadable: "
+                             + os.strerror(errno.ELOOP)}),
+            )
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores mode 000 permissions")
+    def test_cli_check_prints_unreadable_json(self):
+        d = self._new_dir()
+        d.chmod(0)
+        self.addCleanup(d.chmod, 0o700)
+        buf = io.StringIO()
+
+        def run_cli():
+            with contextlib.redirect_stdout(buf):
+                convert.main(["--check", str(d)])
+
+        _run_pinned(run_cli)
+        self.assertEqual(
+            json.loads(buf.getvalue()),
+            {"state": "invalid",
+             "unreadable_file": "model.safetensors is unreadable: "
+             + os.strerror(errno.EACCES)},
+        )
+
+    def test_missing_file_reports_missing_files(self):
+        with self.subTest("absent-file"):
+            d = self._new_dir()
+            (d / "tokenizer/tokenizer.json").unlink()
+            self.assertEqual(
+                self._state(d),
+                ("invalid", {"missing_files": ["tokenizer/tokenizer.json"]}),
+            )
+        with self.subTest("file-at-encoder-dir"):
+            d = self._new_dir()
+            (d / "encoder/config.json").unlink()
+            (d / "encoder").rmdir()
+            (d / "encoder").write_bytes(b"{}")
+            self.assertEqual(
+                self._state(d),
+                ("invalid", {"missing_files": ["encoder/config.json"]}),
+            )
+        with self.subTest("embedded-nul"):
+            d = Path(str(self._tmp()) + "/a\0b")
+            self.assertEqual(self._state(d), ("invalid", {"missing_files": convert.FILES}))
 
 
 def _tiny_enc_cfg() -> dict:
@@ -640,6 +727,67 @@ class ConvertTests(_ConvertBase):
             "exceeds",
         )
         self.assertLess(tracemalloc.get_traced_memory()[1] - before, 4 << 20)
+
+
+class FromLocalCliTests(_ConvertBase):
+    def _run_from_local(self, src: Path, out: Path, expected: str):
+        with mock.patch.object(convert, "convert") as convert_mock:
+            msg = self._assert_exit(
+                lambda: convert.main(["--from-local", str(src), "--out", str(out)]),
+                expected,
+            )
+        self.assertEqual(msg, expected)
+        convert_mock.assert_not_called()
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores mode 000 permissions")
+    def test_from_local_untraversable_source_exits_with_reason(self):
+        for label, lock_parent in (("source-000", False), ("parent-000", True)):
+            with self.subTest(label):
+                base = self._tmp()
+                parent = base / "parent"
+                src = _make_source_snapshot(parent / "src" if lock_parent else base / "src")
+                lock_path = parent if lock_parent else src
+                lock_path.chmod(0)
+                self.addCleanup(lock_path.chmod, 0o700)
+                self._run_from_local(
+                    src,
+                    base / "out",
+                    "convert: cannot read model.safetensors in %s (%s)"
+                    % (src, os.strerror(errno.EACCES)),
+                )
+
+    def test_from_local_unstatable_source_exits_with_reason(self):
+        with self.subTest("name-too-long"):
+            base = self._tmp()
+            src = base / _OVER_PATH_MAX
+            self._run_from_local(
+                src,
+                base / "out",
+                "convert: cannot read model.safetensors in %s (%s)"
+                % (src, os.strerror(errno.ENAMETOOLONG)),
+            )
+        with self.subTest("symlink-loop"):
+            base = self._tmp()
+            src = _make_source_snapshot(base / "src")
+            weights = src / "model.safetensors"
+            weights.unlink()
+            os.symlink("model.safetensors", weights)
+            self._run_from_local(
+                src,
+                base / "out",
+                "convert: cannot read model.safetensors in %s (%s)"
+                % (src, os.strerror(errno.ELOOP)),
+            )
+
+    def test_from_local_missing_weights_keeps_does_not_hold_message(self):
+        base = self._tmp()
+        src = base / "empty"
+        src.mkdir()
+        self._run_from_local(
+            src,
+            base / "out",
+            "convert: %s does not hold model.safetensors" % src,
+        )
 
 
 if __name__ == "__main__":
