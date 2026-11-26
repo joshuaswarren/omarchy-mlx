@@ -218,6 +218,40 @@ class InstallAndWorkerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             install_yield_gate(module2, YieldGate())
 
+        # Patched mlx_lm.server (patches/mlx-lm-server-alias-key.patch) adds
+        # alias and api_key to _run_http_server; both the signature guard and
+        # the composed models-route + yield-gate wrappers must accept and
+        # forward them, while an unknown signature still refuses fail-closed.
+        captured = {}
+
+        def _patched_run(host, port, response_generator, server_class=None,
+                         handler_class=None, alias="", api_key=""):
+            captured.update(handler=handler_class, alias=alias, api_key=api_key)
+            return "patched"
+
+        module3 = FakeServerModule()
+        module3.BatchGenerator = BatchGenerator
+        module3._run_http_server = _patched_run
+        install_yield_gate(module3, YieldGate())
+        from mlx_omarchy_serve import _mlxlm_server as shim
+        shim.install_models_route(module3)
+        res = module3._run_http_server(
+            "127.0.0.1", 0, None, alias="compact-alias", api_key="secret-k")
+        self.assertEqual(res, "patched")
+        self.assertEqual(captured["alias"], "compact-alias")
+        self.assertEqual(captured["api_key"], "secret-k")
+        self.assertIsNotNone(captured["handler"])
+
+        def _unknown_run(host, port, response_generator, server_class=None,
+                         handler_class=None, alias="", api_key="", surprise=1):
+            return "bad"
+
+        module4 = FakeServerModule()
+        module4.BatchGenerator = BatchGenerator
+        module4._run_http_server = _unknown_run
+        with self.assertRaises(RuntimeError):
+            install_yield_gate(module4, YieldGate())
+
     def test_parked_generation_preserves_cache_and_stops_stepping(self):
         """Real thread, real control HTTP, scripted steps: hold stops the
         steps at a boundary, the cache object survives the park, release
