@@ -2354,14 +2354,14 @@ TEST_CASE("fused planner leaves CPU-stream nodes to the CPU") {
   }
 }
 
-TEST_CASE("outgate fold default: G13 non-G13C and G14C default off, env overrides") {
+TEST_CASE("outgate fold default: G13 and G14C default off, env overrides") {
   struct EnvReset {
     ~EnvReset() {
       unsetenv("MLX_OMARCHY_OUTGATE_FOLD");
     }
   } env_reset;
 
-  CHECK(omarchy::outgate_fold_default_for_device("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 Pro (G13S C0)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M2 Max (G14C B1)"));

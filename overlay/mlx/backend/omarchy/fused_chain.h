@@ -292,7 +292,7 @@ const char* qmm_geometry_name();
 bool qmm_vec_q4_word_enabled();
 
 // Returns the chip-keyed default for the out-gate prologue fold: off on G13
-// parts other than G13C and off on G14C, on elsewhere.
+// and G14C, on elsewhere.
 bool outgate_fold_default_for_device(const std::string& device_name);
 
 // MLX_OMARCHY_OUTGATE_FOLD=0/1 overrides; unset falls back to
