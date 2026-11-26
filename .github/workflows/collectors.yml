@@ -51,9 +51,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -r requirements-dev.txt
       # tests/test_mlx_vulkan_*.py need torch (CPU build; the default linux
-      # wheel would drag CUDA) and mlx (PyPI linux wheels are CPU-complete).
+      # wheel would drag CUDA) and mlx; the linux x86 mlx wheel ships no
+      # backend, mlx-cpu provides libmlx.so (w7S comment 7183883072).
       # 3.14 legs keep skipping the suite until torch ships cp314 wheels.
-      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install mlx
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install mlx mlx-cpu
         if: runner.os == 'Linux' && matrix.python == '3.11'
       - run: python scripts/test_collect.py
       - run: python scripts/test_collect_macos.py

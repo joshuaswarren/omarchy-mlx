@@ -63,6 +63,23 @@ def test_detach_split_gelu_graph_lowers_in_the_compiled_executor(
     assert torch.allclose(out, module(x), rtol=1e-4, atol=1e-6)
 
 
+def test_multi_output_graph_returns_all_outputs(mlx_vulkan):
+    """run() must return one result per graph output. The pre-fix code
+    returned the bare first output, so aot iterated it row-wise: x*2 on a
+    (2, 8) input came back as (8,) and a two-output module yielded two ROWS
+    of output 0 (w7S comment 7183883072, verified live on torch 2.15)."""
+    class TwoOut(nn.Module):
+        def forward(self, x):
+            return x * 2, x + 1
+
+    x = torch.randn(2, 8)
+    a, b = _compiled(mlx_vulkan, TwoOut())(x)
+    assert a.shape == x.shape and b.shape == x.shape, \
+        "the compiled run returned rows of output 0 instead of both outputs"
+    assert torch.allclose(a, x * 2, rtol=1e-5, atol=1e-6)
+    assert torch.allclose(b, x + 1, rtol=1e-5, atol=1e-6)
+
+
 def test_layer_norm_backward_obeys_the_output_mask(mlx_vulkan):
     torch.manual_seed(0)
     go = mx.array(torch.randn(2, 8).numpy())

@@ -777,6 +777,10 @@ def _fuse_rmsnorm(nodes):
 def make_compiled_executor(gm, return_all_outputs=False):
     nodes = list(gm.graph.nodes)
     phs = [n for n in nodes if n.op == "placeholder"]
+    out_node = next((n for n in nodes if n.op == "output"), None)
+    n_graph_out = len(out_node.args[0]) \
+        if out_node is not None and isinstance(out_node.args[0], (list, tuple)) \
+        else 1
     skip, fused = _fuse_rmsnorm(nodes)
     fp32_params = {str(w.target) for _, w, _ in fused.values()}
     state_names = {str(n.target) for n in phs if "_cache_layers_" in str(n.target)}
@@ -1019,10 +1023,10 @@ def make_compiled_executor(gm, return_all_outputs=False):
         outs = cfn(*flat)
         mx.eval(*outs)
         t2 = _t.perf_counter()
-        logits, extra = outs[0], outs[1:]
-        for m, arr in zip(mutated, extra):
+        for m, arr in zip(mutated, outs[n_graph_out:]):
             state[str(m.target)] = arr
-        out = _torch(logits)
+        vals = tuple(_torch(t) for t in outs[:n_graph_out])
+        out = vals[0] if n_graph_out == 1 else vals
         t3 = _t.perf_counter()
         if _profile:
             _acc["prep"] += t1 - t0; _acc["cfn"] += t2 - t1; _acc["conv"] += t3 - t2; _acc["n"] += 1
