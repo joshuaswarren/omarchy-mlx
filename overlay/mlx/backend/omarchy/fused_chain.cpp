@@ -1834,18 +1834,46 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           balanced_qkv = group.members.size() == 3 &&
               gemv_balanced_qkv_widths_ok(widths);
           if (!balanced_qkv) {
-            // Split-pair admission: each consecutive member pair whose
-            // widths sit within a 4:1 ratio plans as its own dispatch,
-            // so an asymmetric window never folds as one group while
-            // its balanced pairs still fuse (members outside a passing
-            // pair stay on the per-node path).
-            for (size_t p = 0; p + 1 < group.members.size(); p += 2) {
-              if (!gemv_balanced_pair_widths_ok(widths[p], widths[p + 1])) {
+            // Split-pair admission: each member pair whose widths sit within a
+            // 4:1 ratio plans as its own dispatch, so an asymmetric window
+            // never folds as one group while its balanced pairs still fuse
+            // (members outside a passing pair stay on the per-node path).
+            // MLX_OMARCHY_GEMV_SORT_PAIRS sorts members by width descending
+            // before pairing so out-of-order windows like [2048, 16, 16, 6144]
+            // pair into (6144, 2048) and (16, 16).
+            const char* sp_env = omarchy::env_str("MLX_OMARCHY_GEMV_SORT_PAIRS");
+            const bool sort_pairs = sp_env != nullptr && sp_env[0] != '\0' &&
+                std::strcmp(sp_env, "0") != 0;
+            const bool only_small =
+                sort_pairs && std::strcmp(sp_env, "small") == 0;
+            const bool only_big = sort_pairs && std::strcmp(sp_env, "big") == 0;
+            std::vector<size_t> order(group.members.size());
+            for (size_t idx = 0; idx < order.size(); ++idx) {
+              order[idx] = idx;
+            }
+            if (sort_pairs) {
+              std::stable_sort(
+                  order.begin(), order.end(), [&](size_t a, size_t b) {
+                    return widths[a] > widths[b];
+                  });
+            }
+            for (size_t p = 0; p + 1 < order.size(); p += 2) {
+              const size_t ia = order[p];
+              const size_t ib = order[p + 1];
+              const int64_t wa = widths[ia];
+              const int64_t wb = widths[ib];
+              if (!gemv_balanced_pair_widths_ok(wa, wb)) {
+                continue;
+              }
+              if (only_small && std::max(wa, wb) >= 256) {
+                continue;
+              }
+              if (only_big && std::min(wa, wb) < 256) {
                 continue;
               }
               GemvGroup pair;
-              pair.members.push_back(std::move(group.members[p]));
-              pair.members.push_back(std::move(group.members[p + 1]));
+              pair.members.push_back(std::move(group.members[ia]));
+              pair.members.push_back(std::move(group.members[ib]));
               pair_groups.push_back(std::move(pair));
             }
           }
