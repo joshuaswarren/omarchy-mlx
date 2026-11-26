@@ -216,3 +216,60 @@ cache state, device/driver, fusion policy, and materialization boundaries.
 Report cold pipeline creation separately from warm decode.
 Use token-completion boundaries consistently; a decode interval from token one to token 128 contains 127 intervals.
 Host scheduling, GPU work, and completion waits overlap, so their measured durations must not simply be added.
+
+## SDPA split-PV per-part workgroup limits (DEC-47 lineage)
+
+The width-256 value-phase split-PV pass 1 (`sdpa_decode_split_p1v.comp`,
+`-DSPLIT_R=4 -DHD=256`) serves the Qwen3.5 and Qwen3.8 full-attention layers.
+Pass 1 launches one workgroup per key-value head and 128-key block; the variant
+wins while that workgroup count stays at or below a per-chip limit and loses
+above it. The limit is the measured edge, not a fit bound.
+
+### Per-part defaults
+
+| Chip | Part | Limit (workgroups) | Source receipt |
+|---|---|---|---|
+| G13G | 13-inch M1 | 16 | receipts/2026-11-12-sdpa-hd256-kv-heads-budget |
+| G13C | 16-inch M1 Max | 64 | receipts/2026-11-12-sdpa-hd256-kv-heads-budget |
+| G14C | 14-inch M2 Max | 68 | receipts/2026-11-14-g14c-sdpa-hd256-pv-limit |
+| G17C | M5 | 68 | initial value matching G14C, pending calibration |
+| G15S | M3 Pro (14-core) | 36 | receipts/2026-11-22-m3-pro-g15s-sdpa-split |
+| Unlisted | any | 68 | no-gating default (2026-11-25): the newest-class measured limit |
+
+The `sdpa_split_pv_wide_max_workgroups()` function in `device.h` returns these
+values; `MLX_OMARCHY_SDPA_HD256_PV_LIMIT` overrides at runtime.
+
+### Measurement protocol for adding a part
+
+1. Pin the build to the part's kernel tree and boot the target host.
+2. Run the ABBA battery: random bf16, one decode query, forced flag
+   (`MLX_OMARCHY_SDPA_HD256_PV_LIMIT=<candidate>`), five-pair blocks, at
+   1/2/3/4/8 key-value heads and at context lengths that bracket the
+   nearest 128-key block boundary above and below each candidate.
+3. Find the workgroup count where the variant flips from winning to losing
+   (the edge is typically one block wide). Record the percentage delta on
+   both sides of the edge.
+4. Confirm with the model's own decode call: the model crosses a block
+   boundary one token early; measure inside that call.
+5. Record the results in a receipt under `receipts/`, named
+   `YYYY-MM-DD-<part>-sdpa-split-pv-limit`, and add the part to the
+   `sdpa_split_pv_wide_max_workgroups()` switch in `device.h`.
+
+### Prior evidence per part
+
+- G13G / G13C: one-block-wide edges at 1 KV head (G13G: +26.68% at 2048 keys,
+  16 WGs, then -6.91 at 2049; G13C: +22.48 at 8192 keys, 64, then -5.62 at
+  8193). Model calls on G13C: Qwen3.8-2B (2 KV heads) +28.42% at 3073 keys
+  (50 WGs), -7.06 at 4097 (66); Qwen3.8-9B (4 KV heads) +30.99 at 1537 (52),
+  -7.78 at 2049 (68). On G13G the 2B +29.57 at 769 (14), -8.19 at 1025 (18);
+  the 9B +30.62 at 385 (16), -13.95 at 769 (28).
+- G14C: op rows win +19 to +29 percent from 32 WGs up to 68 and lose -10 to
+  -16 from 69 up; the edge is one block wide at 1 KV head (+19.03% at 8704
+  keys, 68 WGs, then -12.79 at 8832, 69); 4 KV heads win at 64 and 68, 2 KV
+  heads win at 64 (and 34 and 66 in the model rows) and both lose at 76.
+  Qwen3.8-2B +3.4% at 512 and +4.66% at 2048 context; Qwen3.8-9B +1.57%
+  and +1.47%.
+- G15S: op rows at 2 KV heads (8 query heads): faster than the old pass 1
+  through 2304 keys (18 blocks, 36 WGs; independent 94.8-103.2 against
+  132.9-138.9), slower from 2305 (19 blocks, 38 WGs; 156.8-160.1 against
+  132.8-139.0).
