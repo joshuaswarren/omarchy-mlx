@@ -45,8 +45,13 @@ def _torch(v):
     return v
 
 def _opname(node):
-    """aten.mm.default -> mm ; aten::mm -> mm ; else the raw target string."""
-    t = str(node.target)
+    """aten.mm.default -> mm ; aten::mm -> mm ; a torch-level function
+    object through __name__ (matmul, linear) ; else the raw target string."""
+    t = node.target
+    if not isinstance(t, str):
+        s = str(t)
+        t = s if s.startswith("aten.") or s.startswith("aten::") \
+            else (getattr(t, "__name__", None) or s)
     if t.startswith("aten."):
         return t[5:].split(".")[0]
     if t.startswith("aten::"):
@@ -104,6 +109,24 @@ def _unbind(a, dim):
         out.append(a[tuple(idx)])
     return tuple(out)
 
+def _nln_backward(go, inp, nshape, mean, rstd, weight, out_mask):
+    """aten.native_layer_norm_backward: out_mask slots are
+    [produce_dx, produce_dw, produce_db] (positional, not membership)."""
+    red = tuple(range(inp.ndim - len(nshape), inp.ndim))
+    dx = dw = db = None
+    xhat = (inp - mean) * rstd
+    if out_mask[0]:
+        dx = (rstd * (go - go.mean(axis=red, keepdims=True)
+                      - xhat * (go * xhat).mean(axis=red, keepdims=True)))
+        if weight is not None:
+            dx = dx * weight
+    if out_mask[1]:
+        dw = (go * xhat).sum(axis=red)
+    if out_mask[2]:
+        db = go.sum(axis=red)
+    return dx, dw, db
+
+
 def _ln_native(a, normalized_shape, weight, bias, eps):
     """native_layer_norm with real mean/rstd.
 
@@ -118,8 +141,8 @@ def _ln_native(a, normalized_shape, weight, bias, eps):
     b = _mx(bias) if bias is not None else None
     axes = tuple(range(a.ndim - len(normalized_shape), a.ndim))
     mu = a.mean(axis=axes, keepdims=True)
-    rstd = mx.rsqrt(
-        a.square().mean(axis=axes, keepdims=True) - mu.square() + eps)
+    rstd = mx.rsqrt(mx.maximum(
+        a.square().mean(axis=axes, keepdims=True) - mu.square(), 0) + eps)
     out = (a - mu) * rstd
     out = out * w if w is not None else out
     out = out + b if b is not None else out
@@ -219,8 +242,9 @@ def _interpolate(a, size=None, scale_factor=None, mode="nearest",
 
 # torch-level function objects -> lowering. Built lazily below so missing
 # attributes on any given torch build can't break the import.
-def _embedding(weight, idx):
-    """aten.embedding(weight, indices) order."""
+def _embedding(weight, idx, *a_, **k_):
+    """aten.embedding(weight, indices) order; padding_idx and friends are
+    forward-irrelevant, so accept and drop them."""
     return _mx(weight)[_mx(idx).astype(mx.int32)]
 
 def _embedding_f(input, weight, *a_, **k_):
@@ -864,10 +888,7 @@ def make_compiled_executor(gm, return_all_outputs=False):
                 d0, d1 = int(args[1]), int(args[2])
                 env[n] = mx.swapaxes(a0, d0 % a0.ndim, d1 % a0.ndim)
                 continue
-            if name in ("t", "transpose", "transpose.int", "view",
-                        "_unsafe_view", "detach", "gelu_backward",
-                        "native_layer_norm_backward", "split") \
-                    and n.op == "call_function":
+            if name in ("view", "_unsafe_view") and n.op == "call_function":
                 shape = args[1]
                 if isinstance(shape, torch.fx.Node):
                     shape = env[shape]
@@ -898,17 +919,8 @@ def make_compiled_executor(gm, return_all_outputs=False):
                 mean, rstd, weight = _cast(args[3]), _cast(args[4]), args[5]
                 out_mask = args[7] if len(args) > 7 else [True, True, True]
                 w = _cast(weight) if weight is not None else None
-                inp_nd = inp.ndim
-                red = tuple(range(inp_nd - len(nshape), inp_nd))
-                xhat = (inp - mean) * rstd
-                dw = (go * xhat).sum(axis=red) if 1 in out_mask else None
-                db = go.sum(axis=red) if 2 in out_mask else None
-                dx = rstd * (go - go.mean(axis=red, keepdims=True)
-                             - xhat * (go * xhat).mean(axis=red,
-                                                       keepdims=True))
-                if w is not None:
-                    dx = dx * w
-                env[n] = (dx, dw, db)
+                env[n] = _nln_backward(go, inp, nshape, mean, rstd, w,
+                                       out_mask)
                 continue
             if name == "scaled_dot_product_attention":
                 # GQA: HF expands KV to q-heads via expand+reshape before sdpa;
