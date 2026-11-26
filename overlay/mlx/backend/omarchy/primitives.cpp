@@ -15936,13 +15936,101 @@ void GreedyQuantizedArgmax::eval_gpu(
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
   const array& w = inputs.at(1);
   uint32_t n = static_cast<uint32_t>(w.shape(0));
-  if (!subgroup_ready || !omarchy::q4_word_enabled() ||
-      !caps.storage_buffer_16bit_access || !caps.shader_int16) {
+  if (!omarchy::q4_word_enabled() ||
+      !caps.storage_buffer_16bit_access || !caps.shader_int16 ||
+      // The single-workgroup merge reads at most 256 logsumexp
+      // partials, the same bound the chunked route serves.
+      n > 4096u * 256u) {
     auto result = fallback_(inputs);
     settle(result);
     encoder.synchronize("greedy_argmax_fallback");
     outputs.at(0).copy_shared_buffer(result.at(0));
     outputs.at(1).copy_shared_buffer(result.at(1));
+    return;
+  }
+  if (!subgroup_ready) {
+    // DEC-46: the non-subgroup word column gets the same fused answer in
+    // two dispatches (shaders/qmm_vec.comp QMM_VEC_GREEDY_WORD): op 0
+    // runs one workgroup per 4096-element vocab chunk — per-row dots by
+    // the exact single-row chain, a logsumexp_chunk-identical (m, s)
+    // partial, an edge partial, and near-max candidates; op 1 merges the
+    // partials (logsumexp_combine verbatim) and picks the lowest index
+    // normalizing to bf16(max - lse). The 0xFFFFFFFF token sentinel is
+    // for candidate-buffer overflow; the python head composes then.
+    const array& x = inputs.at(0);
+    std::optional<array> x_temp;
+    std::optional<array> w_temp;
+    std::optional<array> scales_temp;
+    std::optional<array> biases_temp;
+    const array& x_d = ensure_dense(
+        x,
+        x.flags().row_contiguous && x.offset() % (8 * x.itemsize()) == 0,
+        x_temp,
+        encoder,
+        s);
+    const array& w_d =
+        ensure_dense(w, w.flags().row_contiguous, w_temp, encoder, s);
+    const array& scales_d = ensure_dense(
+        inputs.at(2), inputs.at(2).flags().row_contiguous, scales_temp,
+        encoder, s);
+    const array& biases_d = ensure_dense(
+        inputs.at(3), inputs.at(3).flags().row_contiguous, biases_temp,
+        encoder, s);
+    array& token = outputs.at(0);
+    array& stats = outputs.at(1);
+    token.set_data(allocate_omarchy(token.nbytes()));
+    stats.set_data(allocate_omarchy(stats.nbytes()));
+    auto scratch = [&](Dtype dtype, int size) {
+      array a({size}, dtype, nullptr, {});
+      a.set_data(allocate_omarchy(a.nbytes()));
+      encoder.add_temporary(a);
+      return a;
+    };
+    uint32_t chunks = (n + 4095u) / 4096u;
+    uint32_t cand_cap = n < 32768u ? n : 32768u;
+    array partials = scratch(float32, static_cast<int>(chunks) * 2);
+    array partial_ext = scratch(uint32, static_cast<int>(chunks) * 2);
+    array candidates = scratch(uint32, static_cast<int>(cand_cap) * 2);
+    array gstate = scratch(uint32, 4);
+    omarchy::ComputeParams params;
+    params.matrix_n = n;
+    params.matrix_k = static_cast<uint32_t>(x.shape(-1));
+    params.output_size = cand_cap;
+    params.lhs_offset = checked_item_offset(x_d, x_d.size(), tag, token);
+    params.rhs_offset = checked_item_offset(w_d, w_d.size(), tag, token);
+    params.aux_offset =
+        checked_item_offset(scales_d, scales_d.size(), tag, token);
+    params.aux_size =
+        checked_item_offset(biases_d, biases_d.size(), tag, token);
+    std::array<omarchy::ComputeBinding, 10> bindings{
+        binding(x_d),
+        binding(w_d),
+        binding(scales_d),
+        binding(biases_d),
+        binding(partials),
+        binding(partial_ext),
+        binding(candidates),
+        binding(gstate),
+        binding(token),
+        binding(stats)};
+    encoder.fill_buffer(
+        binding(gstate).buffer, 0u, gstate.nbytes(), 0);
+    params.operation = 0u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::QmmVecGreedyWordBF16,
+        bindings,
+        params,
+        chunks,
+        1u,
+        1u);
+    params.operation = 1u;
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::QmmVecGreedyWordBF16,
+        bindings,
+        params,
+        1u,
+        1u,
+        1u);
     return;
   }
   // MLX_OMARCHY_GREEDY_PRUNE_TEST (qualification only): "full" forces the

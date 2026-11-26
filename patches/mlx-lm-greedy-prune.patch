@@ -75,7 +75,13 @@
 +            hidden, emb.weight, emb.scales, emb.biases, high, group_size=64, bits=4
 +        )
 +        logits = emb.as_linear(hidden)
-+        return token, (logits - mx.logsumexp(logits, keepdims=True)).squeeze(0)
++        logprobs = (logits - mx.logsumexp(logits, keepdims=True)).squeeze(0)
++        # The fused word-column head emits the 0xFFFFFFFF sentinel when
++        # its candidate buffer overflows; compose then (the token id is
++        # read every step anyway, so this costs no extra sync).
++        if int(token) >= emb.weight.shape[0]:
++            token = mx.argmax(logprobs)
++        return token, logprobs
 +
 +    head.body = text.model
 +    return head
