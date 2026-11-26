@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <map>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <string_view>
 #include <unistd.h>
@@ -1534,6 +1535,26 @@ void CommandEncoder::wait_outstanding_submissions() {
     return;
   }
   add_semaphore_wait(device_.completions().semaphore(), value, nullptr);
+}
+
+ComputeBinding CommandEncoder::sdpa_merge_counters(uint32_t heads) {
+  // Two words per head: an arrival count and a publish count for the
+  // single-dispatch split-K merge (sdpa_decode_split_p1m.comp).
+  const uint32_t words = std::max<uint32_t>(2u * heads, 128u);
+  if (sdpa_counter_words_ < words) {
+    sdpa_counter_buf_ = omarchy::allocator().malloc(
+        static_cast<size_t>(words) * sizeof(uint32_t));
+    auto* vb = static_cast<VulkanBuffer*>(sdpa_counter_buf_.ptr());
+    // In-stream fill (the resnorm ticket's pattern): the pool's one-time
+    // zeroing is a recorded vkCmdFillBuffer ordered before the first merge
+    // dispatch, so it can never land on a buffer the device never sees.
+    fill_buffer(
+        vb->buffer, 0u, static_cast<VkDeviceSize>(words) * sizeof(uint32_t), 0u);
+    sdpa_counter_words_ = words;
+  }
+  auto* vb = static_cast<VulkanBuffer*>(sdpa_counter_buf_.ptr());
+  return ComputeBinding{
+      vb->buffer, 0u, static_cast<VkDeviceSize>(sdpa_counter_words_) * sizeof(uint32_t), vb};
 }
 
 void CommandEncoder::submit() {

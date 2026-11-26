@@ -57,6 +57,10 @@ uint64_t dispatches() {
   return omarchy::trace::counters().vk_compute_dispatches.load();
 }
 
+uint32_t split_binding_limit(const Stream& stream) {
+  return omarchy::get_command_encoder(stream).device().compute().binding_limit();
+}
+
 std::vector<float> pattern(size_t count, uint32_t seed, float amplitude) {
   std::vector<float> values;
   values.reserve(count);
@@ -224,6 +228,29 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   CHECK(e_bk64.max <= 3.0 * rounding + 1e-5);
   if (!bk64_shape) {
     CHECK(split_bk64.out == split_pv.out);
+  }
+  // The single-dispatch merge variant (MLX_OMARCHY_SDPA_SPLIT_MERGE) covers the same shape as the plain value-phase
+  // route at group 4 and head width 128: the value-phase pass 1 with the merge folded into the last block's workgroup is
+  // one dispatch, and its merge folds blocks in the same order as the serial pass 2. Other shapes keep the two-dispatch
+  // route and its bits. A second call on the same stream exercises the counter pool's self-cleaning.
+  const bool merge_shape = heads == 4 * kv_heads && width == 128;
+  setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
+  setenv("MLX_OMARCHY_SDPA_SPLIT_MERGE", "1", 1);
+  Run split_merge = run_attention(q.x, k, v, scale, "1", stream);
+  Run split_merge_again = run_attention(q.x, k, v, scale, "1", stream);
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_MERGE");
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
+  Errors e_merge = error_against(split_merge.out, ref);
+  if (split_device_ready()) {
+    CHECK(split_merge.launched == (merge_shape && split_binding_limit(stream) >= 6 ? 1 : 2));
+    CHECK(split_merge_again.launched == split_merge.launched);
+    CHECK(split_merge_again.out == split_merge.out);
+  }
+  CHECK(e_merge.max <= e_fused.max + 2.0 * rounding + 1e-6);
+  CHECK(e_merge.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
+  CHECK(e_merge.max <= 3.0 * rounding + 1e-5);
+  if (!merge_shape) {
+    CHECK(split_merge.out == split_pv.out);
   }
 }
 

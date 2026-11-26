@@ -17712,6 +17712,17 @@ void ScaledDotProductAttention::eval_gpu(
         if (bk64) {
           split_p1 = omarchy::ComputeKernel::SdpaDecodeSplitP1VBk64R4BF16Hd128;
         }
+        // Single-dispatch variant (value-phase pass 1 with the merge folded into the last block's workgroup,
+        // sdpa_decode_split_p1m.comp): MLX_OMARCHY_SDPA_SPLIT_MERGE, same flag contract as the other split switches. Pass-1
+        // workgroups bump a per-head slot in the encoder's persistent counter pool and the last finisher runs the merge
+        // inline and resets the slot, so the route is one dispatch per call. Prototype on the width-128 value-phase
+        // route only, four query heads per key-value head.
+        const int merge_env = decode_path_override("MLX_OMARCHY_SDPA_SPLIT_MERGE");
+        // An explicit select beats the bk64 default (the merge prototype is its own pass 1); an unset flag keeps
+        // bk64's route because the merge's block counter only covers the 128-key value-phase shape.
+        const bool split_merge = pv && !split_wide && split_group == 4u &&
+            encoder.device().compute().binding_limit() >= 6 &&
+            (merge_env > 0 || (merge_env < 0 && !bk64 && omarchy::sdpa_split_merge_default(decode_caps.device_name, static_cast<uint32_t>(k_len))));
         const uint32_t split_rows = split_rows_route ? static_cast<uint32_t>(q_len) : 1u;
         const omarchy::ComputeKernel split_p2 = split_wide ? omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd256
             : bk64 ? omarchy::ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128 : omarchy::ComputeKernel::SdpaDecodeSplitP2BF16Hd128;
@@ -17721,20 +17732,31 @@ void ScaledDotProductAttention::eval_gpu(
         const uint32_t split_out_row = checked_u32(out.strides()[2], tag, out);
         split_params.out_strides[0] = split_rows > 1u ? checked_u32(out.strides()[1], tag, out) : 0u;
         // Verify rows: row r sees the first k_len - q_len + 1 + r keys; each row runs the one-token pair on its own scratch.
+        // The merge kernel is the 128-key pass 1 even when the bk64 default is on — its grid must count 128-key blocks
+        // or the extra workgroups write out-of-range headers into the next head's block 0.
+        const uint32_t p1_block_keys = split_merge ? 128u : split_block_keys;
         for (uint32_t row = 0; row < split_rows; ++row) {
           const uint32_t row_k = static_cast<uint32_t>(k_len) - (split_rows - 1u - row);
-          const uint32_t row_blocks = (row_k + split_block_keys - 1u) / split_block_keys;
-          const uint64_t scratch_floats = static_cast<uint64_t>(heads) * row_blocks * static_cast<uint64_t>(head_dim + 2);
+          const uint32_t row_blocks = (row_k + p1_block_keys - 1u) / p1_block_keys;
+          const uint64_t scratch_floats = static_cast<uint64_t>(heads) * row_blocks * static_cast<uint64_t>(head_dim + 4);
           array scratch(Shape{static_cast<int>(scratch_floats)}, float32, nullptr, {});
           scratch.set_data(allocate_omarchy(scratch.nbytes()));
           encoder.add_temporary(scratch);
           split_params.matrix_k = row_k;
           split_params.lhs_offset = split_q_offset + row * split_q_row;
           split_params.output_offset = split_out_offset + row * split_out_row;
-          std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
-          encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
-          std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
-          encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
+          if (split_merge) {
+            std::array<omarchy::ComputeBinding, 6> merge_bindings{
+                binding(q), binding(k), binding(v), binding(scratch), binding(out),
+                encoder.sdpa_merge_counters(split_params.matrix_m)};
+            encoder.dispatch_compute(omarchy::ComputeKernel::SdpaDecodeSplitP1MR4BF16Hd128,
+                                     merge_bindings, split_params, split_params.matrix_n, row_blocks);
+          } else {
+            std::array<omarchy::ComputeBinding, 4> split_bindings{binding(q), binding(k), binding(v), binding(scratch)};
+            encoder.dispatch_compute(split_p1, split_bindings, split_params, split_params.matrix_n, row_blocks);
+            std::array<omarchy::ComputeBinding, 2> split_pass2{binding(scratch), binding(out)};
+            encoder.dispatch_compute(split_p2, split_pass2, split_params, split_params.matrix_m);
+          }
         }
         return;
       }
