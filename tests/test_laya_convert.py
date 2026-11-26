@@ -3,6 +3,8 @@
 import builtins
 import contextlib
 import errno
+import fcntl
+import hashlib
 import io
 import json
 import math
@@ -582,7 +584,7 @@ class ConvertTests(_ConvertBase):
                 self.assertEqual(manifest["head_max_tokens"], 64)
                 self.assertEqual(manifest["encoder_architecture"], expected_arch)
                 self.assertEqual(list(manifest["source_files_sha256"]), convert.FILES)
-                self.assertEqual(self.sha_mock.call_count, len(convert.FILES))
+                self.assertEqual(self.sha_mock.call_count, len(convert.FILES) - 2)
                 self.emit_mock.assert_called_once()
                 manifest_raw = (base / "out" / "manifest.json").read_bytes()
                 self.assertLessEqual(len(manifest_raw), convert._MANIFEST_MAX_BYTES)
@@ -653,6 +655,7 @@ class ConvertTests(_ConvertBase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     self._assert_exit(lambda s=src, o=base / "out": self._call_convert(s, o), reason)
                 self.emit_mock.assert_not_called()
+                self.assertFalse((base / "out").exists())
                 if name != "missing-tokenizer":
                     self.sha_mock.assert_not_called()
 
@@ -706,9 +709,13 @@ class ConvertTests(_ConvertBase):
              "encoder/config.json"),
             ("validate_weights", lambda: convert._validate_weights(path, _tiny_enc_cfg(), 1),
              "model.safetensors"),
+            ("copy_source", lambda: convert._copy_source(
+                path, path.parent / "copy.json", "encoder/config.json", "0" * 64),
+             "encoder/config.json"),
         ):
             with self.subTest(label), mock.patch("builtins.open", side_effect=_failing_open):
                 self._assert_exit(call, "cannot read %s in source snapshot" % name)
+        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["source.bin"])
 
     def test_large_config_is_rejected_without_reading_it_all(self):
         path = self._tmp() / "config.json"
@@ -727,6 +734,298 @@ class ConvertTests(_ConvertBase):
             "exceeds",
         )
         self.assertLess(tracemalloc.get_traced_memory()[1] - before, 4 << 20)
+
+    def test_extra_entries_in_snapshot_are_not_copied(self):
+        def _outside_link(root: Path, dst: Path):
+            secret = root / "outside.txt"
+            secret.write_bytes(b"outside-secret")
+            os.symlink(secret, dst)
+
+        def _mode_000_file(root: Path, dst: Path):
+            dst.write_bytes(b"secret")
+            dst.chmod(0)
+            self.addCleanup(dst.chmod, 0o600)
+
+        def _mode_000_dir(root: Path, dst: Path):
+            dst.mkdir()
+            dst.chmod(0)
+            self.addCleanup(dst.chmod, 0o700)
+
+        cases = [
+            ("regular-file", "encoder/extra.txt", lambda r, p: p.write_bytes(b"extra"), False),
+            ("fifo", "tokenizer/extra.fifo", lambda r, p: os.mkfifo(p), False),
+            ("dev-null-symlink", "encoder/null.bin", lambda r, p: os.symlink("/dev/null", p), False),
+            ("dir-loop-symlink", "tokenizer/loop", lambda r, p: os.symlink(".", p), False),
+            ("outside-symlink", "tokenizer/outside.txt", _outside_link, False),
+            ("mode-000-file", "encoder/unreadable.txt", _mode_000_file, True),
+            ("mode-000-dir", "tokenizer/unreadable_dir", _mode_000_dir, True),
+        ]
+        for label, rel, setup, skip_root in cases:
+            with self.subTest(label):
+                if skip_root and os.geteuid() == 0:
+                    self.skipTest("root ignores mode 000 permissions")
+                base = self._tmp()
+                src = _make_source_snapshot(base / "src")
+                out = base / "out"
+                setup(base, src / rel)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    _run_pinned(lambda s=src, o=out: self._call_convert(s, o))
+                self.assertTrue((out / "manifest.json").is_file())
+                self.assertEqual(sorted(p.name for p in (out / "encoder").iterdir()), ["config.json"])
+                self.assertEqual(
+                    sorted(p.name for p in (out / "tokenizer").iterdir()),
+                    ["tokenizer.json", "tokenizer_config.json"],
+                )
+
+    def test_hf_cache_blob_symlinks_copy_as_regular_files(self):
+        base = self._tmp()
+        src = _make_source_snapshot(base / "src")
+        blobs = base / "blobs"
+        blobs.mkdir()
+        expected = {}
+        for name in convert.FILES:
+            p = src / name
+            data = p.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            blob = blobs / digest
+            blob.write_bytes(data)
+            p.unlink()
+            os.symlink(os.path.relpath(blob, p.parent), p)
+            expected[name] = (data, digest)
+        out = base / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            manifest = _run_pinned(lambda: self._call_convert(src, out))
+        for name, (data, digest) in expected.items():
+            self.assertEqual(manifest["source_files_sha256"][name], digest)
+            if name == "model.safetensors":
+                continue
+            dst = out / name
+            self.assertTrue(dst.is_file())
+            self.assertFalse(dst.is_symlink())
+            self.assertEqual(dst.read_bytes(), data)
+
+    def test_copied_bytes_match_hashed_and_validated_bytes(self):
+        with self.subTest("unchanged"):
+            base = self._tmp()
+            src = _make_source_snapshot(base / "src")
+            out = base / "out"
+            with contextlib.redirect_stdout(io.StringIO()):
+                manifest = _run_pinned(lambda: self._call_convert(src, out))
+            for name in convert.FILES:
+                if name == "model.safetensors":
+                    continue
+                actual = hashlib.sha256((out / name).read_bytes()).hexdigest()
+                self.assertEqual(actual, manifest["source_files_sha256"][name])
+
+        with self.subTest("rerun-replaces-outputs"):
+            (src / "tokenizer/tokenizer.json").write_bytes(b'{"v": 2}')
+            with contextlib.redirect_stdout(io.StringIO()):
+                _run_pinned(lambda: self._call_convert(src, out))
+            self.assertEqual((out / "tokenizer/tokenizer.json").read_bytes(), b'{"v": 2}')
+
+        for target_name in ("rl_agent_config.json", "tokenizer/tokenizer.json"):
+            with self.subTest("changed-during-emit-%s" % target_name):
+                base = self._tmp()
+                src = _make_source_snapshot(base / "src")
+                out = base / "out"
+                target = src / target_name
+
+                def _emit_and_rewrite(s, d, p=target):
+                    p.write_bytes(p.read_bytes().replace(b"}", b', "mutated": 1}', 1))
+                    return False, "0" * 64
+
+                with mock.patch.object(convert, "_emit_weights", side_effect=_emit_and_rewrite):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self._assert_exit(lambda s=src, o=out: self._call_convert(s, o),
+                                          "%s changed in the source snapshot during conversion" % target_name)
+                self.assertFalse((out / "manifest.json").exists())
+                self.assertFalse((out / target_name).exists())
+
+        with self.subTest("changed-after-read-config-encoder"):
+            base = self._tmp()
+            src = _make_source_snapshot(base / "src")
+            out = base / "out"
+            real_validate = convert._validate_weights
+
+            def _validate_and_rewrite(*args, **kwargs):
+                res = real_validate(*args, **kwargs)
+                enc = src / "encoder/config.json"
+                enc.write_bytes(enc.read_bytes().replace(b"}", b', "mutated": 1}', 1))
+                return res
+
+            with mock.patch.object(convert, "_validate_weights", side_effect=_validate_and_rewrite):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self._assert_exit(
+                        lambda s=src, o=out: self._call_convert(s, o),
+                        "%s changed in the source snapshot during conversion" % "encoder/config.json",
+                    )
+            self.assertFalse((out / "manifest.json").exists())
+            self.assertFalse((out / "encoder/config.json").exists())
+
+    def test_failed_rerun_removes_stale_manifest(self):
+        base = self._tmp()
+        src = _make_source_snapshot(base / "src")
+        out = base / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            _run_pinned(lambda: self._call_convert(src, out))
+        self.assertTrue((out / "manifest.json").is_file())
+        err = OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+        with mock.patch.object(convert, "_emit_weights", side_effect=err):
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(OSError) as ctx:
+                _run_pinned(lambda: self._call_convert(src, out))
+        self.assertEqual(ctx.exception.errno, errno.ENOSPC)
+        self.assertFalse((out / "manifest.json").exists())
+
+    def test_validation_failure_on_rerun_preserves_manifest(self):
+        base = self._tmp()
+        src = _make_source_snapshot(base / "src")
+        out = base / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            _run_pinned(lambda: self._call_convert(src, out))
+        old_manifest = (out / "manifest.json").read_bytes()
+        (src / "rl_agent_config.json").write_bytes(b"{not json")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self._assert_exit(
+                lambda: self._call_convert(src, out),
+                "rl_agent_config.json is not valid JSON",
+            )
+        self.assertTrue((out / "manifest.json").is_file())
+        self.assertEqual((out / "manifest.json").read_bytes(), old_manifest)
+
+    def test_out_that_is_the_source_dir_is_refused(self):
+        for label, link in (("same-path", False), ("symlink-to-source", True)):
+            with self.subTest(label):
+                base = self._tmp()
+                src = _make_source_snapshot(base / "src")
+                before = {n: (src / n).read_bytes() for n in convert.FILES}
+                out = src
+                if link:
+                    out = base / "out"
+                    os.symlink(src, out)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self._assert_exit(lambda o=out: self._call_convert(src, o),
+                                      "is the source snapshot directory")
+                self.assertEqual({n: (src / n).read_bytes() for n in convert.FILES}, before)
+                self.emit_mock.assert_not_called()
+                self.sha_mock.assert_not_called()
+
+    def test_existing_outputs_are_replaced_not_written_through(self):
+        base = self._tmp()
+        src = _make_source_snapshot(base / "src")
+        out = base / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            _run_pinned(lambda: self._call_convert(src, out))
+        outside = base / "outside.json"
+        outside.write_bytes(b"outside")
+        (out / "rl_agent_config.json").unlink()
+        os.mkfifo(out / "rl_agent_config.json")
+        (out / "tokenizer/tokenizer.json").unlink()
+        os.symlink(outside, out / "tokenizer/tokenizer.json")
+        with contextlib.redirect_stdout(io.StringIO()):
+            _run_pinned(lambda: self._call_convert(src, out))
+        self.assertEqual(outside.read_bytes(), b"outside")
+        for name in ("rl_agent_config.json", "tokenizer/tokenizer.json"):
+            dst = out / name
+            self.assertFalse(dst.is_symlink())
+            self.assertTrue(dst.is_file())
+            self.assertEqual(dst.read_bytes(), (src / name).read_bytes())
+
+    def test_failed_output_write_leaves_previous_file_and_no_part(self):
+        real_replace = os.replace
+        for target in ("tokenizer/tokenizer.json", "manifest.json"):
+            with self.subTest(target):
+                base = self._tmp()
+                src = _make_source_snapshot(base / "src")
+                out = base / "out"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    _run_pinned(lambda: self._call_convert(src, out))
+                old = (out / target).read_bytes()
+                (src / "tokenizer/tokenizer.json").write_bytes(b'{"v": 2}')
+                err = OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+                def _replace(a, b, t=out / target):
+                    if Path(b) == t:
+                        raise err
+                    return real_replace(a, b)
+
+                with mock.patch("os.replace", side_effect=_replace), \
+                        contextlib.redirect_stdout(io.StringIO()), \
+                        self.assertRaises(OSError) as ctx:
+                    _run_pinned(lambda: self._call_convert(src, out))
+                self.assertEqual(ctx.exception.errno, errno.ENOSPC)
+                self.assertFalse((out / "manifest.json").exists())
+                if target != "manifest.json":
+                    self.assertEqual((out / target).read_bytes(), old)
+                parts = [p for p in out.rglob("*") if p.name.endswith(".part")]
+                self.assertEqual(parts, [])
+
+    def test_failed_copy_write_stays_an_output_error(self):
+        base = self._tmp()
+        src = _make_source_snapshot(base / "src")
+        out = base / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            _run_pinned(lambda: self._call_convert(src, out))
+        old = (out / "tokenizer/tokenizer.json").read_bytes()
+        (src / "tokenizer/tokenizer.json").write_bytes(b'{"v": 2}')
+        real_open = builtins.open
+        part = out / "tokenizer/.tokenizer.json.part"
+
+        class _FullDisk:
+            def __init__(self, f):
+                self._f = f
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return self._f.__exit__(*exc)
+
+            def write(self, data):
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+        def _open(file, *args, **kwargs):
+            f = real_open(file, *args, **kwargs)
+            if isinstance(file, (str, os.PathLike)) and Path(file) == part:
+                return _FullDisk(f)
+            return f
+
+        with mock.patch("builtins.open", side_effect=_open), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(OSError) as ctx:
+            _run_pinned(lambda: self._call_convert(src, out))
+        self.assertEqual(ctx.exception.errno, errno.ENOSPC)
+        self.assertEqual((out / "tokenizer/tokenizer.json").read_bytes(), old)
+        self.assertEqual([p for p in out.rglob("*") if p.name.endswith(".part")], [])
+        self.assertFalse((out / "manifest.json").exists())
+
+    def test_concurrent_convert_into_same_out_is_refused(self):
+        base = self._tmp()
+        src = _make_source_snapshot(base / "src")
+        out = base / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            _run_pinned(lambda: self._call_convert(src, out))
+        before_entries = sorted(p.relative_to(out) for p in out.rglob("*"))
+        before_files = {
+            p.relative_to(out): p.read_bytes()
+            for p in sorted(out.rglob("*")) if p.is_file()
+        }
+        self.assertIn(Path("manifest.json"), before_files)
+        (src / "tokenizer/tokenizer.json").write_bytes(b'{"v": 2}')
+        fd = os.open(out, os.O_RDONLY)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.emit_mock.reset_mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self._assert_exit(
+                lambda: self._call_convert(src, out),
+                "another convert is writing to %s" % out,
+            )
+        self.emit_mock.assert_not_called()
+        self.assertEqual(sorted(p.relative_to(out) for p in out.rglob("*")), before_entries)
+        self.assertEqual(
+            {p.relative_to(out): p.read_bytes() for p in sorted(out.rglob("*")) if p.is_file()},
+            before_files,
+        )
 
 
 class FromLocalCliTests(_ConvertBase):

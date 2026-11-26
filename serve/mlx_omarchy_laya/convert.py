@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -77,20 +78,65 @@ def _open_source(path: Path, name: str):
         ) from None
 
 
-def _read_config(path: Path, name: str) -> dict:
+def _read_chunks(path: Path, name: str):
+    """Yield a source file in chunks; only source-side errors become convert: messages."""
+    with _open_source(path, name) as f:
+        yield from iter(lambda: f.read(1 << 20), b"")
+
+
+def _read_config(path: Path, name: str) -> tuple[dict, str]:
     with _open_source(path, name) as f:
         raw = f.read(_CONFIG_MAX_BYTES + 1)
     if len(raw) > _CONFIG_MAX_BYTES:
         raise SystemExit("convert: %s exceeds %d bytes" % (name, _CONFIG_MAX_BYTES))
-    return _parse_json_object(raw, name)
+    return _parse_json_object(raw, name), hashlib.sha256(raw).hexdigest()
 
 
 def _sha256(path: Path, name: str) -> str:
     h = hashlib.sha256()
-    with _open_source(path, name) as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    for chunk in _read_chunks(path, name):
+        h.update(chunk)
     return h.hexdigest()
+
+
+@contextlib.contextmanager
+def _lock_out(out: Path):
+    """Hold a non-blocking exclusive lock on out during the write phase."""
+    fd = os.open(out, os.O_RDONLY)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit("convert: another convert is writing to %s" % out) from None
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def _replace_file(dst: Path):
+    """Write to a sibling temp file and move it over dst only when the block succeeds."""
+    tmp = dst.with_name(".%s.part" % dst.name)
+    tmp.unlink(missing_ok=True)
+    try:
+        with open(tmp, "xb") as f:
+            yield f
+        os.replace(tmp, dst)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _copy_source(src: Path, dst: Path, name: str, sha256: str):
+    """Copy one source file to dst if its bytes still hash to sha256."""
+    dst.parent.mkdir(exist_ok=True)
+    h = hashlib.sha256()
+    with _replace_file(dst) as out, contextlib.closing(_read_chunks(src, name)) as chunks:
+        for chunk in chunks:
+            out.write(chunk)
+            h.update(chunk)
+        if h.hexdigest() != sha256:
+            raise SystemExit("convert: %s changed in the source snapshot during conversion" % name)
 
 
 def _fetch(repo: str, revision: str, subpath: str, name: str, dest: Path):
@@ -239,9 +285,11 @@ def _emit_weights(src: Path, dst: Path) -> tuple:
 def convert(source: Path, repo: str, revision: str, out: Path, catalog_id: str) -> dict:
     import mlx.core  # noqa: F401  (fail fast outside a mlx environment)
 
-    out.mkdir(parents=True, exist_ok=True)
-    enc_cfg_json = _read_config(source / "encoder/config.json", "encoder/config.json")
-    agent_cfg = _read_config(source / "rl_agent_config.json", "rl_agent_config.json")
+    with contextlib.suppress(OSError):
+        if os.path.samefile(out, source):
+            raise SystemExit("convert: --out %s is the source snapshot directory" % out)
+    enc_cfg_json, enc_sha = _read_config(source / "encoder/config.json", "encoder/config.json")
+    agent_cfg, agent_sha = _read_config(source / "rl_agent_config.json", "rl_agent_config.json")
     model_type = enc_cfg_json.get("model_type")
     if model_type != "modernbert":
         shown = (
@@ -258,37 +306,49 @@ def convert(source: Path, repo: str, revision: str, out: Path, catalog_id: str) 
         _positive_int(agent_cfg, k, "rl_agent_config.json")
         for k in ("head_layers", "max_len", "head_max_len"))
     header = _validate_weights(source / "model.safetensors", enc_cfg_json, head_layers)
-    hashes = {name: _sha256(source / name, name) for name in FILES}
+    config_hashes = {
+        "encoder/config.json": enc_sha,
+        "rl_agent_config.json": agent_sha,
+    }
+    hashes = {
+        name: config_hashes[name] if name in config_hashes else _sha256(source / name, name)
+        for name in FILES
+    }
 
     weights_bytes = (source / "model.safetensors").stat().st_size
-    aliases_applied, out_sha = _emit_weights(source / "model.safetensors", out / "model.safetensors")
-    import math
+    out.mkdir(parents=True, exist_ok=True)
+    with _lock_out(out):
+        (out / "manifest.json").unlink(missing_ok=True)
+        aliases_applied, out_sha = _emit_weights(
+            source / "model.safetensors", out / "model.safetensors"
+        )
+        for name in FILES:
+            if name != "model.safetensors":
+                _copy_source(source / name, out / name, name, hashes[name])
+        import math
 
-    param_elements = sum(math.prod(v["shape"]) for v in header.values())
-    archs = enc_cfg_json.get("architectures")
-    arch0 = archs[0] if isinstance(archs, list) and archs else None
-    manifest = {
-        "catalog_id": catalog_id,
-        "source_repo": repo,
-        "source_revision": revision,
-        "source_files_sha256": hashes,
-        "weights_sha256": out_sha,
-        "key_aliases_applied": aliases_applied,
-        "encoder_architecture": (
-            arch0 if isinstance(arch0, str) and len(arch0) <= 256 else None
-        ),
-        "weights_header": {"tensor_count": len(header), "weight_bytes": weights_bytes,
-                           "param_elements": param_elements},
-        "context_max_tokens": max_len,
-        "head_max_tokens": head_max_len,
-        "estimated_bytes": weights_bytes + WORKSPACE_HEADROOM_BYTES,
-    }
-    with open(out / "manifest.json", "w") as f:
-        json.dump(manifest, f, indent=2, sort_keys=True)
+        param_elements = sum(math.prod(v["shape"]) for v in header.values())
+        archs = enc_cfg_json.get("architectures")
+        arch0 = archs[0] if isinstance(archs, list) and archs else None
+        manifest = {
+            "catalog_id": catalog_id,
+            "source_repo": repo,
+            "source_revision": revision,
+            "source_files_sha256": hashes,
+            "weights_sha256": out_sha,
+            "key_aliases_applied": aliases_applied,
+            "encoder_architecture": (
+                arch0 if isinstance(arch0, str) and len(arch0) <= 256 else None
+            ),
+            "weights_header": {"tensor_count": len(header), "weight_bytes": weights_bytes,
+                               "param_elements": param_elements},
+            "context_max_tokens": max_len,
+            "head_max_tokens": head_max_len,
+            "estimated_bytes": weights_bytes + WORKSPACE_HEADROOM_BYTES,
+        }
+        with _replace_file(out / "manifest.json") as f:
+            f.write(json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"))
 
-    shutil.copyfile(source / "rl_agent_config.json", out / "rl_agent_config.json")
-    shutil.copytree(source / "encoder", out / "encoder", dirs_exist_ok=True)
-    shutil.copytree(source / "tokenizer", out / "tokenizer", dirs_exist_ok=True)
     print("convert: %s -> %s (revision %s)" % (catalog_id, out, revision[:12]))
     print("convert: weights %.2f GiB, reservation estimate %.2f GiB"
           % (weights_bytes / 2**30, manifest["estimated_bytes"] / 2**30))
