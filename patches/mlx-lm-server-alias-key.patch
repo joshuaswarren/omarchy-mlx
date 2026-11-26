@@ -2,6 +2,14 @@
 # mlx-lm is MIT licensed; this patch changes no upstream license or notice.
 --- a/mlx_lm/server.py	2026-11-25 13:17:15.058223814 -0600
 +++ b/mlx_lm/server.py	2026-11-25 13:17:27.495119838 -0600
+@@ -3,6 +3,7 @@
+ import argparse
+ import json
+ import logging
++import os
+ import pickle
+ import platform
+ import socket
 @@ -1127,6 +1127,8 @@
          response_generator: ResponseGenerator,
          *args,
