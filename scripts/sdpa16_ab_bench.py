@@ -96,7 +96,7 @@ if args.logits_out:
     last_logits = logits[0, -1]
     mx.eval(last_logits)
     import numpy as np
-    np.save(args.logits_out, np.asarray(last_logits, dtype=np.float32))
+    np.save(args.logits_out, np.asarray(last_logits.astype(mx.float32)))
     top = mx.argsort(-last_logits)[:10]
     mx.eval(top)
     row["argmax"] = int(mx.argmax(last_logits).item())
