@@ -1262,6 +1262,18 @@ enum class ComputeKernel : uint16_t {
   MatmulDirectBF16C16Tn,
   MatmulDirectBF16C16Tt,
   QmmVecGreedyWordBF16,
+  // Coalesced-K+V split-K decode SDPA pass 1 and matching pass 2 builds
+  // (shaders/sdpa_decode_split_p1kv.comp, sdpa_decode_split_p2.comp).
+  // Appended to keep profile kernel ids stable.
+  SdpaDecodeSplitP1KVBk32R4BF16Hd128,
+  SdpaDecodeSplitP1KVBk64R4BF16Hd128,
+  SdpaDecodeSplitP1KVBk128R4BF16Hd128,
+  SdpaDecodeSplitP2Bk32BF16Hd128,
+  SdpaDecodeSplitP1KVBk32R4BF16Hd256,
+  SdpaDecodeSplitP1KVBk64R4BF16Hd256,
+  SdpaDecodeSplitP1KVBk128R4BF16Hd256,
+  SdpaDecodeSplitP2Bk32BF16Hd256,
+  SdpaDecodeSplitP2Bk64BF16Hd256,
   Count,
 };
 
