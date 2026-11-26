@@ -1148,7 +1148,7 @@ endif()
 # cached GLSL from the previous binary. Generated into the same shaders/
 # include dir as the embedded SPIR-V headers.
 set(MLX_OMARCHY_TRANSLATOR_SOURCE_HASH "")
-foreach(source custom_kernel.cpp custom_kernel_cbq.h cbq_msl.inc custom_kernel_bm32.h bm32_msl.inc)
+foreach(source custom_kernel.cpp custom_kernel_cbq.h cbq_msl.inc custom_kernel_bm32.h bm32_msl.inc custom_kernel_ssm.h ssm_msl.inc)
   set(path "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
   file(SHA256 "${path}" hash)
