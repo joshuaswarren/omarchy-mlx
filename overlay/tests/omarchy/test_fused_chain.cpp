@@ -2546,8 +2546,10 @@ TEST_CASE("outgate fold default: G13 non-G13C and G14C default off, env override
       "llvmpipe (LLVM 19.1.7, 256 bits)"));
 
   setenv("MLX_OMARCHY_OUTGATE_FOLD", "0", 1);
+  omarchy::env_note_eval();
   CHECK_FALSE(omarchy::outgate_fold_enabled());
   setenv("MLX_OMARCHY_OUTGATE_FOLD", "1", 1);
+  omarchy::env_note_eval();
   CHECK(omarchy::outgate_fold_enabled());
 }
 
