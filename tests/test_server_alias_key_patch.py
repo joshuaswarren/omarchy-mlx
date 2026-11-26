@@ -118,6 +118,7 @@ class PatchedServerModuleImportsAndBuildsDefaultArgs(unittest.TestCase):
         import os
         import shutil
         import subprocess
+        import sys
         import tempfile
 
         override = os.environ.get("MLX_LM_SITE_PACKAGES")
