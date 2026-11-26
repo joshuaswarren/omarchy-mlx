@@ -166,6 +166,147 @@ class ConcurrentSetReservationTests(unittest.TestCase):
                                      f"{name} has wrong bytes")
 
 
+class TransactionLockOpenTests(unittest.TestCase):
+    """The transaction lock opens without truncating, without following a
+    symlink and without blocking; a damaged lock path is a BudgetError and
+    is left as it was. A regular lock keeps its inode and still excludes."""
+
+    UNUSABLE = r"^reservations lock unusable \(.*reservations\.json\.lock'\); refusing to lock$"
+
+    def setUp(self):
+        self.home, cleanup = _make_home()
+        self.addCleanup(cleanup)
+        self.path = budget.reservations_path(self.home)
+        self.lock = self.path.with_name("reservations.json.lock")
+        self.lock.unlink()
+
+    def _keep_reservation(self):
+        budget.set_reservation("keep", 4096, note="existing", home=self.home)
+        self.lock.unlink()
+        return self.path.read_bytes()
+
+    def test_symlink_lock_refused_and_targets_untouched(self):
+        before = self._keep_reservation()
+        victim = self.home / "notes.txt"
+        victim.write_bytes(b"user data\n" * 100)
+        for target in (self.path.name, str(victim), "/dev/null"):
+            with self.subTest(target=target):
+                try:
+                    self.lock.symlink_to(target)
+                    with self.assertRaisesRegex(budget.BudgetError, self.UNUSABLE):
+                        budget.set_reservation("svc", 1024, home=self.home)
+                    self.assertEqual(os.readlink(self.lock), target)
+                finally:
+                    self.lock.unlink(missing_ok=True)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(victim.read_bytes(), b"user data\n" * 100)
+        self.assertEqual(set(budget.load_reservations(self.home)), {"keep"})
+
+    def test_dangling_symlink_lock_refused_without_creating_target(self):
+        target = self.home / "elsewhere"
+        self.lock.symlink_to(target)
+        with self.assertRaisesRegex(budget.BudgetError, self.UNUSABLE):
+            budget.set_reservation("svc", 1024, home=self.home)
+        self.assertFalse(os.path.lexists(target))
+        self.assertFalse(self.path.exists())
+
+    def test_every_transaction_refuses_a_symlink_lock(self):
+        before = self._keep_reservation()
+        self.lock.symlink_to(self.path.name)
+        calls = {
+            "set_reservation": lambda: budget.set_reservation(
+                "svc", 1024, home=self.home),
+            "set_reservation_state": lambda: budget.set_reservation_state(
+                "keep", "resident", home=self.home),
+            "clear_reservation": lambda: budget.clear_reservation(
+                "keep", home=self.home),
+            "admit_and_reserve": lambda: budget.admit_and_reserve(
+                "svc", 1024, owner="o", home=self.home, available_bytes=GiB),
+            "admit_and_reserve_batch": lambda: budget.admit_and_reserve_batch(
+                [("svc", 1024, "")], pair_id="p", home=self.home,
+                available_bytes=GiB),
+            "claim_reservation": lambda: budget.claim_reservation(
+                "keep", "token", expected_bytes=4096, home=self.home),
+            "resize_reservation": lambda: budget.resize_reservation(
+                "keep", 8192, owner="o", home=self.home, available_bytes=GiB),
+        }
+        for name, call in calls.items():
+            with self.subTest(call=name):
+                with self.assertRaisesRegex(budget.BudgetError, self.UNUSABLE):
+                    call()
+        self.assertEqual(self.path.read_bytes(), before)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires os.mkfifo")
+    def test_fifo_lock_refused_without_blocking(self):
+        os.mkfifo(self.lock)
+        for reader in (False, True):
+            with self.subTest(reader=reader):
+                if reader:  # a reader lets the open succeed; the type check refuses
+                    fd = os.open(self.lock, os.O_RDONLY | os.O_NONBLOCK)
+                    self.addCleanup(os.close, fd)
+                    expected = "^reservations lock is not a regular file; refusing to lock$"
+                else:
+                    expected = self.UNUSABLE
+                caught = []
+
+                def run():
+                    try:
+                        budget.set_reservation("svc", 1024, home=self.home)
+                    except BaseException as exc:
+                        caught.append(exc)
+
+                worker = threading.Thread(target=run, daemon=True)
+                worker.start()
+                worker.join(timeout=10.0)
+                self.assertFalse(worker.is_alive(), "FIFO lock open blocked")
+                self.assertEqual(len(caught), 1)
+                self.assertIsInstance(caught[0], budget.BudgetError)
+                self.assertRegex(str(caught[0]), expected)
+        self.assertTrue(stat.S_ISFIFO(os.lstat(self.lock).st_mode))
+        self.assertFalse(self.path.exists())
+
+    def test_directory_lock_refused(self):
+        self.lock.mkdir()
+        with self.assertRaisesRegex(budget.BudgetError, self.UNUSABLE):
+            budget.set_reservation("svc", 1024, home=self.home)
+        self.assertTrue(self.lock.is_dir())
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root ignores file modes")
+    def test_unwritable_lock_refused(self):
+        self.lock.touch()
+        self.lock.chmod(0o400)
+        with self.assertRaisesRegex(budget.BudgetError, self.UNUSABLE):
+            budget.set_reservation("svc", 1024, home=self.home)
+        self.assertFalse(self.path.exists())
+
+    def test_lock_created_private_and_reused_without_truncation(self):
+        budget.set_reservation("svc", 1024, home=self.home)
+        st = os.lstat(self.lock)
+        self.assertTrue(stat.S_ISREG(st.st_mode))
+        self.assertEqual(stat.S_IMODE(st.st_mode) & 0o077, 0)
+        self.lock.write_bytes(b"held")
+        budget.set_reservation("svc2", 1024, home=self.home)
+        self.assertEqual(self.lock.read_bytes(), b"held")
+        self.assertEqual(os.lstat(self.lock).st_ino, st.st_ino)
+
+    def test_held_lock_still_excludes_a_transaction(self):
+        self.lock.touch()
+        holder = os.open(self.lock, os.O_RDONLY)
+        self.addCleanup(os.close, holder)
+        budget.fcntl.flock(holder, budget.fcntl.LOCK_EX)
+        done = threading.Event()
+        worker = threading.Thread(
+            target=lambda: (budget.set_reservation("svc", 1024, home=self.home),
+                            done.set()),
+            daemon=True)
+        worker.start()
+        self.assertFalse(done.wait(0.5), "transaction ran while the lock was held")
+        budget.fcntl.flock(holder, budget.fcntl.LOCK_UN)
+        self.assertTrue(done.wait(10.0), "transaction never took the released lock")
+        worker.join(10.0)
+        self.assertEqual(set(budget.load_reservations(self.home)), {"svc"})
+
+
 def _deep_list(depth):
     """A depth-deep nested list, built without recursion."""
     deep = []
@@ -520,9 +661,16 @@ class ReservationsFileReadBoundsTests(unittest.TestCase):
         path = budget.reservations_path(home)
         before = path.read_bytes()
         pattern = r"^reservations file unreadable \(.*\); refusing to guess$"
-        with unittest.mock.patch.object(
-            budget.os, "fstat", side_effect=FileNotFoundError("vanished")
-        ):
+        real_fstat = os.fstat
+        reservations_ino = os.stat(path).st_ino
+
+        def vanished_fstat(fd):  # only the reservations file vanishes, not its lock
+            st = real_fstat(fd)
+            if st.st_ino == reservations_ino:
+                raise FileNotFoundError("vanished")
+            return st
+
+        with unittest.mock.patch.object(budget.os, "fstat", vanished_fstat):
             with self.assertRaisesRegex(budget.BudgetError, pattern):
                 budget.load_reservations(home)
             with self.assertRaisesRegex(budget.BudgetError, pattern):
