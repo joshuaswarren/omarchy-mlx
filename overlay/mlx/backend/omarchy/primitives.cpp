@@ -10871,6 +10871,14 @@ bool dispatch_quantized_gemv_group(
             (rope_epi->q.member_index == mi ||
              rope_epi->k.member_index == mi));
     }
+    // The token4 mega-dispatch stages each token row's normed values in
+    // epi_block at 128 floats per subgroup (blk = sub_id * 128u): head
+    // dims above 128 overwrite the next row's scratch. The member route
+    // covers up to 256; above 128 with no member route the group falls
+    // back to ordinary evals.
+    if (!member_route && epi_d > 128) {
+      return false;
+    }
     if (member_route) {
       const RopeEpiSide* route_sides[2] = {&rope_epi->q, &rope_epi->k};
       for (size_t mi = 0; mi < members.size(); ++mi) {
