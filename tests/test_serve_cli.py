@@ -11,6 +11,7 @@ import errno
 import io
 import json
 import os
+import pwd
 import sys
 import tempfile
 import threading
@@ -1583,6 +1584,219 @@ class UntraversableSnapshotTests(unittest.TestCase):
                 self.assertEqual(
                     serve_cli.offline_snapshot_detail(resolved, patterns=["*.safetensors"]),
                     f"; the Hugging Face cache has no snapshot for revision {nul_rev[:12]} of org/model",
+                )
+
+
+class ResolveTargetTests(CliTestBase):
+    """resolve_target() refuses inaccessible local paths cleanly instead of
+    raising raw OS/runtime errors or misclassifying them as HF repo ids."""
+
+    EMPTY_CATALOG = {"models": []}
+
+    def chdir_to(self, directory: Path) -> None:
+        old_cwd = os.getcwd()
+        self.addCleanup(os.chdir, old_cwd)
+        os.chdir(directory)
+
+    def make_locked_model(self) -> tuple[Path, Path]:
+        locked = Path(self.tmp.name) / "locked"
+        model = locked / "model"
+        model.mkdir(parents=True)
+        self.addCleanup(os.chmod, locked, 0o700)
+        os.chmod(locked, 0o000)
+        return locked, model
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses mode bits")
+    def test_untraversable_parent_refuses_abs_and_rel(self):
+        _, model = self.make_locked_model()
+        self.chdir_to(Path(self.tmp.name))
+        reason = os.strerror(errno.EACCES)
+        for target in (str(model), "locked/model"):
+            with self.subTest(target=target):
+                with self.assertRaises(budget.BudgetError) as ctx:
+                    serve_cli.resolve_target(target, self.EMPTY_CATALOG)
+                self.assertEqual(
+                    str(ctx.exception),
+                    f"cannot access local path {target!r} ({reason})",
+                )
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses mode bits")
+    def test_plan_cli_refuses_untraversable_relative_target(self):
+        self.make_locked_model()
+        self.chdir_to(Path(self.tmp.name))
+        code, out, err = self.run_cli(
+            ["plan", "--context", "512", "--weights-gib", "1", "locked/model"]
+        )
+        self.assertEqual(code, 2, (out, err))
+        self.assertEqual(out, "")
+        self.assertEqual(
+            err,
+            f"error: cannot access local path 'locked/model' ({os.strerror(errno.EACCES)})\n",
+        )
+
+    def test_symlink_loop_refuses(self):
+        open_dir = Path(self.tmp.name) / "open"
+        open_dir.mkdir()
+        (open_dir / "loop").symlink_to("loop")
+        self.chdir_to(Path(self.tmp.name))
+        with self.assertRaises(budget.BudgetError) as ctx:
+            serve_cli.resolve_target("open/loop", self.EMPTY_CATALOG)
+        self.assertEqual(
+            str(ctx.exception),
+            f"cannot access local path 'open/loop' ({os.strerror(errno.ELOOP)})",
+        )
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses mode bits")
+    def test_unlistable_or_unsearchable_target_directory_refuses(self):
+        self.chdir_to(Path(self.tmp.name))
+        reason = os.strerror(errno.EACCES)
+        for mode in (0o000, 0o400, 0o100):
+            target = f"model-{mode:o}"
+            with self.subTest(mode=oct(mode)):
+                Path(target).mkdir()
+                self.addCleanup(os.chmod, target, 0o700)
+                os.chmod(target, mode)
+                with self.assertRaises(budget.BudgetError) as ctx:
+                    serve_cli.resolve_target(target, self.EMPTY_CATALOG)
+                self.assertEqual(
+                    str(ctx.exception),
+                    f"cannot access local path {target!r} ({reason})",
+                )
+        Path("model-500").mkdir(mode=0o500)
+        self.addCleanup(os.chmod, "model-500", 0o700)
+        resolved = serve_cli.resolve_target("model-500", self.EMPTY_CATALOG)
+        self.assertEqual(resolved.local_path, Path("model-500"))
+
+    def test_name_too_long_refuses(self):
+        # Filesystems differ in which error a 300-byte name gets, so raise it here.
+        reason = os.strerror(errno.ENAMETOOLONG)
+        too_long = OSError(errno.ENAMETOOLONG, reason)
+        for target in ("n" * 300, "open/" + "n" * 300):
+            with self.subTest(target=target), \
+                    unittest.mock.patch.object(Path, "stat", side_effect=too_long):
+                with self.assertRaises(budget.BudgetError) as ctx:
+                    serve_cli.resolve_target(target, self.EMPTY_CATALOG)
+                self.assertEqual(
+                    str(ctx.exception),
+                    f"cannot access local path {target!r} ({reason})",
+                )
+
+    def test_unknown_tilde_user_refuses(self):
+        target = "~nosuchuser-zz9q/model"
+        with unittest.mock.patch.object(pwd, "getpwnam", side_effect=KeyError(target)):
+            with self.assertRaises(budget.BudgetError) as ctx:
+                serve_cli.resolve_target(target, self.EMPTY_CATALOG)
+        self.assertEqual(
+            str(ctx.exception),
+            f"cannot access local path {target!r} (Could not determine home directory.)",
+        )
+
+    def test_tilde_target_resolves_to_the_expanded_directory(self):
+        model = Path(self.tmp.name) / "model"
+        model.mkdir()
+        with unittest.mock.patch.dict(os.environ, {"HOME": self.tmp.name}):
+            resolved = serve_cli.resolve_target("~/model", self.EMPTY_CATALOG)
+        self.assertEqual(resolved.target, "~/model")
+        self.assertEqual(resolved.local_path, model)
+
+    def test_embedded_nul_gives_generic_target_error(self):
+        for target in ("~a\0b/model", "a\0b"):
+            with self.subTest(target=target):
+                with self.assertRaises(budget.BudgetError) as ctx:
+                    serve_cli.resolve_target(target, self.EMPTY_CATALOG)
+                self.assertEqual(
+                    str(ctx.exception),
+                    f"{target!r} is not a catalog id, an existing local directory, "
+                    "or an HF repo id",
+                )
+
+    def test_controls_preserve_existing_resolution(self):
+        root = Path(self.tmp.name)
+        readable = root / "readable-model"
+        readable.mkdir()
+        afile = root / "afile"
+        afile.write_text("not a dir")
+        self.chdir_to(root)
+
+        for repo_target in ("owner/repo", "afile/x"):
+            with self.subTest(target=repo_target):
+                resolved = serve_cli.resolve_target(repo_target, self.EMPTY_CATALOG)
+                self.assertEqual(resolved.target, repo_target)
+                self.assertIsNone(resolved.entry)
+                self.assertIsNone(resolved.local_path)
+                self.assertEqual(resolved.repo, repo_target)
+                self.assertIsNone(resolved.revision)
+
+        resolved_dir = serve_cli.resolve_target(str(readable), self.EMPTY_CATALOG)
+        self.assertEqual(resolved_dir.target, str(readable))
+        self.assertIsNone(resolved_dir.entry)
+        self.assertEqual(resolved_dir.local_path, readable)
+        self.assertIsNone(resolved_dir.repo)
+        self.assertIsNone(resolved_dir.revision)
+
+        with self.assertRaises(budget.BudgetError) as ctx:
+            serve_cli.resolve_target(str(afile), self.EMPTY_CATALOG)
+        self.assertEqual(
+            str(ctx.exception),
+            f"{str(afile)!r} is not a catalog id, an existing local directory, "
+            "or an HF repo id",
+        )
+
+    def test_directory_at_path_max_resolves_local(self):
+        base = Path(self.tmp.name)
+        need = 4095 - len(os.fsencode(base))
+        if need < 2:
+            self.skipTest(f"temp dir path already {len(os.fsencode(base))} bytes")
+        parts: list[str] = []
+        while need > 202:
+            parts.append("d" * 200)
+            need -= 201
+        parts.append("d" * (need - 1))
+        deep = base.joinpath(*parts)
+        self.assertEqual(len(os.fsencode(deep)), 4095)
+        try:
+            fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                for part in parts:
+                    os.mkdir(part, dir_fd=fd)
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+                    fd, prev = child, fd
+                    os.close(prev)
+            finally:
+                os.close(fd)
+        except OSError as exc:
+            self.skipTest(f"cannot create 4095-byte directory path: {exc}")
+        resolved = serve_cli.resolve_target(str(deep), self.EMPTY_CATALOG)
+        self.assertEqual(resolved.local_path, deep)
+
+    def test_directory_changed_during_probe_refuses(self):
+        target = "owner/repo"
+        (Path(self.tmp.name) / target).mkdir(parents=True)
+        self.chdir_to(Path(self.tmp.name))
+        real_stat = os.stat
+        cases = (
+            ("open", errno.ENOENT, FileNotFoundError),
+            ("open", errno.ENOTDIR, NotADirectoryError),
+            ("stat", errno.ENOENT, FileNotFoundError),
+            ("stat", errno.ENOTDIR, NotADirectoryError),
+        )
+        for probe, err_no, exc_type in cases:
+            reason = os.strerror(err_no)
+            exc = exc_type(err_no, reason)
+            if probe == "open":
+                side_effect = exc
+            else:
+                def side_effect(path, *args, _exc=exc, **kwargs):
+                    if kwargs.get("dir_fd") is not None:
+                        raise _exc
+                    return real_stat(path, *args, **kwargs)
+            with self.subTest(probe=probe, errno=errno.errorcode[err_no]):
+                with unittest.mock.patch.object(serve_cli.os, probe, side_effect=side_effect):
+                    with self.assertRaises(budget.BudgetError) as ctx:
+                        serve_cli.resolve_target(target, self.EMPTY_CATALOG)
+                self.assertEqual(
+                    str(ctx.exception),
+                    f"cannot access local path {target!r} ({reason})",
                 )
 
 

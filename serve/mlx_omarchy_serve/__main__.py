@@ -326,9 +326,24 @@ def resolve_target(target: str | None, cat: dict) -> Resolved:
     for entry in cat["models"]:
         if entry["id"] == target:
             return Resolved(target, entry, None, entry["repo"], entry["revision"])
-    path = Path(target).expanduser()
-    if path.is_dir():
-        return Resolved(target, None, path, None, None)
+    path, is_dir = Path(target), False
+    try:
+        path = path.expanduser()
+        is_dir = stat.S_ISDIR(path.stat().st_mode)
+        if is_dir:  # list and search it without lengthening the path
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)  # listing needs read permission
+            try:
+                os.stat(".", dir_fd=fd)  # a lookup inside it needs search permission
+            finally:
+                os.close(fd)
+            return Resolved(target, None, path, None, None)
+    except (OSError, RuntimeError, ValueError) as exc:
+        # A missing path, a non-directory parent or an embedded NUL is no local directory;
+        # once a directory was found, any probe error is about that directory.
+        if is_dir or not isinstance(exc, (FileNotFoundError, NotADirectoryError, ValueError)):
+            raise budget.BudgetError(
+                f"cannot access local path {target!r} ({getattr(exc, 'strerror', None) or exc})"
+            )
     if REPO_RE.match(target) and "/" in target and not target.startswith("."):
         return Resolved(target, None, None, target, None)
     raise budget.BudgetError(
