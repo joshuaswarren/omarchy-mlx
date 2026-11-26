@@ -12,6 +12,7 @@ subprocesses running a stub that uses the REAL claim/lifetime protocol
 model itself is replaced.
 """
 
+import contextlib
 import json
 import os
 import signal
@@ -1948,6 +1949,108 @@ class PairManagerTests(BasePairTest):
         held = budget.load_reservations(self.home)
         self.assertIn(CHAT_SMALL_ID, held)
         self.assertEqual(held[CHAT_SMALL_ID]["pair_id"], "everyday")
+
+    def test_start_adopts_newest_lock_past_entries_that_are_not_lock_files(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        self.manager.setup("everyday", approve_download=True)
+        self.manager.start()
+        self.manager.stop()
+        locks = pairs.pair_lock_path(self.home, "unused").parent
+        newer = time.time() + 60
+        real_scandir = os.scandir
+
+        def scandir_then_unlink(path):
+            with real_scandir(path) as entries:
+                listed = list(entries)
+            (locks / "vanished.json").unlink()
+            return contextlib.nullcontext(iter(listed))
+
+        for name, make, scandir in (
+                ("directory.json", Path.mkdir, real_scandir),
+                ("fifo.json", os.mkfifo, real_scandir),
+                ("vanished.json", Path.touch, scandir_then_unlink),
+                ("dangling.json", lambda path: path.symlink_to(locks / "gone"), real_scandir),
+                ("looping.json", lambda path: path.symlink_to(path), real_scandir),
+                # the temp file a killed write_pair_lock() leaves behind
+                ("everyday.json1a2b.tmp", Path.touch, real_scandir)):
+            with self.subTest(name):
+                path = locks / name
+                make(path)
+                try:
+                    if not path.is_symlink():
+                        os.utime(path, (newer, newer))
+                    restarted = pairs.PairManager(self.home)
+                    self.addCleanup(restarted.stop)
+                    with mock.patch("os.scandir", scandir):
+                        self.assertEqual(restarted._newest_lock_pair_id(), "everyday")
+                    # only once the pick is right: a picked FIFO hangs start()
+                    status = restarted.start()
+                    self.assertEqual((status["state"], status["pair_id"]),
+                                     ("ready", "everyday"))
+                    restarted.stop()
+                finally:
+                    if path.is_dir() and not path.is_symlink():
+                        path.rmdir()
+                    else:
+                        path.unlink(missing_ok=True)
+
+    def test_newest_lock_orders_by_nanosecond_mtime_then_name(self):
+        lock = {"version": 1, "models": {}}
+        for pair_id in ("everyday", "quality"):
+            pairs.write_pair_lock(self.home, pair_id, dict(lock, pair_id=pair_id))
+        stamp = time.time_ns()
+        os.utime(pairs.pair_lock_path(self.home, "quality"), ns=(stamp, stamp))
+        os.utime(pairs.pair_lock_path(self.home, "everyday"), ns=(stamp + 1, stamp + 1))
+        self.assertEqual(self.manager._newest_lock_pair_id(), "everyday")
+        os.utime(pairs.pair_lock_path(self.home, "everyday"), ns=(stamp, stamp))
+        self.assertEqual(self.manager._newest_lock_pair_id(), "quality")  # tie: last name
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+    def test_unreadable_lock_directory_is_pair_error_not_absent(self):
+        # server.resume() reports a "no saved pair lock" message as absent
+        pairs.write_pair_lock(self.home, "everyday",
+                              {"version": 1, "pair_id": "everyday", "models": {}})
+        locks = pairs.pair_lock_path(self.home, "unused").parent
+        for path, mode in ((locks, 0o000), (locks, 0o300), (locks, 0o400),
+                           (locks.parent, 0o000)):
+            with self.subTest(path=path.name, mode=oct(mode)):
+                path.chmod(mode)
+                try:
+                    with self.assertRaisesRegex(
+                            pairs.PairError, "pair lock directory .* is unreadable"):
+                        self.manager.adopt_saved()
+                    with self.assertRaisesRegex(pairs.PairError, "no prepared pair"):
+                        self.manager.start()
+                finally:
+                    path.chmod(0o755)
+        real_scandir = os.scandir
+
+        def scandir_then_lock(path):
+            with real_scandir(path) as entries:
+                listed = list(entries)
+            locks.chmod(0o400)
+            return contextlib.nullcontext(iter(listed))
+
+        with self.subTest("locked during the scan"):
+            try:
+                with mock.patch("os.scandir", scandir_then_lock), self.assertRaisesRegex(
+                        pairs.PairError, "pair lock directory .* is unreadable"):
+                    self.manager.adopt_saved()
+            finally:
+                locks.chmod(0o755)
+
+    def test_missing_or_file_lock_directory_is_no_saved_lock(self):
+        locks = pairs.pair_lock_path(self.home, "unused").parent
+        with self.assertRaisesRegex(pairs.PairError, "no saved pair lock to adopt"):
+            self.manager.adopt_saved()
+        locks.parent.mkdir(parents=True)
+        locks.write_text("")
+        with self.assertRaisesRegex(pairs.PairError, "no saved pair lock to adopt"):
+            self.manager.adopt_saved()
+        self.manager.home = self.home / "nul\0home"  # base's is_dir() was False
+        with self.assertRaisesRegex(pairs.PairError, "no saved pair lock to adopt"):
+            self.manager.adopt_saved()
 
     def test_setup_without_approval_uses_cached_artifacts(self):
         self.make_chat_snapshot(CHAT_SMALL_ID)
