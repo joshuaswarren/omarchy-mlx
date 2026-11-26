@@ -1274,6 +1274,23 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP1KVBk128R4BF16Hd256,
   SdpaDecodeSplitP2Bk32BF16Hd256,
   SdpaDecodeSplitP2Bk64BF16Hd256,
+  // bf16 twin of the two-tensor SliceUpdate merge (slice_update_pair.comp
+  // -DUSE_BF16): verbatim 16-bit copy, so the variant only changes the
+  // element type. Appended to keep profile kernel ids stable.
+  SliceUpdatePairBF16,
+  // Token4 column carrying the residual+norm epilogue (qmm_vec.comp
+  // QMM_VEC_TOKENS+RESNORM): the last finishing workgroup norms every
+  // live token row of the materialized sum. Appended to keep profile
+  // kernel ids stable.
+  QmmVecQ4MultiToken4ResNormSubgroupBF16,
+  // QMM_VEC_TOKENS+ROPE_EPI): the last finishing workgroup norms and
+  // rotates the Q/K member rows for the layer's two fused-norm ropes,
+  // storing queries to a fresh buffer and keys through the slice
+  // pair's KV window. Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiToken4RopeEpiSubgroupBF16,
+  // Per-member twin of the rope epilogue above: the same tail on the
+  // single-weight Rows8 column, one dispatch per group member.
+  QmmVecQ4WordSubgroupRows8RopeEpiBF16,
   Count,
 };
 

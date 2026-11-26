@@ -2641,3 +2641,361 @@ TEST_CASE("TapeIndex generation wrap rezeros stale slots") {
   CHECK(t.put_if_absent(42, 8));
   CHECK(*t.find(42) == 8);
 }
+
+namespace {
+
+// Fused RMSNorm+RoPE epilogue (MLX_OMARCHY_ROPE_EPI): the q/k member
+// rows' norm+rotate tail on the token decode group. These cases check
+// the epilogue against the unfused path on real tensors across
+// multiple token rows and rope heads (direct tensor parity, not
+// generated-ID parity), plus the refusal contracts: differing q/k rope
+// states must not share the query's plan parameters, and a head dim the
+// token4 scratch cannot hold must refuse when the member route is off.
+struct RopeEpiEnv {
+  RopeEpiEnv() {
+    setenv("MLX_OMARCHY_FUSED_CHAIN", "1", 1);
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    setenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI", "1", 1);
+    setenv("MLX_OMARCHY_ROPE_EPI", "1", 1);
+  }
+  ~RopeEpiEnv() {
+    unsetenv("MLX_OMARCHY_FUSED_CHAIN");
+    unsetenv("MLX_OMARCHY_FUSED_GEMV");
+    unsetenv("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI");
+    unsetenv("MLX_OMARCHY_ROPE_EPI");
+    unsetenv("MLX_OMARCHY_ROPE_EPI_MEMBER");
+  }
+};
+
+// Decode tape: three 4-bit/group-64 transposed projections sharing one
+// bf16 multi-row x; the q and k outputs reach rope_rms_norm through a
+// reshape+transpose chain; the k rope feeds the keys slice update and
+// the v view feeds the values update (the producer-direct pair).
+struct RopeEpiTape {
+  int t = 4;
+  int q_heads = 4;
+  int kv_heads = 2;
+  int head_dim = 64;
+  int k = 64;
+  array x{0};
+  array qw{0};
+  array qs{0};
+  array qb{0};
+  array kw{0};
+  array ks{0};
+  array kb{0};
+  array vw{0};
+  array vs{0};
+  array vb{0};
+  array wq{0};
+  array wk{0};
+  array off{0};
+  array keys_cache{0};
+  array values_cache{0};
+};
+
+RopeEpiTape make_rope_epi_tape(const Stream& stream, int head_dim) {
+  RopeEpiTape tp;
+  tp.head_dim = head_dim;
+  const int nq = tp.q_heads * tp.head_dim;
+  const int nk = tp.kv_heads * tp.head_dim;
+  const int words = tp.k / 8;
+  const int groups = tp.k / 64;
+  auto make_words = [words](int n, uint32_t salt) {
+    std::vector<uint32_t> w(static_cast<size_t>(n) * words);
+    for (size_t i = 0; i < w.size(); ++i) {
+      w[i] = (salt + static_cast<uint32_t>(i)) * 2654435761u;
+    }
+    return array(w.data(), {n, words}, uint32);
+  };
+  std::vector<float> xf(tp.t * tp.k);
+  for (size_t i = 0; i < xf.size(); ++i) {
+    xf[i] = static_cast<float>(static_cast<int>((i * 37 + 11) % 17) - 8) *
+        0.0625f;
+  }
+  tp.x = astype(
+      array(xf.data(), {1, tp.t, tp.k}, float32), bfloat16, stream);
+  tp.qw = make_words(nq, 1u);
+  tp.kw = make_words(nk, 7u);
+  tp.vw = make_words(nk, 13u);
+  std::vector<float> scale_v(nq, 0.25f);
+  std::vector<float> bias_v(nq, -0.125f);
+  tp.qs = astype(
+      array(scale_v.data(), {nq, groups}, float32), bfloat16, stream);
+  tp.qb = astype(
+      array(bias_v.data(), {nq, groups}, float32), bfloat16, stream);
+  std::vector<float> kscale_v(nk, 0.5f);
+  std::vector<float> kbias_v(nk, 0.25f);
+  tp.ks = astype(
+      array(kscale_v.data(), {nk, groups}, float32), bfloat16, stream);
+  tp.kb = astype(
+      array(kbias_v.data(), {nk, groups}, float32), bfloat16, stream);
+  tp.vs = astype(
+      array(kscale_v.data(), {nk, groups}, float32), bfloat16, stream);
+  tp.vb = astype(
+      array(kbias_v.data(), {nk, groups}, float32), bfloat16, stream);
+  std::vector<float> wq_v(tp.head_dim);
+  std::vector<float> wk_v(tp.head_dim);
+  for (int i = 0; i < tp.head_dim; ++i) {
+    wq_v[i] = 1.0f + static_cast<float>(i % 8) * 0.0078125f;
+    wk_v[i] = 1.0f + static_cast<float>((i + 3) % 8) * 0.0078125f;
+  }
+  tp.wq = astype(
+      array(wq_v.data(), {tp.head_dim}, float32), bfloat16, stream);
+  tp.wk = astype(
+      array(wk_v.data(), {tp.head_dim}, float32), bfloat16, stream);
+  tp.off = array(3, int32);
+  std::vector<float> cache_v(tp.kv_heads * 8 * tp.head_dim);
+  for (size_t i = 0; i < cache_v.size(); ++i) {
+    cache_v[i] = static_cast<float>(i % 128) * 0.0078125f - 0.5f;
+  }
+  tp.keys_cache = astype(
+      array(
+          cache_v.data(), {1, tp.kv_heads, 8, tp.head_dim}, float32),
+      bfloat16, stream);
+  tp.values_cache = astype(
+      array(
+          cache_v.data(), {1, tp.kv_heads, 8, tp.head_dim}, float32),
+      bfloat16, stream);
+  eval({tp.x,
+        tp.qw,
+        tp.qs,
+        tp.qb,
+        tp.kw,
+        tp.ks,
+        tp.kb,
+        tp.vw,
+        tp.vs,
+        tp.vb,
+        tp.wq,
+        tp.wk,
+        tp.off,
+        tp.keys_cache,
+        tp.values_cache});
+  sync_stream(stream);
+  return tp;
+}
+
+struct RopeEpiOut {
+  array q;
+  array keys;
+  array values;
+  uint64_t dispatches{0};
+  int64_t last_kernel{-1};
+};
+
+RopeEpiOut rope_epi_eval(
+    const RopeEpiTape& tp,
+    const Stream& stream,
+    int q_dims,
+    int k_dims,
+    float k_base,
+    float k_scale) {
+  array qp = quantized_matmul(
+      tp.x, tp.qw, tp.qs, tp.qb, true, 64, 4, "affine", stream);
+  array kp = quantized_matmul(
+      tp.x, tp.kw, tp.ks, tp.kb, true, 64, 4, "affine", stream);
+  array vp = quantized_matmul(
+      tp.x, tp.vw, tp.vs, tp.vb, true, 64, 4, "affine", stream);
+  array qv = transpose(
+      reshape(
+          qp, Shape{1, tp.t, tp.q_heads, tp.head_dim}, stream),
+      {0, 2, 1, 3},
+      stream);
+  array kv = transpose(
+      reshape(
+          kp, Shape{1, tp.t, tp.kv_heads, tp.head_dim}, stream),
+      {0, 2, 1, 3},
+      stream);
+  array vv = transpose(
+      reshape(
+          vp, Shape{1, tp.t, tp.kv_heads, tp.head_dim}, stream),
+      {0, 2, 1, 3},
+      stream);
+  array qrot = fast::rope_rms_norm(
+      qv,
+      q_dims,
+      tp.wq,
+      1e-6f,
+      false,
+      10000.0f,
+      1.0f,
+      tp.off,
+      stream);
+  array krot = fast::rope_rms_norm(
+      kv,
+      k_dims,
+      tp.wk,
+      1e-6f,
+      false,
+      k_base,
+      k_scale,
+      tp.off,
+      stream);
+  array uk = slice_update(
+      tp.keys_cache,
+      krot,
+      Shape{0, 0, 3, 0},
+      Shape{1, tp.kv_heads, 3 + tp.t, tp.head_dim},
+      stream);
+  array uv = slice_update(
+      tp.values_cache,
+      vv,
+      Shape{0, 0, 3, 0},
+      Shape{1, tp.kv_heads, 3 + tp.t, tp.head_dim},
+      stream);
+  RopeEpiOut out{qrot, uk, uv, 0, -1};
+  out.dispatches = counters().vk_compute_dispatches.load();
+  eval({qrot, uk, uv});
+  sync_stream(stream);
+  out.dispatches =
+      counters().vk_compute_dispatches.load() - out.dispatches;
+  out.last_kernel = counters().last_dispatched_kernel.load();
+  return out;
+}
+
+bool rope_epi_caps(const Stream& stream) {
+  const auto& caps =
+      omarchy::get_command_encoder(stream).device().capabilities();
+  return caps.storage_buffer_16bit_access && caps.shader_int16 &&
+      caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) !=
+          0u;
+}
+
+} // namespace
+
+// Per-member route (default): q/k member Rows8 dispatches carry the
+// norm+rotate tail. The last-finisher-per-head protocol must produce
+// the unfused path's exact bits on every one of the 4 token rows and
+// 6 rope heads (4 q + 2 k), and the values window stays the same.
+TEST_CASE("rope-epi member tail is bit-exact across rows and heads") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!rope_epi_caps(stream)) {
+    skip("the rope-epi tail needs bf16 storage and 32-lane subgroup arithmetic");
+    return;
+  }
+  RopeEpiEnv env;
+  set_compile_mode(CompileMode::disabled);
+  RopeEpiTape tp = make_rope_epi_tape(stream, 64);
+  unsetenv("MLX_OMARCHY_ROPE_EPI");
+  RopeEpiOut off = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  setenv("MLX_OMARCHY_ROPE_EPI", "1", 1);
+  RopeEpiOut on = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  CHECK_EQ(
+      on.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16));
+  CHECK_NE(
+      off.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16));
+  expect_bit_exact(off.q, on.q, stream);
+  expect_bit_exact(off.keys, on.keys, stream);
+  expect_bit_exact(off.values, on.values, stream);
+}
+
+// Token4 route (MLX_OMARCHY_ROPE_EPI_MEMBER=0): the joint dispatch's
+// per-head last finisher runs the same tail; same parity contract.
+TEST_CASE("rope-epi token4 tail is bit-exact across rows and heads") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!rope_epi_caps(stream)) {
+    skip("the rope-epi tail needs bf16 storage and 32-lane subgroup arithmetic");
+    return;
+  }
+  RopeEpiEnv env;
+  setenv("MLX_OMARCHY_ROPE_EPI_MEMBER", "0", 1);
+  set_compile_mode(CompileMode::disabled);
+  RopeEpiTape tp = make_rope_epi_tape(stream, 64);
+  unsetenv("MLX_OMARCHY_ROPE_EPI");
+  RopeEpiOut off = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  setenv("MLX_OMARCHY_ROPE_EPI", "1", 1);
+  RopeEpiOut on = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  CHECK_EQ(
+      on.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::
+              QmmVecQ4MultiToken4RopeEpiSubgroupBF16));
+  expect_bit_exact(off.q, on.q, stream);
+  expect_bit_exact(off.keys, on.keys, stream);
+  expect_bit_exact(off.values, on.values, stream);
+}
+
+// The plan stores the query rope's state for both sides: a keys rope
+// with different rotation dims must refuse the fold and take the
+// ordinary paths (values stay correct).
+TEST_CASE("rope-epi refuses differing q/k rope states") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!rope_epi_caps(stream)) {
+    skip("the rope-epi tail needs bf16 storage and 32-lane subgroup arithmetic");
+    return;
+  }
+  RopeEpiEnv env;
+  set_compile_mode(CompileMode::disabled);
+  RopeEpiTape tp = make_rope_epi_tape(stream, 64);
+  unsetenv("MLX_OMARCHY_ROPE_EPI");
+  RopeEpiOut off = rope_epi_eval(tp, stream, 64, 32, 10000.0f, 1.0f);
+  setenv("MLX_OMARCHY_ROPE_EPI", "1", 1);
+  RopeEpiOut on = rope_epi_eval(tp, stream, 64, 32, 10000.0f, 1.0f);
+  CHECK_NE(
+      on.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16));
+  CHECK_NE(
+      on.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::
+              QmmVecQ4MultiToken4RopeEpiSubgroupBF16));
+  expect_bit_exact(off.q, on.q, stream);
+  expect_bit_exact(off.keys, on.keys, stream);
+  expect_bit_exact(off.values, on.values, stream);
+}
+
+// Head dim 192: the member route folds two reads per lane and still
+// produces the unfused bits; the token4 mega-dispatch stages only 128
+// floats of normed row per subgroup, so with the member route off the
+// plan must refuse and fall back rather than overwrite a neighbor's
+// scratch (the review's scratch-overrun finding).
+TEST_CASE("rope-epi covers vd>128 on the member route and refuses token4") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  if (!rope_epi_caps(stream)) {
+    skip("the rope-epi tail needs bf16 storage and 32-lane subgroup arithmetic");
+    return;
+  }
+  RopeEpiEnv env;
+  set_compile_mode(CompileMode::disabled);
+  RopeEpiTape tp = make_rope_epi_tape(stream, 192);
+  unsetenv("MLX_OMARCHY_ROPE_EPI");
+  RopeEpiOut off = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  setenv("MLX_OMARCHY_ROPE_EPI", "1", 1);
+  RopeEpiOut on_member = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  CHECK_EQ(
+      on_member.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16));
+  expect_bit_exact(off.q, on_member.q, stream);
+  expect_bit_exact(off.keys, on_member.keys, stream);
+  expect_bit_exact(off.values, on_member.values, stream);
+  setenv("MLX_OMARCHY_ROPE_EPI_MEMBER", "0", 1);
+  RopeEpiOut on_token4 = rope_epi_eval(tp, stream, 64, 64, 10000.0f, 1.0f);
+  unsetenv("MLX_OMARCHY_ROPE_EPI_MEMBER");
+  CHECK_NE(
+      on_token4.last_kernel,
+      static_cast<int64_t>(
+          omarchy::ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16));
+  expect_bit_exact(off.q, on_token4.q, stream);
+  expect_bit_exact(off.keys, on_token4.keys, stream);
+  expect_bit_exact(off.values, on_token4.values, stream);
+}

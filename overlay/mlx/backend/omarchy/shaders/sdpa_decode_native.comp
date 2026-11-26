@@ -343,8 +343,12 @@ void main() {
       ++key;
     }
 #ifdef SDPA_ROWS
-    output_data.values[o_batch + head * params.shape[0] +
-        row * SDPA_DIM + d] = bf16_store(1.0 * accumulator);
+    // out_strides[1]/[2] carry the out head/row strides: the ordinary
+    // route passes the (H,S,D) strides this hardcoded layout implied,
+    // while the out-transpose fold passes (D, H*D) to store the
+    // (1,S,H*D) reshape layout directly.
+    output_data.values[o_batch + head * params.out_strides[1] +
+        row * params.out_strides[2] + d] = bf16_store(1.0 * accumulator);
 #else
     output_data.values[o_batch + head * SDPA_DIM + d] =
         bf16_store(1.0 * accumulator);

@@ -80,6 +80,9 @@ uint16_t bf16_store(float value) {
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
 #include "omarchy_half.h"
+#if defined(QMM_VEC_ROPE_EPI)
+#include "omarchy_trig.h"
+#endif
 #if defined(FP_MODE) && defined(QMM_VEC_Q4_WORD)
 #error "QMM_VEC_Q4_WORD applies to affine quantization only"
 #endif
@@ -93,12 +96,12 @@ uint16_t bf16_store(float value) {
      (!defined(QMM_VEC_MULTI) && !defined(QMM_VEC_RESNORM)))
 #error "QMM_VEC_OUTGATE builds on the bf16 subgroup multi or resnorm column"
 #endif
-#if defined(QMM_VEC_RESNORM) && \
+#if defined(QMM_VEC_RESNORM) && !defined(QMM_VEC_TOKENS) && \
     (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
      !defined(QMM_VEC_Q4_WORD) || defined(QMM_VEC_MULTI) || \
      defined(QMM_VEC_SWIGLU) || \
      defined(QMM_VEC_BATCH) || defined(QMM_VEC_ROWS) || \
-     defined(QMM_VEC_TOKENS) || defined(QMM_VEC_GREEDY) || \
+     defined(QMM_VEC_GREEDY) || \
      ROWS_PER_SLOT != 2 || SLOTS_PER_GROUP < 8)
 #error "QMM_VEC_RESNORM builds on bf16 subgroup Q4 word 2-row >=8-slot single weight"
 #endif
@@ -109,6 +112,26 @@ uint16_t bf16_store(float value) {
      defined(QMM_VEC_BATCH) || defined(QMM_VEC_ROWS) || \
      defined(QMM_VEC_TOKENS) || defined(QMM_VEC_GREEDY))
 #error "QMM_VEC_SWIGLU builds on bf16 subgroup Q4 word"
+#endif
+#if defined(QMM_VEC_RESNORM) && defined(QMM_VEC_TOKENS) && \
+    (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
+     !defined(QMM_VEC_Q4_WORD) || !defined(QMM_VEC_MULTI) || \
+     !defined(M_TOKENS))
+#error "QMM_VEC_RESNORM on the token column builds on the bf16 subgroup multi-token variant"
+#endif
+#if defined(QMM_VEC_ROPE_EPI)
+#if !defined(USE_BF16) || !defined(USE_SUBGROUP) || \
+    !defined(QMM_VEC_Q4_WORD) || defined(QMM_VEC_RESNORM)
+#error "QMM_VEC_ROPE_EPI builds on the bf16 subgroup Q4 word column without resnorm"
+#endif
+#if defined(QMM_VEC_MULTI) && \
+    (!defined(QMM_VEC_TOKENS) || !defined(M_TOKENS))
+#error "QMM_VEC_ROPE_EPI multi builds on the token variant"
+#endif
+#if !defined(QMM_VEC_MULTI) && !defined(QMM_VEC_ROWS)
+#error "QMM_VEC_ROPE_EPI needs the multi-token or single-weight rows base"
+#endif
+
 #endif
 
 // Decode geometry: SLOTS_PER_GROUP 32-lane slots per workgroup, each slot
@@ -222,6 +245,26 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 // the member's output store lands at out_strides[i] + column inside a
 // whole parent buffer the member's binding aliases; unflagged members
 // store at column exactly as before.
+// The token-route residual+norm epilogue reads Sum0 back inside the same
+// dispatch (the last finishing workgroup norms the materialized sum), so
+// that variant upgrades every Sum slot to coherent; all other multi
+// builds keep the writeonly store contract.
+#if defined(QMM_VEC_TOKENS) && \
+    (defined(QMM_VEC_RESNORM) || defined(QMM_VEC_ROPE_EPI))
+#define QMM_VEC_SUM_ACCESS coherent
+#else
+#define QMM_VEC_SUM_ACCESS writeonly
+#endif
+#if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_ROPE_EPI)
+// The fused-norm rope epilogue reads the Q/K members' materialized
+// outputs back inside the same dispatch, so their stores upgrade to
+// coherent like the resnorm variant's Sum slot. Measured on the M1 Max:
+// an unqualified decl produces stale reads (wrong ids) — coherent is
+// load-bearing for cross-workgroup visibility on this stack.
+#define QMM_VEC_OUTPUT_ACCESS coherent
+#else
+#define QMM_VEC_OUTPUT_ACCESS writeonly
+#endif
 #define QMM_VEC_MULTI_WEIGHT(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
   WVEC_T values[]; \
@@ -232,19 +275,74 @@ layout(set = 0, binding = B + 1, std430) readonly buffer Scales##I { \
 layout(set = 0, binding = B + 2, std430) readonly buffer Biases##I { \
   STORAGE_TYPE values[]; \
 } biases##I; \
-layout(set = 0, binding = B + 3, std430) writeonly buffer Output##I { \
+layout(set = 0, binding = B + 3, std430) QMM_VEC_OUTPUT_ACCESS buffer Output##I { \
   STORAGE_TYPE values[]; \
 } output##I; \
 layout(set = 0, binding = B + 4, std430) readonly buffer Addend##I { \
   STORAGE_TYPE values[]; \
 } addend##I; \
-layout(set = 0, binding = B + 5, std430) writeonly buffer Sum##I { \
+layout(set = 0, binding = B + 5, std430) QMM_VEC_SUM_ACCESS buffer Sum##I { \
   STORAGE_TYPE values[]; \
 } sum##I;
 QMM_VEC_MULTI_WEIGHT(0, 1)
 QMM_VEC_MULTI_WEIGHT(1, 7)
 QMM_VEC_MULTI_WEIGHT(2, 13)
 QMM_VEC_MULTI_WEIGHT(3, 19)
+#if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_RESNORM)
+// Token residual+norm epilogue: single-member groups only (weights 1..3
+// stay filler-bound), so the norm weight/output and the last-workgroup
+// ticket ride the free slots above binding 24.
+layout(set = 0, binding = 25, std430) readonly buffer NormWeight {
+  STORAGE_TYPE values[];
+} norm_weight;
+layout(set = 0, binding = 26, std430) writeonly buffer NormOutput {
+  STORAGE_TYPE values[];
+} norm_output;
+layout(set = 0, binding = 27, std430) coherent buffer Ticket {
+  uint done;
+} ticket;
+shared uint s_resnorm_is_last;
+shared float s_resnorm_partial[8u];
+#endif
+#if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_ROPE_EPI)
+// Fused RMSNorm+RoPE epilogue on a <=3-member token group: member 3's
+// weight slots are repurposed (the host refuses 4-member rope-epi
+// groups) — input_w3 carries the scalar position offset, scales3 and
+// biases3 the per-side norm weights, output3 the query rope output,
+// and sum3 the producer-direct keys window. The ticket rides binding
+// 25 the same way the resnorm variant's does.
+layout(set = 0, binding = 25, std430) coherent buffer Ticket {
+  uint values[];
+} ticket;
+shared uint s_rope_is_last;
+// epi_rounded is epi_block: the reduce tree's row sum is consumed
+// into |norm| before the rounded pass overwrites the same range, so
+// one 2KB scratch serves both (occupancy cost measured on the M1 Max:
+// +4KB static shared slowed the member-dot ~2ms/30-step).
+shared float epi_block[512u];
+float epi_member_load(uint member, uint index) {
+  if (member == 0u) {
+    return LOAD_VALUE(output0.values[index]);
+  }
+  if (member == 1u) {
+    return LOAD_VALUE(output1.values[index]);
+  }
+  return LOAD_VALUE(output2.values[index]);
+}
+float epi_weight_load(uint side, uint index) {
+  return side == 0u ? LOAD_VALUE(scales3.values[index])
+                    : LOAD_VALUE(biases3.values[index]);
+}
+// bf16 round-to-nearest-even on the f32 register value, the same
+// constant-shift form fast_rope_norm.comp calls rope_round.
+float epi_rope_round(float value) {
+  uint bits = floatBitsToUint(value);
+  uint rounded = isnan(value)
+      ? ((bits >> 16u) | 0x40u)
+      : ((bits + 0x7fffu + ((bits >> 16u) & 1u)) >> 16u);
+  return uintBitsToFloat(rounded << 16u);
+}
+#endif
 #if defined(QMM_VEC_OUTGATE)
 // Out-gate prologue (flags bit 17): x = out * bf16(sigmoid(gate)), the
 // exact arithmetic and rounding of the two elementwise kernels the
@@ -424,9 +522,63 @@ layout(set = 0, binding = 10, std430) buffer Logits {
   STORAGE_TYPE values[];
 } logits;
 #else
+#if defined(QMM_VEC_ROPE_EPI)
+// The per-member rope epilogue reads the member's materialized output
+// back inside the same dispatch (cross-workgroup): coherent like the
+// token variant's member outputs.
+layout(set = 0, binding = 4, std430) coherent buffer Output {
+  STORAGE_TYPE values[];
+} output_data;
+#else
 layout(set = 0, binding = 4, std430) writeonly buffer Output {
   STORAGE_TYPE values[];
 } output_data;
+#endif
+#if defined(QMM_VEC_ROWS) && defined(QMM_VEC_ROPE_EPI)
+// Per-member fused RMSNorm+RoPE epilogue on the single-weight rows
+// column: one dispatch per group member, and each member's own
+// workgroups elect the last finisher per rope head (the same protocol
+// the multi-token variant runs across the joint grid, but the member
+// dot keeps the proven Rows8 kernel instead of one mega-dispatch).
+// Bindings 5-8 ride the free slots above the single-weight set:
+// this side's norm weight, the epilogue output (the query rope buffer
+// or the producer-direct keys window), the scalar position offset
+// (u32 words; the host passes the word index in params.count), and
+// the shared ticket buffer.
+layout(set = 0, binding = 5, std430) readonly buffer NormWeight {
+  STORAGE_TYPE values[];
+} norm_weight;
+layout(set = 0, binding = 6, std430) writeonly buffer EpiOut {
+  STORAGE_TYPE values[];
+} epi_out;
+layout(set = 0, binding = 7, std430) readonly buffer OffsetBuf {
+  uint values[];
+} offset_buf;
+layout(set = 0, binding = 8, std430) coherent buffer Ticket {
+  uint values[];
+} ticket;
+shared uint s_epi_is_last;
+// epi_rounded is epi_block: the reduce tree's row sum is consumed
+// into |norm| before the rounded pass overwrites the same range, so
+// one 2KB scratch serves both (occupancy cost measured on the M1 Max:
+// +4KB static shared slowed the member-dot ~2ms/30-step).
+shared float epi_block[512u];
+float epi_member_load(uint index) {
+  return LOAD_VALUE(output_data.values[index]);
+}
+float epi_weight_load(uint index) {
+  return LOAD_VALUE(norm_weight.values[index]);
+}
+// bf16 round-to-nearest-even on the f32 register value, the same
+// constant-shift form fast_rope_norm.comp calls rope_round.
+float epi_rope_round(float value) {
+  uint bits = floatBitsToUint(value);
+  uint rounded = isnan(value)
+      ? ((bits >> 16u) | 0x40u)
+      : ((bits + 0x7fffu + ((bits >> 16u) & 1u)) >> 16u);
+  return uintBitsToFloat(rounded << 16u);
+}
+#endif
 #endif
 #endif
 #endif
@@ -959,13 +1111,26 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 // weight words load once, x quads load once per token and are shared by
 // every slot column; dot and input_sum accumulate per (column, token)
 // exactly as the single-token kernel's per-column chain does.
+// The eight nibble-to-float conversions of each weight word and slot
+// column are computed once per word and reused by every token - the same
+// sharing the batch form's Q4_NIB_WORD applies per row (defined inside
+// QMM_VEC_BATCH, so the token column gets its own copy under a distinct
+// name). Each token's fma chain takes the same values in the same order
+// as the unhoisted Q4_TOK_DOT, so every row stays bit-identical.
+#define Q4_TOK_NIB_WORD(p, n) \
+  for (uint j = 0u; j < 4u; ++j) { \
+    n[j] = Q4_NIB(p, 4u * j); \
+    n[j + 4u] = Q4_NIB((p) >> 16u, 4u * j); \
+  }
 #define Q4_TOK_BLOCK(W, S, B, words_this_step) { \
-  uint wa[ROWS_PER_SLOT]; \
-  uint wb[ROWS_PER_SLOT]; \
+  float na[ROWS_PER_SLOT][8]; \
+  float nb[ROWS_PER_SLOT][8]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-    wa[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
+    uint wa = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
+    Q4_TOK_NIB_WORD(wa, na[r]) \
     if ((words_this_step) == 2u) { \
-      wb[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w + 1u); \
+      uint wb = WLOAD(W, w_base + row_base[r] * words_per_row + w + 1u); \
+      Q4_TOK_NIB_WORD(wb, nb[r]) \
     } \
   } \
   precise float dot_t[ROWS_PER_SLOT][M_TOKENS]; \
@@ -988,29 +1153,37 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     } \
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
       { Q4_QUAD_LOAD_T(xa.x, xa.y, input_sum_t[r][m]) \
-        uint p = wa[r]; Q4_TOK_DOT(dot_t[r][m], p); } \
+        dot_t[r][m] += fma(x3, na[r][3], \
+            fma(x2, na[r][2], fma(x1, na[r][1], x0 * na[r][0]))); } \
       { Q4_QUAD_LOAD_T(xa.z, xa.w, input_sum_t[r][m]) \
-        uint p = wa[r] >> 16u; Q4_TOK_DOT(dot_t[r][m], p); } \
+        dot_t[r][m] += fma(x3, na[r][7], \
+            fma(x2, na[r][6], fma(x1, na[r][5], x0 * na[r][4]))); } \
       if ((words_this_step) == 2u) { \
         { Q4_QUAD_LOAD_T(xb.x, xb.y, input_sum_t[r][m]) \
-          uint p = wb[r]; Q4_TOK_DOT(dot_t[r][m], p); } \
+          dot_t[r][m] += fma(x3, nb[r][3], \
+              fma(x2, nb[r][2], fma(x1, nb[r][1], x0 * nb[r][0]))); } \
         { Q4_QUAD_LOAD_T(xb.z, xb.w, input_sum_t[r][m]) \
-          uint p = wb[r] >> 16u; Q4_TOK_DOT(dot_t[r][m], p); } \
+          dot_t[r][m] += fma(x3, nb[r][7], \
+              fma(x2, nb[r][6], fma(x1, nb[r][5], x0 * nb[r][4]))); } \
       } \
     } \
   } \
   uint group = w / 8u; \
+  float scale_r[ROWS_PER_SLOT]; \
+  float bias_r[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    scale_r[r] = \
+        LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + group]); \
+    bias_r[r] = \
+        LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + group]); \
+  } \
   for (uint m = 0u; m < M_TOKENS; ++m) { \
     if (m >= token_count) { \
       continue; \
     } \
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-      float scale = \
-          LOAD_VALUE(S.values[s_base + row_base[r] * groups_per_row + group]); \
-      float bias = \
-          LOAD_VALUE(B.values[b_base + row_base[r] * groups_per_row + group]); \
-      precise float bias_term = input_sum_t[r][m] * bias; \
-      acc_t[m][r] += fma(scale, dot_t[r][m], bias_term); \
+      precise float bias_term = input_sum_t[r][m] * bias_r[r]; \
+      acc_t[m][r] += fma(scale_r[r], dot_t[r][m], bias_term); \
     } \
   } \
 }
@@ -1253,7 +1426,26 @@ void main() {
           } else {
             output3.values[out_index] = STORE_VALUE(rounded);
           }
-          if ((params.flags & (256u << which)) != 0u) {
+          if ((params.flags & (4096u << which)) != 0u) {
+            // Producer-direct KV window on the token column (raw
+            // members only): token row m scatters its n columns into
+            // the updated cache copy at seq position offset + m *
+            // head_dim. aux_offset/matrix_n carry the window offset
+            // and head dim; in_strides[which] the head row gap.
+            uint win_index = params.aux_offset +
+                m * params.matrix_n +
+                (column_r / params.matrix_n) * params.in_strides[which] +
+                (column_r % params.matrix_n);
+            if (which == 0u) {
+              sum0.values[win_index] = STORE_VALUE(rounded);
+            } else if (which == 1u) {
+              sum1.values[win_index] = STORE_VALUE(rounded);
+            } else if (which == 2u) {
+              sum2.values[win_index] = STORE_VALUE(rounded);
+            } else {
+              sum3.values[win_index] = STORE_VALUE(rounded);
+            }
+          } else if ((params.flags & (256u << which)) != 0u) {
             // Add epilogue: sum = rounded output + addend; the addend
             // row stride is params.in_strides[which] (n for a full
             // (tokens, n) addend, 0 for a broadcast bias vector). The
@@ -1277,6 +1469,380 @@ void main() {
       }
     }
   }
+#if defined(QMM_VEC_RESNORM)
+  // Residual+norm epilogue on the token column: the same last-workgroup
+  // Apple RMSNorm the single-row variant runs, once per live token row
+  // of sum0 (single-member groups only, so the norm row length is n0).
+  // The 128-thread workgroup emulates the 256-thread tree exactly: real
+  // lane l covers virtual lanes l and l+128, each subgroup's hardware
+  // reduction sees the identical operand order the 256-thread kernel
+  // gives that virtual subgroup (v-subgroups 0..3 on pass A, 4..7 on
+  // pass B), and the combine consumes the same eight partials. Per-row
+  // bits therefore match the eager 256-thread-per-row kernel exactly.
+  barrier();
+  memoryBarrierBuffer();
+  if (lane == 0u) {
+    uint prev = atomicAdd(ticket.done, 1u);
+    s_resnorm_is_last = (prev == gl_NumWorkGroups.x - 1u) ? 1u : 0u;
+  }
+  barrier();
+  if (s_resnorm_is_last == 0u) {
+    return;
+  }
+  if (lane == 0u) {
+    ticket.done = 0u;
+  }
+  memoryBarrierBuffer();
+  barrier();
+  {
+    uint sub_id = lane / LANES;
+    uint sub_lane = lane % LANES;
+    uint row_length = n0;
+    float eps = params.alpha;
+    uint n_reads = row_length / 256u;
+    bool reg_path =
+        (row_length == 2048u || row_length == 2560u || row_length == 4096u);
+    for (uint m = 0u; m < token_count; ++m) {
+      uint row_off = (row0 + m) * n0;
+      float reg_x0[16u];
+      float reg_x1[16u];
+      precise float reg_sq0 = 0.0;
+      precise float reg_sq1 = 0.0;
+      if (reg_path) {
+        uint base0 = lane * n_reads;
+        uint base1 = (lane + 128u) * n_reads;
+        for (uint i = 0u; i < 8u; ++i) {
+          reg_x0[i] = LOAD_VALUE(sum0.values[row_off + base0 + i]);
+          reg_sq0 += reg_x0[i] * reg_x0[i];
+          reg_x1[i] = LOAD_VALUE(sum0.values[row_off + base1 + i]);
+          reg_sq1 += reg_x1[i] * reg_x1[i];
+        }
+        if (n_reads == 10u) {
+          for (uint i = 8u; i < 10u; ++i) {
+            reg_x0[i] = LOAD_VALUE(sum0.values[row_off + base0 + i]);
+            reg_sq0 += reg_x0[i] * reg_x0[i];
+            reg_x1[i] = LOAD_VALUE(sum0.values[row_off + base1 + i]);
+            reg_sq1 += reg_x1[i] * reg_x1[i];
+          }
+        } else if (n_reads == 16u) {
+          for (uint i = 8u; i < 16u; ++i) {
+            reg_x0[i] = LOAD_VALUE(sum0.values[row_off + base0 + i]);
+            reg_sq0 += reg_x0[i] * reg_x0[i];
+            reg_x1[i] = LOAD_VALUE(sum0.values[row_off + base1 + i]);
+            reg_sq1 += reg_x1[i] * reg_x1[i];
+          }
+        }
+      } else {
+        for (uint index = lane; index < row_length; index += 256u) {
+          reg_sq0 += LOAD_VALUE(sum0.values[row_off + index]) *
+                     LOAD_VALUE(sum0.values[row_off + index]);
+        }
+        for (uint index = lane + 128u; index < row_length; index += 256u) {
+          reg_sq1 += LOAD_VALUE(sum0.values[row_off + index]) *
+                     LOAD_VALUE(sum0.values[row_off + index]);
+        }
+      }
+      float sub_partial0 = subgroupAdd(reg_sq0);
+      if (sub_lane == 0u) {
+        s_resnorm_partial[sub_id] = sub_partial0;
+      }
+      barrier();
+      float sub_partial1 = subgroupAdd(reg_sq1);
+      if (sub_lane == 0u) {
+        s_resnorm_partial[sub_id + 4u] = sub_partial1;
+      }
+      barrier();
+      if (sub_id == 0u) {
+        float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+        float total_sq = subgroupAdd(v);
+        if (sub_lane == 0u) {
+          s_resnorm_partial[0] = total_sq;
+        }
+      }
+      barrier();
+      float mean_square = s_resnorm_partial[0] / float(row_length);
+      float norm = inversesqrt(mean_square + eps);
+      if (reg_path) {
+        uint base0 = lane * n_reads;
+        uint base1 = (lane + 128u) * n_reads;
+        for (uint i = 0u; i < 8u; ++i) {
+          uint index0 = base0 + i;
+          uint index1 = base1 + i;
+          float weight0 =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                  : LOAD_VALUE(norm_weight.values[params.rhs_offset + index0]);
+          float weight1 =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                  : LOAD_VALUE(norm_weight.values[params.rhs_offset + index1]);
+          precise float norm_weight_v0 = norm * weight0;
+          precise float norm_weight_v1 = norm * weight1;
+          precise float result0 = reg_x0[i] * norm_weight_v0;
+          precise float result1 = reg_x1[i] * norm_weight_v1;
+          norm_output.values[row_off + index0] = STORE_VALUE(result0);
+          norm_output.values[row_off + index1] = STORE_VALUE(result1);
+        }
+        if (n_reads == 10u) {
+          for (uint i = 8u; i < 10u; ++i) {
+            uint index0 = base0 + i;
+            uint index1 = base1 + i;
+            float weight0 =
+                (params.lhs_size == 1u)
+                    ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                    : LOAD_VALUE(norm_weight.values[params.rhs_offset + index0]);
+            float weight1 =
+                (params.lhs_size == 1u)
+                    ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                    : LOAD_VALUE(norm_weight.values[params.rhs_offset + index1]);
+            precise float norm_weight_v0 = norm * weight0;
+            precise float norm_weight_v1 = norm * weight1;
+            precise float result0 = reg_x0[i] * norm_weight_v0;
+            precise float result1 = reg_x1[i] * norm_weight_v1;
+            norm_output.values[row_off + index0] = STORE_VALUE(result0);
+            norm_output.values[row_off + index1] = STORE_VALUE(result1);
+          }
+        } else if (n_reads == 16u) {
+          for (uint i = 8u; i < 16u; ++i) {
+            uint index0 = base0 + i;
+            uint index1 = base1 + i;
+            float weight0 =
+                (params.lhs_size == 1u)
+                    ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                    : LOAD_VALUE(norm_weight.values[params.rhs_offset + index0]);
+            float weight1 =
+                (params.lhs_size == 1u)
+                    ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                    : LOAD_VALUE(norm_weight.values[params.rhs_offset + index1]);
+            precise float norm_weight_v0 = norm * weight0;
+            precise float norm_weight_v1 = norm * weight1;
+            precise float result0 = reg_x0[i] * norm_weight_v0;
+            precise float result1 = reg_x1[i] * norm_weight_v1;
+            norm_output.values[row_off + index0] = STORE_VALUE(result0);
+            norm_output.values[row_off + index1] = STORE_VALUE(result1);
+          }
+        }
+      } else {
+        for (uint index = lane; index < row_length; index += 256u) {
+          float value = LOAD_VALUE(sum0.values[row_off + index]);
+          float weight =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                  : LOAD_VALUE(norm_weight.values[params.rhs_offset + index]);
+          precise float norm_weight_v = norm * weight;
+          precise float result = value * norm_weight_v;
+          norm_output.values[row_off + index] = STORE_VALUE(result);
+        }
+        for (uint index = lane + 128u; index < row_length; index += 256u) {
+          float value = LOAD_VALUE(sum0.values[row_off + index]);
+          float weight =
+              (params.lhs_size == 1u)
+                  ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+                  : LOAD_VALUE(norm_weight.values[params.rhs_offset + index]);
+          precise float norm_weight_v = norm * weight;
+          precise float result = value * norm_weight_v;
+          norm_output.values[row_off + index] = STORE_VALUE(result);
+        }
+      }
+      barrier();
+    }
+  }
+#endif
+#if defined(QMM_VEC_ROPE_EPI)
+  // Fused RMSNorm+RoPE epilogue: a member-dot workgroup covers
+  // COLUMNS_PER_GROUP contiguous output columns, all inside a single
+  // rope head (whose per-head element span is the mat stride is0), so
+  // is0/COLUMNS_PER_GROUP workgroups finish each head. The last
+  // finisher norms and rotates that head's token rows exactly like
+  // the standalone FastRopeNormBF16 dispatch pair it replaces — the
+  // 128-thread workgroup emulates the 256-thread norm tree via
+  // virtual lanes l and l+128 (dead threads contribute the same
+  // 0.0), and the rotate/store phase carries one output word pair
+  // per thread. Both ropes are forward, non-traditional,
+  // scalar-offset by the host contract, so the rotation takes the
+  // forward branches only. Flag bit 2 is a debug skip (results are
+  // wrong when set; it isolates the tail's cost in timing runs).
+  if ((params.flags & 4u) == 0u) {
+    const uint row_length = params.reduce_size;
+    const uint half_dims = params.aux_size;
+    const float eps = uintBitsToFloat(params.operation);
+    const bool passthrough = 2u * half_dims < row_length;
+    const uint rope_t = token_count;
+    const uint epi_sel = params.shape[3];
+    const uint q_heads = (epi_sel >> 4u) & 0xFFFu;
+    uint side;
+    uint heads;
+    if (which == (epi_sel & 3u)) {
+      side = 0u;
+      heads = q_heads;
+    } else if (which == ((epi_sel >> 2u) & 3u)) {
+      side = 1u;
+      heads = (epi_sel >> 16u) & 0xFFFu;
+    } else {
+      return;
+    }
+    const uint in_off =
+        side == 0u ? params.lhs_size : params.rhs_size;
+    // (mat, t) strides re-derived under the contract pattern flag
+    // bit s: transposed [N,T,D] view (D, N*D) or contiguous
+    // [1,N,T,D] view (T*D, D).
+    const bool epi_transpose = ((params.flags >> side) & 1u) != 0u;
+    const uint is0 =
+        epi_transpose ? row_length : rope_t * row_length;
+    const uint is1 =
+        epi_transpose ? heads * row_length : row_length;
+    // q's offset rides the uint input_w3 slot, k's the u16 addend3
+    // slot reassembled from two u16 lanes at params.count.
+    const float epi_off =
+        side == 0u
+            ? float(int(input_w3.values[params.rhs_offset]))
+            : float(int(
+                  uint(addend3.values[params.count]) |
+                  (uint(addend3.values[params.count + 1u]) << 16u)));
+    const uint member = which;
+    barrier();
+    memoryBarrierBuffer();
+    const uint wgs_per_head = is0 / COLUMNS_PER_GROUP;
+    const uint head = workgroup / wgs_per_head;
+    const uint tix = (side == 0u) ? head : (q_heads + head);
+    if (lane == 0u) {
+      uint prev = atomicAdd(ticket.values[tix], 1u);
+      s_rope_is_last = (prev == wgs_per_head - 1u) ? 1u : 0u;
+    }
+    barrier();
+    if (s_rope_is_last == 0u) {
+      return;
+    }
+    if (lane == 0u) {
+      ticket.values[tix] = 0u;
+    }
+    memoryBarrierBuffer();
+    barrier();
+    // Debug bit 3: stop after the election (isolates wait+elect cost
+    // from the row work in timing runs; results are wrong).
+    if ((params.flags & 8u) != 0u) {
+      return;
+    }
+    // Row-per-subgroup: the workgroup's four 32-lane subgroups each
+    // take one token row. The norm keeps the 256-thread tree's exact
+    // pairing — partials v[i]^2 (+v[i+128]^2) then the 64..1 shared
+    // tree — so every reduction order matches the serial path
+    // bit-for-bit; only the row-to-subgroup assignment changed.
+    const uint sub_id = lane / LANES;
+    const uint sub_lane = lane % LANES;
+    const uint t = sub_id;
+    const uint mat = head;
+    const uint blk = sub_id * 128u;
+    const uint in_base = in_off + t * is1 + mat * is0;
+    const bool row_ok = t < rope_t;
+    for (uint i = sub_lane; i < 128u; i += LANES) {
+      float sq = 0.0;
+      if (row_ok && i < row_length) {
+        float v = epi_member_load(member, in_base + i);
+        sq = v * v;
+      }
+      if (row_ok && i + 128u < row_length) {
+        float v = epi_member_load(member, in_base + i + 128u);
+        sq += v * v;
+      }
+      epi_block[blk + i] = sq;
+    }
+    barrier();
+    for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+      for (uint i = sub_lane; i < stride; i += LANES) {
+        epi_block[blk + i] += epi_block[blk + i + stride];
+      }
+      barrier();
+    }
+    const float mean_square = epi_block[blk] / float(row_length);
+    barrier();
+    precise float norm = inversesqrt(mean_square + eps);
+    for (uint vl = sub_lane; vl < row_length; vl += LANES) {
+      float v = row_ok ? epi_member_load(member, in_base + vl) : 0.0;
+      float w = epi_weight_load(side, vl);
+      precise float weight_norm = w * norm;
+      epi_block[blk + vl] = epi_rope_round(v * weight_norm);
+    }
+    barrier();
+    for (uint k = sub_lane; k < row_length / 2u; k += LANES) {
+      const float position =
+          params.alpha * (float(t) + epi_off);
+          float v0;
+          float v1;
+          if (passthrough) {
+            const uint d0 = 2u * k;
+            const uint d1 = d0 + 1u;
+            if (d0 >= 2u * half_dims) {
+              v0 = epi_block[blk + d0];
+              v1 = epi_block[blk + d1];
+            } else {
+              float vals[2];
+              for (uint s = 0u; s < 2u; ++s) {
+                uint d = d0 + s;
+                uint i = d % half_dims;
+                float inv_freq = exp(-float(i) * params.beta);
+                float theta = position * inv_freq;
+                float cos_t = epi_rope_round(omarchy_trig_cos(theta));
+                float sin_t = epi_rope_round(omarchy_trig_sin(theta));
+                float x1 = epi_block[blk + i];
+                float x2 = epi_block[blk + i + half_dims];
+                float xa = epi_rope_round(x1 * cos_t);
+                float xb = epi_rope_round(x2 * sin_t);
+                float xc = epi_rope_round(x1 * sin_t);
+                float xd = epi_rope_round(x2 * cos_t);
+                vals[s] = (d < half_dims) ? (xa - xb) : (xc + xd);
+              }
+              v0 = vals[0];
+              v1 = vals[1];
+            }
+          } else {
+            bool r1_side = k < (half_dims >> 1u);
+            uint j0 = r1_side
+                ? (2u * k)
+                : (half_dims + 2u * (k - (half_dims >> 1u)));
+            uint j1 = j0 + 1u;
+            uint i0 = r1_side ? j0 : (j0 - half_dims);
+            uint i1 = i0 + 1u;
+            float inv0 = exp(-float(i0) * params.beta);
+            float inv1 = exp(-float(i1) * params.beta);
+            float cos0 =
+                epi_rope_round(omarchy_trig_cos(position * inv0));
+            float sin0 =
+                epi_rope_round(omarchy_trig_sin(position * inv0));
+            float cos1 =
+                epi_rope_round(omarchy_trig_cos(position * inv1));
+            float sin1 =
+                epi_rope_round(omarchy_trig_sin(position * inv1));
+            float xa = epi_block[blk + i0];
+            float xb = epi_block[blk + i0 + half_dims];
+            float xc = epi_block[blk + i1];
+            float xd = epi_block[blk + i1 + half_dims];
+            if (r1_side) {
+              v0 = epi_rope_round(xa * cos0) - epi_rope_round(xb * sin0);
+              v1 = epi_rope_round(xc * cos1) - epi_rope_round(xd * sin1);
+            } else {
+              v0 = epi_rope_round(xa * sin0) + epi_rope_round(xb * cos0);
+              v1 = epi_rope_round(xc * sin1) + epi_rope_round(xd * cos1);
+            }
+          }
+          if (!row_ok) {
+            continue;
+          }
+          if (side == 0u) {
+            uint ob = params.output_size +
+                (mat * rope_t + t) * row_length + 2u * k;
+            output3.values[ob] = STORE_VALUE(v0);
+            output3.values[ob + 1u] = STORE_VALUE(v1);
+          } else {
+            uint ob = params.output_offset +
+                mat * params.out_strides[1] +
+                t * params.out_strides[2] + 2u * k;
+            sum3.values[ob] = STORE_VALUE(v0);
+            sum3.values[ob + 1u] = STORE_VALUE(v1);
+          }
+    }
+  }
+#endif
 }
 #elif ROWS_PER_SLOT > 1
 // Multi-row main: same workgroup -> weight partition and fold contract as
@@ -2824,9 +3390,191 @@ void main() {
       if (lane_in_slot == 0u && column + r < n) {
         output_data.values[params.output_offset + rt * params.matrix_n +
             column + r] = STORE_VALUE(total);
+#if defined(QMM_VEC_ROPE_EPI)
+        // Producer-direct KV window on flag bit 4 (window member only):
+        // the same scatter the token kernel runs — window offset +
+        // m*head_dim + (c/head_dim)*row_gap + c%head_dim — but the
+        // storing lane already holds the rounded value, so the window
+        // write is one extra store on epi_out instead of a read-back.
+        if ((params.flags & 16u) != 0u) {
+          epi_out.values[params.out_strides[0] + rt * params.dims +
+              ((column + r) / params.dims) * params.out_strides[1] +
+              ((column + r) % params.dims)] = STORE_VALUE(total);
+        }
+#endif
       }
     }
   }
+#if defined(QMM_VEC_ROPE_EPI)
+  // Per-member RMSNorm+RoPE epilogue: this dispatch's workgroups cover
+  // COLUMNS_PER_GROUP contiguous columns of ONE member's output, all
+  // inside a single rope head (whose per-head element span is the mat
+  // stride is0), so is0/COLUMNS_PER_GROUP workgroups finish each head.
+  // The LAST finisher of each head norms and rotates all rope_t token
+  // rows, exactly like the standalone FastRopeNormBF16 dispatch pair
+  // it replaces — the same math the multi-token epilogue carries, with
+  // the member fixed (this dispatch's Output) and side in flag bit 0.
+  // Flag bit 2 skips the tail and bit 3 stops after the election
+  // (debug timing; results are wrong when set).
+  if ((params.flags & 4u) == 0u) {
+    const uint row_length = params.reduce_size;
+    const uint half_dims = params.dims;
+    const float eps = uintBitsToFloat(params.operation);
+    const bool passthrough = 2u * half_dims < row_length;
+    const uint rope_t = rows;
+    const uint side = params.flags & 1u;
+    const uint heads = params.shape[3];
+    const uint in_off = params.lhs_size;
+    const bool epi_transpose = (params.flags & 2u) != 0u;
+    const uint is0 =
+        epi_transpose ? row_length : rope_t * row_length;
+    const uint is1 =
+        epi_transpose ? heads * row_length : row_length;
+    const float epi_off =
+        float(int(offset_buf.values[params.count]));
+    barrier();
+    memoryBarrierBuffer();
+    const uint wgs_per_head = is0 / COLUMNS_PER_GROUP;
+    const uint head = gl_WorkGroupID.x / wgs_per_head;
+    const uint tix = head;
+    // Only the LAST finisher of this head reads its tiles: the head
+    // row spans every producer's column slice, so an earlier elected
+    // workgroup could read tiles that are still unwritten. The same
+    // last-arrival protocol the multi-token epilogue runs.
+    if (lane == 0u) {
+      const uint prev = atomicAdd(ticket.values[tix], 1u);
+      s_epi_is_last = (prev == wgs_per_head - 1u) ? 1u : 0u;
+    }
+    barrier();
+    if (s_epi_is_last == 0u) {
+      return;
+    }
+    if (lane == 0u) {
+      ticket.values[tix] = 0u;
+    }
+    memoryBarrierBuffer();
+    barrier();
+    if ((params.flags & 8u) != 0u) {
+      return;
+    }
+    // The norm keeps the serial path's exact pairing: each of the 128
+    // lanes folds v[i]^2 (+v[i+128]^2) into one scratch slot, then the
+    // 64..1 shared tree runs the same order — bit-for-bit with the
+    // standalone path; only the row-to-workgroup assignment changed.
+    const uint mat = head;
+    for (uint t = 0u; t < rope_t; ++t) {
+      const uint in_base = in_off + t * is1 + mat * is0;
+      // v_reg keeps this lane's pass-1 load for the weighted pass:
+      // the two walks hit the same indices below row_length.
+      float v_reg = 0.0;
+      {
+        const uint i = lane;
+        float sq = 0.0;
+        if (i < row_length) {
+          v_reg = epi_member_load(in_base + i);
+          sq = v_reg * v_reg;
+        }
+        if (i + 128u < row_length) {
+          float v2 = epi_member_load(in_base + i + 128u);
+          sq += v2 * v2;
+        }
+        epi_block[i] = sq;
+      }
+      barrier();
+      for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+          epi_block[lane] += epi_block[lane + stride];
+        }
+        barrier();
+      }
+      const float mean_square = epi_block[0] / float(row_length);
+      barrier();
+      precise float norm = inversesqrt(mean_square + eps);
+      for (uint vl = lane; vl < row_length; vl += 128u) {
+        float v = (vl < 128u) ? v_reg : epi_member_load(in_base + vl);
+        float w = epi_weight_load(vl);
+        precise float weight_norm = w * norm;
+        epi_block[vl] = epi_rope_round(v * weight_norm);
+      }
+      barrier();
+      for (uint k = lane; k < row_length / 2u; k += 128u) {
+        const float position =
+            params.alpha * (float(t) + epi_off);
+        float v0;
+        float v1;
+        if (passthrough) {
+          const uint d0 = 2u * k;
+          const uint d1 = d0 + 1u;
+          if (d0 >= 2u * half_dims) {
+            v0 = epi_block[d0];
+            v1 = epi_block[d1];
+          } else {
+            float vals[2];
+            for (uint s = 0u; s < 2u; ++s) {
+              uint d = d0 + s;
+              uint i = d % half_dims;
+              float inv_freq = exp(-float(i) * params.beta);
+              float theta = position * inv_freq;
+              float cos_t = epi_rope_round(omarchy_trig_cos(theta));
+              float sin_t = epi_rope_round(omarchy_trig_sin(theta));
+              float x1 = epi_block[i];
+              float x2 = epi_block[i + half_dims];
+              float xa = epi_rope_round(x1 * cos_t);
+              float xb = epi_rope_round(x2 * sin_t);
+              float xc = epi_rope_round(x1 * sin_t);
+              float xd = epi_rope_round(x2 * cos_t);
+              vals[s] = (d < half_dims) ? (xa - xb) : (xc + xd);
+            }
+            v0 = vals[0];
+            v1 = vals[1];
+          }
+        } else {
+          bool r1_side = k < (half_dims >> 1u);
+          uint j0 = r1_side
+              ? (2u * k)
+              : (half_dims + 2u * (k - (half_dims >> 1u)));
+          uint j1 = j0 + 1u;
+          uint i0 = r1_side ? j0 : (j0 - half_dims);
+          uint i1 = i0 + 1u;
+          float inv0 = exp(-float(i0) * params.beta);
+          float inv1 = exp(-float(i1) * params.beta);
+          float cos0 =
+              epi_rope_round(omarchy_trig_cos(position * inv0));
+          float sin0 =
+              epi_rope_round(omarchy_trig_sin(position * inv0));
+          float cos1 =
+              epi_rope_round(omarchy_trig_cos(position * inv1));
+          float sin1 =
+              epi_rope_round(omarchy_trig_sin(position * inv1));
+          float xa = epi_block[i0];
+          float xb = epi_block[i0 + half_dims];
+          float xc = epi_block[i1];
+          float xd = epi_block[i1 + half_dims];
+          if (r1_side) {
+            v0 = epi_rope_round(xa * cos0) - epi_rope_round(xb * sin0);
+            v1 = epi_rope_round(xc * cos1) - epi_rope_round(xd * sin1);
+          } else {
+            v0 = epi_rope_round(xa * sin0) + epi_rope_round(xb * cos0);
+            v1 = epi_rope_round(xc * sin1) + epi_rope_round(xd * cos1);
+          }
+        }
+        if (side == 0u) {
+          uint ob = params.output_size +
+              (mat * rope_t + t) * row_length + 2u * k;
+          epi_out.values[ob] = STORE_VALUE(v0);
+          epi_out.values[ob + 1u] = STORE_VALUE(v1);
+        } else {
+          uint ob = params.out_strides[0] +
+              mat * params.out_strides[1] +
+              t * params.out_strides[2] + 2u * k;
+          epi_out.values[ob] = STORE_VALUE(v0);
+          epi_out.values[ob + 1u] = STORE_VALUE(v1);
+        }
+      }
+      barrier();
+    }
+  }
+#endif
 }
 #else
 // Multi-row form of the Q4 word main: same batch walk and bases as the

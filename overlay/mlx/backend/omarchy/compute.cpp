@@ -133,6 +133,7 @@
 #include "copy_general_bf16.h"
 #include "copy_general_f16.h"
 #include "slice_update_pair_f16.h"
+#include "slice_update_pair_bf16.h"
 #include "copy_general_f32.h"
 #include "copy_general_u32.h"
 #include "copy_general_bool.h"
@@ -304,6 +305,7 @@
 #include "qmm_vec_q4_word_subgroup_bf16_g128.h"
 #include "qmm_vec_q4_word_subgroup_batch4_bf16.h"
 #include "qmm_vec_q4_word_subgroup_rows8_bf16.h"
+#include "qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16.h"
 #include "qmm_vec_q4_word_subgroup_batch8_bf16.h"
 #include "qmm_vec_q4_word_subgroup_f16.h"
 #include "qmm_vec_q4_word_subgroup_f32.h"
@@ -331,6 +333,8 @@
 #include "qmm_vec_q4_multi_token16_bf16.h"
 #include "qmm_vec_q4_multi_token8_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token8_bf16.h"
+#include "qmm_vec_q4_multi_token4_resnorm_subgroup_bf16.h"
+#include "qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_subgroup_f16.h"
 #include "qmm_vec_q4_multi_subgroup_f32.h"
 #include "sdpa_decode_native_f16.h"
@@ -1106,6 +1110,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {copy_general_f16, copy_general_f16_size};
     case ComputeKernel::SliceUpdatePairF16:
       return {slice_update_pair_f16, slice_update_pair_f16_size};
+    case ComputeKernel::SliceUpdatePairBF16:
+      return {slice_update_pair_bf16, slice_update_pair_bf16_size};
     case ComputeKernel::CopyGeneralBF16:
       return {copy_general_bf16, copy_general_bf16_size};
     case ComputeKernel::CopyGeneralU32:
@@ -1976,6 +1982,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
           qmm_vec_q4_multi_token8_subgroup_bf16_size};
     case ComputeKernel::QmmVecQ4MultiToken8BF16:
       return {qmm_vec_q4_multi_token8_bf16, qmm_vec_q4_multi_token8_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken4ResNormSubgroupBF16:
+      return {
+          qmm_vec_q4_multi_token4_resnorm_subgroup_bf16,
+          qmm_vec_q4_multi_token4_resnorm_subgroup_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16:
+      return {
+          qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16,
+          qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16_size};
     case ComputeKernel::SdpaDecodeNativeF16:
       return {sdpa_decode_native_f16, sdpa_decode_native_f16_size};
     case ComputeKernel::SdpaDecodeNativeBF16:
@@ -2228,6 +2242,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_rows8_bf16,
           qmm_vec_q4_word_subgroup_rows8_bf16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16:
+      return {
+          qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16,
+          qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16_size};
     case ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16:
       return {
           qmm_vec_q4_word_subgroup_batch8_bf16,

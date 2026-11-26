@@ -10411,9 +10411,22 @@ bool dispatch_quantized_gemv_group(
     const Stream& stream,
     OutgatePlan* outgate,
     ResNormPlan* res_norm,
-    bool* res_norm_done) {
+    bool* res_norm_done,
+    RopeEpiPlan* rope_epi,
+    bool* rope_epi_done) {
   if (res_norm_done) {
     *res_norm_done = false;
+  }
+  if (rope_epi_done) {
+    *rope_epi_done = false;
+  }
+  if (rope_epi != nullptr &&
+      std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+    static int tre = 0;
+    if (tre++ < 4) {
+      std::fprintf(
+          stderr, "[epi-ctr] enter: members=%zu\n", members.size());
+    }
   }
   if (members.empty() || members.size() > kQmmVecMultiWeights ||
       !q4_word_enabled()) {
@@ -10524,30 +10537,66 @@ bool dispatch_quantized_gemv_group(
       x.size() != static_cast<size_t>(rows) * static_cast<size_t>(k)) {
     return false;
   }
-  // The multi-token kernel has no producer-direct KV window contract.
+  // Producer-direct KV windows ride the token column only for a single
+  // raw member (no Add epilogue: the token store has no free per-member
+  // slot for both the addend row stride and the window row gap) on the
+  // single-pass range (rows <= 8: the two-pass row0 slot would collide
+  // with the window offset), whose update region's seq stride is the
+  // head dim (a row-contiguous cache guarantees it). The token kernel
+  // scatters row m to window offset + m * head_dim + (c/head_dim) *
+  // row_gap + c % head_dim; aux_offset/matrix_n carry the offset and
+  // head dim because out_strides[0]/matrix_m already carry the row0 and
+  // token_count contract.
   if (token_route) {
+    size_t window_members = 0;
     for (auto& member : members) {
-      if (member.sum_window) {
+      if (!member.sum_window) {
+        continue;
+      }
+      const auto& window = *member.sum_window;
+      ++window_members;
+      if (member.epilogue || rows > 8u || window.head_dim == 0u ||
+          window.strides[2] != window.head_dim) {
         return false;
       }
     }
+    if (window_members > 1) {
+      return false;
+    }
   }
   bool res_norm_active = false;
-  if (res_norm != nullptr && !token_route && !swiglu_out &&
+  // The residual+norm epilogue rides the token column too: rows 2..4
+  // dispatch the single-member group on the token4+resnorm kernel,
+  // whose last workgroup norms every live row of the materialized sum
+  // (bit-identical to the eager 256-thread-per-row norm). The group's
+  // norm output is then (rows, n), not a flat n vector.
+  const bool res_norm_token = token_route && rows <= 4u;
+  if (res_norm != nullptr && (!token_route || res_norm_token) &&
+      !swiglu_out &&
       members.size() == 1 && members[0].epilogue.has_value() &&
       members[0].addend.has_value() && !members[0].sum_window &&
       dtype == bfloat16 && subgroup_ready &&
       members[0].node.inputs().size() == 4) {
     const array& w = members[0].node.inputs()[1];
     const int n_cand = w.ndim() == 2 ? w.shape(0) : 0;
-    const size_t min_bindings = outgate != nullptr ? 13u : 10u;
+    const size_t expected_out =
+        static_cast<size_t>(token_route ? rows : 1u) *
+        static_cast<size_t>(n_cand);
+    const size_t min_bindings = outgate != nullptr ? 13u
+        : token_route                            ? 28u
+                                                 : 10u;
     if (n_cand > 0 &&
         encoder.device().compute().binding_limit() >= min_bindings &&
         apple_norm_enabled(
-            encoder.device(), static_cast<size_t>(n_cand), size_t{1}) &&
+            encoder.device(),
+            static_cast<size_t>(n_cand),
+            static_cast<size_t>(token_route ? rows : 1u)) &&
         res_norm->out.dtype() == bfloat16 &&
-        res_norm->out.size() == static_cast<size_t>(n_cand) &&
+        res_norm->out.size() == expected_out &&
         res_norm->out.ndim() >= 1 && res_norm->out.shape(-1) == n_cand &&
+        (!token_route || (res_norm->out.ndim() >= 2 &&
+                          res_norm->out.shape(-2) ==
+                              static_cast<int>(rows))) &&
         res_norm->out.primitive().stream() == stream &&
         res_norm->out.data_shared_ptr() == nullptr) {
       const array& nw = res_norm->weight;
@@ -10557,6 +10606,288 @@ bool dispatch_quantized_gemv_group(
         res_norm_active = true;
       }
     }
+  }
+  // Fused RMSNorm+RoPE epilogue on a token4 group (planner attach in
+  // fused_chain.cpp): the last workgroup of the dispatch norms and
+  // rotates the two member rows the Q/K fast::RoPE nodes would have
+  // read, storing the query rows into the rope's own buffer and the
+  // keys rows through the slice pair's producer-direct keys window.
+  // The two FastRopeNormBF16 dispatches and their dependent
+  // boundaries are deleted. Everything the shader cannot express
+  // refuses the whole group, which falls back to ordinary evals.
+  bool rope_epi_active = false;
+  bool member_route = false;
+  int64_t epi_heads[2] = {0, 0};
+  int epi_pattern[2] = {0, 0};
+  int64_t epi_d = 0;
+  if (rope_epi != nullptr && !rope_epi->traditional && token_route &&
+      rows <= 4u && outgate == nullptr && swiglu_out == nullptr &&
+      res_norm == nullptr && dtype == bfloat16 && subgroup_ready &&
+      members.size() <= 3u &&
+      encoder.device().compute().binding_limit() >=
+          kQmmVecMultiBindings + 1u) {
+    rope_epi_active = true;
+    const bool epi_ctrace =
+        std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr;
+    const RopeEpiSide* epi_sides[2] = {&rope_epi->q, &rope_epi->k};
+    for (size_t s = 0; s < 2u && rope_epi_active; ++s) {
+      const auto& side = *epi_sides[s];
+      // The rope input view's LOGICAL layout rides side.view_*:
+      // dispatch-time node strides are post-materialization and no
+      // longer describe the member storage the epilogue reads.
+      const array& view = side.rope.inputs()[0];
+      const array& wnorm = side.rope.inputs()[2];
+      const int vndim = static_cast<int>(side.view_shape.size());
+      const int64_t vd = vndim > 0 ? side.view_shape[vndim - 1] : 0;
+      const int64_t vt = vndim > 1 ? side.view_shape[vndim - 2] : 0;
+      if (side.member_index >= members.size() ||
+          members[side.member_index].out_view ||
+          view.dtype() != bfloat16 || vndim < 3 ||
+          vt != static_cast<int64_t>(rows) ||
+          vd <= 0 || vd > 256 || (vd % 2) != 0 ||
+          side.view_strides[vndim - 1] != 1 ||
+          wnorm.dtype() != bfloat16 ||
+          wnorm.size() != static_cast<size_t>(vd) ||
+          !whole_dense(wnorm, wnorm.size()) ||
+          !input_ready(wnorm, stream)) {
+        if (epi_ctrace) {
+          static int trc = 0;
+          if (trc++ < 4) {
+            std::fprintf(
+                stderr,
+                "[epi-ctr] side%zu mi=%zu/%zu out_view=%d dtype=%d ndim=%d "
+                "t=%lld/%u d=%lld istr=%lld wdtype=%d wsize=%zu dense=%d ready=%d\n",
+                s,
+                side.member_index,
+                members.size(),
+                members[side.member_index].out_view.has_value(),
+                view.dtype() == bfloat16,
+                vndim,
+                static_cast<long long>(vt),
+                rows,
+                static_cast<long long>(vd),
+                static_cast<long long>(
+                    vndim > 0 ? side.view_strides[vndim - 1] : -1),
+                wnorm.dtype() == bfloat16,
+                wnorm.size(),
+                whole_dense(wnorm, wnorm.size()),
+                input_ready(wnorm, stream));
+          }
+        }
+        rope_epi_active = false;
+        break;
+      }
+      if (s == 0) {
+        epi_d = vd;
+      } else if (vd != epi_d) {
+        rope_epi_active = false;
+        break;
+      }
+      // The epilogue re-derives the (mat, t) strides from N/T/D under
+      // the two view patterns the shader knows: a transposed [N,T,D]
+      // view of the contiguous member rows (head stride D, token
+      // stride N*D) or a contiguous [1,N,T,D] view (T*D, D).
+      int64_t vn = static_cast<int64_t>(side.view_shape[0]);
+      for (int i = 1; i < vndim - 2; ++i) {
+        vn *= side.view_shape[i];
+      }
+      if (vn <= 0 || vn > 4095) {
+        rope_epi_active = false;
+        break;
+      }
+      if (side.view_strides[vndim - 3] == vd &&
+          side.view_strides[vndim - 2] == vn * vd) {
+        epi_pattern[s] = 1;
+      } else {
+        // The epilogue's per-head ticket election requires the
+        // transposed view (each rope head spans one contiguous
+        // member-column slice covered by a contiguous workgroup
+        // range); any other layout falls back.
+        if (epi_ctrace) {
+          static int trp = 0;
+          if (trp++ < 4) {
+            std::fprintf(
+                stderr,
+                "[epi-ctr] side%zu strides: -3=%lld -2=%lld vn=%lld vt=%lld vd=%lld ndim=%d\n",
+                s,
+                static_cast<long long>(side.view_strides[vndim - 3]),
+                static_cast<long long>(side.view_strides[vndim - 2]),
+                static_cast<long long>(vn),
+                static_cast<long long>(vt),
+                static_cast<long long>(vd),
+                vndim);
+          }
+        }
+        rope_epi_active = false;
+        break;
+      }
+      epi_heads[s] = vn;
+    }
+    if (rope_epi_active &&
+        (epi_heads[0] + epi_heads[1] > 64 ||
+         epi_d % 8 != 0 ||
+         (epi_heads[0] * static_cast<int64_t>(epi_d)) % 8 != 0)) {
+      // Ticket slot carries 64 counters; the election needs each head
+      // to span a whole number of COLUMNS_PER_GROUP (=8) column tiles.
+      rope_epi_active = false;
+    }
+    if (rope_epi_active) {
+      const array& offset = rope_epi->q.rope.inputs()[1];
+      const array& k_offset = rope_epi->k.rope.inputs()[1];
+      const auto& window = *rope_epi->k.window;
+      if (rope_epi->dims <= 0 || rope_epi->dims > epi_d ||
+          (rope_epi->dims % 2) != 0 || ((rope_epi->dims / 2) % 2) != 0 ||
+          offset.size() != 1 || offset.dtype() != int32 ||
+          k_offset.size() != 1 || k_offset.dtype() != int32 ||
+          !input_ready(offset, stream) ||
+          !input_ready(k_offset, stream) ||
+          window.strides[2] != 1u) {
+        if (epi_ctrace) {
+          static int trw = 0;
+          if (trw++ < 4) {
+            std::fprintf(
+                stderr,
+                "[epi-ctr] off: dims=%d/%lld osize=%zu odtype=%d ksize=%zu "
+                "kdtype=%d oready=%d kready=%d wstride2=%u\n",
+                rope_epi->dims,
+                static_cast<long long>(epi_d),
+                offset.size(),
+                offset.dtype() == int32,
+                k_offset.size(),
+                k_offset.dtype() == int32,
+                input_ready(offset, stream),
+                input_ready(k_offset, stream),
+                window.strides[2]);
+          }
+        }
+        rope_epi_active = false;
+      }
+    }
+    if (rope_epi_active) {
+      // The remaining refusals MUST decide here, inside the contract
+      // phase: the member allocation loop and the KV-window commits
+      // below run for every member before the dispatch reaches this
+      // point, and a return after commit_values_kv_write leaves
+      // pair.values_committed set so the fallback skips the values
+      // SliceUpdate. All reads are pure, so the window contract and
+      // the route election land alongside the rest of the checks.
+      const array& q_view = rope_epi->q.rope.inputs()[0];
+      const array& k_view = rope_epi->k.rope.inputs()[0];
+      array& q_member = members[rope_epi->q.member_index].node;
+      array& k_member = members[rope_epi->k.member_index].node;
+      const auto& win = *rope_epi->k.window;
+      if (win.node.data_shared_ptr() != nullptr ||
+          win.base.data_shared_ptr() == nullptr ||
+          win.base.dtype() != bfloat16 ||
+          !win.base.flags().row_contiguous ||
+          win.base.size() != win.base.data_size() ||
+          win.base.offset() % win.base.itemsize() != 0 ||
+          (win.offset & 1u) != 0u ||
+          !input_ready(win.base, stream)) {
+        if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+          static int trv = 0;
+          if (trv++ < 4) {
+            std::fprintf(
+                stderr,
+                "[epi-ctr] view: q_v=%p q_m=%p k_v=%p k_m=%p kn=%p kb=%p "
+                "bf16=%d rows=%d den=%d off=%u rdy=%d\n",
+                q_view.data_shared_ptr(),
+                q_member.data_shared_ptr(),
+                k_view.data_shared_ptr(),
+                k_member.data_shared_ptr(),
+                win.node.data_shared_ptr(),
+                win.base.data_shared_ptr(),
+                static_cast<int>(win.base.dtype() == bfloat16),
+                static_cast<int>(win.base.flags().row_contiguous),
+                static_cast<int>(win.base.size() == win.base.data_size()),
+                win.offset,
+                static_cast<int>(input_ready(win.base, stream)));
+          }
+        }
+        rope_epi_active = false;
+      }
+    }
+    if (rope_epi_active) {
+      // Per-member route election, decided here with the rest of the
+      // contract: the token4/member choice changes only dispatch
+      // layout, but the vd>128 refusal must fire before any member
+      // allocation or KV-window commit below. Live read (not cached):
+      // the A/B knob is toggled per eval in tests. rows/lhs_offset
+      // constraints match the member kernels' PACKED_ROPE_TOKEN
+      // dispatch table; lhs_offset is x.offset()/x.itemsize().
+      const char* epi_member_env = std::getenv("MLX_OMARCHY_ROPE_EPI_MEMBER");
+      const bool epi_member_route = epi_member_env == nullptr ||
+          epi_member_env[0] == '\0' || std::strcmp(epi_member_env, "0") != 0;
+      member_route = epi_member_route && rows <= 4u &&
+          encoder.device().compute().binding_limit() >= 9u &&
+          ((x.offset() / x.itemsize()) % 8u) == 0u;
+      for (size_t mi = 0; mi < members.size() && member_route; ++mi) {
+        const auto& member = members[mi];
+        member_route = !member.epilogue && !member.addend &&
+            !member.out_view;
+        // A rope member with its own KV window can't take the member
+        // route: binding 6 is already that rope's epilogue output, so
+        // the member window would have no slot (no such group exists
+        // today — k's window rides the rope contract, v's is a plain
+        // member).
+        member_route = member_route &&
+            !(member.sum_window &&
+              (rope_epi->q.member_index == mi ||
+               rope_epi->k.member_index == mi));
+      }
+      // The token4 mega-dispatch stages each token row's normed values
+      // in epi_block at 128 floats per subgroup: head dims above 128
+      // overwrite the next row's scratch. The member route covers up
+      // to 256; above 128 with no member route the group falls back to
+      // ordinary evals.
+      if (!member_route && epi_d > 128) {
+        rope_epi_active = false;
+      }
+    }
+  } else if (
+      rope_epi != nullptr &&
+      std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+    static int trg = 0;
+    if (trg++ < 4) {
+      std::fprintf(
+          stderr,
+          "[epi-ctr] gate: trad=%d tok=%d rows=%u og=%d sw=%d rn=%d "
+          "bf16=%d sg=%d mem=%zu bind=%u\n",
+          rope_epi->traditional,
+          token_route,
+          rows,
+          outgate != nullptr,
+          swiglu_out != nullptr,
+          res_norm != nullptr,
+          dtype == bfloat16,
+          subgroup_ready,
+          members.size(),
+          encoder.device().compute().binding_limit());
+    }
+  }
+  {
+    static const bool epi_dispatch_off = []() {
+      const char* env = std::getenv("MLX_OMARCHY_ROPE_EPI_DISPATCH");
+      return env != nullptr && env[0] == '0';
+    }();
+    if (epi_dispatch_off) {
+      rope_epi_active = false;
+    }
+  }
+  if (rope_epi != nullptr && !rope_epi_active) {
+    if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+      static int trr = 0;
+      if (trr++ < 4) {
+        std::fprintf(stderr, "[epi-ctr] refuse: contract dead\n");
+      }
+    }
+    // An attached plan whose contract failed anywhere refuses the
+    // whole group BEFORE any allocation or KV-window commit below:
+    // the ropes and their view chain are skip-role'd, so a plain
+    // dispatch here would leave them unmaterialized, and a refusal
+    // after the values window commits leaves it unwritten. The
+    // failed state replays every node ordinarily.
+    return false;
   }
   ComputeParams params;
   uint32_t total_groups = 0;
@@ -10568,8 +10899,10 @@ bool dispatch_quantized_gemv_group(
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
   // resnorm epilogue kernels.
   const uint32_t group_columns = res_norm_active
-      ? (outgate != nullptr ? geom.outgate_resnorm_columns
-                            : geom.resnorm_columns)
+      ? (token_route
+             ? 8u
+             : (outgate != nullptr ? geom.outgate_resnorm_columns
+                                   : geom.resnorm_columns))
       : dedicated_swiglu_active
       ? geom.swiglu_columns
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
@@ -10798,15 +11131,282 @@ bool dispatch_quantized_gemv_group(
       }
       const auto& window = *members[i].sum_window;
       params.in_strides[i] = window.row_gap;
-      params.out_strides[i] = window.offset;
       params.flags |= 4096u << i;
-      params.matrix_m = window.head_dim;
+      if (token_route) {
+        // The token column's out_strides[0]/matrix_m already carry
+        // row0/token_count, so the window offset and head dim arrive
+        // on spare scalars instead.
+        params.aux_offset = window.offset;
+        params.matrix_n = window.head_dim;
+      } else {
+        params.out_strides[i] = window.offset;
+        params.matrix_m = window.head_dim;
+      }
       if (!members[i].epilogue) {
         // Raw member: the kernel stores the rounded output into the
         // window without reading an addend (shader flags bit 18).
         params.flags |= 262144u;
       }
     }
+  }
+  if (rope_epi_active) {
+    // Every refusal for this group already fired in the contract phase
+    // above: the member allocation loop and the values KV-window commit
+    // ran before this point, so nothing here may return false.
+    const array& offset = rope_epi->q.rope.inputs()[1];
+    auto& window = *rope_epi->k.window;
+    bind_kv_window_storage(window, stream);
+    rope_epi->q.rope.set_data(
+        allocator().malloc(rope_epi->q.rope.nbytes()));
+    encoder.add_temporary(rope_epi->q.rope);
+    encoder.add_temporary(rope_epi->q.rope.inputs()[2]);
+    encoder.add_temporary(rope_epi->k.rope.inputs()[2]);
+    encoder.add_temporary(offset);
+    encoder.add_temporary(rope_epi->k.rope.inputs()[1]);
+    if (member_route) {
+      const RopeEpiSide* route_sides[2] = {&rope_epi->q, &rope_epi->k};
+      for (size_t mi = 0; mi < members.size(); ++mi) {
+        auto& member = members[mi];
+        const array& mw = member.node.inputs()[1];
+        const array& mscales = member.node.inputs()[2];
+        const array& mbiases = member.node.inputs()[3];
+        const uint32_t m_groups = (params.shape[mi] + 7u) / 8u;
+        int route_side = -1;
+        for (int s = 0; s < 2; ++s) {
+          if (route_sides[s]->member_index == mi) {
+            route_side = s;
+          }
+        }
+        ComputeParams mp = params;
+        mp.rhs_offset =
+            static_cast<uint32_t>(mw.offset() / mw.itemsize());
+        mp.aux_offset =
+            static_cast<uint32_t>(mscales.offset() / mscales.itemsize());
+        mp.aux_size =
+            static_cast<uint32_t>(mbiases.offset() / mbiases.itemsize());
+        mp.matrix_m = rows;
+        mp.matrix_n = params.shape[mi];
+        mp.output_offset = static_cast<uint32_t>(
+            member.node.offset() / member.node.itemsize());
+        mp.flags = 0u;
+        mp.in_strides[0] = mp.in_strides[1] = mp.in_strides[2] =
+            mp.in_strides[3] = 0u;
+        mp.out_strides[0] = mp.out_strides[1] = mp.out_strides[2] =
+            mp.out_strides[3] = 0u;
+        mp.shape[0] = mp.shape[1] = mp.shape[2] = mp.shape[3] = 0u;
+        if (route_side < 0) {
+          if (member.sum_window) {
+            // Producer-direct KV window member: same kernel with flag
+            // bit 4 — the store loop scatters each rounded output into
+            // the window at offset + rt*head_dim + (c/head_dim)*row_gap
+            // + c%head_dim (out_strides[0]=offset, dims=head_dim,
+            // out_strides[1]=row_gap; flag bit 2 keeps the rope tail
+            // off). The spare bindings carry fillers; epi_out is the
+            // window itself.
+            const auto& wnd = *member.sum_window;
+            mp.flags = 16u | 4u;
+            mp.dims = wnd.head_dim;
+            mp.out_strides[0] = wnd.offset;
+            mp.out_strides[1] = wnd.row_gap;
+            std::array<ComputeBinding, 9> wb{
+                binding(x),
+                binding(mw),
+                binding(mscales),
+                binding(mbiases),
+                binding(member.node),
+                binding(member.node),
+                binding(wnd.node),
+                binding(member.node),
+                encoder.resnorm_ticket_binding()};
+            encoder.dispatch_compute(
+                ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16,
+                wb,
+                mp,
+                m_groups,
+                1u,
+                1u);
+            continue;
+          }
+          mp.operation = 4u;
+          mp.reduce_size = 64u;
+          std::array<ComputeBinding, 5> mb{
+              binding(x),
+              binding(mw),
+              binding(mscales),
+              binding(mbiases),
+              binding(member.node)};
+          encoder.dispatch_compute(
+              ComputeKernel::QmmVecQ4WordSubgroupRows8BF16,
+              mb,
+              mp,
+              m_groups,
+              1u,
+              1u);
+          continue;
+        }
+        const auto& eside = *route_sides[route_side];
+        const array& eside_off = eside.rope.inputs()[1];
+        mp.count = static_cast<uint32_t>(
+            eside_off.offset() / eside_off.itemsize());
+        mp.operation =
+            std::bit_cast<uint32_t>(rope_epi->norm_eps);
+        mp.lhs_size = static_cast<uint32_t>(eside.view_offset);
+        mp.reduce_size = static_cast<uint32_t>(epi_d);
+        mp.dims = static_cast<uint32_t>(rope_epi->dims / 2);
+        mp.alpha = rope_epi->scale;
+        mp.beta = static_cast<float>(
+            std::log(static_cast<double>(rope_epi->base)) /
+            (rope_epi->dims / 2));
+        mp.shape[3] = static_cast<uint32_t>(epi_heads[route_side]);
+        mp.flags = static_cast<uint32_t>(route_side) |
+            (static_cast<uint32_t>(epi_pattern[route_side]) << 1u);
+        {
+          static const bool epi_no_tail =
+              std::getenv("MLX_OMARCHY_ROPE_EPI_NOTAIL") != nullptr;
+          if (epi_no_tail) {
+            mp.flags |= 4u;
+          }
+          static const bool epi_no_rows =
+              std::getenv("MLX_OMARCHY_ROPE_EPI_NOROWS") != nullptr;
+          if (epi_no_rows) {
+            mp.flags |= 8u;
+          }
+        }
+        if (route_side == 0) {
+          mp.output_size = static_cast<uint32_t>(
+              rope_epi->q.rope.offset() /
+              rope_epi->q.rope.itemsize());
+        } else {
+          mp.out_strides[0] = window.offset;
+          mp.out_strides[1] = window.strides[0];
+          mp.out_strides[2] = window.strides[1];
+        }
+        std::array<ComputeBinding, 9> sb{
+            binding(x),
+            binding(mw),
+            binding(mscales),
+            binding(mbiases),
+            binding(member.node),
+            binding(eside.rope.inputs()[2]),
+            binding(route_side == 0 ? rope_epi->q.rope : window.node),
+            binding(eside_off),
+            encoder.resnorm_ticket_binding()};
+        encoder.dispatch_compute(
+            ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16,
+            sb,
+            mp,
+            m_groups,
+            1u,
+            1u);
+      }
+    } else {
+    // Params mirror the FastRopeNormBF16 contract on fields the token
+    // member-dot code never reads; q rides the lhs_* names, k rhs_*.
+    // The shader's push-constant struct ends at out_strides, so the
+    // view (mat, t) strides are re-derived in the shader from the head
+    // count and row length under the two contract patterns — flag
+    // bit s picks each side's pattern — and the member indices and
+    // head counts pack into the unused fourth member's shape slot.
+    params.operation = std::bit_cast<uint32_t>(rope_epi->norm_eps);
+    params.alpha = rope_epi->scale;
+    params.beta = static_cast<float>(
+        std::log(static_cast<double>(rope_epi->base)) /
+        (rope_epi->dims / 2));
+    params.reduce_size = static_cast<uint32_t>(epi_d);
+    params.aux_size = static_cast<uint32_t>(rope_epi->dims / 2);
+    params.lhs_size = static_cast<uint32_t>(rope_epi->q.view_offset);
+    params.rhs_size = static_cast<uint32_t>(rope_epi->k.view_offset);
+    params.output_size = static_cast<uint32_t>(
+        rope_epi->q.rope.offset() / rope_epi->q.rope.itemsize());
+    params.output_offset = window.offset;
+    params.out_strides[1] = window.strides[0];
+    params.out_strides[2] = window.strides[1];
+    params.out_strides[3] = window.strides[2];
+    params.rhs_offset = static_cast<uint32_t>(
+        offset.offset() / offset.itemsize());
+    // The keys offset rides the u16 addend3 slot; its element index is
+    // the byte offset in u16 units (int32 storage is always u16-aligned).
+    // params.count is unread by every qmm_vec leg.
+    params.count = static_cast<uint32_t>(
+        rope_epi->k.rope.inputs()[1].offset() / 2);
+    params.shape[3] =
+        static_cast<uint32_t>(rope_epi->q.member_index) |
+        (static_cast<uint32_t>(rope_epi->k.member_index) << 2u) |
+        (static_cast<uint32_t>(epi_heads[0]) << 4u) |
+        (static_cast<uint32_t>(epi_heads[1]) << 16u);
+    params.flags |= (epi_pattern[0] != 0 ? 1u : 0u) |
+        (epi_pattern[1] != 0 ? 2u : 0u);
+    {
+      static const bool epi_no_tail =
+          std::getenv("MLX_OMARCHY_ROPE_EPI_NOTAIL") != nullptr;
+      if (epi_no_tail) {
+        params.flags |= 4u;
+      }
+      static const bool epi_no_rows =
+          std::getenv("MLX_OMARCHY_ROPE_EPI_NOROWS") != nullptr;
+      if (epi_no_rows) {
+        params.flags |= 8u;
+      }
+    }
+    // Standard multi layout; the shader repurposes member 3's declared
+    // slots: input_w3 = scalar position offset, scales3/biases3 =
+    // per-side norm weights, output3 = query rope output, addend3
+    // unused, sum3 = keys window. The ticket rides binding 25.
+    std::array<ComputeBinding, kQmmVecMultiBindings + 1> epi_bindings{};
+    epi_bindings[0] = binding(x);
+    const ComputeBinding epi_filler = binding(members[0].node);
+    for (uint32_t i = 0; i < kQmmVecMultiWeights; ++i) {
+      const uint32_t base = 1 + i * kQmmVecMultiBindingsPerWeight;
+      if (i < members.size()) {
+        const auto& member = members[i];
+        epi_bindings[base] = binding(member.node.inputs()[1]);
+        epi_bindings[base + 1] = binding(member.node.inputs()[2]);
+        epi_bindings[base + 2] = binding(member.node.inputs()[3]);
+        epi_bindings[base + 3] = binding(member.node);
+        epi_bindings[base + 4] = member.addend
+            ? binding(*member.addend)
+            : binding(member.node);
+        epi_bindings[base + 5] = member.sum_window
+            ? binding(member.sum_window->node)
+            : (member.epilogue ? binding(*member.epilogue)
+                               : binding(member.node));
+      } else {
+        for (uint32_t j = 0; j < kQmmVecMultiBindingsPerWeight; ++j) {
+          epi_bindings[base + j] = epi_filler;
+        }
+      }
+    }
+    epi_bindings[19] = binding(offset);
+    epi_bindings[20] = binding(rope_epi->q.rope.inputs()[2]);
+    epi_bindings[21] = binding(rope_epi->k.rope.inputs()[2]);
+    epi_bindings[22] = binding(rope_epi->q.rope);
+    epi_bindings[23] = binding(rope_epi->k.rope.inputs()[1]);
+    epi_bindings[24] = binding(window.node);
+    epi_bindings[kQmmVecMultiBindings] =
+        encoder.resnorm_ticket_binding();
+    if (std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr) {
+      static int trd = 0;
+      if (trd++ < 4) {
+        std::fprintf(
+            stderr,
+            "[epi-ctr] dispatch: groups=%u bindings=%zu\n",
+            total_groups,
+            epi_bindings.size());
+      }
+    }
+    encoder.dispatch_compute(
+        ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16,
+        epi_bindings,
+        params,
+        total_groups,
+        1u,
+        1u);
+    }
+    commit_rope_kv_redirect(rope_epi->k.rope);
+    if (rope_epi_done) {
+      *rope_epi_done = true;
+    }
+    return true;
   }
   if (res_norm_active) {
     res_norm->out.set_data(allocator().malloc(res_norm->out.nbytes()));
@@ -10834,6 +11434,34 @@ bool dispatch_quantized_gemv_group(
           binding(outgate->x)};
       encoder.dispatch_compute(
           geom.outgate_resnorm,
+          rn_bindings,
+          params,
+          total_groups,
+          1u,
+          1u);
+    } else if (token_route) {
+      // Token column resnorm: the multi binding layout (x + four
+      // weight slots, unused slots filler-bound like the plain group
+      // dispatch) with the norm weight/output and the ticket on the
+      // free slots above binding 24.
+      std::array<ComputeBinding, kQmmVecMultiBindings + 3> rn_bindings{};
+      rn_bindings[0] = binding(x);
+      rn_bindings[1] = binding(members[0].node.inputs()[1]);
+      rn_bindings[2] = binding(members[0].node.inputs()[2]);
+      rn_bindings[3] = binding(members[0].node.inputs()[3]);
+      rn_bindings[4] = binding(members[0].node);
+      rn_bindings[5] = binding(*members[0].addend);
+      rn_bindings[6] = binding(*members[0].epilogue);
+      const ComputeBinding rn_filler = binding(members[0].node);
+      for (uint32_t b = 7u; b < kQmmVecMultiBindings; ++b) {
+        rn_bindings[b] = rn_filler;
+      }
+      rn_bindings[kQmmVecMultiBindings] = binding(res_norm->weight);
+      rn_bindings[kQmmVecMultiBindings + 1] = binding(res_norm->out);
+      rn_bindings[kQmmVecMultiBindings + 2] =
+          encoder.resnorm_ticket_binding();
+      encoder.dispatch_compute(
+          ComputeKernel::QmmVecQ4MultiToken4ResNormSubgroupBF16,
           rn_bindings,
           params,
           total_groups,
@@ -11460,8 +12088,10 @@ SliceUpdatePairDispatch dispatch_slice_update_pair(
     const Stream& stream) {
   auto& encoder = get_command_encoder(stream);
   const auto& caps = encoder.device().capabilities();
+  const bool bf16_pair = nodes[0].dtype() == bfloat16;
   if (encoder.device().compute().binding_limit() < 4 ||
-      !caps.shader_float16 || !caps.storage_buffer_16bit_access) {
+      !caps.storage_buffer_16bit_access ||
+      (bf16_pair ? !caps.shader_int16 : !caps.shader_float16)) {
     return SliceUpdatePairDispatch::unsupported;
   }
 
@@ -11478,7 +12108,8 @@ SliceUpdatePairDispatch dispatch_slice_update_pair(
   }
 
   const array& first_update = nodes[0].inputs()[1];
-  if (nodes[0].dtype() != float16 || nodes[1].dtype() != float16 ||
+  if ((nodes[0].dtype() != float16 && nodes[0].dtype() != bfloat16) ||
+      nodes[1].dtype() != nodes[0].dtype() ||
       nodes[0].shape() != nodes[1].shape() || first_update.size() == 0 ||
       first_update.ndim() == 0 || first_update.ndim() > 4 ||
       first_update.ndim() != nodes[0].ndim() ||
@@ -11529,7 +12160,7 @@ SliceUpdatePairDispatch dispatch_slice_update_pair(
     const array& base = nodes[i].inputs()[0];
     const array& update = nodes[i].inputs()[1];
     if (nodes[i].primitive().stream() != stream ||
-        base.dtype() != float16 || update.dtype() != float16 ||
+        base.dtype() != nodes[i].dtype() || update.dtype() != nodes[i].dtype() ||
         base.shape() != nodes[i].shape() ||
         update.shape() != first_update.shape() ||
         !base.flags().row_contiguous || base.size() != base.data_size() ||
@@ -11582,7 +12213,8 @@ SliceUpdatePairDispatch dispatch_slice_update_pair(
       binding(nodes[0]),
       binding(nodes[1])};
   encoder.dispatch_compute(
-      ComputeKernel::SliceUpdatePairF16,
+      nodes[0].dtype() == bfloat16 ? ComputeKernel::SliceUpdatePairBF16
+                                   : ComputeKernel::SliceUpdatePairF16,
       bindings,
       params,
       compute_dispatch_group_count(params.count));
@@ -18198,11 +18830,51 @@ void ScaledDotProductAttention::eval_gpu(
       // One dispatch per (head, row): gl_WorkGroupID.y selects the
       // verify row; the kernel derives each row's causal key bound from
       // dims (q_len) and walks the single-query arm over the visible
-      // prefix. out_strides[0] carries the q row stride (D); the
-      // output row stride is the compiled SDPA_DIM.
+      // prefix. out_strides[0] carries the q row stride (D);
+      // out_strides[1]/[2] carry the out head/row strides so the
+      // out-transpose fold can store (1,S,H*D) directly.
       params.dims = checked_u32(q_len, tag, out);
       params.out_strides[0] = checked_u32(q.strides()[2], tag, out);
-      params.out_strides[1] = checked_u32(out.strides()[2], tag, out);
+      // A planned materializing Reshape whose view chain maps out's
+      // (1,H,S,D) layout to (1,S,H*D) takes the kernel's store into its
+      // own buffer — head stride D, row stride H*D — and the transpose
+      // copy dispatch is skipped. The dispatch re-verifies the reshape's
+      // shape contract; any mismatch keeps the ordinary path and the
+      // reshape evaluates normally.
+      if (const array* transpose_plan =
+              omarchy::find_sdpa_transpose_out(out);
+          transpose_plan != nullptr &&
+          transpose_plan->shape() == Shape{1, q_len, heads * head_dim} &&
+          transpose_plan->dtype() == bfloat16 &&
+          transpose_plan->primitive().stream() == s &&
+          transpose_plan->data_shared_ptr() == nullptr &&
+          out.flags().contiguous) {
+        array& transpose_out =
+            const_cast<array&>(*transpose_plan);
+        transpose_out.set_data(
+            allocate_omarchy(transpose_out.nbytes()));
+        encoder.add_temporary(transpose_out);
+        std::array<omarchy::ComputeBinding, 4> transpose_bindings{
+            binding(q),
+            binding(k),
+            binding(v),
+            binding(transpose_out)};
+        params.output_offset = checked_item_offset(
+            transpose_out, transpose_out.size(), tag, out);
+        params.out_strides[1] = checked_u32(head_dim, tag, out);
+        params.out_strides[2] =
+            checked_u32(heads * head_dim, tag, out);
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::SdpaDecodeRowsBF16Hd128,
+            transpose_bindings,
+            params,
+            params.matrix_m,
+            static_cast<uint32_t>(q_len));
+        omarchy::commit_sdpa_transpose_out(out);
+        return;
+      }
+      params.out_strides[1] = checked_u32(out.strides()[1], tag, out);
+      params.out_strides[2] = checked_u32(out.strides()[2], tag, out);
       encoder.dispatch_compute(
           omarchy::ComputeKernel::SdpaDecodeRowsBF16Hd128,
           bindings,

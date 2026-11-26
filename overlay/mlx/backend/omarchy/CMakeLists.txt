@@ -243,6 +243,7 @@ omarchy_shader(slice_update_reduce_f16 shaders/slice_update_reduce.comp -DUSE_FP
 omarchy_shader(slice_update_reduce_bf16 shaders/slice_update_reduce.comp -DUSE_BF16=1)
 omarchy_shader(slice_update_reduce_u32 shaders/slice_update_reduce.comp -DUSE_U32=1)
 omarchy_shader(slice_update_pair_f16 shaders/slice_update_pair.comp)
+omarchy_shader(slice_update_pair_bf16 shaders/slice_update_pair.comp -DUSE_BF16=1)
 omarchy_shader(scatter_triple_u32 shaders/scatter.comp -DUSE_U32=1 -DUSE_TRIPLE_INDEX=1)
 omarchy_shader(scatter_triple_f16 shaders/scatter.comp -DUSE_FP16=1 -DUSE_TRIPLE_INDEX=1)
 omarchy_shader(scatter_triple_bf16 shaders/scatter.comp -DUSE_BF16=1 -DUSE_TRIPLE_INDEX=1)
@@ -394,6 +395,10 @@ omarchy_shader(qmm_vec_q4_word_subgroup_batch4_bf16 shaders/qmm_vec.comp -DUSE_B
 # rows of one [R, K] activation against one 2D weight, weight words read once
 # per block; m in 9..16 runs as two host passes of <= 8.
 omarchy_shader(qmm_vec_q4_word_subgroup_rows8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_ROWS=8)
+# Per-member rope epilogue: the Rows8 single-weight column carrying the
+# same fused RMSNorm+RoPE tail as the multi-token epilogue, one dispatch
+# per group member so the member dot keeps the Rows8 kernel.
+omarchy_shader(qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_ROWS=8 -DQMM_VEC_ROPE_EPI=1)
 # Tensor/MMA row routing (default off, MLX_OMARCHY_QMM_MMA_ROWS=1 arms):
 # a non-batched bf16 q4/g64 transposed call with 4..16 rows and
 # K >= 512 % 128 == 0, N >= 512 % 16 == 0, N*K >= 2^21 skips this row
@@ -447,6 +452,19 @@ omarchy_shader(qmm_vec_q4_multi_token16_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -
 # pass, rows 9..16 run two (the token16 unroll miscompiles on AGX).
 omarchy_shader(qmm_vec_q4_multi_token8_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=8)
 omarchy_shader(qmm_vec_q4_multi_token8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DQMM_VEC_TOKENS=1 -DM_TOKENS=8)
+# Token4 + residual-norm epilogue: the token column's single-member
+# group carries sum0 materialized and the last finishing workgroup
+# norms every live token row (bit-identical to the eager
+# 256-thread-per-row Apple norm via a two-virtual-lane emulation on the
+# 128-thread workgroup). Bindings 25..27 ride above the weight slots.
+omarchy_shader(qmm_vec_q4_multi_token4_resnorm_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=4 -DQMM_VEC_RESNORM=1)
+# Fused RMSNorm+RoPE epilogue on the same token4 multi column: the last
+# finishing workgroup norms and rotates the Q/K member rows for the
+# layer's two fused-norm ropes (bit-identical to the standalone
+# FastRopeNormBF16 row math), storing queries into the rope's buffer
+# and keys through the pair's KV window. Epilogue bindings ride the
+# free weight slots 19..24 of a <=3-member group.
+omarchy_shader(qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=4 -DQMM_VEC_ROPE_EPI=1)
 # Greedy-argmax decode head: bounds, survivors, and flagged full path
 # around the same Q4 word subgroup column (QMM_VEC_GREEDY).
 omarchy_shader(qmm_vec_greedy_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY=1)

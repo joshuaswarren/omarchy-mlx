@@ -1,21 +1,27 @@
 #version 460
 
 #extension GL_EXT_shader_16bit_storage : require
+#ifdef USE_BF16
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#define elem_t uint16_t
+#else
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define elem_t float16_t
+#endif
 
 layout(local_size_x = 256) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer InputA {
-  float16_t values[];
+  elem_t values[];
 } input_a;
 layout(set = 0, binding = 1, std430) readonly buffer InputB {
-  float16_t values[];
+  elem_t values[];
 } input_b;
 layout(set = 0, binding = 2, std430) writeonly buffer OutputA {
-  float16_t values[];
+  elem_t values[];
 } output_a;
 layout(set = 0, binding = 3, std430) writeonly buffer OutputB {
-  float16_t values[];
+  elem_t values[];
 } output_b;
 
 layout(push_constant) uniform Params {
