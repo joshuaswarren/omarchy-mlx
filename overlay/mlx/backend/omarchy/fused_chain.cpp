@@ -1088,9 +1088,22 @@ std::optional<DirectGeometry> direct_window_geometry(const array& member) {
 // base handle, which would count as a second holder.
 // MLX_OMARCHY_KV_INPLACE=0 forces the copy.
 bool kv_window_in_place(const array& member) {
-  return (omarchy::env_str("MLX_OMARCHY_KV_INPLACE") == nullptr ||
-          env_flag("MLX_OMARCHY_KV_INPLACE")) &&
-      member.inputs()[0].is_donatable();
+  const bool env_on = omarchy::env_str("MLX_OMARCHY_KV_INPLACE") == nullptr ||
+      env_flag("MLX_OMARCHY_KV_INPLACE");
+  const array& base = member.inputs()[0];
+  const bool donatable = base.is_donatable();
+  // MLX_OMARCHY_KV_TRACE: donation is the in-place gate; a refusal that
+  // only shows up as a missing alias names no cause without the split.
+  if (omarchy::env_str("MLX_OMARCHY_KV_TRACE") != nullptr) {
+    auto data = base.data_shared_ptr();
+    std::fprintf(
+        stderr,
+        "[kv-inplace] env=%d donatable=%d data_uses=%ld\n",
+        static_cast<int>(env_on),
+        static_cast<int>(donatable),
+        data ? static_cast<long>(data.use_count()) : -1L);
+  }
+  return env_on && donatable;
 }
 
 // Keys: the RoPE kernel writes (matrix, time, feature) output strides,
