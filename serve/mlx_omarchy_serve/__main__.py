@@ -360,7 +360,7 @@ def backend_for(resolved: Resolved, server_flag: str | None) -> tuple[str, str |
 # ------------------------------------------------------------------- planning
 
 
-def hf_cache_dir() -> Path:
+def hf_cache_dir(*, create: bool = True) -> Path:
     # Mirror huggingface_hub's own precedence when it is importable
     # (HF_HUB_CACHE > HF_HOME/hub > default); fall back to the same
     # order manually so the disk check cannot look at the wrong volume.
@@ -376,7 +376,8 @@ def hf_cache_dir() -> Path:
             home = os.environ.get("HF_HOME")
             base = Path(home) if home else Path.home() / ".cache/huggingface"
             hub = base / "hub"
-    hub.mkdir(parents=True, exist_ok=True)  # the download would create it; stat it now
+    if create:
+        hub.mkdir(parents=True, exist_ok=True)  # the download would create it; stat it now
     return hub
 
 
@@ -503,6 +504,14 @@ def nonempty_file(path: Path) -> bool:
     return stat.S_ISREG(info.st_mode) and info.st_size > 0
 
 
+def regular_file(path: Path) -> bool:
+    try:
+        info = path.stat()
+    except (OSError, ValueError):  # 3.11's Path.is_file() raises for an untraversable directory
+        return False
+    return stat.S_ISREG(info.st_mode)
+
+
 def shard_name_ok(name: str) -> bool:
     """A relative file path inside the snapshot, written in normal form:
     not empty, ".", absolute, "..", NUL, a lone surrogate, "./x", "x/" or "x/."."""
@@ -540,10 +549,16 @@ def snapshot_gaps(path: Path, patterns: list[str] | None = None,
     transformers-style checkpoints) config.json and some tokenizer file must
     also be present; a pack with its own layout (Laya keeps encoder/config.json
     and tokenizer/) declares its files in patterns and passes hf_layout=False.
-    Empty list means complete."""
+    A file that cannot be checked counts as a gap. Empty list means complete."""
     gaps: list[str] = []
     index = path / "model.safetensors.index.json"
-    if index.is_file():
+    try:
+        has_index = stat.S_ISREG(index.stat().st_mode)
+    except (FileNotFoundError, NotADirectoryError, ValueError):
+        has_index = False
+    except OSError:  # an index that cannot be checked may exist: no single-file fallback
+        has_index = True
+    if has_index:
         shards = index_shards(index)
         if shards is None:
             gaps.append("model.safetensors.index.json (unreadable or malformed)")
@@ -553,17 +568,21 @@ def snapshot_gaps(path: Path, patterns: list[str] | None = None,
             gaps.extend(shard for shard in shards if not nonempty_file(path / shard))
     elif not nonempty_file(path / "model.safetensors"):
         gaps.append("model.safetensors")
-    if hf_layout and not (path / "config.json").is_file():
+    if hf_layout and not regular_file(path / "config.json"):
         gaps.append("config.json")
-    if hf_layout and not any((path / name).is_file() for name in
+    if hf_layout and not any(regular_file(path / name) for name in
                              ("tokenizer.json", "tokenizer.model", "tokenizer_config.json")):
         gaps.append("a tokenizer file (tokenizer.json et al.)")
     if patterns:
         for pattern in patterns:
             if any(ch in pattern for ch in "*?["):
-                if not any(path.glob(pattern)):
+                try:
+                    matched = any(path.glob(pattern))
+                except OSError:  # 3.11's Path.glob() calls is_dir() on path
+                    matched = False
+                if not matched:
                     gaps.append(pattern)
-            elif not (path / pattern).is_file():
+            elif not regular_file(path / pattern):
                 gaps.append(pattern)
     return gaps
 
@@ -576,18 +595,36 @@ def snapshot_complete(path: Path, patterns: list[str] | None = None,
 def offline_snapshot_detail(resolved: Resolved, patterns: list[str] | None = None,
                             hf_layout: bool = True) -> str:
     """Human-readable cache state for an offline refusal: names the exact
-    missing files when a snapshot directory exists, or says none does."""
+    missing files when a snapshot directory exists, names an unreadable
+    snapshot directory, or says none does."""
     if resolved.local_path is not None or not resolved.revision:
         return ""
-    directory = (hf_cache_dir() / ("models--" + resolved.repo.replace("/", "--"))
+    directory = (hf_cache_dir(create=False) / ("models--" + resolved.repo.replace("/", "--"))
                  / "snapshots" / resolved.revision)
-    if not directory.is_dir():
-        return (f"; the Hugging Face cache has no snapshot for revision "
-                f"{resolved.revision[:12]} of {resolved.repo}")
+
+    def unreadable_or_absent() -> str | None:
+        try:
+            with os.scandir(directory):  # the snapshot exists and can be listed and searched
+                pass
+            os.stat(os.path.join(directory, "."))
+        except (FileNotFoundError, NotADirectoryError, ValueError):
+            return (f"; the Hugging Face cache has no snapshot for revision "
+                    f"{resolved.revision[:12]} of {resolved.repo}")
+        except OSError as exc:  # an untraversable cache or snapshot directory
+            return (f"; the Hugging Face cache snapshot for revision {resolved.revision[:12]} "
+                    f"of {resolved.repo} is unreadable at {directory} ({exc.strerror or exc})")
+        return None
+
+    state = unreadable_or_absent()
+    if state is not None:
+        return state
     gaps = snapshot_gaps(directory, patterns, hf_layout)
     if not gaps:
         return ""
-    return f"; the cached snapshot for {resolved.repo} is missing: " + ", ".join(gaps[:8])
+    # a directory locked or removed during the scan: report that, not missing files
+    return unreadable_or_absent() or (
+        f"; the cached snapshot for {resolved.repo} is missing: " + ", ".join(gaps[:8])
+    )
 
 
 def probe_snapshot(resolved: Resolved, patterns: list[str] | None = None,
