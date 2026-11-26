@@ -33,6 +33,14 @@
 #error "sdpa_decode_online.comp supports SUBGROUPS=16 or SUBGROUPS=32 only"
 #endif
 
+#ifndef HD
+#define HD 128
+#endif
+
+#if HD != 128 && (HD != 256 || SUBGROUPS != 16)
+#error "sdpa_decode_online.comp supports HD=128 or HD=256 with SUBGROUPS=16"
+#endif
+
 layout(local_size_x = SUBGROUPS * 32, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer Query {
@@ -72,7 +80,7 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-const uint D = 128u;
+const uint D = uint(HD);
 const float LOG2E = 1.4426950408889634;
 
 shared float s_max[SUBGROUPS];
@@ -91,6 +99,17 @@ uint16_t bf16_store(float v) {
   uint rounding_bias = 0x00007fffu + ((bits >> 16u) & 1u);
   return uint16_t((bits + rounding_bias) >> 16u);
 }
+
+#if HD == 256
+vec4 unpack4(uvec2 v) {
+  return uintBitsToFloat(uvec4(
+      v.x << 16u, v.x & 0xffff0000u, v.y << 16u, v.y & 0xffff0000u));
+}
+
+float dot4(vec4 q, vec4 k) {
+  return fma(q.x, k.x, fma(q.y, k.y, fma(q.z, k.z, q.w * k.w)));
+}
+#endif
 
 void main() {
   uint head = gl_WorkGroupID.x;
@@ -114,6 +133,15 @@ void main() {
   float q1 = bf16_load(query_data.values[q_base + 1u]) * s_scale;
   float q2 = bf16_load(query_data.values[q_base + 2u]) * s_scale;
   float q3 = bf16_load(query_data.values[q_base + 3u]) * s_scale;
+#if HD == 256
+  // A second coalesced 128-element half, in the same subgroup.
+  vec4 q_hi = vec4(
+      bf16_load(query_data.values[q_base + 128u]),
+      bf16_load(query_data.values[q_base + 129u]),
+      bf16_load(query_data.values[q_base + 130u]),
+      bf16_load(query_data.values[q_base + 131u])) * s_scale;
+  vec4 o_hi = vec4(0.0);
+#endif
 
   float m_i = uintBitsToFloat(0xff800000u);
   float l_i = 0.0;
@@ -139,6 +167,10 @@ void main() {
                 fma(q1, uintBitsToFloat(kw.x & 0xffff0000u),
                 fma(q2, uintBitsToFloat(kw.y << 16u),
                     q3 * uintBitsToFloat(kw.y & 0xffff0000u))));
+#if HD == 256
+    dot += dot4(q_hi, unpack4(key_data.values[k_idx + 32u]));
+    o_hi = unpack4(value_data.values[v_idx + 32u]);
+#endif
     m_i = subgroupAdd(dot);
     l_i = 1.0;
     o0 = uintBitsToFloat(vw.x << 16u);
@@ -151,6 +183,10 @@ void main() {
     for (uint key = sg + uint(SUBGROUPS); key < k_len; key += uint(SUBGROUPS)) {
       kw = key_data.values[k_idx];
       vw = value_data.values[v_idx];
+#if HD == 256
+      vec4 kh = unpack4(key_data.values[k_idx + 32u]);
+      vec4 vh = unpack4(value_data.values[v_idx + 32u]);
+#endif
       k_idx += k_step;
       v_idx += v_step;
 
@@ -158,6 +194,9 @@ void main() {
             fma(q1, uintBitsToFloat(kw.x & 0xffff0000u),
             fma(q2, uintBitsToFloat(kw.y << 16u),
                 q3 * uintBitsToFloat(kw.y & 0xffff0000u))));
+#if HD == 256
+      dot += dot4(q_hi, kh);
+#endif
       float score = subgroupAdd(dot);
       float new_max = max(m_i, score);
       float factor = exp2(m_i - new_max);
@@ -168,6 +207,9 @@ void main() {
       o1 = fma(o1, factor, p * uintBitsToFloat(vw.x & 0xffff0000u));
       o2 = fma(o2, factor, p * uintBitsToFloat(vw.y << 16u));
       o3 = fma(o3, factor, p * uintBitsToFloat(vw.y & 0xffff0000u));
+#if HD == 256
+      o_hi = fma(o_hi, vec4(factor), p * vh);
+#endif
     }
 
     if (lane == 0u) {
@@ -179,6 +221,12 @@ void main() {
     s_o[obase + 1u] = o1;
     s_o[obase + 2u] = o2;
     s_o[obase + 3u] = o3;
+#if HD == 256
+    s_o[obase + 128u] = o_hi.x;
+    s_o[obase + 129u] = o_hi.y;
+    s_o[obase + 130u] = o_hi.z;
+    s_o[obase + 131u] = o_hi.w;
+#endif
   }
 
   barrier();

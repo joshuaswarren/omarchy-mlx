@@ -18920,9 +18920,9 @@ void ScaledDotProductAttention::eval_gpu(
   const bool decode_batch_ok = batch == 1 ||
       (decode_bf16_probe && q_len == 1 &&
           decode_path_override("MLX_OMARCHY_SDPA_DECODE_BATCH") != 0);
-  // Single-dispatch online-softmax bf16 decode route (HD=128, batch 1, q_len 1):
-  // one 1024-thread (32-subgroup) workgroup per query head, coalesced 256-byte
-  // uvec2 K/V loads, zero scratch/atomics/pass-2. MLX_OMARCHY_SDPA_ONLINE: "0"
+  // Single-dispatch online-softmax bf16 decode, batch 1 and q_len 1.
+  // G13G HD256 uses 16 subgroups to fit shared memory and is opt-in only.
+  // MLX_OMARCHY_SDPA_ONLINE: "0"
   // disables, any other non-empty value forces; unset defers to explicit
   // split-K overrides if set, otherwise follows omarchy::sdpa_online_default.
   {
@@ -18941,10 +18941,15 @@ void ScaledDotProductAttention::eval_gpu(
       constexpr VkSubgroupFeatureFlags kOnlineSubgroupFeatures =
           VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
           VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
+      const bool g13g_hd256 = online_env > 0 && head_dim == 256 &&
+          v_dim == 256 &&
+          decode_caps.device_name.find("G13G") != std::string::npos;
+      const uint32_t need_threads = g13g_hd256 ? 512u : 1024u;
+      const uint32_t need_shmem = g13g_hd256 ? 16512u : 16640u;
       const bool online_device_ready = decode_caps.subgroup_size == 32u &&
-          decode_caps.max_compute_work_group_invocations >= 1024u &&
-          decode_caps.max_compute_work_group_size[0] >= 1024u &&
-          decode_caps.max_compute_shared_memory_size >= 16640u &&
+          decode_caps.max_compute_work_group_invocations >= need_threads &&
+          decode_caps.max_compute_work_group_size[0] >= need_threads &&
+          decode_caps.max_compute_shared_memory_size >= need_shmem &&
           (decode_caps.subgroup_operations & kOnlineSubgroupFeatures) ==
               kOnlineSubgroupFeatures;
       if (online_device_ready &&
@@ -18952,7 +18957,8 @@ void ScaledDotProductAttention::eval_gpu(
           q.dtype() == bfloat16 && k.dtype() == bfloat16 &&
           v.dtype() == bfloat16 && out.dtype() == bfloat16 &&
           inputs.size() == 3 && !has_sinks_ && !output_logsumexp_ &&
-          batch == 1 && q_len == 1 && head_dim == 128 && v_dim == 128 &&
+          batch == 1 && q_len == 1 &&
+          ((head_dim == 128 && v_dim == 128) || g13g_hd256) &&
           k_len > 0 && kv_heads > 0 && heads % kv_heads == 0 &&
           q.strides()[3] == 1 && k.strides()[3] == 1 && v.strides()[3] == 1 &&
           k.strides()[1] % 4 == 0 && k.strides()[2] % 4 == 0 &&
@@ -18980,7 +18986,8 @@ void ScaledDotProductAttention::eval_gpu(
           std::array<omarchy::ComputeBinding, 4> online_bindings{
               binding(q), binding(k), binding(v), binding(out)};
           encoder.dispatch_compute(
-              omarchy::ComputeKernel::SdpaDecodeOnlineSg32BF16Hd128,
+              g13g_hd256 ? omarchy::ComputeKernel::SdpaDecodeOnlineSg16BF16Hd256
+                         : omarchy::ComputeKernel::SdpaDecodeOnlineSg32BF16Hd128,
               online_bindings, online_params, online_params.matrix_m);
           return;
         }

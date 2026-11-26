@@ -782,47 +782,60 @@ TEST_CASE("online-softmax 1-dispatch SDPA: default gating, float64 accuracy, and
   constexpr VkSubgroupFeatureFlags kOnlineFeatures =
       VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
-  const bool online_ready = caps.subgroup_size == 32u &&
-      caps.max_compute_work_group_invocations >= 1024u &&
-      caps.max_compute_work_group_size[0] >= 1024u &&
-      caps.max_compute_shared_memory_size >= 16640u &&
+  const bool subgroup_ready = caps.subgroup_size == 32u &&
       (caps.subgroup_operations & kOnlineFeatures) == kOnlineFeatures;
   struct ShapeCase {
-    int heads, kv_heads, keys;
+    int heads, kv_heads, keys, width;
     bool one_hot;
   };
   for (const ShapeCase& sc : {
-           ShapeCase{32, 8, 1, false},
-           ShapeCase{32, 8, 15, false},
-           ShapeCase{32, 8, 31, false},
-           ShapeCase{32, 8, 32, false},
-           ShapeCase{32, 8, 33, false},
-           ShapeCase{32, 8, 65, true},
-           ShapeCase{32, 8, 513, false},
-           ShapeCase{32, 8, 544, false},
-           ShapeCase{32, 8, 2048, false},
+           ShapeCase{32, 8, 1, 128, false},
+           ShapeCase{32, 8, 15, 128, false},
+           ShapeCase{32, 8, 31, 128, false},
+           ShapeCase{32, 8, 32, 128, false},
+           ShapeCase{32, 8, 33, 128, false},
+           ShapeCase{32, 8, 65, 128, true},
+           ShapeCase{32, 8, 513, 128, false},
+           ShapeCase{32, 8, 544, 128, false},
+           ShapeCase{32, 8, 2048, 128, false},
+           ShapeCase{8, 2, 1, 256, false},
+           ShapeCase{8, 2, 16, 256, false},
+           ShapeCase{8, 2, 17, 256, false},
+           ShapeCase{8, 2, 193, 256, true},
+           ShapeCase{8, 2, 513, 256, false},
+           ShapeCase{8, 2, 2049, 256, false},
        }) {
+    const bool wide = sc.width == 256;
+    if (wide && caps.device_name.find("G13G") == std::string::npos) {
+      continue;
+    }
+    const uint32_t threads = wide ? 512u : 1024u;
+    const uint32_t shmem = wide ? 16512u : 16640u;
+    const bool online_ready = subgroup_ready &&
+        caps.max_compute_work_group_invocations >= threads &&
+        caps.max_compute_work_group_size[0] >= threads &&
+        caps.max_compute_shared_memory_size >= shmem;
     Stream stream = gpu_stream();
     Stored q = make_bf16(
-        pattern(static_cast<size_t>(sc.heads) * 128, 11, 1.0f),
-        Shape{1, sc.heads, 1, 128},
+        pattern(static_cast<size_t>(sc.heads) * sc.width, 11, 1.0f),
+        Shape{1, sc.heads, 1, sc.width},
         stream);
     std::vector<float> k_host =
-        pattern(static_cast<size_t>(sc.kv_heads) * sc.keys * 128, 23, 1.0f);
+        pattern(static_cast<size_t>(sc.kv_heads) * sc.keys * sc.width, 23, 1.0f);
     std::vector<float> v_host =
-        pattern(static_cast<size_t>(sc.kv_heads) * sc.keys * 128, 37, 1.0f);
+        pattern(static_cast<size_t>(sc.kv_heads) * sc.keys * sc.width, 37, 1.0f);
     if (sc.one_hot) {
       std::fill(k_host.begin(), k_host.end(), 0.0f);
       for (size_t i = 0; i != v_host.size(); ++i) {
-        size_t key = (i / 128) % sc.keys;
-        v_host[i] = (i % 128) == (key % 128) ? 1.0f : 0.0f;
+        size_t key = (i / sc.width) % sc.keys;
+        v_host[i] = (i % sc.width) == (key % sc.width) ? 1.0f : 0.0f;
       }
     }
-    Stored k = make_bf16(k_host, Shape{1, sc.kv_heads, sc.keys, 128}, stream);
-    Stored v = make_bf16(v_host, Shape{1, sc.kv_heads, sc.keys, 128}, stream);
-    const float scale = 1.0f / std::sqrt(128.0f);
+    Stored k = make_bf16(k_host, Shape{1, sc.kv_heads, sc.keys, sc.width}, stream);
+    Stored v = make_bf16(v_host, Shape{1, sc.kv_heads, sc.keys, sc.width}, stream);
+    const float scale = 1.0f / std::sqrt(static_cast<float>(sc.width));
     std::vector<double> ref = reference(
-        q.values, k.values, v.values, sc.heads, sc.kv_heads, sc.keys, sc.keys, 0, 128, scale);
+        q.values, k.values, v.values, sc.heads, sc.kv_heads, sc.keys, sc.keys, 0, sc.width, scale);
     setenv("MLX_OMARCHY_SDPA_ONLINE", "0", 1);
     Run baseline = run_attention(q.x, k.x, v.x, scale, "0", stream);
     Errors e_base = error_against(baseline.out, ref);
@@ -834,7 +847,7 @@ TEST_CASE("online-softmax 1-dispatch SDPA: default gating, float64 accuracy, and
     Run online = run_attention(q.x, k.x, v.x, scale, "1", stream);
     unsetenv("MLX_OMARCHY_SDPA_ONLINE");
     Errors e_online = error_against(online.out, ref);
-    INFO("keys=" << sc.keys);
+    INFO("width=" << sc.width << " keys=" << sc.keys);
     CHECK(e_online.max <= e_base.max + 2.0 * rounding + 1e-6);
     CHECK(e_online.mean <= e_base.mean + 0.25 * rounding + 1e-7);
     CHECK(e_online.max <= 3.0 * rounding + 1e-5);
