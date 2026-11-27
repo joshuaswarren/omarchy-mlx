@@ -1427,6 +1427,19 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast,
   QmmVecQ4SwigluBF16R1S4W2Fast,
   QmmVecQ4ResNormVec4BF16R2S32W2Fast,
+  // Track N / G14C parity variants (env-gated default off; appended to keep
+  // profile kernel ids stable).
+  QmmVecQ4WordSubgroupBF16R1S4W2Fast,
+  QmmVecQ4WordSubgroupBF16R1S8W2Fast,
+  QmmVecQ4ResNormVec4BF16R2S32W2FastEpiPack,
+  QmmVecQ4ResNormVec4BF16R2S32W2FastEpiNoOut0,
+  QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast,
+  QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast3M,
+  QmmVecQ4MultiSubgroupBF16R2S32W2UpfrontFast3M,
+  GatedDeltaDecodeConvNormBF16Sg32FastInterleave,
+  SdpaDecodeOnlineRopeSg32BF16Hd256Fast,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast,
+  GatherDequantNormBF16,
   Count,
 };
 
