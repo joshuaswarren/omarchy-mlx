@@ -2287,6 +2287,9 @@ def test_meshgrid():
     fx_aten(torch.ops.aten.meshgrid.indexing, (x, y), {"indexing": "xy"})
     fx_aten(torch.ops.aten.meshgrid.indexing, (x, y, z), {"indexing": "ij"})
 
+    # 0-D scalar input is legal aten ("0D or 1D"); treat as length-1 axis
+    fx_aten(torch.ops.aten.meshgrid.default, (torch.tensor(2.5), y), {})
+
     # aten requires same dtype; mx accepts mixed — the lowering defers
     # and the CPU fallback raises torch's own error
     g = torch.fx.Graph()
@@ -2298,6 +2301,16 @@ def test_meshgrid():
     try:
         run(i, y)
         raise AssertionError("no raise on mixed dtypes")
+    except RuntimeError:
+        pass
+
+    # aten also raises on >1-D input where mx silently flattens — same
+    # defer-to-raise contract
+    m = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    run2, stats2 = mlx_vulkan.make_executor(gm)
+    try:
+        run2(m, y)
+        raise AssertionError("no raise on >1-D input")
     except RuntimeError:
         pass
     print("test_meshgrid PASS")
