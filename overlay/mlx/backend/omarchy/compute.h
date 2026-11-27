@@ -1438,6 +1438,12 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeOnlineRopeSg32BF16Hd256Fast,
   SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast,
   GatherDequantNormBF16,
+  // G14C-gated compile-time ResNormVec4 D2048/D4096 specializations and
+  // batch==1 Word/lm_head variants. Appended to keep profile kernel ids stable.
+  QmmVecQ4ResNormVec4BF16R2S32W2FastD2048,
+  QmmVecQ4ResNormVec4BF16R2S32W2FastD4096,
+  QmmVecQ4WordSubgroupBF16R2S4W2FastB1,
+  QmmVecQ4WordSubgroupBF16R2S32W2FastB1,
   Count,
 };
 
