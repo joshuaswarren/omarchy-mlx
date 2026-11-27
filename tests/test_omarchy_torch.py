@@ -92,6 +92,7 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         cases = [
             ("log1p", torch.ops.aten.log1p.default, (x,)),
             ("expm1", torch.ops.aten.expm1.default, (x,)),
+            ("expm1_", torch.ops.aten.expm1_.default, (x,)),
             ("logaddexp", torch.ops.aten.logaddexp.default, (x, y)),
         ]
         np = __import__("numpy")
@@ -99,12 +100,12 @@ class TestOmarchyTorchBackend(unittest.TestCase):
             lowering = ATEN_TABLE[name]
             for dtype in (torch.float32, torch.bfloat16):
                 targs = [a.to(dtype) for a in args]
-                ref = aten_fn(*targs)
                 margs = [
                     mx.array(a.float().numpy()).astype(
                         mx.float32 if dtype == torch.float32 else mx.bfloat16)
                     for a in targs
                 ]
+                ref = aten_fn(*targs)
                 got = torch.from_numpy(
                     np.array(lowering(*margs).astype(mx.float32)))
                 tol = dict(atol=1e-6, rtol=1e-5) if dtype == torch.float32 \
