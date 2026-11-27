@@ -150,5 +150,40 @@ class TestOmarchyTorchBackend(unittest.TestCase):
 
 
 
+    def test_piecewise_activations(self):
+        """PT-AL-b: the piecewise activation family lowers in the wheel
+        backend — fp32 and bf16 parity against the torch functions."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x = torch.tensor([[-4.0, -2.9, -0.49, 0.0, 0.51, 3.1, 7.0],
+                          [-3.2, -0.5, 0.5, 1.0, -1.0, 2.9, -7.0]])
+        F = torch.nn.functional
+        cases = [
+            ("hardswish", (x,), F.hardswish(x)),
+            ("hardsigmoid", (x,), F.hardsigmoid(x)),
+            ("hardshrink", (x, 0.5), F.hardshrink(x, 0.5)),
+            ("softshrink", (x, 0.5), F.softshrink(x, 0.5)),
+            ("tanhshrink", (x,), F.tanhshrink(x)),
+            ("softsign", (x,), F.softsign(x)),
+        ]
+        for name, ins, ref in cases:
+            lowering = ATEN_TABLE[name]
+            for dtype, tol in ((torch.float32, 1e-5),
+                               (torch.bfloat16, 2e-2)):
+                mins = tuple(
+                    (mx.array(t.float().numpy()).astype(mx.bfloat16)
+                     if dtype == torch.bfloat16 else mx.array(t.numpy()))
+                    if torch.is_tensor(t) else t for t in ins)
+                got = torch.from_numpy(
+                    np.array(lowering(*mins).astype(mx.float32)))
+                self.assertTrue(
+                    torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                    (name, dtype, float((got - ref.float()).abs().max())))
+
+
 if __name__ == "__main__":
     unittest.main()

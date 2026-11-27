@@ -117,6 +117,19 @@ int scenario(const std::string& name, const std::string& out) {
     outs.push_back(oa);
     outs.push_back(ob);
     outs.push_back(oc);
+  } else if (name == "qkv3m") {
+    auto x = make_x(2048, rng);
+    auto a = make_lin(4096, 2048, rng);
+    auto b = make_lin(512, 2048, rng);
+    auto c = make_lin(512, 2048, rng);
+    eval(x, a.w, a.s, a.b, b.w, b.s, b.b, c.w, c.s, c.b);
+    auto oa = qmm(x, a);
+    auto ob = qmm(x, b);
+    auto oc = qmm(x, c);
+    eval(oa, ob, oc);
+    outs.push_back(oa);
+    outs.push_back(ob);
+    outs.push_back(oc);
   } else if (name == "swiglu") {
     auto x = make_x(2048, rng);
     auto gate = make_lin(6144, 2048, rng);
@@ -839,6 +852,65 @@ int main(int argc, char** argv) {
       ++failures;
     } else {
       std::cout << "ok: order swiglu-2x8w2 identical\n";
+    }
+    // Compile-time ResNormVec4 R2S16W2Fast D2048/D4096 specializations must be
+    // 0-ULP bit-identical to the non-specialized R2S16W2Fast variant (including
+    // live QMM output).
+    for (const char* name :
+         {"resnorm2048", "resnorm2048_liveqmm", "resnorm4096"}) {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_VEC4", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_R2S32", "0", 1);
+      setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_SPEC", "0", 1);
+      int rc1 = run_child(name, base.c_str());
+      setenv("MLX_OMARCHY_RESNORM_SPEC", "1", 1);
+      int rc2 = run_child(name, other.c_str());
+      unsetenv("MLX_OMARCHY_RESNORM_SPEC");
+      unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_RESNORM_R2S32");
+      unsetenv("MLX_OMARCHY_RESNORM_VEC4");
+      unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: " << name
+                  << "_r2s16_spec differed from non-spec R2S16W2Fast (rc "
+                  << rc1 << "/" << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: " << name << "_r2s16_spec identical\n";
+      }
+    }
+    // 16-binding 3-member plain+KV trimmed Multi R2S8W2UpfrontFast3M must be
+    // 0-ULP bit-identical to 25-binding R2S8W2UpfrontFast across 2-member and
+    // 3-member plain groups.
+    for (const char* name : {"k512", "qkv3m"}) {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_MULTI_R2S16", "0", 1);
+      setenv("MLX_OMARCHY_Q4_UPFRONT", "1", 1);
+      setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
+      setenv("MLX_OMARCHY_MULTI_3M", "0", 1);
+      int rc1 = run_child(name, base.c_str());
+      setenv("MLX_OMARCHY_MULTI_3M", "1", 1);
+      int rc2 = run_child(name, other.c_str());
+      unsetenv("MLX_OMARCHY_MULTI_3M");
+      unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_Q4_UPFRONT");
+      unsetenv("MLX_OMARCHY_MULTI_R2S16");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: multi_r2s8_up_fast_3m_" << name
+                  << " differed from R2S8W2UpfrontFast (rc " << rc1 << "/"
+                  << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: multi_r2s8_up_fast_3m_" << name << " identical\n";
+      }
     }
   }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")

@@ -193,6 +193,26 @@ def test_conv1d_census_grouped():
     print("test_conv1d_census_grouped PASS")
 
 
+def test_conv1d_unbatched_executor():
+    # PT-U5 residual complement to test_conv1d_unbatched (PAR-41, #1098):
+    # the unbatched (C, L) form must route through the executor's mlx leg
+    # end-to-end, not just lower correctly at the table level.
+    rng = np.random.RandomState(7)
+    a = rng.randn(4, 16).astype(np.float32)   # (C, L) unbatched
+    w = rng.randn(3, 4, 5).astype(np.float32)  # (O, I, K)
+    g = torch.fx.Graph()
+    px, pw = g.placeholder("x"), g.placeholder("w")
+    g.output(g.call_function(torch.ops.aten.conv1d.default, (px, pw)))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(torch.tensor(a), torch.tensor(w))
+    exp = torch.ops.aten.conv1d.default(torch.tensor(a), torch.tensor(w))
+    np.testing.assert_allclose(np.asarray(out), exp.numpy(), rtol=1e-4, atol=1e-5)
+    assert "conv1d" in stats["mlx"], stats
+    assert "conv1d" not in stats["cpu"], stats
+    print("test_conv1d_unbatched_executor PASS")
+
+
 if __name__ == "__main__":
     test_conv1d_fp32_configs()
     test_conv1d_fp32_shapes()
@@ -200,3 +220,5 @@ if __name__ == "__main__":
     test_conv1d_groups()
     test_conv1d_census_lowered()
     test_conv1d_census_grouped()
+    test_conv1d_unbatched()
+    test_conv1d_unbatched_executor()
