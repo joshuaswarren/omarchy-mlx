@@ -52,6 +52,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -62,6 +64,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import zipfile
 import zlib
@@ -273,7 +276,7 @@ def prepare_wheelhouse(
         if wheel is None:
             missing.append(pin)
             continue
-        digest, size = _hash_file(wheel)
+        digest, size = _hash_file(wheel, max_bytes=MAX_FILE_BYTES)
         entries[name] = {"wheel": wheel.name, "version": version,
                          "sha256": digest, "size": size}
     if missing and require_complete:
@@ -870,28 +873,193 @@ def _check_rel(rel: str) -> None:
 # ------------------------------------------------------------------ export
 
 
-def _walk_artifact(directory: Path) -> list[tuple[str, Path]]:
-    out = []
-    for path in sorted(directory.rglob("*")):
-        if path.is_symlink():
-            raise TransferError(f"refusing symlinked artifact file: {path}")
-        if path.is_dir():
-            continue
-        if not path.is_file():
-            raise TransferError(f"refusing non-regular artifact file: {path}")
-        out.append((path.relative_to(directory).as_posix(), path))
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+_MISSING_PATH_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR, errno.ELOOP})
+
+
+def _is_missing(exc: OSError | ValueError) -> bool:
+    return isinstance(exc, ValueError) or exc.errno in _MISSING_PATH_ERRNOS
+
+
+def _display_path(path: Path, rel: str | None = None) -> str | Path:
+    return f"{path}/{rel}" if rel is not None else path
+
+
+@contextlib.contextmanager
+def _open_regular(path: Path, rel: str | None = None):
+    """Open without blocking (FIFO), anchor under path when rel is given so no
+    link below it is followed, and yield only a regular file and its fstat."""
+    display = _display_path(path, rel)
+    try:
+        if rel is None:
+            fd = os.open(path, os.O_RDONLY | _O_NONBLOCK)
+        else:
+            parts = rel.split("/")
+            if any(part in ("", ".", "..") for part in parts):
+                raise ValueError(f"unsafe relative path: {rel!r}")
+            dirfd = os.open(path, os.O_RDONLY | _O_DIRECTORY | _O_NONBLOCK)
+            try:
+                for part in parts[:-1]:
+                    try:
+                        next_fd = os.open(
+                            part,
+                            os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW,
+                            dir_fd=dirfd,
+                        )
+                    except OSError as exc:
+                        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                            raise TransferError(
+                                f"refusing symlinked or non-directory artifact path: {display}"
+                            ) from exc
+                        raise
+                    prev_fd, dirfd = dirfd, next_fd
+                    os.close(prev_fd)
+                try:
+                    fd = os.open(
+                        parts[-1],
+                        os.O_RDONLY | _O_NONBLOCK | _O_NOFOLLOW,
+                        dir_fd=dirfd,
+                    )
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise TransferError(f"refusing symlinked file: {display}") from exc
+                    raise
+            finally:
+                os.close(dirfd)
+    except TransferError:
+        raise
+    except OSError as exc:
+        raise TransferError(f"cannot read {display}: {exc.strerror or exc}") from exc
+    except ValueError as exc:
+        raise TransferError(f"cannot read {display}: {exc}") from exc
+
+    try:
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise TransferError(f"refusing non-regular file: {display}")
+            stream = open(fd, "rb", buffering=0)
+        except OSError as exc:
+            raise TransferError(f"cannot read {display}: {exc.strerror or exc}") from exc
+    except BaseException:
+        os.close(fd)
+        raise
+    with stream:
+        yield stream, st
+
+
+def _read_chunks(stream, path, limit: int | None = None):
+    """Yield chunks from stream; with limit, read at most limit + 1 bytes total."""
+    read = 0
+    while True:
+        want = _CHUNK if limit is None else min(_CHUNK, limit - read + 1)
+        if want <= 0:
+            break
+        try:
+            chunk = stream.read(want)
+        except OSError as exc:
+            raise TransferError(f"cannot read {path}: {exc.strerror or exc}") from exc
+        if not chunk:
+            break
+        read += len(chunk)
+        yield chunk
+
+
+def _walk_artifact(directory: Path) -> list[str]:
+    directory = Path(directory)
+
+    def dir_error(where: Path, exc: BaseException) -> TransferError:
+        detail = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+        return TransferError(f"cannot read artifact directory {where}: {detail}")
+
+    def scan(fd: int, current: Path):
+        try:
+            with os.scandir(fd) as it:
+                entries = list(it)
+        except (OSError, ValueError) as exc:
+            raise dir_error(current, exc) from exc
+        entries.sort(key=lambda e: e.name)
+        return iter(entries)
+
+    out: list[str] = []
+    try:
+        root_fd = os.open(directory, os.O_RDONLY | _O_DIRECTORY | _O_NONBLOCK)
+    except (OSError, ValueError) as exc:
+        raise dir_error(directory, exc) from exc
+
+    # One directory fd stays open per level of the current path, so walk
+    # depth is bounded by the soft RLIMIT_NOFILE.
+    stack: list[tuple[int, Path, str, object]] = [(root_fd, directory, "", None)]
+    try:
+        while stack:
+            fd, current, prefix, it = stack[-1]
+            if it is None:
+                it = scan(fd, current)
+                stack[-1] = (fd, current, prefix, it)
+            entry = next(it, None)
+            if entry is None:
+                stack.pop()
+                os.close(fd)
+                continue
+            name = entry.name
+            entry_path = current / name
+            try:
+                name.encode("utf-8")
+            except UnicodeEncodeError:
+                raise TransferError(
+                    f"artifact file name is not valid UTF-8: {str(entry_path)!r}"
+                ) from None
+            try:
+                is_sym = entry.is_symlink()
+                is_dir = False if is_sym else entry.is_dir(follow_symlinks=False)
+                is_reg = False if (is_sym or is_dir) else entry.is_file(follow_symlinks=False)
+            except (OSError, ValueError) as exc:
+                raise dir_error(current, exc) from exc
+            if is_sym:
+                raise TransferError(f"refusing symlinked artifact file: {entry_path}")
+            rel = f"{prefix}/{name}" if prefix else name
+            if is_dir:
+                try:
+                    child_fd = os.open(
+                        name,
+                        os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW,
+                        dir_fd=fd,
+                    )
+                except (OSError, ValueError) as exc:
+                    if isinstance(exc, OSError) and exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                        raise TransferError(
+                            f"refusing symlinked or non-directory artifact path: {entry_path}"
+                        ) from exc
+                    raise dir_error(entry_path, exc) from exc
+                stack.append((child_fd, entry_path, rel, None))
+            elif not is_reg:
+                raise TransferError(f"refusing non-regular artifact file: {entry_path}")
+            else:
+                out.append(rel)
+    finally:
+        for fd, *_ in reversed(stack):
+            os.close(fd)
     if not out:
         raise TransferError(f"artifact directory is empty: {directory}")
     return out
 
 
-def _hash_file(path: Path) -> tuple[str, int]:
+def _hash_file(path: Path, rel: str | None = None, *,
+               max_bytes: int | None = None) -> tuple[str, int]:
+    """Hash one regular file in chunks, enforcing an optional byte cap."""
+    display = _display_path(path, rel)
     h = hashlib.sha256()
     size = 0
-    with path.open("rb") as f:
-        while chunk := f.read(_CHUNK):
-            h.update(chunk)
+    with _open_regular(path, rel) as (stream, st):
+        if max_bytes is not None and st.st_size > max_bytes:
+            raise TransferError(f"file exceeds {max_bytes} bytes: {display}")
+        for chunk in _read_chunks(stream, display, max_bytes):
             size += len(chunk)
+            if max_bytes is not None and size > max_bytes:
+                raise TransferError(f"file exceeds {max_bytes} bytes: {display}")
+            h.update(chunk)
     return h.hexdigest(), size
 
 
@@ -902,19 +1070,17 @@ class _BundleBuilder:
 
     def __init__(self):
         self.files: dict[str, dict] = {}
-        self.sources: dict[str, Path] = {}
+        self.sources: dict[str, tuple[Path, str | None]] = {}
         self.blobs: dict[str, bytes] = {}
         self.license_rollup: dict[str, dict] = {}
 
-    def add_file(self, rel: str, src: Path) -> int:
+    def add_file(self, rel: str, src: Path, inner: str | None = None) -> int:
         _check_rel(rel)
         if rel in self.files:
             raise TransferError(f"duplicate payload path: {rel}")
-        digest, size = _hash_file(src)
-        if size > MAX_FILE_BYTES:
-            raise TransferError(f"file exceeds {MAX_FILE_BYTES} bytes: {src}")
+        digest, size = _hash_file(src, inner, max_bytes=MAX_FILE_BYTES)
         self.files[rel] = {"sha256": digest, "size": size}
-        self.sources[rel] = src
+        self.sources[rel] = (src, inner)
         return size
 
     def add_blob(self, rel: str, data: bytes) -> int:
@@ -950,8 +1116,22 @@ class _BundleBuilder:
                 )
         for role, model in lock["models"].items():
             directory = Path(model["path"])
-            if not directory.is_dir():
-                raise TransferError(f"pair {pair_id} role {role}: artifact dir missing: {directory}")
+            missing_cause: BaseException | None = None
+            is_dir = False
+            try:
+                is_dir = stat.S_ISDIR(directory.stat().st_mode)
+            except (OSError, ValueError) as exc:
+                if _is_missing(exc):
+                    missing_cause = exc
+                else:
+                    raise TransferError(
+                        f"pair {pair_id} role {role}: cannot access artifact dir {directory}: "
+                        f"{exc.strerror or exc}"
+                    ) from exc
+            if not is_dir:
+                raise TransferError(
+                    f"pair {pair_id} role {role}: artifact dir missing: {directory}"
+                ) from missing_cause
             lic = lock["licenses"].get(model["id"])
             if lic is None:
                 raise TransferError(f"pair {pair_id}: no license for model {model['id']!r}")
@@ -959,8 +1139,8 @@ class _BundleBuilder:
             rollup = self.license_rollup.setdefault(lic, {"models": [], "bytes": 0})
             if model["id"] not in rollup["models"]:
                 rollup["models"].append(model["id"])
-            for name, path in _walk_artifact(directory):
-                pair_bytes += self.add_file(f"{pair_id}/{role}/{name}", path)
+            for name in _walk_artifact(directory):
+                pair_bytes += self.add_file(f"{pair_id}/{role}/{name}", directory, name)
                 count += 1
                 rollup["bytes"] += self.files[f"{pair_id}/{role}/{name}"]["size"]
         return {
@@ -996,7 +1176,7 @@ class _BundleBuilder:
             rollup["models"].append(pack_id)
         pack_bytes = self.add_blob(f"voice/{pack_id}/manifest.json", receipt_path.read_bytes())
         count = 1
-        for name, path in _walk_artifact(pack_dir):
+        for name in _walk_artifact(pack_dir):
             if name == "manifest.json":
                 continue
             expected = listed.get(name)
@@ -1005,7 +1185,7 @@ class _BundleBuilder:
                     f"voice pack {pack_id}: file {name} is not listed in manifest.json"
                 )
             rel = f"voice/{pack_id}/{name}"
-            size = self.add_file(rel, path)
+            size = self.add_file(rel, pack_dir, name)
             if size != expected.get("bytes") or self.files[rel]["sha256"] != expected.get("sha256"):
                 raise TransferError(
                     f"voice pack {pack_id}: {name} does not match manifest.json "
@@ -1032,14 +1212,21 @@ def _collect_wheel_entries(builder: _BundleBuilder, plats: dict, wheelhouse: Pat
     missing = []
     for canon, entry in sorted(wheels.items()):
         fname = entry["wheel"]
-        if not (wheelhouse / fname).is_file():
-            missing.append(f"{canon}=={entry.get('version')} ({fname})")
-            continue
+        wheel_path = wheelhouse / fname
+        try:
+            wheel_path.stat()
+        except (OSError, ValueError) as exc:
+            if _is_missing(exc):
+                missing.append(f"{canon}=={entry.get('version')} ({fname})")
+                continue
+            raise TransferError(
+                f"cannot access wheel {wheel_path}: {exc.strerror or exc}"
+            ) from exc
         reason = _wheel_matches_platform(fname, plats)
         if reason:
             raise PlatformMismatch(reason)
         rel = f"{WHEELS_TOP}/{fname}"
-        size = builder.add_file(rel, wheelhouse / fname)
+        size = builder.add_file(rel, wheel_path)
         prepared = entry.get("sha256")
         if prepared and builder.files[rel]["sha256"] != prepared:
             raise WheelhouseIncomplete(
@@ -1052,6 +1239,31 @@ def _collect_wheel_entries(builder: _BundleBuilder, plats: dict, wheelhouse: Pat
         if not allow_incomplete:
             raise WheelhouseIncomplete(f"runtime wheelhouse incomplete; missing: {listing}")
     return wheel_entries, missing
+
+
+def _write_payload(zf: zipfile.ZipFile, rel: str, src: Path,
+                   inner: str | None, entry: dict) -> None:
+    """Write src so the bytes written equal the size and sha256 add_file
+    recorded, or raise TransferError."""
+    display = _display_path(src, inner)
+    expected_size = entry["size"]
+    with _open_regular(src, inner) as (stream, st):
+        if st.st_size != expected_size:
+            raise TransferError(f"file changed during export: {display}")
+        zi = zipfile.ZipInfo(rel, time.localtime(st.st_mtime)[:6])
+        zi.external_attr = (st.st_mode & 0xFFFF) << 16
+        zi.file_size = expected_size
+        h = hashlib.sha256()
+        size = 0
+        with zf.open(zi, "w") as dst:
+            for chunk in _read_chunks(stream, display, expected_size):
+                if size + len(chunk) > expected_size:
+                    raise TransferError(f"file changed during export: {display}")
+                dst.write(chunk)
+                h.update(chunk)
+                size += len(chunk)
+        if size != expected_size or h.hexdigest() != entry["sha256"]:
+            raise TransferError(f"file changed during export: {display}")
 
 
 def _write_bundle_zip(out_path: Path, manifest: dict, builder: _BundleBuilder,
@@ -1074,7 +1286,8 @@ def _write_bundle_zip(out_path: Path, manifest: dict, builder: _BundleBuilder,
                 if rel in builder.blobs:
                     zf.writestr(rel, builder.blobs[rel])
                 else:
-                    zf.write(builder.sources[rel], arcname=rel)
+                    src, inner = builder.sources[rel]
+                    _write_payload(zf, rel, src, inner, files[rel])
                 done += files[rel]["size"]
                 if progress:
                     progress(done, total, rel)
