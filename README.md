@@ -203,6 +203,32 @@ Same MacBook Pro on both sides, same quantized model snapshot, same prompt, and 
 | 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 / 64 | 202.71 tok/s (`819625f8`, 5 pairs) | 212.82 tok/s (5 runs) | 95.2% | `4784df039da0` |
 | 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 / 128 | 100.69 tok/s (`#1059` / `#1063`, 5 pairs) | 104.53 tok/s (5 runs) | 96.3% | `efb521ae04af` |
 
+
+### Parity card (November 2026, Mesa `53ad9af196f5`)
+
+One row per machine, model snapshot and context. Decode and prefill are
+tokens per second on the same MacBook Pro on both sides, same snapshot,
+same prompt, greedy output verified by SHA-256 on every run. Linux
+cells run the unified Mesa pin `53ad9af196f5` with
+`MLX_OMARCHY_DEFER_TOKENS=0`; macOS cells run stock `mlx 0.32.2` /
+`mlx-lm` on Metal. The share column is Linux decode as a share of
+macOS decode: 100% means parity, higher is faster on Linux.
+
+| Machine | Model (snapshot) | Context | Linux decode | Linux prefill | macOS decode | macOS prefill | Linux / macOS | Runs | Greedy SHA-256 (12 hex) | PR | Mesa pin |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|
+| 13-inch M1 MacBook Pro (8-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 | pending | pending | pending | pending | pending | pending | `4784df039da0` | pending | `53ad9af196f5` |
+| 13-inch M1 MacBook Pro (8-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 | pending | pending | pending | pending | pending | pending | `c5fb4074d0b5` | pending | `53ad9af196f5` |
+| 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | pending | pending | pending | pending | pending | pending | `a6fad159dfa9` | pending | `53ad9af196f5` |
+| 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | pending | pending | pending | pending | pending | pending | `9115b5280c1d` | pending | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | pending | pending | pending | pending | pending | pending | `efb521ae04af` | pending | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | pending | pending | pending | pending | pending | pending | `542524d1f692` | pending | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | pending | pending | pending | pending | pending | pending | `697272134f42` | pending | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | pending | pending | pending | pending | pending | pending | pending | pending | `53ad9af196f5` |
+| 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 | pending | pending | pending | pending | pending | pending | `4784df039da0` | pending | `53ad9af196f5` |
+| 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 | pending | pending | pending | pending | pending | pending | `c5fb4074d0b5` | pending | `53ad9af196f5` |
+| 14-inch M2 Max MacBook Pro (38-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | pending | pending | pending | pending | pending | pending | `cedd5549b251` | pending | `53ad9af196f5` |
+| 14-inch M2 Max MacBook Pro (38-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | pending | pending | pending | pending | pending | pending | `5b327e139ad9` | pending | `53ad9af196f5` |
+
 ### Earlier M1 Max model sweep (October 2026)
 
 Same MacBook Pro (M1 Max, 64 GB), same models, same prompts, MLX on both sides with the same mlx-lm (0.32.0), measured 2026-10-09 to 2026-10-11. The Linux column runs the mlx-lm patches the installer applies. Where macOS is shown, the percentage is Linux as a share of macOS: 100% means equal, higher is faster on Linux.
