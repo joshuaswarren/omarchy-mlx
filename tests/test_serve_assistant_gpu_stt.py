@@ -244,6 +244,74 @@ class BarePackageTest(unittest.TestCase):
                     sys.modules.pop(name, None)
 
 
+class StageTimersTest(unittest.TestCase):
+    """The V2 per-stage profile: seam accumulation and the emitted buckets."""
+
+    def setUp(self):
+        from mlx_omarchy_assistant import gpu_stt_worker as worker
+        self.worker = worker
+        worker._TIMERS.reset()
+        worker._TIMERS.load_ms = 0.0
+
+    def test_disabled_by_default_and_on_for_truthy_values(self):
+        for value in (None, "", "off", "0", "no"):
+            with patch.dict(os.environ, {}, clear=True):
+                if value is not None:
+                    os.environ["MLX_OMARCHY_GPU_STT_STAGES"] = value
+                self.assertFalse(self.worker._stages_enabled())
+        with patch.dict(os.environ, {"MLX_OMARCHY_GPU_STT_STAGES": "on"}):
+            self.assertTrue(self.worker._stages_enabled())
+
+    def test_buckets_split_decode_into_encoder_decoder_and_post(self):
+        timers = self.worker._StageTimers()
+        timers.load_ms, timers.resample_ms = 900.0, 5.0
+        timers.mel_ms, timers.encoder_ms, timers.decode_ms, timers.generate_ms = 3.0, 40.0, 90.0, 120.0
+        timers.generate_calls = 1
+        stages = timers.as_dict()
+        self.assertEqual(stages["encoder"], 40.0)
+        self.assertEqual(stages["decoder"], 50.0)   # decode minus encoder
+        self.assertEqual(stages["post"], 27.0)      # generate minus mel minus decode
+        self.assertEqual(stages["request_total"], 125.0)
+        self.assertEqual(stages["load"], 900.0)
+
+    def test_model_wraps_report_into_the_shared_accumulator(self):
+        calls = []
+
+        class FakeModel:
+            def _log_mel_spectrogram(self, audio):
+                return "mel"
+
+            def encoder(self, mel):
+                calls.append(("encoder", mel))
+                return "features", [1]
+
+            def decode(self, mel):
+                calls.append(("decode", mel))
+                self.encoder(mel)
+                return []
+
+        model = FakeModel()
+        self.worker._instrument_model(model)
+        model._log_mel_spectrogram("audio")
+        model.decode("mel")
+        self.assertEqual(calls, [("decode", "mel"), ("encoder", "mel")])
+        self.assertGreaterEqual(self.worker._TIMERS.mel_ms, 0.0)
+        self.assertGreater(self.worker._TIMERS.decode_ms, self.worker._TIMERS.encoder_ms)
+
+    def test_generate_counts_calls_and_total_time(self):
+        result = type("R", (), {"text": "hello"})()
+
+        class FakeModel:
+            def generate(self, audio, verbose=False):
+                return result
+
+        timers = self.worker._StageTimers()
+        self.assertEqual(self.worker.generate_with_model(FakeModel(), "audio", timers), "hello")
+        self.assertEqual(self.worker.generate_with_model(FakeModel(), "audio", timers), "hello")
+        self.assertEqual(timers.generate_calls, 2)
+        self.assertGreaterEqual(timers.generate_ms, 0.0)
+
+
 class EmptyTranscriptRetryTest(unittest.TestCase):
     """The worker's decode path, with numpy standing in for mlx."""
 
