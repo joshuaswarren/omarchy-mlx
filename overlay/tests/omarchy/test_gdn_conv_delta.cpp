@@ -481,3 +481,43 @@ TEST_CASE("coalesced GDN Sg32 default policy, accuracy, dispatch count, and off-
     }
   }
 }
+
+TEST_CASE("coalesced GDN Sg32 f32 A_log GQA 3-in-1 fusion policy, accuracy, and lazy off-switch") {
+  CHECK(omarchy::gdn_conv_coalesced_f32a_default("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default("Apple M6 (G18G B1)"));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default(""));
+
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  constexpr int HK = 16;
+  constexpr int HV = 32;
+  Inputs in = make_inputs(101u, 0.2f, s, HK, HV);
+  in.a_log = pattern({HV}, 107u, 0.5f, 1.0f);
+  eval({in.a_log});
+
+  auto run_9b = [&](const char* coal_flag) {
+    setenv("MLX_OMARCHY_GDN_COALESCED", coal_flag, 1);
+    setenv("MLX_OMARCHY_GDN_DECODE_COALESCED", "1", 1);
+    Run r = fused(in, s, true, HK);
+    unsetenv("MLX_OMARCHY_GDN_COALESCED");
+    unsetenv("MLX_OMARCHY_GDN_DECODE_COALESCED");
+    return r;
+  };
+
+  Run off = run_9b("0");
+  // Warm pipeline, then measure fused dispatch count and bit-exactness vs composed Sg32.
+  run_9b("1");
+  Run on = run_9b("1");
+  CHECK(off.dispatches >= 3u);
+  if (on.dispatches != off.dispatches) {
+    CHECK_EQ(on.dispatches, 1u);
+  } else if (const char* req = std::getenv("MLX_OMARCHY_GDN_REQUIRE_ENGAGED");
+             req != nullptr && std::string(req) == "1") {
+    FAIL("coalesced f32 A_log 3-in-1 kernel did not engage (dispatches=", on.dispatches, ")");
+  }
+  CHECK(array_equal(on.out[0], off.out[0], s).item<bool>());
+  CHECK(array_equal(on.out[1], off.out[1], s).item<bool>());
+  CHECK(array_equal(on.out[2], off.out[2], s).item<bool>());
+}
