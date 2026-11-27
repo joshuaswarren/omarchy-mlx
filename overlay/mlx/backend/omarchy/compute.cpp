@@ -778,6 +778,8 @@
 #include "matmul_direct_f16_c16_tn.h"
 #include "matmul_direct_f16_c16_tt.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s32w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s4w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s4w2.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
@@ -2577,6 +2579,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_bf16_r2s32w2,
           qmm_vec_q4_word_subgroup_bf16_r2s32w2_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S4W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s4w2,
+          qmm_vec_q4_swiglu_bf16_r1s4w2_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

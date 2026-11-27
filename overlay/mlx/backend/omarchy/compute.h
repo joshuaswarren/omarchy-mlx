@@ -1380,6 +1380,11 @@ enum class ComputeKernel : uint16_t {
   // one 64-lane subgroup per workgroup. Appended to keep profile kernel
   // ids stable.
   SdpaCausalFlashCoopmat16BF16,
+  // 128-thread (4 subgroups) Q4 word subgroup GEMV (8 cols/WG) and dedicated
+  // SwiGLU (4 cols/WG) for G14C occupancy headroom (Appended to keep profile
+  // kernel ids stable).
+  QmmVecQ4WordSubgroupBF16R2S4W2,
+  QmmVecQ4SwigluBF16R1S4W2,
   Count,
 };
 

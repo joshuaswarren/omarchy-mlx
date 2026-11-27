@@ -851,6 +851,22 @@ inline bool qmm_swiglu_r1_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// 128-thread (4 subgroups, 4 cols/WG) dedicated SwiGLU
+// (QmmVecQ4SwigluBF16R1S4W2: higher warp scheduling headroom on G14C than
+// 256-thread R1S8W2, bit-identical). Default on G14C; MLX_OMARCHY_SWIGLU_R1S4=0
+// restores R1S8W2 and MLX_OMARCHY_SWIGLU_R1=0 disables R1. Pure.
+inline bool qmm_swiglu_r1s4_default(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
+// 128-thread (4 subgroups, 8 cols/WG) Q4 word subgroup decode GEMV for
+// single-output projections with N >= 2048 (QmmVecQ4WordSubgroupBF16R2S4W2,
+// bit-identical to R2S8W2). Default on G14C; MLX_OMARCHY_WORD_R2S4=0 restores
+// geometry.word. Pure.
+inline bool qmm_word_r2s4_default(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
 // Coalesced 128-bit uvec4 ResNorm epilogue with 512-thread workgroups
 // (QmmVecQ4ResNormVec4BF16R2S16W2: 32 cols/WG halving ticket.done atomic
 // contention + single-pass coherent sum0_v4 load held in registers across the

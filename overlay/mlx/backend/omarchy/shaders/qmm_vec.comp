@@ -2154,7 +2154,9 @@ void main() {
     ticket.done = 0u;
   }
   memoryBarrierBuffer();
+#ifndef QMM_RESNORM_VEC4
   barrier();
+#endif
 
   // Single-row Apple RMSNorm (mirrors shaders/fast_norm_apple.comp bit-for-bit)
   // over sum0.values[0..n-1] on threads 0..255; barriers stay workgroup-uniform.
@@ -2198,16 +2200,10 @@ void main() {
         }
       }
       barrier();
-      if (sub_id == 0u) {
+      if (lane < 256u) {
         float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
         float total_sq = subgroupAdd(v);
-        if (sub_lane == 0u) {
-          s_resnorm_partial[0] = total_sq;
-        }
-      }
-      barrier();
-      if (lane < 256u) {
-        float mean_square = s_resnorm_partial[0] / float(row_length);
+        float mean_square = total_sq / float(row_length);
         float norm = inversesqrt(mean_square + eps);
         uvec4 wv0 = norm_weight_v4.values[nw_base + lane];
         #define RN_PACK_PAIR(sv_w, wv_w, out_u) { \
@@ -2263,16 +2259,10 @@ void main() {
         }
       }
       barrier();
-      if (sub_id == 0u) {
+      if (lane < 256u) {
         float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
         float total_sq = subgroupAdd(v);
-        if (sub_lane == 0u) {
-          s_resnorm_partial[0] = total_sq;
-        }
-      }
-      barrier();
-      if (lane < 256u) {
-        float mean_square = s_resnorm_partial[0] / float(row_length);
+        float mean_square = total_sq / float(row_length);
         float norm = inversesqrt(mean_square + eps);
         uvec4 wv0 = norm_weight_v4.values[nw_base + vidx];
         uvec4 wv1 = norm_weight_v4.values[nw_base + vidx + 1u];
