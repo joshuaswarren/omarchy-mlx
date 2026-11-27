@@ -1347,6 +1347,10 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeOnlineRopeOutgateSg32BF16Hd128,
   SdpaDecodeOnlineRopeSg32BF16Hd256,
   SdpaDecodeOnlineRopeOutgateSg32BF16Hd256,
+  // Coalesced-state fused GDN decode conv + gated-delta + gated-RMSNorm
+  // (Dk == Dv == 128, f32 state, bf16 qkv/gates/out; 1024 threads, 32 SGs).
+  // Appended to keep profile kernel ids stable.
+  GatedDeltaDecodeConvNormBF16Sg32,
   Count,
 };
 

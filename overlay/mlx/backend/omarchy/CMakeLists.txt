@@ -587,6 +587,8 @@ omarchy_shader(gated_delta_decode_perrow_pfw_conv_norm_bf16 shaders/gated_delta_
 # ... and for unequal key/value head counts (native GQA key-head index in the conv prologue).
 omarchy_shader(gated_delta_decode_perrow_pf_conv_gqa_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NATIVE_GQA_INDEX=1)
 omarchy_shader(gated_delta_decode_perrow_pf_conv_norm_gqa_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1 -DGDN_NATIVE_GQA_INDEX=1)
+# Coalesced-state fused GDN decode conv + gated-delta + gated-RMSNorm (1024 threads, 32 SGs, 4 rows/SG).
+omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32 shaders/gated_delta_decode_conv_coalesced.comp)
 omarchy_shader(gated_delta_decode_composed_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_COMPOSED_ORDER=1)
 omarchy_shader(gated_delta_decode_gqa_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_NATIVE_GQA_INDEX=1)
 omarchy_shader(gated_delta_decode_state_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DSTATE_BF16=1)
