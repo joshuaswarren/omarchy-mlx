@@ -258,6 +258,39 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     (name, ins[1:], dtype,
                      float((got - ref.float()).abs().max())))
 
+    def test_reciprocal_frac_parity(self):
+        """PT-AL-e: aten.reciprocal/frac lower in the wheel backend —
+        fp32 and bf16 parity incl. the sign-kept frac contract and the
+        in-place aten aliases."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x = torch.tensor([[-2.3, -0.7, -0.5, 0.0], [0.25, 1.9, 8.0, -4.0]])
+        cases = [
+            ("reciprocal", torch.reciprocal(x)),
+            ("frac", torch.frac(x)),
+            ("reciprocal_", torch.reciprocal(x)),
+            ("frac_", torch.frac(x)),
+        ]
+        for name, ref in cases:
+            lowering = ATEN_TABLE[name]
+            for dtype, tol in ((torch.float32, 1e-5),
+                               (torch.bfloat16, 2e-2)):
+                m = (mx.array(x.float().numpy()).astype(mx.bfloat16)
+                     if dtype == torch.bfloat16 else mx.array(x.numpy()))
+                got = torch.from_numpy(
+                    np.array(lowering(m).astype(mx.float32)))
+                self.assertTrue(
+                    torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                    (name, dtype,
+                     float((got - ref.float()).abs().max())))
+        # frac keeps x's sign: -0.3, not the floor form's +0.7.
+        got = np.array(ATEN_TABLE["frac"](mx.array([-2.3])))
+        self.assertTrue(abs(float(got[0]) - (-0.3)) < 1e-6, got)
+
 
 if __name__ == "__main__":
     unittest.main()
