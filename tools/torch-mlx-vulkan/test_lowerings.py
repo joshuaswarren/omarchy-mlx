@@ -2674,6 +2674,63 @@ def test_reciprocal_frac():
     print("test_reciprocal_frac PASS")
 
 
+def test_linalg_norm():
+    # PT-NORM-b: aten.linalg_vector_norm + aten.linalg_norm (normalization,
+    # grad clipping). Also pins aten.norm's inf/-inf contract: the prior
+    # lowering silently computed a 2-norm for both.
+    x = torch.randn(3, 4)
+    x3 = torch.randn(2, 3, 4)
+    cases = [
+        (torch.ops.aten.linalg_vector_norm.default, (x,), {},
+         torch.linalg.vector_norm(x), "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x,), {"ord": 1.0},
+         torch.linalg.vector_norm(x, ord=1.0), "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x,),
+         {"ord": float("inf"), "dim": [1]},
+         torch.linalg.vector_norm(x, ord=float("inf"), dim=[1]),
+         "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x3,),
+         {"ord": 0.5, "dim": [1, 2], "keepdim": True},
+         torch.linalg.vector_norm(x3, ord=0.5, dim=[1, 2], keepdim=True),
+         "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x,),
+         {"dtype": torch.float64},
+         torch.linalg.vector_norm(x, dtype=torch.float64),
+         "linalg_vector_norm"),
+        (torch.ops.aten.linalg_norm.default, (x,), {},
+         torch.linalg.norm(x), "linalg_norm"),
+        (torch.ops.aten.linalg_norm.default, (x,),
+         {"ord": float("-inf"), "dim": [0]},
+         torch.linalg.norm(x, ord=float("-inf"), dim=[0]), "linalg_norm"),
+        (torch.ops.aten.linalg_norm.default, (x3,), {"ord": 2.0, "dim": [2]},
+         torch.linalg.norm(x3, ord=2.0, dim=[2]), "linalg_norm"),
+    ]
+    for target, ins, kw, ref, name in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kw)
+        assert any(name in s for s in stats["mlx"]), (stats, str(target))
+        got = out.float().numpy()
+        assert np.allclose(got, ref.float().numpy(), atol=1e-5), \
+            (str(target), kw, got, ref.float().numpy())
+    # the aten.norm inf/-inf fix at table level.
+    m = mx.array(x.numpy())
+    for p, ref in (("inf", torch.norm(x, float("inf"))),
+                   ("-inf", torch.norm(x, float("-inf"))),
+                   (1.0, torch.norm(x, 1.0)),
+                   (2.0, torch.norm(x, 2.0))):
+        got = torch.from_numpy(np.array(
+            mlx_vulkan.ATEN_TABLE["norm"](m, p)))
+        assert torch.allclose(got, ref.float(), atol=1e-5), \
+            (p, float(got), float(ref))
+    print("test_linalg_norm PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2720,6 +2777,7 @@ if __name__ == "__main__":
     test_elu_selu_celu()
     test_glu()
     test_reciprocal_frac()
+    test_linalg_norm()
     test_cosine_similarity()
     print("ALL PASS")
 
