@@ -1023,31 +1023,6 @@ bool is_op(const array* node, const std::type_info& op) {
   return node && node->has_primitive() && typeid(node->primitive()) == op;
 }
 
-// Structural signature of an eval tape: op type, dtype, shape, and input
-// arity per node, folded in tape order. Decode steps re-issue the same
-// graph, so identical signatures mean the fold plan transfers by tape
-// position. Prim state (axes, eps, quant bits) is deliberately out of the
-// key: replay revalidates every fold's gates against the new nodes and
-// declines on any mismatch, so a colliding-but-different tape costs one
-// revalidation pass, never a wrong plan.
-uint64_t tape_signature(const std::deque<array>& tape) {
-  uint64_t h = tape.size() * 0x9e3779b97f4a7c15ull;
-  auto mix = [&h](uint64_t v) {
-    h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
-  };
-  for (const auto& node : tape) {
-    mix(node.has_primitive()
-            ? static_cast<uint64_t>(typeid(node.primitive()).hash_code())
-            : 0xfeedfaceull);
-    mix(static_cast<uint64_t>(node.dtype().val()));
-    mix(static_cast<uint64_t>(node.ndim()));
-    for (const auto dim : node.shape()) {
-      mix(static_cast<uint64_t>(dim));
-    }
-    mix(static_cast<uint64_t>(node.inputs().size()));
-  }
-  return h;
-}
 // Two RoPE offset inputs can share one buffer binding when they are the
 // same node, or when both are host-constant int scalars with an equal
 // value (the mlx_lm decode shape: cache.offset is a Python int, so each
@@ -1470,7 +1445,1566 @@ bool node_trio_enabled(const array& node) {
   return d != nullptr && fused_trio_enabled(*d);
 }
 
+// ---------------------------------------------------------------------------
+// Per-shape fold-plan cache (thread-local).
+//
+// Autoregressive decode repeats the exact same graph topology on every token
+// while only array handles, KV-cache write offsets, and KV-view slice lengths
+// advance. We hash the tape's full structural + attribute + config signature
+// (masking only the dynamic KV sequence axis on 4D Slice views over 4D
+// SliceUpdate nodes while encoding SDPA online-rope regime transitions),
+// cache the resulting fold plan as tape-index templates, and instantiate a
+// fresh EagerFusionState on cache hit in linear time over the planned folds.
+// Runtime-dependent checks (SliceUpdate state match, KV direct-window geometry
+// and buffer donation, shared RoPE offsets, RopeNorm view flags) are
+// revalidated on every replay; any mismatch declines the cached plan cleanly
+// and falls through to the full planner.
+// ---------------------------------------------------------------------------
+
+struct FoldKeyHasher {
+  uint64_t lo = 0x243f6a8885a308d3ull;
+  uint64_t hi = 0x13198a2e03707344ull;
+
+  void mix(uint64_t v) {
+    lo ^= v + 0x9e3779b97f4a7c15ull + (lo << 6) + (lo >> 2);
+    lo *= 0xbf58476d1ce4e5b9ull;
+    lo ^= lo >> 31;
+    hi ^= (v ^ lo) + 0x517cc1b727220a95ull + (hi << 7) + (hi >> 3);
+    hi *= 0x94d049bb133111ebull;
+    hi ^= hi >> 31;
+  }
+
+  void mix_bytes(const void* data, size_t n) {
+    mix(static_cast<uint64_t>(n));
+    const auto* p = static_cast<const uint8_t*>(data);
+    size_t i = 0;
+    while (i + 8 <= n) {
+      uint64_t w = 0;
+      std::memcpy(&w, p + i, 8);
+      mix(w);
+      i += 8;
+    }
+    if (i < n) {
+      uint64_t tail = 0;
+      std::memcpy(&tail, p + i, n - i);
+      mix(tail);
+    }
+  }
+
+  void mix_float(float f) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &f, sizeof(bits));
+    mix(static_cast<uint64_t>(bits));
+  }
+};
+
+bool fold_planner_trace_active() {
+  return std::getenv("MLX_OMARCHY_SWIGLU_TRACE") != nullptr ||
+      omarchy::env_str("MLX_OMARCHY_KV_TRACE") != nullptr ||
+      std::getenv("MLX_OMARCHY_ROPE_EPI_TRACE") != nullptr ||
+      omarchy::env_str("MLX_OMARCHY_ROPE_NORM_TRACE") != nullptr ||
+      omarchy::env_str("MLX_OMARCHY_SDPA_ROPE_TRACE") != nullptr ||
+      omarchy::env_str("MLX_OMARCHY_TRIO_TRACE") != nullptr;
+}
+
+void hash_fold_config(FoldKeyHasher& h) {
+  auto mix_env = [&](const char* val) {
+    if (val == nullptr) {
+      h.mix(0x100000001ull);
+    } else {
+      h.mix(0x200000002ull);
+      h.mix_bytes(val, std::strlen(val));
+    }
+  };
+  mix_env(omarchy::env_str("MLX_OMARCHY_FUSED_CHAIN"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_NO_FUSION_GATE"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_OUTGATE_FOLD"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_GDN_INPROJ_BA_FOLD"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_GDN_COALESCED"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_FUSED_GEMV"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_QMM_EPILOGUE_GEMV"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_GEMV_BALANCED_QKV"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_FUSED_GEMV_SWIGLU"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_QMM_VEC_TOKEN_MULTI"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_QMM_VEC_TOKEN_FOLD"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_QMM_VEC_Q4_WORD"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_KV_DIRECT"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_QMM_RESIDUAL_NORM"));
+  mix_env(std::getenv("MLX_OMARCHY_ROPE_EPI"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_SDPA_OUTGATE"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_ADD_NORM_FUSE"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_ROPE_NORM_FOLD"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE_ROPE"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_FUSED_TRIO"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_ROPE_NORM_PAIR"));
+  mix_env(omarchy::env_str("MLX_OMARCHY_PROLOGUE_FOLD"));
+  mix_env(std::getenv("MLX_OMARCHY_PROLOGUE_NORM"));
+}
+
+constexpr uint32_t kExternalSlotBit = 0x80000000u;
+
+FoldPlanKey compute_fold_plan_key_impl(
+    const std::deque<array>& tape,
+    TapeIndex<uint32_t>& id_map) {
+  id_map.prepare(tape.size() * 2 + 16);
+  const uint32_t n = static_cast<uint32_t>(tape.size());
+  for (uint32_t i = 0; i < n; ++i) {
+    id_map.put_if_absent(tape[i].id(), i);
+  }
+
+  FoldKeyHasher h;
+  hash_fold_config(h);
+  h.mix(static_cast<uint64_t>(n));
+
+  uint32_t next_ext = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    const array& node = tape[i];
+    const bool has_prim = node.has_primitive();
+    const std::type_info* ti = nullptr;
+    if (has_prim) {
+      Primitive& p = node.primitive();
+      ti = &typeid(p);
+      h.mix(static_cast<uint64_t>(ti->hash_code()));
+      const Stream& st = p.stream();
+      h.mix(
+          (static_cast<uint64_t>(static_cast<int>(st.device.type)) << 32) |
+          static_cast<uint32_t>(st.device.index));
+      h.mix(static_cast<uint64_t>(st.index));
+    } else {
+      h.mix(0xfeedface00000001ull);
+    }
+
+    h.mix(static_cast<uint64_t>(node.dtype().val()));
+    h.mix(static_cast<uint64_t>(node.ndim()));
+    h.mix(static_cast<uint64_t>(node.siblings().size()));
+
+    // KV-cache slice views (4D Slice over a 4D SliceUpdate) grow axis 2 by +1
+    // each decode token. Mask axis 2 to (len > 0) here and encode the exact
+    // SDPA online-rope k_len regime on the consuming SDPA node below.
+    bool mask_kv_seq_axis = false;
+    if (ti != nullptr && *ti == typeid(Slice) && node.ndim() == 4 &&
+        !node.inputs().empty()) {
+      const uint32_t* src_pos = id_map.find(node.inputs()[0].id());
+      if (src_pos != nullptr && (*src_pos & kExternalSlotBit) == 0 &&
+          is_op(&tape[*src_pos], typeid(SliceUpdate)) &&
+          tape[*src_pos].ndim() == 4) {
+        mask_kv_seq_axis = true;
+      }
+    }
+    h.mix(mask_kv_seq_axis ? 0x511ce001ull : 0x511ce000ull);
+    for (int ax = 0; ax < node.ndim(); ++ax) {
+      if (mask_kv_seq_axis && ax == 2) {
+        h.mix(node.shape(2) > 0 ? 1ull : 0ull);
+      } else {
+        h.mix(static_cast<uint64_t>(node.shape(ax)));
+      }
+    }
+
+    const auto& inputs = node.inputs();
+    h.mix(static_cast<uint64_t>(inputs.size()));
+    for (const auto& inp : inputs) {
+      if (const uint32_t* slot = id_map.find(inp.id()); slot != nullptr) {
+        h.mix(static_cast<uint64_t>(*slot));
+      } else {
+        const uint32_t ext_slot = kExternalSlotBit | next_ext++;
+        id_map.put_if_absent(inp.id(), ext_slot);
+        h.mix(static_cast<uint64_t>(ext_slot));
+        h.mix(static_cast<uint64_t>(inp.dtype().val()));
+        h.mix(static_cast<uint64_t>(inp.ndim()));
+        for (int ax = 0; ax < inp.ndim(); ++ax) {
+          h.mix(static_cast<uint64_t>(inp.shape(ax)));
+        }
+      }
+    }
+
+    if (ti == nullptr) {
+      continue;
+    }
+    Primitive& p = node.primitive();
+    if (*ti == typeid(QuantizedMatmul)) {
+      auto [group_size, bits, mode, transpose] =
+          static_cast<const QuantizedMatmul&>(p).state();
+      h.mix(static_cast<uint64_t>(group_size));
+      h.mix(static_cast<uint64_t>(bits));
+      h.mix(static_cast<uint64_t>(static_cast<int>(mode)));
+      h.mix(transpose ? 1ull : 0ull);
+    } else if (*ti == typeid(fast::RMSNorm)) {
+      h.mix_float(static_cast<const fast::RMSNorm&>(p).state().second);
+    } else if (*ti == typeid(fast::RoPE)) {
+      const auto& rp = static_cast<const fast::RoPE&>(p);
+      const auto& st = rp.state();
+      h.mix(rp.has_norm() ? 1ull : 0ull);
+      if (rp.has_norm()) {
+        h.mix_float(rp.norm_eps());
+      }
+      h.mix(static_cast<uint64_t>(std::get<1>(st)));
+      h.mix(std::get<2>(st) ? 1ull : 0ull);
+      h.mix_float(std::get<3>(st));
+      h.mix_float(std::get<4>(st));
+      h.mix(std::get<5>(st) ? 1ull : 0ull);
+      h.mix((p.stream().device.type == mlx::core::Device::gpu &&
+             fast::RoPE::use_fallback(p.stream()))
+                ? 1ull
+                : 0ull);
+    } else if (*ti == typeid(Transpose)) {
+      const auto& axes = static_cast<const Transpose&>(p).state();
+      h.mix(static_cast<uint64_t>(axes.size()));
+      for (int ax : axes) {
+        h.mix(static_cast<uint64_t>(ax));
+      }
+    } else if (*ti == typeid(SliceUpdate)) {
+      const auto& st = static_cast<const SliceUpdate&>(p).state();
+      h.mix(static_cast<uint64_t>(static_cast<int>(std::get<0>(st))));
+      if (!inputs.empty()) {
+        const array& base = inputs[0];
+        uint64_t bflags = (base.flags().row_contiguous ? 1ull : 0ull) |
+            (base.size() == base.data_size() ? 2ull : 0ull) |
+            ((base.itemsize() != 0 && base.offset() % base.itemsize() == 0)
+                 ? 4ull
+                 : 0ull);
+        h.mix(bflags);
+      }
+    } else if (*ti == typeid(Gather)) {
+      const auto& gst = static_cast<const Gather&>(p).state();
+      h.mix(static_cast<uint64_t>(gst.first.size()));
+      for (int ax : gst.first) {
+        h.mix(static_cast<uint64_t>(ax));
+      }
+      h.mix(static_cast<uint64_t>(gst.second.size()));
+      for (auto sz : gst.second) {
+        h.mix(static_cast<uint64_t>(sz));
+      }
+    } else if (*ti == typeid(fast::Quantize)) {
+      const auto& qst = static_cast<const fast::Quantize&>(p).state();
+      h.mix(static_cast<uint64_t>(std::get<1>(qst)));
+      h.mix(static_cast<uint64_t>(std::get<2>(qst)));
+      h.mix(static_cast<uint64_t>(static_cast<int>(std::get<3>(qst))));
+      h.mix(std::get<4>(qst) ? 1ull : 0ull);
+    } else if (*ti == typeid(fast::GdnConvDeltaUpdate)) {
+      h.mix(static_cast<uint64_t>(
+          static_cast<const fast::GdnConvDeltaUpdate&>(p).key_dim()));
+    } else if (*ti == typeid(fast::ScaledDotProductAttention)) {
+      if (node.ndim() == 4 && inputs.size() == 3 &&
+          (node.shape(3) == 128 || node.shape(3) == 256) &&
+          inputs[1].ndim() == 4) {
+        const int64_t k_len = inputs[1].shape(2);
+        uint64_t regime = (k_len > 0) ? 1ull : 0ull;
+        if (const Device* d = stream_device(node);
+            d != nullptr && k_len > 0) {
+          const auto& caps = d->capabilities();
+          if (sdpa_online_rope_enabled(
+                  caps, static_cast<uint32_t>(k_len), node.shape(3), false)) {
+            regime |= 2ull;
+          }
+          if (sdpa_online_rope_enabled(
+                  caps, static_cast<uint32_t>(k_len), node.shape(3), true)) {
+            regime |= 4ull;
+          }
+        }
+        h.mix(regime);
+      }
+    }
+  }
+  return FoldPlanKey{h.lo, h.hi, tape.size()};
+}
+
+// Tape-position reference to any array referenced by a cached fold plan:
+// either a tape node itself (input_idx == kSelf) or an input slot of a tape
+// node. Holds no array handles so cached templates never retain GPU buffers.
+struct NodeRef {
+  static constexpr uint32_t kSelf = std::numeric_limits<uint32_t>::max();
+  uint32_t tape_idx{0};
+  uint32_t input_idx{kSelf};
+
+  const array& resolve(const std::deque<array>& tape) const {
+    return input_idx == kSelf ? tape[tape_idx]
+                              : tape[tape_idx].inputs()[input_idx];
+  }
+};
+
+struct RoleTmpl {
+  uint32_t node_idx{0};
+  uint32_t group_ref{0};
+  EagerStep step{EagerStep::skip};
+};
+
+struct GemvMemberTmpl {
+  uint32_t node_idx{0};
+  int32_t epilogue_idx{-1};
+  std::optional<NodeRef> addend;
+};
+
+struct OutgateTmpl {
+  NodeRef gate;
+  NodeRef out;
+  uint32_t x_idx{0};
+  uint32_t sigmoid_idx{0};
+};
+
+struct ResNormTmpl {
+  uint32_t norm_idx{0};
+  NodeRef weight;
+  float eps{0.0f};
+  bool dead_qmm_out{false};
+};
+
+struct RopeEpiSideTmpl {
+  uint32_t rope_idx{0};
+  size_t member_index{0};
+  std::vector<uint32_t> view_chain_indices;
+  Shape view_shape;
+  Strides view_strides;
+  int64_t view_offset{0};
+  size_t pair_index{0};
+};
+
+struct RopeEpiTmpl {
+  RopeEpiSideTmpl q;
+  RopeEpiSideTmpl k;
+  int dims{0};
+  bool traditional{false};
+  float base{0.0f};
+  float scale{1.0f};
+  float norm_eps{0.0f};
+};
+
+struct GemvGroupTmpl {
+  std::vector<GemvMemberTmpl> members;
+  int32_t swiglu_out_idx{-1};
+  std::vector<uint32_t> swiglu_role_indices;
+  std::optional<OutgateTmpl> outgate;
+  std::optional<ResNormTmpl> res_norm;
+  std::optional<RopeEpiTmpl> rope_epi;
+};
+
+struct DenseGemvGroupTmpl {
+  std::vector<uint32_t> node_indices;
+  NodeRef input;
+};
+
+struct SliceUpdatePairTmpl {
+  uint32_t first_idx{0};
+  uint32_t second_idx{0};
+  bool direct{false};
+  uint8_t rope_side{0};
+  DirectKind sum_kind{DirectKind::none};
+  size_t sum_group_index{0};
+  size_t sum_member_index{0};
+  uint32_t rope_idx{0};
+  std::vector<uint32_t> sum_view_chain_indices;
+};
+
+struct SdpaTransposeTmpl {
+  uint32_t sdpa_idx{0};
+  uint32_t reshape_idx{0};
+  std::vector<uint32_t> chain_indices;
+};
+
+struct SdpaOutgateTmpl {
+  uint32_t sdpa_idx{0};
+  uint32_t tail_idx{0};
+  NodeRef gate_src;
+  std::vector<uint32_t> skip_indices;
+};
+
+struct SdpaOnlineRopeTmpl {
+  uint32_t q_rope_idx{0};
+  uint32_t k_rope_idx{0};
+  uint32_t sdpa_idx{0};
+  NodeRef q_raw;
+  NodeRef k_raw;
+  NodeRef offset;
+  std::optional<NodeRef> q_weight;
+  std::optional<NodeRef> k_weight;
+  int32_t q_view_idx{-1};
+  int32_t k_view_idx{-1};
+  int q_norm_fold{-1};
+  int k_norm_fold{-1};
+  size_t pair_index{0};
+  bool has_norm{false};
+  float eps{0.0f};
+  float base{0.0f};
+  float scale{1.0f};
+  int dims{0};
+};
+
+struct RopePairTmpl {
+  uint32_t first_idx{0};
+  uint32_t second_idx{0};
+  std::array<int, 2> norm_folds{-1, -1};
+};
+
+struct AddNormPairTmpl {
+  uint32_t add_idx{0};
+  uint32_t norm_idx{0};
+};
+
+struct RopeNormTmpl {
+  uint32_t norm_idx{0};
+  uint32_t rope_idx{0};
+  int32_t view_idx{-1};
+  NodeRef x;
+  NodeRef w;
+  float eps{0.0f};
+};
+
+struct PrologueFoldTmpl {
+  uint32_t quant_idx{0};
+  NodeRef ids;
+  NodeRef w;
+  NodeRef scales;
+  NodeRef biases;
+  std::vector<uint32_t> replay_indices;
+  int bits{0};
+  int group_size{0};
+  int64_t words_per_row{0};
+  int64_t groups_per_row{0};
+  int64_t nrows{0};
+  int32_t norm_out_idx{-1};
+  std::optional<NodeRef> norm_weight;
+  float norm_eps{0.0f};
+};
+
+struct GdnInProjBaTmpl {
+  uint32_t gdn_idx{0};
+  uint32_t a_idx{0};
+  uint32_t b_idx{0};
+  NodeRef x;
+  NodeRef w_a;
+  NodeRef s_a;
+  NodeRef b_a;
+  NodeRef w_b;
+  NodeRef s_b;
+  NodeRef b_b;
+  uint32_t k{0};
+  uint32_t hv{0};
+};
+
+struct FoldPlanTemplate {
+  std::vector<RoleTmpl> roles;
+  std::vector<GemvGroupTmpl> gemv_groups;
+  std::vector<DenseGemvGroupTmpl> dense_gemv_groups;
+  std::vector<SliceUpdatePairTmpl> slice_update_pairs;
+  std::vector<SdpaTransposeTmpl> sdpa_transpose_folds;
+  std::vector<SdpaOutgateTmpl> sdpa_outgate_folds;
+  std::vector<SdpaOnlineRopeTmpl> sdpa_online_rope_plans;
+  std::vector<RopePairTmpl> rope_pairs;
+  std::vector<AddNormPairTmpl> add_norm_pairs;
+  std::vector<RopeNormTmpl> rope_norms;
+  std::vector<PrologueFoldTmpl> prologue_folds;
+  std::vector<GdnInProjBaTmpl> gdn_ba_folds;
+};
+
+struct FoldPlanCacheEntry {
+  FoldPlanKey key;
+  FoldPlanTemplate tmpl;
+};
+
+struct FoldPlanCacheState {
+  static constexpr size_t kMaxEntries = 16;
+  std::vector<FoldPlanCacheEntry> entries;
+  uint64_t hits{0};
+  uint64_t misses{0};
+  uint64_t revalidation_fallbacks{0};
+};
+
+FoldPlanCacheState& fold_plan_cache_state() {
+  static thread_local FoldPlanCacheState cache;
+  return cache;
+}
+
+const FoldPlanTemplate* fold_plan_cache_lookup(const FoldPlanKey& key) {
+  auto& cache = fold_plan_cache_state();
+  for (size_t i = 0; i < cache.entries.size(); ++i) {
+    if (cache.entries[i].key == key) {
+      if (i > 0) {
+        std::rotate(
+            cache.entries.begin(),
+            cache.entries.begin() + static_cast<ptrdiff_t>(i),
+            cache.entries.begin() + static_cast<ptrdiff_t>(i + 1));
+      }
+      return &cache.entries[0].tmpl;
+    }
+  }
+  return nullptr;
+}
+
+void fold_plan_cache_insert(const FoldPlanKey& key, FoldPlanTemplate&& tmpl) {
+  auto& cache = fold_plan_cache_state();
+  for (size_t i = 0; i < cache.entries.size(); ++i) {
+    if (cache.entries[i].key == key) {
+      cache.entries[i].tmpl = std::move(tmpl);
+      if (i > 0) {
+        std::rotate(
+            cache.entries.begin(),
+            cache.entries.begin() + static_cast<ptrdiff_t>(i),
+            cache.entries.begin() + static_cast<ptrdiff_t>(i + 1));
+      }
+      return;
+    }
+  }
+  if (cache.entries.size() >= FoldPlanCacheState::kMaxEntries) {
+    cache.entries.pop_back();
+  }
+  cache.entries.insert(
+      cache.entries.begin(), FoldPlanCacheEntry{key, std::move(tmpl)});
+}
+
+std::optional<uint32_t> find_tape_pos(
+    std::uintptr_t id,
+    const TapeIndex<uint32_t>& id_map) {
+  const uint32_t* p = id_map.find(id);
+  if (p == nullptr || (*p & kExternalSlotBit) != 0) {
+    return std::nullopt;
+  }
+  return *p;
+}
+
+std::optional<NodeRef> find_node_ref(
+    const array& target,
+    uint32_t hint_idx,
+    const std::deque<array>& tape,
+    const TapeIndex<uint32_t>& id_map) {
+  if (auto pos = find_tape_pos(target.id(), id_map)) {
+    return NodeRef{*pos, NodeRef::kSelf};
+  }
+  const auto& inps = tape[hint_idx].inputs();
+  for (uint32_t k = 0; k < static_cast<uint32_t>(inps.size()); ++k) {
+    if (inps[k].id() == target.id()) {
+      return NodeRef{hint_idx, k};
+    }
+  }
+  // One-hop view unwrap (e.g. Broadcast(bias), Flatten(x), Reshape(gate_src)).
+  for (uint32_t k = 0; k < static_cast<uint32_t>(inps.size()); ++k) {
+    if (auto mid = find_tape_pos(inps[k].id(), id_map)) {
+      const auto& minps = tape[*mid].inputs();
+      for (uint32_t m = 0; m < static_cast<uint32_t>(minps.size()); ++m) {
+        if (minps[m].id() == target.id()) {
+          return NodeRef{*mid, m};
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<FoldPlanTemplate> extract_fold_plan_template(
+    const EagerFusionState& state,
+    const std::deque<array>& tape,
+    const TapeIndex<uint32_t>& id_map) {
+  FoldPlanTemplate tmpl;
+  const uint32_t n = static_cast<uint32_t>(tape.size());
+
+  // 1. Roles (SwiGLU chain roles + Outgate/RopeEpi skip roles).
+  tmpl.roles.reserve(state.roles.size());
+  for (const auto& [id, role] : state.roles) {
+    auto node_idx = find_tape_pos(id, id_map);
+    if (!node_idx) {
+      return std::nullopt;
+    }
+    uint32_t group_ref = 0;
+    if (role.step == EagerStep::skip) {
+      group_ref = static_cast<uint32_t>(role.group);
+    } else {
+      auto tail_idx = find_tape_pos(role.group, id_map);
+      if (!tail_idx) {
+        return std::nullopt;
+      }
+      group_ref = *tail_idx;
+    }
+    tmpl.roles.push_back(RoleTmpl{*node_idx, group_ref, role.step});
+  }
+
+  // 2. Quantized GEMV groups.
+  tmpl.gemv_groups.reserve(state.gemv_groups.size());
+  std::vector<std::vector<uint32_t>> extra_gemv_roles(state.gemv_groups.size());
+  for (uint32_t i = 0; i < n; ++i) {
+    if (const size_t* gi = state.gemv_roles.find(tape[i].id())) {
+      const auto& g = state.gemv_groups[*gi];
+      bool is_member_or_ep = false;
+      for (const auto& m : g.members) {
+        if (m.node.id() == tape[i].id() ||
+            (m.epilogue && m.epilogue->id() == tape[i].id())) {
+          is_member_or_ep = true;
+          break;
+        }
+      }
+      if (!is_member_or_ep) {
+        extra_gemv_roles[*gi].push_back(i);
+      }
+    }
+  }
+  for (size_t gi = 0; gi < state.gemv_groups.size(); ++gi) {
+    const auto& g = state.gemv_groups[gi];
+    GemvGroupTmpl gt;
+    gt.members.reserve(g.members.size());
+    for (const auto& m : g.members) {
+      auto node_idx = find_tape_pos(m.node.id(), id_map);
+      if (!node_idx) {
+        return std::nullopt;
+      }
+      GemvMemberTmpl mt;
+      mt.node_idx = *node_idx;
+      if (m.epilogue) {
+        auto ep_idx = find_tape_pos(m.epilogue->id(), id_map);
+        if (!ep_idx) {
+          return std::nullopt;
+        }
+        mt.epilogue_idx = static_cast<int32_t>(*ep_idx);
+        if (m.addend) {
+          auto addend_ref = find_node_ref(*m.addend, *ep_idx, tape, id_map);
+          if (!addend_ref) {
+            return std::nullopt;
+          }
+          mt.addend = *addend_ref;
+        }
+      }
+      gt.members.push_back(std::move(mt));
+    }
+    if (g.swiglu_out) {
+      auto sw_idx = find_tape_pos(g.swiglu_out->id(), id_map);
+      if (!sw_idx) {
+        return std::nullopt;
+      }
+      gt.swiglu_out_idx = static_cast<int32_t>(*sw_idx);
+      gt.swiglu_role_indices = std::move(extra_gemv_roles[gi]);
+    }
+    if (g.outgate) {
+      auto x_idx = find_tape_pos(g.outgate->x.id(), id_map);
+      auto sig_idx = find_tape_pos(g.outgate->sigmoid_id, id_map);
+      if (!x_idx || !sig_idx) {
+        return std::nullopt;
+      }
+      auto gate_ref = find_node_ref(g.outgate->gate, *sig_idx, tape, id_map);
+      auto out_ref = find_node_ref(g.outgate->out, *x_idx, tape, id_map);
+      if (!gate_ref || !out_ref) {
+        return std::nullopt;
+      }
+      gt.outgate = OutgateTmpl{*gate_ref, *out_ref, *x_idx, *sig_idx};
+    }
+    if (g.res_norm) {
+      auto norm_idx = find_tape_pos(g.res_norm->out.id(), id_map);
+      if (!norm_idx) {
+        return std::nullopt;
+      }
+      auto w_ref = find_node_ref(g.res_norm->weight, *norm_idx, tape, id_map);
+      if (!w_ref) {
+        return std::nullopt;
+      }
+      gt.res_norm =
+          ResNormTmpl{*norm_idx, *w_ref, g.res_norm->eps, g.res_norm->dead_qmm_out};
+    }
+    if (g.rope_epi) {
+      auto extract_side = [&](const RopeEpiSide& s) -> std::optional<RopeEpiSideTmpl> {
+        auto r_idx = find_tape_pos(s.rope.id(), id_map);
+        if (!r_idx) {
+          return std::nullopt;
+        }
+        RopeEpiSideTmpl st;
+        st.rope_idx = *r_idx;
+        st.member_index = s.member_index;
+        st.view_chain_indices.reserve(s.view_chain.size());
+        for (const auto& v : s.view_chain) {
+          auto v_idx = find_tape_pos(v.id(), id_map);
+          if (!v_idx) {
+            return std::nullopt;
+          }
+          st.view_chain_indices.push_back(*v_idx);
+        }
+        st.view_shape = s.view_shape;
+        st.view_strides = s.view_strides;
+        st.view_offset = s.view_offset;
+        st.pair_index = s.pair_index;
+        return st;
+      };
+      auto qs = extract_side(g.rope_epi->q);
+      auto ks = extract_side(g.rope_epi->k);
+      if (!qs || !ks) {
+        return std::nullopt;
+      }
+      gt.rope_epi = RopeEpiTmpl{
+          std::move(*qs),
+          std::move(*ks),
+          g.rope_epi->dims,
+          g.rope_epi->traditional,
+          g.rope_epi->base,
+          g.rope_epi->scale,
+          g.rope_epi->norm_eps};
+    }
+    tmpl.gemv_groups.push_back(std::move(gt));
+  }
+
+  // 3. Dense GEMV groups.
+  tmpl.dense_gemv_groups.reserve(state.dense_gemv_groups.size());
+  for (const auto& dg : state.dense_gemv_groups) {
+    if (dg.nodes.empty() || !dg.input) {
+      return std::nullopt;
+    }
+    DenseGemvGroupTmpl dgt;
+    dgt.node_indices.reserve(dg.nodes.size());
+    for (const auto& nd : dg.nodes) {
+      auto idx = find_tape_pos(nd.id(), id_map);
+      if (!idx) {
+        return std::nullopt;
+      }
+      dgt.node_indices.push_back(*idx);
+    }
+    auto in_ref = find_node_ref(*dg.input, dgt.node_indices[0], tape, id_map);
+    if (!in_ref) {
+      return std::nullopt;
+    }
+    dgt.input = *in_ref;
+    tmpl.dense_gemv_groups.push_back(std::move(dgt));
+  }
+
+  // 4. SliceUpdate pairs + producer-direct KV bindings.
+  std::vector<std::vector<uint32_t>> views_by_pair(
+      state.slice_update_pairs.size());
+  for (uint32_t i = 0; i < n; ++i) {
+    if (const size_t* pi = state.reshape_redirect_roles.find(tape[i].id())) {
+      views_by_pair[*pi].push_back(i);
+    }
+  }
+  tmpl.slice_update_pairs.reserve(state.slice_update_pairs.size());
+  for (size_t pi = 0; pi < state.slice_update_pairs.size(); ++pi) {
+    const auto& pair = state.slice_update_pairs[pi];
+    auto first_idx = find_tape_pos(pair.nodes[0].id(), id_map);
+    auto second_idx = find_tape_pos(pair.nodes[1].id(), id_map);
+    if (!first_idx || !second_idx) {
+      return std::nullopt;
+    }
+    SliceUpdatePairTmpl pt;
+    pt.first_idx = *first_idx;
+    pt.second_idx = *second_idx;
+    pt.direct = pair.direct;
+    if (pair.direct) {
+      if (!pair.windows[0] || !pair.windows[1]) {
+        return std::nullopt;
+      }
+      pt.rope_side =
+          (pair.windows[0]->node.id() == pair.nodes[0].id()) ? 0 : 1;
+      auto r_idx = find_tape_pos(
+          pair.nodes[pt.rope_side].inputs()[1].id(), id_map);
+      if (!r_idx) {
+        return std::nullopt;
+      }
+      pt.rope_idx = *r_idx;
+      pt.sum_view_chain_indices = std::move(views_by_pair[pi]);
+
+      const std::uintptr_t sum_su_id = pair.windows[1]->node.id();
+      bool found_sum = false;
+      for (size_t gi = 0; gi < state.gemv_groups.size() && !found_sum; ++gi) {
+        for (size_t mi = 0; mi < state.gemv_groups[gi].members.size(); ++mi) {
+          const auto& sw = state.gemv_groups[gi].members[mi].sum_window;
+          if (sw && sw->node.id() == sum_su_id) {
+            pt.sum_kind = DirectKind::values_sum;
+            pt.sum_group_index = gi;
+            pt.sum_member_index = mi;
+            found_sum = true;
+            break;
+          }
+        }
+      }
+      for (size_t gi = 0; gi < state.dense_gemv_groups.size() && !found_sum;
+           ++gi) {
+        const auto& sws = state.dense_gemv_groups[gi].sum_windows;
+        for (size_t mi = 0; mi < sws.size(); ++mi) {
+          if (sws[mi] && sws[mi]->node.id() == sum_su_id) {
+            pt.sum_kind = DirectKind::dense_values;
+            pt.sum_group_index = gi;
+            pt.sum_member_index = mi;
+            found_sum = true;
+            break;
+          }
+        }
+      }
+      if (!found_sum) {
+        return std::nullopt;
+      }
+    }
+    tmpl.slice_update_pairs.push_back(std::move(pt));
+  }
+
+  // 5. SDPA out-transpose folds.
+  tmpl.sdpa_transpose_folds.resize(state.sdpa_transpose_folds.size());
+  for (size_t fi = 0; fi < state.sdpa_transpose_folds.size(); ++fi) {
+    const auto& f = state.sdpa_transpose_folds[fi];
+    auto r_idx = find_tape_pos(f.reshape.id(), id_map);
+    if (!r_idx) {
+      return std::nullopt;
+    }
+    tmpl.sdpa_transpose_folds[fi].reshape_idx = *r_idx;
+    tmpl.sdpa_transpose_folds[fi].chain_indices.reserve(f.chain.size());
+    for (const auto& c : f.chain) {
+      auto c_idx = find_tape_pos(c.id(), id_map);
+      if (!c_idx) {
+        return std::nullopt;
+      }
+      tmpl.sdpa_transpose_folds[fi].chain_indices.push_back(*c_idx);
+    }
+  }
+  for (const auto& [id, fi] : state.sdpa_transpose_plans) {
+    auto s_idx = find_tape_pos(id, id_map);
+    if (!s_idx) {
+      return std::nullopt;
+    }
+    tmpl.sdpa_transpose_folds[fi].sdpa_idx = *s_idx;
+  }
+
+  // 6. SDPA out-gate folds.
+  tmpl.sdpa_outgate_folds.resize(state.sdpa_outgate_folds.size());
+  for (const auto& [id, fi] : state.sdpa_outgate_plans) {
+    auto s_idx = find_tape_pos(id, id_map);
+    if (!s_idx) {
+      return std::nullopt;
+    }
+    tmpl.sdpa_outgate_folds[fi].sdpa_idx = *s_idx;
+  }
+  for (const auto& [id, fi] : state.sdpa_outgate_skip_roles) {
+    auto sk_idx = find_tape_pos(id, id_map);
+    if (!sk_idx) {
+      return std::nullopt;
+    }
+    tmpl.sdpa_outgate_folds[fi].skip_indices.push_back(*sk_idx);
+  }
+  for (size_t fi = 0; fi < state.sdpa_outgate_folds.size(); ++fi) {
+    const auto& f = state.sdpa_outgate_folds[fi];
+    auto tail_idx = find_tape_pos(f.plan.tail.id(), id_map);
+    if (!tail_idx) {
+      return std::nullopt;
+    }
+    tmpl.sdpa_outgate_folds[fi].tail_idx = *tail_idx;
+    uint32_t sig_hint = *tail_idx;
+    for (uint32_t si : tmpl.sdpa_outgate_folds[fi].skip_indices) {
+      if (is_op(&tape[si], typeid(Sigmoid))) {
+        sig_hint = si;
+        break;
+      }
+    }
+    auto g_ref = find_node_ref(f.plan.gate_src, sig_hint, tape, id_map);
+    if (!g_ref) {
+      return std::nullopt;
+    }
+    tmpl.sdpa_outgate_folds[fi].gate_src = *g_ref;
+  }
+
+  // 7. Add -> RMSNorm pairs.
+  tmpl.add_norm_pairs.reserve(state.add_norm_pairs.size());
+  for (const auto& p : state.add_norm_pairs) {
+    auto a_idx = find_tape_pos(p.nodes[0].id(), id_map);
+    auto n_idx = find_tape_pos(p.nodes[1].id(), id_map);
+    if (!a_idx || !n_idx) {
+      return std::nullopt;
+    }
+    tmpl.add_norm_pairs.push_back(AddNormPairTmpl{*a_idx, *n_idx});
+  }
+
+  // 8. RMSNorm -> RoPE folds.
+  tmpl.rope_norms.reserve(state.rope_norms.size());
+  for (const auto& f : state.rope_norms) {
+    auto n_idx = find_tape_pos(f.norm.id(), id_map);
+    auto r_idx = find_tape_pos(f.rope.id(), id_map);
+    if (!n_idx || !r_idx) {
+      return std::nullopt;
+    }
+    int32_t view_idx = -1;
+    if (f.view) {
+      auto v_idx = find_tape_pos(f.view->id(), id_map);
+      if (!v_idx) {
+        return std::nullopt;
+      }
+      view_idx = static_cast<int32_t>(*v_idx);
+    }
+    auto x_ref = find_node_ref(f.x, *n_idx, tape, id_map);
+    auto w_ref = find_node_ref(f.w, *n_idx, tape, id_map);
+    if (!x_ref || !w_ref) {
+      return std::nullopt;
+    }
+    tmpl.rope_norms.push_back(
+        RopeNormTmpl{*n_idx, *r_idx, view_idx, *x_ref, *w_ref, f.eps});
+  }
+
+  // 9. SDPA online-rope plans.
+  tmpl.sdpa_online_rope_plans.reserve(state.sdpa_online_rope_plans.size());
+  for (const auto& p : state.sdpa_online_rope_plans) {
+    auto qr_idx = find_tape_pos(p.q_rope.id(), id_map);
+    auto kr_idx = find_tape_pos(p.k_rope.id(), id_map);
+    auto s_idx = find_tape_pos(p.sdpa.id(), id_map);
+    if (!qr_idx || !kr_idx || !s_idx) {
+      return std::nullopt;
+    }
+    const uint32_t q_hint = p.q_norm_fold >= 0
+        ? tmpl.rope_norms[p.q_norm_fold].norm_idx
+        : *qr_idx;
+    const uint32_t k_hint = p.k_norm_fold >= 0
+        ? tmpl.rope_norms[p.k_norm_fold].norm_idx
+        : *kr_idx;
+    auto q_raw_ref = find_node_ref(p.q_raw, q_hint, tape, id_map);
+    auto k_raw_ref = find_node_ref(p.k_raw, k_hint, tape, id_map);
+    auto off_ref = find_node_ref(p.offset, *qr_idx, tape, id_map);
+    if (!q_raw_ref || !k_raw_ref || !off_ref) {
+      return std::nullopt;
+    }
+    std::optional<NodeRef> qw_ref;
+    std::optional<NodeRef> kw_ref;
+    if (p.q_weight) {
+      qw_ref = find_node_ref(*p.q_weight, q_hint, tape, id_map);
+      if (!qw_ref) {
+        return std::nullopt;
+      }
+    }
+    if (p.k_weight) {
+      kw_ref = find_node_ref(*p.k_weight, k_hint, tape, id_map);
+      if (!kw_ref) {
+        return std::nullopt;
+      }
+    }
+    int32_t qv_idx = -1;
+    int32_t kv_idx = -1;
+    if (p.q_view) {
+      auto v = find_tape_pos(p.q_view->id(), id_map);
+      if (!v) {
+        return std::nullopt;
+      }
+      qv_idx = static_cast<int32_t>(*v);
+    }
+    if (p.k_view) {
+      auto v = find_tape_pos(p.k_view->id(), id_map);
+      if (!v) {
+        return std::nullopt;
+      }
+      kv_idx = static_cast<int32_t>(*v);
+    }
+    tmpl.sdpa_online_rope_plans.push_back(SdpaOnlineRopeTmpl{
+        *qr_idx,
+        *kr_idx,
+        *s_idx,
+        *q_raw_ref,
+        *k_raw_ref,
+        *off_ref,
+        qw_ref,
+        kw_ref,
+        qv_idx,
+        kv_idx,
+        p.q_norm_fold,
+        p.k_norm_fold,
+        p.pair_index,
+        p.has_norm,
+        p.eps,
+        p.base,
+        p.scale,
+        p.dims});
+  }
+
+  // 10. RoPE pairs.
+  tmpl.rope_pairs.reserve(state.rope_pairs.size());
+  for (const auto& p : state.rope_pairs) {
+    auto f_idx = find_tape_pos(p.nodes[0].id(), id_map);
+    auto s_idx = find_tape_pos(p.nodes[1].id(), id_map);
+    if (!f_idx || !s_idx) {
+      return std::nullopt;
+    }
+    tmpl.rope_pairs.push_back(RopePairTmpl{*f_idx, *s_idx, p.norm_folds});
+  }
+
+  // 11. Quantized-embedding prologue folds.
+  tmpl.prologue_folds.reserve(state.prologue_folds.size());
+  for (const auto& f : state.prologue_folds) {
+    auto q_idx = find_tape_pos(f.quant.id(), id_map);
+    if (!q_idx || f.replay.empty()) {
+      return std::nullopt;
+    }
+    PrologueFoldTmpl pt;
+    pt.quant_idx = *q_idx;
+    pt.replay_indices.reserve(f.replay.size());
+    std::vector<uint32_t> gather_indices;
+    for (const auto& step : f.replay) {
+      auto s_idx = find_tape_pos(step.node.id(), id_map);
+      if (!s_idx) {
+        return std::nullopt;
+      }
+      pt.replay_indices.push_back(*s_idx);
+      if (is_op(&tape[*s_idx], typeid(Gather))) {
+        gather_indices.push_back(*s_idx);
+      }
+    }
+    if (gather_indices.size() != 3) {
+      return std::nullopt;
+    }
+    auto ids_ref = find_node_ref(f.ids, gather_indices[0], tape, id_map);
+    auto w_ref = find_node_ref(f.w, gather_indices[0], tape, id_map);
+    auto s_ref = find_node_ref(f.scales, gather_indices[1], tape, id_map);
+    auto b_ref = find_node_ref(f.biases, gather_indices[2], tape, id_map);
+    if (!ids_ref || !w_ref || !s_ref || !b_ref) {
+      return std::nullopt;
+    }
+    pt.ids = *ids_ref;
+    pt.w = *w_ref;
+    pt.scales = *s_ref;
+    pt.biases = *b_ref;
+    pt.bits = f.bits;
+    pt.group_size = f.group_size;
+    pt.words_per_row = f.words_per_row;
+    pt.groups_per_row = f.groups_per_row;
+    pt.nrows = f.nrows;
+    if (f.norm_out && f.norm_weight) {
+      auto no_idx = find_tape_pos(f.norm_out->id(), id_map);
+      if (!no_idx) {
+        return std::nullopt;
+      }
+      auto nw_ref = find_node_ref(*f.norm_weight, *no_idx, tape, id_map);
+      if (!nw_ref) {
+        return std::nullopt;
+      }
+      pt.norm_out_idx = static_cast<int32_t>(*no_idx);
+      pt.norm_weight = *nw_ref;
+      pt.norm_eps = f.norm_eps;
+    }
+    tmpl.prologue_folds.push_back(std::move(pt));
+  }
+
+  // 12. GDN in_proj_a/b prologue folds.
+  if (!state.gdn_ba_folds.empty()) {
+    std::vector<int32_t> gdn_idx_by_fold(state.gdn_ba_folds.size(), -1);
+    for (uint32_t i = 0; i < n; ++i) {
+      if (is_op(&tape[i], typeid(fast::GdnConvDeltaUpdate))) {
+        if (const size_t* fi = state.gdn_ba_roles.find(tape[i].id())) {
+          gdn_idx_by_fold[*fi] = static_cast<int32_t>(i);
+        }
+      }
+    }
+    tmpl.gdn_ba_folds.reserve(state.gdn_ba_folds.size());
+    for (size_t fi = 0; fi < state.gdn_ba_folds.size(); ++fi) {
+      const auto& f = state.gdn_ba_folds[fi];
+      auto a_idx = find_tape_pos(f.a_node.id(), id_map);
+      auto b_idx = find_tape_pos(f.b_node.id(), id_map);
+      if (gdn_idx_by_fold[fi] < 0 || !a_idx || !b_idx) {
+        return std::nullopt;
+      }
+      auto x_ref = find_node_ref(f.plan.x, *a_idx, tape, id_map);
+      auto wa_ref = find_node_ref(f.plan.w_a, *a_idx, tape, id_map);
+      auto sa_ref = find_node_ref(f.plan.s_a, *a_idx, tape, id_map);
+      auto ba_ref = find_node_ref(f.plan.b_a, *a_idx, tape, id_map);
+      auto wb_ref = find_node_ref(f.plan.w_b, *b_idx, tape, id_map);
+      auto sb_ref = find_node_ref(f.plan.s_b, *b_idx, tape, id_map);
+      auto bb_ref = find_node_ref(f.plan.b_b, *b_idx, tape, id_map);
+      if (!x_ref || !wa_ref || !sa_ref || !ba_ref || !wb_ref || !sb_ref ||
+          !bb_ref) {
+        return std::nullopt;
+      }
+      tmpl.gdn_ba_folds.push_back(GdnInProjBaTmpl{
+          static_cast<uint32_t>(gdn_idx_by_fold[fi]),
+          *a_idx,
+          *b_idx,
+          *x_ref,
+          *wa_ref,
+          *sa_ref,
+          *ba_ref,
+          *wb_ref,
+          *sb_ref,
+          *bb_ref,
+          f.plan.k,
+          f.plan.hv});
+    }
+  }
+
+  return tmpl;
+}
+
+bool instantiate_fold_plan(
+    const FoldPlanTemplate& tmpl,
+    const std::deque<array>& tape,
+    EagerFusionState& state) {
+  // 1. Quantized GEMV groups.
+  state.gemv_groups.reserve(tmpl.gemv_groups.size());
+  for (size_t gi = 0; gi < tmpl.gemv_groups.size(); ++gi) {
+    const auto& gt = tmpl.gemv_groups[gi];
+    GemvGroup group;
+    group.members.reserve(gt.members.size());
+    for (const auto& mt : gt.members) {
+      const array& node = tape[mt.node_idx];
+      GemvFusionMember member{node, std::nullopt, std::nullopt};
+      state.gemv_roles.put_if_absent(node.id(), gi);
+      if (mt.epilogue_idx >= 0) {
+        const array& ep = tape[mt.epilogue_idx];
+        member.epilogue = ep;
+        state.gemv_roles.put_if_absent(ep.id(), gi);
+        if (mt.addend) {
+          member.addend = mt.addend->resolve(tape);
+        }
+      }
+      group.members.push_back(std::move(member));
+    }
+    if (gt.swiglu_out_idx >= 0) {
+      group.swiglu_out = tape[gt.swiglu_out_idx];
+      for (uint32_t ri : gt.swiglu_role_indices) {
+        state.gemv_roles.put_if_absent(tape[ri].id(), gi);
+      }
+    }
+    if (gt.outgate) {
+      const array& x = tape[gt.outgate->x_idx];
+      const array& sig = tape[gt.outgate->sigmoid_idx];
+      group.outgate = OutgatePlan{
+          gt.outgate->gate.resolve(tape),
+          gt.outgate->out.resolve(tape),
+          x,
+          sig.id()};
+    }
+    if (gt.res_norm) {
+      const array& norm = tape[gt.res_norm->norm_idx];
+      group.res_norm = ResNormPlan{
+          norm,
+          gt.res_norm->weight.resolve(tape),
+          gt.res_norm->eps,
+          gt.res_norm->dead_qmm_out};
+      state.res_norm_skip_roles.put_if_absent(norm.id(), gi);
+    }
+    if (gt.rope_epi) {
+      auto build_side = [&](const RopeEpiSideTmpl& st) {
+        std::vector<array> vchain;
+        vchain.reserve(st.view_chain_indices.size());
+        for (uint32_t vi : st.view_chain_indices) {
+          vchain.push_back(tape[vi]);
+        }
+        return RopeEpiSide{
+            tape[st.rope_idx],
+            st.member_index,
+            std::move(vchain),
+            st.view_shape,
+            st.view_strides,
+            st.view_offset,
+            std::nullopt,
+            st.pair_index};
+      };
+      group.rope_epi = RopeEpiPlan{
+          build_side(gt.rope_epi->q),
+          build_side(gt.rope_epi->k),
+          gt.rope_epi->dims,
+          gt.rope_epi->traditional,
+          gt.rope_epi->base,
+          gt.rope_epi->scale,
+          gt.rope_epi->norm_eps};
+    }
+    state.gemv_groups.push_back(std::move(group));
+  }
+
+  // 2. Dense GEMV groups.
+  state.dense_gemv_groups.reserve(tmpl.dense_gemv_groups.size());
+  for (size_t gi = 0; gi < tmpl.dense_gemv_groups.size(); ++gi) {
+    const auto& dgt = tmpl.dense_gemv_groups[gi];
+    DenseGemvGroup group;
+    group.input = dgt.input.resolve(tape);
+    group.nodes.reserve(dgt.node_indices.size());
+    for (uint32_t ni : dgt.node_indices) {
+      const array& nd = tape[ni];
+      group.nodes.push_back(nd);
+      state.dense_gemv_roles.put_if_absent(nd.id(), gi);
+    }
+    state.dense_gemv_groups.push_back(std::move(group));
+  }
+
+  // 3. SliceUpdate pairs: revalidate runtime state match and recompute fresh
+  // KV direct-write window offsets and buffer donation flags for this token.
+  state.slice_update_pairs.reserve(tmpl.slice_update_pairs.size());
+  for (size_t pi = 0; pi < tmpl.slice_update_pairs.size(); ++pi) {
+    const auto& pt = tmpl.slice_update_pairs[pi];
+    const array& first = tape[pt.first_idx];
+    const array& second = tape[pt.second_idx];
+    const auto& st0 = static_cast<const SliceUpdate&>(first.primitive()).state();
+    const auto& st1 =
+        static_cast<const SliceUpdate&>(second.primitive()).state();
+    if (st0 != st1 || std::get<0>(st0) != SliceUpdate::None) {
+      return false;
+    }
+    state.slice_update_roles.put_if_absent(first.id(), pi);
+    state.slice_update_roles.put_if_absent(second.id(), pi);
+    state.slice_update_pairs.emplace_back(first, second);
+    if (pt.direct) {
+      auto& pair = state.slice_update_pairs.back();
+      const array& keys_member = pt.rope_side == 0 ? first : second;
+      const array& vals_member = pt.rope_side == 0 ? second : first;
+      auto keys_geom = direct_window_geometry(keys_member);
+      auto vals_geom = direct_window_geometry(vals_member);
+      if (!keys_geom || !vals_geom) {
+        return false;
+      }
+      const array& k_upd = keys_member.inputs()[1];
+      uint32_t matrix_stride = 0;
+      if (k_upd.ndim() == 4) {
+        uint64_t heads = static_cast<uint64_t>(k_upd.shape(1));
+        if (heads == 0 ||
+            static_cast<uint64_t>(keys_geom->strides[0]) !=
+                heads * static_cast<uint64_t>(keys_geom->strides[1])) {
+          return false;
+        }
+        matrix_stride = keys_geom->strides[1];
+      } else {
+        matrix_stride = keys_geom->strides[0];
+      }
+      const array& v_upd = vals_member.inputs()[1];
+      if (v_upd.ndim() != 4 || v_upd.shape(3) <= 0) {
+        return false;
+      }
+      const uint32_t head_dim = static_cast<uint32_t>(v_upd.shape(3));
+      // Query donation BEFORE copying base handles into KvDirectWindow.
+      const bool keys_in_place = kv_window_in_place(keys_member);
+      const bool vals_in_place = kv_window_in_place(vals_member);
+      KvDirectWindow keys_win{
+          keys_member,
+          keys_member.inputs()[0],
+          keys_geom->offset,
+          {matrix_stride, keys_geom->strides[k_upd.ndim() - 2], 1, 0},
+          keys_geom->ndim,
+          /*row_gap=*/0,
+          /*head_dim=*/0,
+          keys_in_place};
+      KvDirectWindow vals_win{
+          vals_member,
+          vals_member.inputs()[0],
+          vals_geom->offset,
+          {vals_geom->strides[0],
+           vals_geom->strides[1],
+           vals_geom->strides[2],
+           vals_geom->strides[3]},
+          vals_geom->ndim,
+          /*row_gap=*/vals_geom->strides[1],
+          /*head_dim=*/head_dim,
+          vals_in_place};
+      if (pt.sum_kind == DirectKind::dense_values) {
+        auto& windows = state.dense_gemv_groups[pt.sum_group_index].sum_windows;
+        if (windows.size() <
+            state.dense_gemv_groups[pt.sum_group_index].nodes.size()) {
+          windows.resize(
+              state.dense_gemv_groups[pt.sum_group_index].nodes.size());
+        }
+        windows[pt.sum_member_index] = vals_win;
+      } else {
+        state.gemv_groups[pt.sum_group_index]
+            .members[pt.sum_member_index]
+            .sum_window = vals_win;
+      }
+      pair.windows[0] = std::move(keys_win);
+      pair.windows[1] = std::move(vals_win);
+      state.rope_redirect_roles.put_if_absent(tape[pt.rope_idx].id(), pi);
+      for (uint32_t vi : pt.sum_view_chain_indices) {
+        state.reshape_redirect_roles.put_if_absent(tape[vi].id(), pi);
+      }
+      pair.direct = true;
+    }
+  }
+
+  // Attach freshly computed keys windows to any RopeEpiPlan.
+  for (auto& group : state.gemv_groups) {
+    if (group.rope_epi) {
+      const auto& pair = state.slice_update_pairs[group.rope_epi->k.pair_index];
+      if (!pair.direct || !pair.windows[0]) {
+        return false;
+      }
+      group.rope_epi->k.window = pair.windows[0];
+    }
+  }
+
+  // 4. Roles (SwiGLU chain roles + Outgate/RopeEpi skip roles).
+  for (const auto& rt : tmpl.roles) {
+    const std::uintptr_t group_val = (rt.step == EagerStep::skip)
+        ? static_cast<std::uintptr_t>(rt.group_ref)
+        : tape[rt.group_ref].id();
+    state.roles.emplace(tape[rt.node_idx].id(), EagerRole{group_val, rt.step});
+  }
+
+  // 5. SDPA out-gate folds.
+  state.sdpa_outgate_folds.reserve(tmpl.sdpa_outgate_folds.size());
+  for (size_t fi = 0; fi < tmpl.sdpa_outgate_folds.size(); ++fi) {
+    const auto& ft = tmpl.sdpa_outgate_folds[fi];
+    state.sdpa_outgate_folds.push_back(SdpaOutgateFold{
+        SdpaOutgatePlan{tape[ft.tail_idx], ft.gate_src.resolve(tape)}, false});
+    state.sdpa_outgate_plans.emplace(tape[ft.sdpa_idx].id(), fi);
+    for (uint32_t si : ft.skip_indices) {
+      state.sdpa_outgate_skip_roles.emplace(tape[si].id(), fi);
+    }
+  }
+
+  // 6. SDPA out-transpose folds.
+  state.sdpa_transpose_folds.reserve(tmpl.sdpa_transpose_folds.size());
+  for (size_t fi = 0; fi < tmpl.sdpa_transpose_folds.size(); ++fi) {
+    const auto& ft = tmpl.sdpa_transpose_folds[fi];
+    SdpaTransposeFold fold{tape[ft.reshape_idx], {}, false};
+    fold.chain.reserve(ft.chain_indices.size());
+    for (uint32_t ci : ft.chain_indices) {
+      fold.chain.push_back(tape[ci]);
+      state.sdpa_transpose_skip_roles.emplace(tape[ci].id(), fi);
+    }
+    state.sdpa_transpose_plans.emplace(tape[ft.sdpa_idx].id(), fi);
+    state.sdpa_transpose_skip_roles.emplace(tape[ft.reshape_idx].id(), fi);
+    state.sdpa_transpose_folds.push_back(std::move(fold));
+  }
+
+  // 7. Add -> RMSNorm pairs.
+  state.add_norm_pairs.reserve(tmpl.add_norm_pairs.size());
+  for (size_t pi = 0; pi < tmpl.add_norm_pairs.size(); ++pi) {
+    const auto& pt = tmpl.add_norm_pairs[pi];
+    const array& add = tape[pt.add_idx];
+    const array& norm = tape[pt.norm_idx];
+    state.add_norm_roles.put_if_absent(add.id(), pi);
+    state.add_norm_roles.put_if_absent(norm.id(), pi);
+    state.add_norm_pairs.push_back(AddNormPair{{add, norm}});
+  }
+
+  // 8. RMSNorm -> RoPE folds (revalidate view contiguity/offset).
+  state.rope_norms.reserve(tmpl.rope_norms.size());
+  for (size_t fi = 0; fi < tmpl.rope_norms.size(); ++fi) {
+    const auto& ft = tmpl.rope_norms[fi];
+    const array& n = tape[ft.norm_idx];
+    const array& rope = tape[ft.rope_idx];
+    const array& x = ft.x.resolve(tape);
+    const array& w = ft.w.resolve(tape);
+    std::optional<array> view_opt;
+    std::shared_ptr<Primitive> view_prim;
+    if (ft.view_idx >= 0) {
+      const array& view = tape[ft.view_idx];
+      if (!x.flags().row_contiguous ||
+          (view.itemsize() != 0 && view.offset() % view.itemsize() != 0) ||
+          view.shape(-1) != x.shape(-1)) {
+        return false;
+      }
+      view_opt = view;
+      view_prim = view.primitive_ptr();
+      state.rope_norm_skip_roles.put_if_absent(view.id(), fi);
+    }
+    state.rope_norm_skip_roles.put_if_absent(n.id(), fi);
+    state.rope_norm_roles.put_if_absent(rope.id(), fi);
+    state.rope_norms.push_back(RopeNormFold{
+        n,
+        rope,
+        std::move(view_opt),
+        x,
+        w,
+        n.primitive_ptr(),
+        std::move(view_prim),
+        ft.eps});
+  }
+
+  // 9. SDPA online-rope plans (revalidate shared Q/K RoPE offsets).
+  state.sdpa_online_rope_plans.reserve(tmpl.sdpa_online_rope_plans.size());
+  for (size_t pi = 0; pi < tmpl.sdpa_online_rope_plans.size(); ++pi) {
+    const auto& pt = tmpl.sdpa_online_rope_plans[pi];
+    const array& q_rope = tape[pt.q_rope_idx];
+    const array& k_rope = tape[pt.k_rope_idx];
+    const array& sdpa = tape[pt.sdpa_idx];
+    if (!rope_offset_shared(q_rope.inputs()[1], k_rope.inputs()[1])) {
+      return false;
+    }
+    const auto& pair = state.slice_update_pairs[pt.pair_index];
+    if (!pair.direct || !pair.windows[0] || !pair.windows[1]) {
+      return false;
+    }
+    std::optional<array> q_weight;
+    std::optional<array> k_weight;
+    if (pt.q_weight) {
+      q_weight = pt.q_weight->resolve(tape);
+    }
+    if (pt.k_weight) {
+      k_weight = pt.k_weight->resolve(tape);
+    }
+    std::optional<array> q_view;
+    std::optional<array> k_view;
+    std::shared_ptr<Primitive> q_view_prim;
+    std::shared_ptr<Primitive> k_view_prim;
+    if (pt.q_view_idx >= 0) {
+      q_view = tape[pt.q_view_idx];
+      q_view_prim = tape[pt.q_view_idx].primitive_ptr();
+    }
+    if (pt.k_view_idx >= 0) {
+      k_view = tape[pt.k_view_idx];
+      k_view_prim = tape[pt.k_view_idx].primitive_ptr();
+    }
+    state.sdpa_online_rope_plans.push_back(SdpaOnlineRopePlan{
+        q_rope,
+        k_rope,
+        sdpa,
+        pt.q_raw.resolve(tape),
+        pt.k_raw.resolve(tape),
+        pt.offset.resolve(tape),
+        std::move(q_weight),
+        std::move(k_weight),
+        std::move(q_view),
+        std::move(k_view),
+        std::move(q_view_prim),
+        std::move(k_view_prim),
+        q_rope.primitive_ptr(),
+        k_rope.primitive_ptr(),
+        q_rope.inputs(),
+        k_rope.inputs(),
+        pt.q_norm_fold,
+        pt.k_norm_fold,
+        pt.pair_index,
+        pt.has_norm,
+        pt.eps,
+        pt.base,
+        pt.scale,
+        pt.dims,
+        SdpaOnlineRopeCtx{},
+        false,
+        false,
+        SdpaOnlineRopePlan::State::pending});
+    state.sdpa_online_rope_skip_roles.emplace(q_rope.id(), pi);
+    state.sdpa_online_rope_skip_roles.emplace(k_rope.id(), pi);
+    state.sdpa_online_rope_su_roles.emplace(pair.nodes[0].id(), pi);
+    state.sdpa_online_rope_su_roles.emplace(pair.nodes[1].id(), pi);
+    state.sdpa_online_rope_roles.emplace(sdpa.id(), pi);
+  }
+
+  // 10. RoPE pairs (revalidate shared scalar offsets).
+  state.rope_pairs.reserve(tmpl.rope_pairs.size());
+  for (size_t pi = 0; pi < tmpl.rope_pairs.size(); ++pi) {
+    const auto& pt = tmpl.rope_pairs[pi];
+    const array& first = tape[pt.first_idx];
+    const array& second = tape[pt.second_idx];
+    if (!rope_offset_shared(first.inputs()[1], second.inputs()[1])) {
+      return false;
+    }
+    state.rope_pair_roles.put_if_absent(first.id(), pi);
+    state.rope_pair_roles.put_if_absent(second.id(), pi);
+    RopePair pair{{first, second}};
+    pair.norm_folds = pt.norm_folds;
+    state.rope_pairs.push_back(std::move(pair));
+  }
+
+  // 11. Quantized-embedding prologue folds.
+  state.prologue_folds.reserve(tmpl.prologue_folds.size());
+  for (size_t fi = 0; fi < tmpl.prologue_folds.size(); ++fi) {
+    const auto& pt = tmpl.prologue_folds[fi];
+    const array& quant = tape[pt.quant_idx];
+    std::vector<PrologueFold::ReplayStep> replay;
+    replay.reserve(pt.replay_indices.size());
+    for (uint32_t ri : pt.replay_indices) {
+      const array& step_node = tape[ri];
+      replay.push_back(PrologueFold::ReplayStep{
+          step_node, step_node.primitive_ptr(), step_node.inputs()});
+      state.prologue_skip_roles.put_if_absent(step_node.id(), fi);
+    }
+    state.prologue_fold_roles.put_if_absent(quant.id(), fi);
+    std::optional<array> norm_out;
+    std::optional<array> norm_weight;
+    if (pt.norm_out_idx >= 0 && pt.norm_weight) {
+      const array& no = tape[pt.norm_out_idx];
+      norm_out = no;
+      norm_weight = pt.norm_weight->resolve(tape);
+      state.prologue_norm_skip_roles.put_if_absent(no.id(), fi);
+    }
+    state.prologue_folds.push_back(PrologueFold{
+        quant,
+        pt.ids.resolve(tape),
+        pt.w.resolve(tape),
+        pt.scales.resolve(tape),
+        pt.biases.resolve(tape),
+        std::move(replay),
+        pt.bits,
+        pt.group_size,
+        pt.words_per_row,
+        pt.groups_per_row,
+        pt.nrows,
+        std::move(norm_out),
+        std::move(norm_weight),
+        pt.norm_eps,
+        false,
+        PrologueFold::State::pending});
+  }
+
+  // 12. GDN in_proj_a/b prologue folds.
+  state.gdn_ba_folds.reserve(tmpl.gdn_ba_folds.size());
+  for (size_t fi = 0; fi < tmpl.gdn_ba_folds.size(); ++fi) {
+    const auto& ft = tmpl.gdn_ba_folds[fi];
+    const array& gdn = tape[ft.gdn_idx];
+    const array& a_node = tape[ft.a_idx];
+    const array& b_node = tape[ft.b_idx];
+    state.gdn_ba_skip_roles.put_if_absent(a_node.id(), fi);
+    state.gdn_ba_skip_roles.put_if_absent(b_node.id(), fi);
+    state.gdn_ba_roles.put_if_absent(gdn.id(), fi);
+    for (const auto& sib : gdn.siblings()) {
+      state.gdn_ba_roles.put_if_absent(sib.id(), fi);
+    }
+    state.gdn_ba_folds.push_back(GdnInProjBaFold{
+        GdnInProjBaPlan{
+            ft.x.resolve(tape),
+            ft.w_a.resolve(tape),
+            ft.s_a.resolve(tape),
+            ft.b_a.resolve(tape),
+            ft.w_b.resolve(tape),
+            ft.s_b.resolve(tape),
+            ft.b_b.resolve(tape),
+            ft.k,
+            ft.hv},
+        a_node,
+        a_node.primitive_ptr(),
+        a_node.inputs(),
+        b_node,
+        b_node.primitive_ptr(),
+        b_node.inputs(),
+        GdnInProjBaFold::State::pending});
+  }
+
+  return true;
+}
+
+void print_fold_timing(
+    size_t tape_size,
+    std::chrono::steady_clock::time_point plan_t0,
+    const EagerFusionState& state,
+    const char* cache_status) {
+  const double plan_us =
+      std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - plan_t0)
+          .count();
+  std::fprintf(
+      stderr,
+      "[fold-time] plan tape=%zu us=%.0f gemv=%zu dense=%zu swiglu-roles=%zu "
+      "rope-pairs=%zu rope-norms=%zu prologues=%zu slice-pairs=%zu "
+      "sdpa-folds=%zu rope-epis=%zu cache=%s\n",
+      tape_size,
+      plan_us,
+      state.gemv_groups.size(),
+      state.dense_gemv_groups.size(),
+      state.roles.size(),
+      state.rope_pairs.size(),
+      state.rope_norms.size(),
+      state.prologue_folds.size(),
+      state.slice_update_pairs.size(),
+      state.sdpa_transpose_folds.size(),
+      std::count_if(
+          state.gemv_groups.begin(),
+          state.gemv_groups.end(),
+          [](const auto& g) { return g.rope_epi.has_value(); }),
+      cache_status);
+}
+
 } // namespace
+
+bool fold_plan_cache_enabled() {
+  const char* env = omarchy::env_str("MLX_OMARCHY_FOLD_PLAN_CACHE");
+  return env == nullptr || env[0] == '\0' || std::strcmp(env, "0") != 0;
+}
+
+FoldPlanKey compute_fold_plan_key(const std::deque<array>& tape) {
+  env_note_eval();
+  static thread_local TapeIndex<uint32_t> standalone_id_map;
+  return compute_fold_plan_key_impl(tape, standalone_id_map);
+}
+
+FoldPlanCacheStats fold_plan_cache_stats() {
+  const auto& c = fold_plan_cache_state();
+  return FoldPlanCacheStats{
+      c.hits, c.misses, c.revalidation_fallbacks, c.entries.size()};
+}
+
+void clear_fold_plan_cache() {
+  auto& c = fold_plan_cache_state();
+  c.entries.clear();
+  c.hits = 0;
+  c.misses = 0;
+  c.revalidation_fallbacks = 0;
+}
 
 double* eval_phase_slots() {
   static thread_local double slots[8];
@@ -1522,6 +3056,30 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   }
   eager_state = state;
   state->prepare(tape.size());
+
+  const bool use_cache =
+      fold_plan_cache_enabled() && !fold_planner_trace_active();
+  static thread_local TapeIndex<uint32_t> key_id_map;
+  FoldPlanKey plan_key{};
+  const char* cache_status = "off";
+  if (use_cache) {
+    plan_key = compute_fold_plan_key_impl(tape, key_id_map);
+    if (const FoldPlanTemplate* tmpl = fold_plan_cache_lookup(plan_key)) {
+      if (instantiate_fold_plan(*tmpl, tape, *state)) {
+        ++fold_plan_cache_state().hits;
+        cache_status = "hit";
+        if (fold_timing) {
+          print_fold_timing(tape.size(), plan_t0, *state, cache_status);
+        }
+        return;
+      }
+      ++fold_plan_cache_state().revalidation_fallbacks;
+      state->reset();
+      state->prepare(tape.size());
+    }
+    ++fold_plan_cache_state().misses;
+    cache_status = "miss";
+  }
   // Tape-index scratch is thread-local and reused across passes. The maps
   // are only live for this planning section, so reuse is safe under nested
   // scopes: a nested scope's eval runs after this constructor returns,
@@ -3785,30 +5343,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
     }
   }
+  if (use_cache) {
+    if (auto tmpl = extract_fold_plan_template(*state, tape, key_id_map)) {
+      fold_plan_cache_insert(plan_key, std::move(*tmpl));
+    }
+  }
   if (fold_timing) {
-    const double plan_us =
-        std::chrono::duration<double, std::micro>(
-            std::chrono::steady_clock::now() - plan_t0)
-            .count();
-    std::fprintf(
-        stderr,
-        "[fold-time] plan tape=%zu us=%.0f gemv=%zu dense=%zu swiglu-roles=%zu "
-        "rope-pairs=%zu rope-norms=%zu prologues=%zu slice-pairs=%zu "
-        "sdpa-folds=%zu rope-epis=%zu\n",
-        tape.size(),
-        plan_us,
-        state->gemv_groups.size(),
-        state->dense_gemv_groups.size(),
-        state->roles.size(),
-        state->rope_pairs.size(),
-        state->rope_norms.size(),
-        state->prologue_folds.size(),
-        state->slice_update_pairs.size(),
-        state->sdpa_transpose_folds.size(),
-        std::count_if(
-            state->gemv_groups.begin(),
-            state->gemv_groups.end(),
-            [](const auto& g) { return g.rope_epi.has_value(); }));
+    print_fold_timing(tape.size(), plan_t0, *state, cache_status);
   }
 }
 
