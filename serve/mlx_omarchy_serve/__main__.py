@@ -539,12 +539,45 @@ def shard_name_ok(name: str) -> bool:
             and ".." not in path.parts and "\0" not in name)
 
 
+# Cap for a snapshot's model.safetensors.index.json and config.json. Public
+# 1T-parameter MoE weight maps reach about 20 MB (one entry per expert
+# tensor and scale) and mixed-precision MLX configs list every layer's
+# quantization (a few hundred KB); 64 MiB leaves room above both.
+SNAPSHOT_JSON_MAX_BYTES = 64 << 20
+SNAPSHOT_JSON_CHUNK = 64 << 10
+
+
+def read_snapshot_text(path: Path) -> str:
+    """UTF-8 text of a regular file of at most SNAPSHOT_JSON_MAX_BYTES.
+    Symlinks are followed: a Hugging Face cache snapshot links each file
+    into blobs/. A FIFO, device or oversized file raises ValueError
+    instead of blocking or reading without bound."""
+    cap = SNAPSHOT_JSON_MAX_BYTES
+    # O_NONBLOCK: a FIFO opens without a writer and is refused below.
+    with open(path, "rb", buffering=0,  # a buffered read would read ahead past the cap
+              opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("not a regular file")
+        if info.st_size > cap:
+            raise ValueError(f"exceeds {cap} bytes")
+        raw = bytearray()
+        while len(raw) <= cap:  # a short read is not EOF; stop at cap + 1
+            chunk = stream.read(min(SNAPSHOT_JSON_CHUNK, cap + 1 - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+    if len(raw) > cap:
+        raise ValueError(f"exceeds {cap} bytes")
+    return raw.decode("utf-8")
+
+
 def index_shards(index: Path) -> list[str] | None:
     """Sorted shard names of a safetensors index, or None when the file is
     unreadable or is not {"weight_map": {tensor: shard}} with every shard a
     name shard_name_ok accepts."""
     try:
-        obj = json.loads(index.read_text(encoding="utf-8"))
+        obj = json.loads(read_snapshot_text(index))
     except (OSError, ValueError, RecursionError):
         return None
     weight_map = obj.get("weight_map") if isinstance(obj, dict) else None
@@ -687,7 +720,7 @@ def download_snapshot(resolved: Resolved, patterns: list[str] | None = None) -> 
 def check_custom_code(model_dir: Path) -> None:
     config = model_dir / "config.json"
     try:
-        obj = json.loads(config.read_text(encoding="utf-8"))
+        obj = json.loads(read_snapshot_text(config))
     except (OSError, ValueError, RecursionError):
         return  # advisory only: an unreadable config.json warns about nothing
     if isinstance(obj, dict) and "auto_map" in obj:

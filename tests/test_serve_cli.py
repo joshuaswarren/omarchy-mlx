@@ -15,6 +15,7 @@ import pwd
 import sys
 import tempfile
 import threading
+import tracemalloc
 import types
 import unittest
 import unittest.mock
@@ -1355,6 +1356,308 @@ class MalformedSnapshotJsonTests(CliTestBase):
                 self.assertEqual(err.getvalue(), "")
         with unittest.mock.patch.object(serve_cli.json, "loads", side_effect=RecursionError):
             self.assertIsNone(serve_cli.check_custom_code(self.model_dir()))
+
+
+def call_on_fifo(fifo: Path, fn, payload: bytes | None = None):
+    """fn() in a bounded worker. Without a writer (payload None) a blocking
+    open never returns; with one holding payload, a blocking read never sees
+    EOF. The FIFO is released afterwards either way."""
+    result = {}
+
+    def run():
+        try:
+            result["value"] = fn()
+        except BaseException as exc:  # re-raised in the caller
+            result["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    wfd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK) if payload is not None else None
+    try:
+        if wfd is not None:
+            assert os.write(wfd, payload) == len(payload)
+        worker.start()
+        worker.join(timeout=5)
+        blocked = worker.is_alive()
+    finally:
+        if wfd is not None:
+            os.close(wfd)
+        elif worker.is_alive():  # a blocked open returns once a writer opens
+            with contextlib.suppress(OSError):
+                os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+    worker.join(timeout=5)
+    if blocked:
+        raise AssertionError(f"blocked on the FIFO {fifo}")
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
+
+
+def padded_json(obj: dict, size: int) -> bytes:
+    """obj plus a "pad" string, encoded to exactly size bytes: valid JSON
+    that a read stopping early cannot parse."""
+    raw = json.dumps({"pad": "", **obj}).encode()
+    return raw.replace(b'"pad": ""', b'"pad": "' + b"x" * (size - len(raw)) + b'"', 1)
+
+
+class ShortReads:
+    """A stream that returns at most 1000 bytes per read() and records the
+    file offset at close, so a test can see whether the reader loops and
+    whether it read past what it returned."""
+
+    def __init__(self, stream, offsets: list):
+        self.stream, self.offsets = stream, offsets
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.offsets.append(os.lseek(self.stream.fileno(), 0, os.SEEK_CUR))
+        self.stream.close()
+
+    def fileno(self):
+        return self.stream.fileno()
+
+    def read(self, n):
+        return self.stream.read(min(n, 1000))
+
+
+AUTO_MAP = {"auto_map": {"AutoModel": "x"}}
+WEIGHT_MAP = {"weight_map": {"w": "s.safetensors"}}
+
+
+class BoundedSnapshotJsonReadTests(CliTestBase):
+    """model.safetensors.index.json and config.json are read with a size cap
+    and a non-blocking open: a FIFO, device or oversized file is a malformed
+    index (or no custom-code warning) instead of a hang or MemoryError, and
+    symlinks into a Hugging Face blobs/ directory still load."""
+
+    def snapshot(self) -> Path:
+        directory = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        (directory / "model.safetensors.index.json").write_text(json.dumps(WEIGHT_MAP))
+        (directory / "config.json").write_text(json.dumps(AUTO_MAP))
+        (directory / "s.safetensors").write_bytes(b"x" * 32)
+        (directory / "tokenizer.json").write_text("{}")
+        return directory
+
+    def warning(self, directory: Path) -> str:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(serve_cli.check_custom_code(directory))
+        return err.getvalue()
+
+    def test_fifos_are_refused_without_blocking(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFO unavailable")
+        for writer in (False, True):
+            with self.subTest(writer=writer):
+                directory = self.snapshot()
+                index, config = directory / "model.safetensors.index.json", directory / "config.json"
+                for path in (index, config):
+                    path.unlink()
+                    os.mkfifo(path)
+                self.assertIsNone(call_on_fifo(
+                    index, lambda: serve_cli.index_shards(index),
+                    json.dumps(WEIGHT_MAP).encode() if writer else None))
+                self.assertEqual(call_on_fifo(
+                    config, lambda: self.warning(directory),
+                    json.dumps(AUTO_MAP).encode() if writer else None), "")
+        # end to end: only mlx-lm checks a local directory's config.json type,
+        # so `pull --server omlx` reaches the custom-code check with the FIFO
+        code, _, err = call_on_fifo(config, lambda: self.run_cli(
+            ["pull", str(directory), "--server", "omlx", "--weights-gib", "1",
+             "--context", "1024", "--yes"]))
+        self.assertEqual(code, 3)
+        self.assertIn("omlx", err)
+        self.assertNotIn("auto_map", err)
+
+    def test_devices_and_directories_are_refused(self):
+        # No endless device such as /dev/zero: a reader that lost its bound
+        # would read it until the host runs out of memory. The FIFO and
+        # sparse-file tests prove the bound with finite inputs.
+        for target in (os.devnull, "directory"):
+            with self.subTest(target):
+                directory = self.snapshot()
+                for name in ("model.safetensors.index.json", "config.json"):
+                    (directory / name).unlink()
+                    if target == "directory":
+                        (directory / name).mkdir()
+                    else:
+                        os.symlink(target, directory / name)
+                if target != "directory":
+                    for name in ("model.safetensors.index.json", "config.json"):
+                        with self.assertRaisesRegex(ValueError, "^not a regular file$"):
+                            serve_cli.read_snapshot_text(directory / name)
+                self.assertIsNone(serve_cli.index_shards(directory / "model.safetensors.index.json"))
+                self.assertEqual(self.warning(directory), "")
+
+    def test_hugging_face_blob_symlinks_are_followed(self):
+        root = Path(self.tmp.name) / "models--org--model"
+        blobs, snap = root / "blobs", root / "snapshots" / ("a" * 40)
+        blobs.mkdir(parents=True)
+        snap.mkdir(parents=True)
+        files = {"model.safetensors.index.json": json.dumps(WEIGHT_MAP).encode(),
+                 "config.json": json.dumps(AUTO_MAP).encode(),
+                 "s.safetensors": b"x" * 32, "tokenizer.json": b"{}"}
+        for number, (name, raw) in enumerate(files.items()):
+            (blobs / f"blob{number}").write_bytes(raw)
+            os.symlink(f"../../blobs/blob{number}", snap / name)
+        self.assertEqual(serve_cli.index_shards(snap / "model.safetensors.index.json"),
+                         ["s.safetensors"])
+        self.assertEqual(serve_cli.snapshot_gaps(snap), [])
+        self.assertIn("auto_map", self.warning(snap))
+        (blobs / "blob0").unlink()
+        (blobs / "blob1").unlink()
+        self.assertIsNone(serve_cli.index_shards(snap / "model.safetensors.index.json"))
+        self.assertEqual(self.warning(snap), "")
+
+    def test_encoding_matches_a_utf8_text_read(self):
+        # json.loads() of bytes would accept these; a UTF-8 text read does not
+        directory = self.snapshot()
+        (directory / "model.safetensors.index.json").write_bytes(
+            b"\xef\xbb\xbf" + json.dumps(WEIGHT_MAP).encode())
+        (directory / "config.json").write_bytes(json.dumps(AUTO_MAP).encode("utf-16"))
+        self.assertIsNone(serve_cli.index_shards(directory / "model.safetensors.index.json"))
+        self.assertEqual(self.warning(directory), "")
+
+    def test_size_cap(self):
+        directory = self.snapshot()
+        index, config = directory / "model.safetensors.index.json", directory / "config.json"
+        # a small valid index and config.json do not allocate the 64 MiB cap
+        tracing = tracemalloc.is_tracing()
+        if not tracing:
+            tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            before = tracemalloc.get_traced_memory()[0]
+            self.assertEqual(serve_cli.index_shards(index), ["s.safetensors"])
+            self.assertIn("auto_map", self.warning(directory))
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            if not tracing:
+                tracemalloc.stop()
+        self.assertLess(peak - before, 1 << 20)
+        # a sparse file one byte over the 64 MiB cap is refused before any read
+        for path in (index, config):
+            path.unlink()
+            with open(path, "wb") as stream:
+                stream.truncate((64 << 20) + 1)
+        tracing = tracemalloc.is_tracing()
+        if not tracing:
+            tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            before = tracemalloc.get_traced_memory()[0]
+            self.assertIsNone(serve_cli.index_shards(index))
+            self.assertEqual(self.warning(directory), "")
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            if not tracing:
+                tracemalloc.stop()
+        self.assertLess(peak - before, 1 << 20)
+        self.assertEqual(serve_cli.SNAPSHOT_JSON_MAX_BYTES, 64 << 20)
+        # a weight map larger than the largest public one (about 20 MB) resolves
+        names = (f"model.layers.{layer}.mlp.experts.{expert}.down_proj.weight_scale_inv"
+                 for layer in range(61) for expert in range(5500))
+        index.write_text(json.dumps({"weight_map": dict.fromkeys(names, "s.safetensors")}))
+        self.assertGreater(index.stat().st_size, 24 << 20)
+        self.assertEqual(serve_cli.index_shards(index), ["s.safetensors"])
+        cap = 4096
+        with unittest.mock.patch.object(serve_cli, "SNAPSHOT_JSON_MAX_BYTES", cap):
+            index.write_bytes(padded_json(WEIGHT_MAP, cap))
+            config.write_bytes(padded_json(AUTO_MAP, cap))
+            self.assertEqual(serve_cli.index_shards(index), ["s.safetensors"])
+            self.assertIn("auto_map", self.warning(directory))
+            index.write_bytes(padded_json(WEIGHT_MAP, cap + 1))
+            config.write_bytes(padded_json(AUTO_MAP, cap + 1))
+            self.assertIsNone(serve_cli.index_shards(index))
+            self.assertEqual(self.warning(directory), "")
+
+    def test_read_stops_at_the_cap_when_fstat_reports_less(self):
+        """A file that grows after fstat(), or whose size fstat() does not
+        report (procfs), is still read to at most cap + 1 bytes."""
+        cap = 4096
+        real_fstat, real_open = os.fstat, open
+        offsets = []
+
+        def fstat_size_zero(fd):
+            info = real_fstat(fd)
+            return types.SimpleNamespace(st_mode=info.st_mode, st_size=0)
+
+        directory = self.snapshot()
+        index, config = directory / "model.safetensors.index.json", directory / "config.json"
+        with unittest.mock.patch.object(serve_cli, "SNAPSHOT_JSON_MAX_BYTES", cap), \
+                unittest.mock.patch.object(serve_cli.os, "fstat", fstat_size_zero), \
+                unittest.mock.patch.object(serve_cli, "open", create=True, new=lambda *a, **k:
+                                           ShortReads(real_open(*a, **k), offsets)):
+            # short reads: the reader loops to EOF at the cap and one byte past it
+            index.write_bytes(padded_json(WEIGHT_MAP, cap))
+            config.write_bytes(padded_json(AUTO_MAP, cap))
+            self.assertEqual(serve_cli.index_shards(index), ["s.safetensors"])
+            self.assertIn("auto_map", self.warning(directory))
+            index.write_bytes(padded_json(WEIGHT_MAP, cap + 1))
+            with self.assertRaisesRegex(ValueError, f"^exceeds {cap} bytes$"):
+                serve_cli.read_snapshot_text(index)
+            config.write_bytes(padded_json(AUTO_MAP, cap + 1))
+            self.assertEqual(self.warning(directory), "")
+            # a sparse 64 MiB file: the read stops at cap + 1 bytes
+            index.unlink()
+            with real_open(index, "wb") as stream:
+                stream.truncate(64 << 20)
+            offsets.clear()
+            tracing = tracemalloc.is_tracing()
+            if not tracing:
+                tracemalloc.start()
+            try:
+                tracemalloc.reset_peak()
+                before = tracemalloc.get_traced_memory()[0]
+                self.assertIsNone(serve_cli.index_shards(index))
+                peak = tracemalloc.get_traced_memory()[1]
+            finally:
+                if not tracing:
+                    tracemalloc.stop()
+        self.assertEqual(offsets, [cap + 1])
+        self.assertLess(peak - before, 1 << 20)
+
+    def test_recursion_depth_matches_read_text(self):
+        """json.loads() runs at the caller's stack depth, not inside the reader
+        helper, so valid JSON nested to the exact recursion limit still parses."""
+        directory = self.snapshot()
+        index, config = directory / "model.safetensors.index.json", directory / "config.json"
+
+        def nested(payload: dict, depth: int) -> str:
+            body = json.dumps(payload)[:-1]
+            return f'{body}, "nested": {"[" * depth}0{"]" * depth}}}'
+
+        def read_text_loads(path: Path):
+            return json.loads(path.read_text(encoding="utf-8"))
+
+        def run():
+            lo, hi = 0, 1
+            while True:
+                index.write_text(nested(WEIGHT_MAP, hi), encoding="utf-8")
+                try:
+                    read_text_loads(index)
+                except RecursionError:
+                    break
+                lo, hi = hi, hi * 2
+            while lo + 1 < hi:
+                mid = (lo + hi) // 2
+                index.write_text(nested(WEIGHT_MAP, mid), encoding="utf-8")
+                try:
+                    read_text_loads(index)
+                except RecursionError:
+                    hi = mid
+                else:
+                    lo = mid
+            index.write_text(nested(WEIGHT_MAP, lo), encoding="utf-8")
+            config.write_text(nested(AUTO_MAP, lo), encoding="utf-8")
+            self.assertEqual(serve_cli.index_shards(index), ["s.safetensors"])
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertIsNone(serve_cli.check_custom_code(directory))
+            self.assertIn("auto_map", err.getvalue())
+
+        on_pinned_stack(run)
 
 
 @unittest.skipIf(os.geteuid() == 0, "root bypasses mode bits")
