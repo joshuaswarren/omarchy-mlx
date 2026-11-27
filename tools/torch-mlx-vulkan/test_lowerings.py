@@ -2615,6 +2615,23 @@ def test_out_variants():
     assert stats["cpu"] == [], stats
     assert np.allclose(torch.as_tensor(got).float().numpy(), ref.float().numpy(), atol=3e-2)
     assert np.allclose(torch.as_tensor(got_o).float().numpy(), ref_buf.float().numpy(), atol=3e-2)
+
+    # 7) a resizable baked literal (PyTorch's `out=torch.empty(0)` pattern)
+    #    must be resized before the write: without resize_ the copy_ raised,
+    #    LOWER-FAIL logged, and the node still recorded LOWERED with the
+    #    buffer left unwritten (gemini-4-neon review on 979d832a9).
+    g = torch.fx.Graph()
+    pa, pb = g.placeholder("a"), g.placeholder("b")
+    lit = torch.empty(0)
+    n = g.call_function(torch.ops.aten.mul.out, (pa, pb), {"out": lit})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    got = run(a, b)
+    assert stats["cpu"] == [], stats
+    assert tuple(lit.shape) == (4,), lit.shape
+    assert np.allclose(lit.float().numpy(), (a * b).float().numpy(), atol=3e-2), (
+        "resizable out literal was left unwritten", lit, a * b)
     print("test_out_variants PASS")
 def test_cosine_similarity():
     # PT-NORM-a: aten.cosine_similarity.default (embedding-eval family).
