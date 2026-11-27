@@ -1350,9 +1350,10 @@ def _bincount(a, weights=None, minlength=0):
     else:
         w, dt = _mx(weights), _mx(weights).dtype
         if w.dtype == mx.float64:
-            # the scatter accumulates float32; the f64 -> f32 cast keeps the
-            # fraction (the catch-all int32 cast silently truncated it)
-            w = w.astype(mx.float32)
+            # the GPU wheel has no float64: mx silently casts an f64 array
+            # to float32, so the only torch-exact route is the fallback
+            # (torch accumulates in true f64 and returns f64)
+            return _raise("bincount float64 weights fall back to torch for exact f64 sums")
         elif w.dtype not in (mx.float32, mx.float16, mx.bfloat16):
             # every integer weight dtype accumulates through the int32
             # Scatter::Sum: refuse when the SUM can leave int32
