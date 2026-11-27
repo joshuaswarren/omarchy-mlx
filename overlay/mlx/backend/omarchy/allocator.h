@@ -249,6 +249,8 @@ class VulkanAllocator : public allocator::Allocator {
   // stop counting against the open-batch budget once they can drain.
   void stamp_batch(
       const std::unordered_set<VulkanBuffer*>& bufs, uint64_t completion);
+  void stamp_batch(
+      std::span<VulkanBuffer* const> bufs, uint64_t completion);
 
   // Bytes of freed buffers pinned by a batch that has not yet been
   // submitted (quarantined at kPendingCompletion). Nothing can recycle

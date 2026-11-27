@@ -19266,6 +19266,68 @@ void ScaledDotProductAttention::eval_gpu(
               binding(kw),
               binding(off),
               binding(*og->gate)};
+          uint32_t gqa4_splits = 0u;
+          if (is_hd256 && rp.matrix_n > 0u && rp.matrix_m == rp.matrix_n * 4u &&
+              rp.matrix_n <= 64u &&
+              encoder.device().compute().binding_limit() >= 11u) {
+            const char* gqa4_env =
+                omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE_ROPE_GQA4");
+            if (gqa4_env != nullptr && gqa4_env[0] != '\0' &&
+                std::strcmp(gqa4_env, "0") != 0) {
+              uint32_t min_splits = (rp.matrix_k + 255u) / 256u;
+              if (min_splits == 0u) {
+                min_splits = 1u;
+              }
+              uint32_t want = 0u;
+              if (std::strcmp(gqa4_env, "1") == 0) {
+                uint32_t target = 32u / rp.matrix_n;
+                if (target < 1u) target = 1u;
+                want = std::max(target, min_splits);
+                if (want > 32u) want = 32u;
+              } else {
+                long parsed = std::strtol(gqa4_env, nullptr, 10);
+                if (parsed >= 1 && parsed <= 32) {
+                  want = static_cast<uint32_t>(parsed);
+                }
+              }
+              if (want >= min_splits && want >= 1u && want <= 32u &&
+                  rp.matrix_k <= want * 256u) {
+                gqa4_splits = want;
+              }
+            }
+          }
+          if (gqa4_splits > 0u) {
+            array split_scratch(
+                Shape{static_cast<int>(
+                    gqa4_splits > 1u ? rp.matrix_m * gqa4_splits * 260u : 4u)},
+                float32,
+                nullptr,
+                {});
+            split_scratch.set_data(allocate_omarchy(split_scratch.nbytes()));
+            encoder.add_temporary(split_scratch);
+            rp.out_strides[3] = gqa4_splits;
+            std::array<omarchy::ComputeBinding, 11> rb_og_gqa4{
+                binding(q_raw),
+                binding(k),
+                binding(v),
+                binding(tail_out),
+                binding(k_raw),
+                binding(qw),
+                binding(kw),
+                binding(off),
+                binding(*og->gate),
+                binding(split_scratch),
+                encoder.resnorm_ticket_binding()};
+            encoder.dispatch_compute(
+                omarchy::ComputeKernel::
+                    SdpaDecodeOnlineRopeOutgateGqa4Sg32BF16Hd256,
+                rb_og_gqa4,
+                rp,
+                rp.matrix_n * gqa4_splits);
+            omarchy::commit_sdpa_online_rope(out);
+            omarchy::commit_sdpa_outgate(out);
+            dispatched = true;
+          } else {
           uint32_t split_k = 1u;
           if (is_hd256 && rp.matrix_m <= 64u &&
               encoder.device().compute().binding_limit() >= 11u) {
@@ -19327,6 +19389,7 @@ void ScaledDotProductAttention::eval_gpu(
           omarchy::commit_sdpa_online_rope(out);
           omarchy::commit_sdpa_outgate(out);
           dispatched = true;
+          }
         } else {
           out.set_data(allocate_omarchy(out.nbytes()));
           rp.output_offset = checked_item_offset(out, out.size(), tag, out);

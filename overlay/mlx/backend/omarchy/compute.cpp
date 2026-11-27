@@ -397,6 +397,7 @@
 #include "sdpa_decode_online_rope_sg32_bf16_hd256.h"
 #include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256.h"
 #include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split.h"
+#include "sdpa_decode_online_rope_outgate_gqa4_sg32_bf16_hd256.h"
 #include "sdpa_decode_online_sg32_bf16_hd256.h"
 #include "sdpa_decode_online_sg16_bf16_hd256.h"
 #include "sdpa_decode_online_outgate_sg32_bf16_hd128.h"
@@ -2581,6 +2582,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_swiglu_bf16_r1s4w2,
           qmm_vec_q4_swiglu_bf16_r1s4w2_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateGqa4Sg32BF16Hd256:
+      return {
+          sdpa_decode_online_rope_outgate_gqa4_sg32_bf16_hd256,
+          sdpa_decode_online_rope_outgate_gqa4_sg32_bf16_hd256_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

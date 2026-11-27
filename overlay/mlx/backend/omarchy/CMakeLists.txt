@@ -568,6 +568,7 @@ omarchy_shader(sdpa_decode_online_rope_outgate_sg32_bf16_hd128 shaders/sdpa_deco
 omarchy_shader(sdpa_decode_online_rope_sg32_bf16_hd256 shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=256)
 omarchy_shader(sdpa_decode_online_rope_outgate_sg32_bf16_hd256 shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=256 -DSDPA_OUTGATE=1)
 omarchy_shader(sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=256 -DSDPA_OUTGATE=1 -DSDPA_SPLIT_K=1)
+omarchy_shader(sdpa_decode_online_rope_outgate_gqa4_sg32_bf16_hd256 shaders/sdpa_decode_online_rope_gqa4.comp)
 omarchy_shader(sdpa_decode_online_sg32_bf16_hd256 shaders/sdpa_decode_online.comp -DSUBGROUPS=32 -DHD=256)
 omarchy_shader(sdpa_decode_online_sg16_bf16_hd256 shaders/sdpa_decode_online.comp -DSUBGROUPS=16 -DHD=256)
 omarchy_shader(sdpa_decode_online_outgate_sg32_bf16_hd128 shaders/sdpa_decode_online.comp -DSUBGROUPS=32 -DHD=128 -DSDPA_OUTGATE=1)

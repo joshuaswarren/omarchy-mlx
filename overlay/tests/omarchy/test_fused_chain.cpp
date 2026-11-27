@@ -3757,6 +3757,21 @@ TEST_CASE("sdpa outgate and online-rope hd256: bit-exact output and k_cache") {
         eval({md});
         CHECK_MESSAGE(md.item<float>() <= 2e-2f, "split=", sp, " max_diff=", md.item<float>());
       }
+      for (const char* gq : {"1", "2", "8", "16"}) {
+        setenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_GQA4", gq, 1);
+        auto [g_g4, k_g4, n_g4, lk_g4] = run(pos, "32", "1", "1");
+        unsetenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_GQA4");
+        INFO("online-rope-gqa4=" << gq << " pos=" << pos);
+        CHECK_EQ(n_g4 + 5, n_base);
+        CHECK_EQ(
+            lk_g4,
+            static_cast<int64_t>(
+                omarchy::ComputeKernel::SdpaDecodeOnlineRopeOutgateGqa4Sg32BF16Hd256));
+        expect_bit_exact(k_base, k_g4, stream);
+        auto md = max(abs(astype(g_base, float32, stream) - astype(g_g4, float32, stream)), stream);
+        eval({md});
+        CHECK_MESSAGE(md.item<float>() <= 2e-2f, "gqa4=", gq, " max_diff=", md.item<float>());
+      }
     }
     // 3. Split-K HD=256 + Outgate (online disabled).
     auto [g_sp_base, k_sp_base, n_sp_base, lk_sp_base] = run(pos, "0", "0", "0");

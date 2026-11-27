@@ -992,6 +992,24 @@ void VulkanAllocator::stamp_batch(
   pending_quarantine_bytes_ = pending;
 }
 
+void VulkanAllocator::stamp_batch(
+    std::span<VulkanBuffer* const> bufs,
+    uint64_t completion) {
+  std::unique_lock lk(mutex_);
+  for (auto* buf : bufs) {
+    if (buf) {
+      buf->completion = completion;
+    }
+  }
+  size_t pending = 0;
+  for (auto* buf : quarantine_) {
+    if (buf->completion == kPendingCompletion) {
+      pending += buf->size;
+    }
+  }
+  pending_quarantine_bytes_ = pending;
+}
+
 
 VulkanBuffer* VulkanAllocator::note_buffer_handle(VkBuffer handle) {
   std::unique_lock lk(mutex_);

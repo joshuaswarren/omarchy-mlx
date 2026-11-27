@@ -456,7 +456,7 @@ void CommandEncoder::upload_device_local_if_needed(
         // program order plus the barrier tracker/wave scheduler orders the
         // inline vkCmdUpdateBuffer after it without flushing. Only flush if
         // another encoder holds the uncommitted use of vb.
-        const bool on_this_encoder = batch_buffers_.count(vb) != 0;
+        const bool on_this_encoder = batch_buffers_contains(vb);
         if (!on_this_encoder) {
           synchronize_pending_encoders();
           comp = omarchy::allocator().buffer_completion(vb);
@@ -470,7 +470,7 @@ void CommandEncoder::upload_device_local_if_needed(
         add_semaphore_wait(device_.completions().semaphore(), comp, nullptr);
       }
       if (auto* noted = omarchy::allocator().note_buffer_handle(vb->buffer)) {
-        batch_buffers_.insert(noted);
+        record_batch_buffer(noted);
       }
       if (wave_sched()) {
         PendingNode& node = pending_.emplace_back();
@@ -545,10 +545,10 @@ void CommandEncoder::copy_buffer(
     commit_device_local_write(dst_vb);
   }
   if (auto* vb = omarchy::allocator().note_buffer_handle(src)) {
-    batch_buffers_.insert(vb);
+    record_batch_buffer(vb);
   }
   if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
-    batch_buffers_.insert(vb);
+    record_batch_buffer(vb);
   }
   if (wave_sched()) {
     PendingNode& node = pending_.emplace_back();
@@ -606,7 +606,7 @@ void CommandEncoder::fill_buffer(
   upload_device_local_if_needed(dst_vb, false, true, offset, size, true);
   commit_device_local_write(dst_vb);
   if (auto* vb = omarchy::allocator().note_buffer_handle(dst)) {
-    batch_buffers_.insert(vb);
+    record_batch_buffer(vb);
   }
   if (wave_sched()) {
     PendingNode& node = pending_.emplace_back();
@@ -901,15 +901,17 @@ void CommandEncoder::dispatch_compute_pipeline(
     }
   }
   bool any_device_local = false;
-  for (const auto& item : bindings) {
-    auto* vb = const_cast<VulkanBuffer*>(
-        static_cast<const VulkanBuffer*>(item.owner));
-    if (!vb) {
-      vb = omarchy::allocator().lookup_buffer_handle(item.buffer);
-    }
-    if (vb && vb->device_local) {
-      any_device_local = true;
-      break;
+  if (!host_slim() || omarchy::device_local_activations_enabled()) {
+    for (const auto& item : bindings) {
+      auto* vb = const_cast<VulkanBuffer*>(
+          static_cast<const VulkanBuffer*>(item.owner));
+      if (!vb) {
+        vb = omarchy::allocator().lookup_buffer_handle(item.buffer);
+      }
+      if (vb && vb->device_local) {
+        any_device_local = true;
+        break;
+      }
     }
   }
   if (any_device_local) {
@@ -990,7 +992,7 @@ void CommandEncoder::dispatch_compute_pipeline(
           static_cast<VulkanBuffer*>(const_cast<void*>(item.owner));
       if (buf) {
         owners[owner_count++] = buf;
-        batch_buffers_.insert(buf);
+        record_batch_buffer(buf);
       }
     }
     omarchy::allocator().note_batch_buffers({owners.data(), owner_count});
@@ -1547,11 +1549,13 @@ void CommandEncoder::emit_pending() {
             node.update_data.data());
         transfer_since_barrier_ = true;
       }
-      for (uint32_t r = 0; r < node.nr; ++r) {
-        tracker_.add_read(node.rd[r]);
-      }
-      for (uint32_t r = 0; r < node.nw; ++r) {
-        tracker_.add_write(node.wr[r]);
+      if (!host_slim()) {
+        for (uint32_t r = 0; r < node.nr; ++r) {
+          tracker_.add_read(node.rd[r]);
+        }
+        for (uint32_t r = 0; r < node.nw; ++r) {
+          tracker_.add_write(node.wr[r]);
+        }
       }
     }
     }
@@ -1787,10 +1791,14 @@ void CommandEncoder::submit() {
           timeline::Kind::QueueSubmit,
           timeline::SubKind::StampBatch,
           encoder_id_,
-          static_cast<uint64_t>(batch_buffers_.size()));
-      omarchy::allocator().stamp_batch(batch_buffers_, completion_value);
+          static_cast<uint64_t>(batch_buffers_count()));
+      if (host_slim()) {
+        omarchy::allocator().stamp_batch(batch_buffers_vec_, completion_value);
+      } else {
+        omarchy::allocator().stamp_batch(batch_buffers_, completion_value);
+      }
     }
-    batch_buffers_.clear();
+    batch_buffers_clear();
     VkSemaphore completion_sem = device_.completions().semaphore();
     signal_sems.push_back(completion_sem);
     signal_values.push_back(completion_value);
@@ -1908,7 +1916,7 @@ void CommandEncoder::submit() {
       // typed error propagates to the stream's error handling. The
       // batch's buffer stamps are harmless: those buffers stay alive via
       // their arrays or the quarantine.
-      batch_buffers_.clear();
+      batch_buffers_clear();
       pending_.clear();
       dep_records_.clear();
       recording_ = false;

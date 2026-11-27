@@ -2351,6 +2351,37 @@ void wait_for_timeline_progress(
   info.pSemaphores = &semaphore;
   info.pValues = &target_value;
 
+  static const uint64_t spin_us = []() -> uint64_t {
+    const char* e = std::getenv("MLX_OMARCHY_WAIT_SPIN_US");
+    if (!e || e[0] == '\0') {
+      return 0;
+    }
+    long v = std::strtol(e, nullptr, 10);
+    return v > 0 ? static_cast<uint64_t>(v) : 0;
+  }();
+  if (spin_us > 0) {
+    uint64_t cur = 0;
+    if (vk::device_table().GetSemaphoreCounterValue(
+            device, semaphore, &cur) == VK_SUCCESS &&
+        cur >= target_value) {
+      return;
+    }
+    const auto spin_deadline =
+        clock::now() + std::chrono::microseconds(spin_us);
+    do {
+#if defined(__aarch64__)
+      asm volatile("yield" ::: "memory");
+#elif defined(__x86_64__)
+      __builtin_ia32_pause();
+#endif
+      if (vk::device_table().GetSemaphoreCounterValue(
+              device, semaphore, &cur) == VK_SUCCESS &&
+          cur >= target_value) {
+        return;
+      }
+    } while (clock::now() < spin_deadline);
+  }
+
   timeline::ScopedEvent tl_wait(
       timeline::Kind::Wait, timeline::SubKind::TimelineWait, 0, target_value);
   for (;;) {

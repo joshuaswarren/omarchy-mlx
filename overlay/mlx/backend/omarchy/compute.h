@@ -1379,6 +1379,9 @@ enum class ComputeKernel : uint16_t {
   // kernel ids stable).
   QmmVecQ4WordSubgroupBF16R2S4W2,
   QmmVecQ4SwigluBF16R1S4W2,
+  // Single-dispatch GQA-4 fused Q/K RMSNorm + RoPE + K-cache write + 2-phase
+  // K-then-V split-K decode SDPA + outgate (HD=256, repeats=4, 256 threads).
+  SdpaDecodeOnlineRopeOutgateGqa4Sg32BF16Hd256,
   Count,
 };
 

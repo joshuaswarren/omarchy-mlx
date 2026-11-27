@@ -1,0 +1,616 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Single-dispatch GQA-4 fused Q/K RMSNorm + RoPE + KV-cache write + 2-phase
+// K-then-V split-K decode SDPA + output-gate epilogue for HD=256, repeats=4
+// (MLX_OMARCHY_SDPA_ONLINE_ROPE_GQA4).
+//
+// Why this exists:
+// - sdpa_decode_online_rope.comp launches 1 WG per (Q_head, split), so 4 Q
+//   heads sharing one KV head read the entire K and V cache 4x separately.
+// - This 256-thread (8-subgroup) kernel assigns 1 WG per (kv_head, split_id),
+//   loading each K and V uvec4 row ONCE for all 4 Q heads (4x less KV DRAM
+//   bandwidth) with zero register spill:
+//     * Prologue: RMSNorm + RoPE on Q[0..3] and K + K-cache write (leader
+//       split_id==0) + load rotated Q[0..3] (32 floats/lane) into registers.
+//     * Phase 1 (K-only): 8 SGs stride contiguous split keys (n_keys <= 256),
+//       read each K row ONCE, write 4 dot scores into s_p[4][256]; Q[0..3]
+//       registers are then dead and reused by O[0..3].
+//     * Phase 2 (Softmax): SGs 0..3 compute exact block max, single exp2 per
+//       key (zero online rescaling), and sum into s_max[4]/s_sum[4].
+//     * Phase 3 (V-only): 8 SGs read each V row ONCE, accumulate O[0..3]
+//       (32 floats/lane), reduce each head across 8 SGs through s_o[8][256]
+//       (all 256 threads active, single pass) into split_scratch (or direct
+//       outgate output when splits == 1).
+//     * Phase 4 (Split-K merge): 1 atomic per kv_head; last split WG merges
+//       all 4 heads across all 256 threads and writes apply_outgate().
+
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "omarchy_trig.h"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer QRaw {
+  uint values[];
+} q_raw_data;
+layout(set = 0, binding = 1, std430) buffer KeyCache {
+  uvec4 values[];
+} key_data;
+layout(set = 0, binding = 2, std430) readonly buffer ValueCache {
+  uvec4 values[];
+} value_data;
+layout(set = 0, binding = 3, std430) writeonly buffer Output {
+  uint16_t values[];
+} output_data;
+layout(set = 0, binding = 4, std430) readonly buffer KRaw {
+  uint values[];
+} k_raw_data;
+layout(set = 0, binding = 5, std430) readonly buffer QWeight {
+  uint values[];
+} q_weight_data;
+layout(set = 0, binding = 6, std430) readonly buffer KWeight {
+  uint values[];
+} k_weight_data;
+layout(set = 0, binding = 7, std430) readonly buffer Offsets {
+  int values[];
+} offset_data;
+layout(set = 0, binding = 8, std430) readonly buffer Gate {
+  uint16_t values[];
+} gate_data;
+layout(set = 0, binding = 9, std430) coherent buffer SplitScratch {
+  float values[];
+} split_scratch;
+layout(set = 0, binding = 10, std430) coherent buffer SplitTicket {
+  uint done[];
+} split_ticket;
+
+layout(push_constant) uniform Params {
+  uint count;           // k_write_vec_base (>> 3 for HD=256)
+  uint operation;       // floatBitsToUint(norm_eps)
+  uint lhs_size;        // q_weight_offset (elements)
+  uint rhs_size;        // k_weight_offset (elements)
+  uint reduce_size;     // q_raw_head_stride (elements)
+  uint output_size;     // k_raw_head_stride (elements)
+  uint lhs_offset;      // q_raw_offset (elements)
+  uint rhs_offset;      // k_cache_base_offset (elements, %8 == 0)
+  uint output_offset;   // out_offset (elements)
+  uint aux_size;        // k_raw_offset (elements)
+  uint aux_offset;      // v_cache_base_offset (elements, %8 == 0)
+  uint matrix_m;        // heads (== kv_heads * 4)
+  uint matrix_n;        // kv_heads
+  uint matrix_k;        // k_len
+  uint flags;           // bit 0: has_norm, bit 1: write_k_cache, bit 2: apple_norm
+  float alpha;          // sdpa scale
+  float beta;           // rope_beta = log(base) / float(half_dims)
+  uint dims;            // offset_buf_offset (int32 elements)
+  uint shape[4];        // [floatBitsToUint(rope_scale), k_head_stride, k_seq_stride, k_write_head_stride]
+  uint in_strides[4];   // [half_dims (0 => 128), v_head_stride, v_seq_stride, unused]
+  uint out_strides[4];  // [out_head_stride, gate_offset, gate_head_stride, splits]
+} params;
+
+const uint D = 256u;
+const uint HALF_D = 128u;
+const uint SUBGROUPS = 8u;
+const uint MAX_SPLIT_KEYS = 256u;
+const float LOG2E = 1.4426950408889634;
+
+// 12,836 B total shared memory (8,192 + 4,096 + 512 + 36).
+// During Prologue, s_o[0..1023] holds Q[0..3], s_o[1024..1279] holds K,
+// and s_o[1280..1319] holds apple_norm SG partials (5 * 8).
+shared float s_o[SUBGROUPS * D];
+shared float s_p[4u * MAX_SPLIT_KEYS];
+shared uint s_k_words[HALF_D];
+shared float s_max[4];
+shared float s_sum[4];
+shared uint s_split_is_last;
+
+float load_q_raw(uint abs_index) {
+  uint word = q_raw_data.values[abs_index >> 1u];
+  uint bits = ((abs_index & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+  return uintBitsToFloat(bits << 16u);
+}
+
+float load_k_raw(uint abs_index) {
+  uint word = k_raw_data.values[abs_index >> 1u];
+  uint bits = ((abs_index & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+  return uintBitsToFloat(bits << 16u);
+}
+
+float load_q_weight(uint abs_index) {
+  uint word = q_weight_data.values[abs_index >> 1u];
+  uint bits = ((abs_index & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+  return uintBitsToFloat(bits << 16u);
+}
+
+float load_k_weight(uint abs_index) {
+  uint word = k_weight_data.values[abs_index >> 1u];
+  uint bits = ((abs_index & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+  return uintBitsToFloat(bits << 16u);
+}
+
+float bf16_load(uint16_t raw) {
+  return uintBitsToFloat(uint(raw) << 16u);
+}
+
+uint bf16_bits(float value) {
+  uint bits = floatBitsToUint(value);
+  return isnan(value)
+      ? ((bits >> 16u) | 0x40u)
+      : ((bits + 0x7fffu + ((bits >> 16u) & 1u)) >> 16u);
+}
+
+float rope_round(float value) {
+  return uintBitsToFloat(bf16_bits(value) << 16u);
+}
+
+uint16_t bf16_store(float v) {
+  uint bits = floatBitsToUint(v);
+  if ((bits & 0x7fffffffu) > 0x7f800000u) {
+    return uint16_t((bits >> 16u) | 0x0040u);
+  }
+  uint rounding_bias = 0x00007fffu + ((bits >> 16u) & 1u);
+  return uint16_t((bits + rounding_bias) >> 16u);
+}
+
+uint16_t apply_outgate(float val, uint gate_idx) {
+  uint16_t raw_out = bf16_store(val);
+  float g = bf16_load(gate_data.values[gate_idx]);
+  uint16_t raw_sig = bf16_store(1.0 / (1.0 + exp(-g)));
+  return bf16_store(bf16_load(raw_out) * bf16_load(raw_sig));
+}
+
+float tree_reduce32(float v) {
+  v += subgroupShuffleDown(v, 16u);
+  v += subgroupShuffleDown(v, 8u);
+  v += subgroupShuffleDown(v, 4u);
+  v += subgroupShuffleDown(v, 2u);
+  v += subgroupShuffleDown(v, 1u);
+  return subgroupShuffle(v, 0u);
+}
+
+void main() {
+  uint splits = params.out_strides[3];
+  uint kv_head = gl_WorkGroupID.x / splits;
+  uint split_id = gl_WorkGroupID.x % splits;
+  uint kv_heads = params.matrix_n;
+  uint k_len = params.matrix_k;
+  if (kv_head >= kv_heads || k_len == 0u) {
+    return;
+  }
+
+  uint head0 = kv_head * 4u;
+  uint t = gl_LocalInvocationID.x;
+  uint sg = t >> 5u;
+  uint lane = t & 31u;
+
+  bool has_norm = (params.flags & 1u) != 0u;
+  bool write_k = (params.flags & 2u) != 0u;
+  bool use_apple_norm = (params.flags & 4u) != 0u;
+  float s_scale = params.alpha * LOG2E;
+
+  // Prologue Phase A: RMSNorm on Q[head0..head0+3] -> s_o[0..1023] and
+  // K[kv_head] -> s_o[1024..1279].
+  if (!has_norm) {
+    for (uint r = 0u; r < 4u; ++r) {
+      uint q_row_base = params.lhs_offset + (head0 + r) * params.reduce_size;
+      s_o[r * D + t] = load_q_raw(q_row_base + t);
+    }
+    uint k_row_base = params.aux_size + kv_head * params.output_size;
+    s_o[1024u + t] = load_k_raw(k_row_base + t);
+  } else if (use_apple_norm) {
+    precise float qv0 = load_q_raw(params.lhs_offset + (head0 + 0u) * params.reduce_size + t);
+    precise float qv1 = load_q_raw(params.lhs_offset + (head0 + 1u) * params.reduce_size + t);
+    precise float qv2 = load_q_raw(params.lhs_offset + (head0 + 2u) * params.reduce_size + t);
+    precise float qv3 = load_q_raw(params.lhs_offset + (head0 + 3u) * params.reduce_size + t);
+    precise float kv = load_k_raw(params.aux_size + kv_head * params.output_size + t);
+    precise float sq0 = qv0 * qv0;
+    precise float sq1 = qv1 * qv1;
+    precise float sq2 = qv2 * qv2;
+    precise float sq3 = qv3 * qv3;
+    precise float sqk = kv * kv;
+    float sg0 = subgroupAdd(sq0);
+    float sg1 = subgroupAdd(sq1);
+    float sg2 = subgroupAdd(sq2);
+    float sg3 = subgroupAdd(sq3);
+    float sgk = subgroupAdd(sqk);
+    if (lane == 0u) {
+      s_o[1280u + 0u * 8u + sg] = sg0;
+      s_o[1280u + 1u * 8u + sg] = sg1;
+      s_o[1280u + 2u * 8u + sg] = sg2;
+      s_o[1280u + 3u * 8u + sg] = sg3;
+      s_o[1280u + 4u * 8u + sg] = sgk;
+    }
+    barrier();
+    precise float eps = uintBitsToFloat(params.operation);
+    precise float qw = load_q_weight(params.lhs_size + t);
+    precise float kw = load_k_weight(params.rhs_size + t);
+    {
+      float p0 = (lane < 8u) ? s_o[1280u + 0u * 8u + lane] : 0.0;
+      precise float n0 = inversesqrt(subgroupAdd(p0) / 256.0 + eps);
+      precise float wn0 = qw * n0;
+      s_o[0u * D + t] = rope_round(qv0 * wn0);
+    }
+    {
+      float p1 = (lane < 8u) ? s_o[1280u + 1u * 8u + lane] : 0.0;
+      precise float n1 = inversesqrt(subgroupAdd(p1) / 256.0 + eps);
+      precise float wn1 = qw * n1;
+      s_o[1u * D + t] = rope_round(qv1 * wn1);
+    }
+    {
+      float p2 = (lane < 8u) ? s_o[1280u + 2u * 8u + lane] : 0.0;
+      precise float n2 = inversesqrt(subgroupAdd(p2) / 256.0 + eps);
+      precise float wn2 = qw * n2;
+      s_o[2u * D + t] = rope_round(qv2 * wn2);
+    }
+    {
+      float p3 = (lane < 8u) ? s_o[1280u + 3u * 8u + lane] : 0.0;
+      precise float n3 = inversesqrt(subgroupAdd(p3) / 256.0 + eps);
+      precise float wn3 = qw * n3;
+      s_o[3u * D + t] = rope_round(qv3 * wn3);
+    }
+    {
+      float pk = (lane < 8u) ? s_o[1280u + 4u * 8u + lane] : 0.0;
+      precise float nk = inversesqrt(subgroupAdd(pk) / 256.0 + eps);
+      precise float wnk = kw * nk;
+      s_o[1024u + t] = rope_round(kv * wnk);
+    }
+  } else {
+    // Stride-128..1 tree reduction: SGs 0..3 own Q[0..3], SG 4 owns K.
+    if (sg < 5u) {
+      bool is_k = (sg == 4u);
+      uint row_base = is_k ? (params.aux_size + kv_head * params.output_size)
+                           : (params.lhs_offset + (head0 + sg) * params.reduce_size);
+      float s0 = is_k ? load_k_raw(row_base + lane + 0u) : load_q_raw(row_base + lane + 0u);
+      float s1 = is_k ? load_k_raw(row_base + lane + 32u) : load_q_raw(row_base + lane + 32u);
+      float s2 = is_k ? load_k_raw(row_base + lane + 64u) : load_q_raw(row_base + lane + 64u);
+      float s3 = is_k ? load_k_raw(row_base + lane + 96u) : load_q_raw(row_base + lane + 96u);
+      float s4 = is_k ? load_k_raw(row_base + lane + 128u) : load_q_raw(row_base + lane + 128u);
+      float s5 = is_k ? load_k_raw(row_base + lane + 160u) : load_q_raw(row_base + lane + 160u);
+      float s6 = is_k ? load_k_raw(row_base + lane + 192u) : load_q_raw(row_base + lane + 192u);
+      float s7 = is_k ? load_k_raw(row_base + lane + 224u) : load_q_raw(row_base + lane + 224u);
+      s0 = s0 * s0; s1 = s1 * s1; s2 = s2 * s2; s3 = s3 * s3;
+      s4 = s4 * s4; s5 = s5 * s5; s6 = s6 * s6; s7 = s7 * s7;
+      float acc = ((s0 + s4) + (s2 + s6)) + ((s1 + s5) + (s3 + s7));
+      float sum = tree_reduce32(acc);
+      precise float mean_square = sum / 256.0;
+      precise float eps = uintBitsToFloat(params.operation);
+      precise float norm = inversesqrt(mean_square + eps);
+      uint w_base = is_k ? params.rhs_size : params.lhs_size;
+      uint s_base = sg * D;
+      for (uint blk = 0u; blk < D; blk += 32u) {
+        uint idx = blk + lane;
+        precise float v = is_k ? load_k_raw(row_base + idx) : load_q_raw(row_base + idx);
+        precise float w = is_k ? load_k_weight(w_base + idx) : load_q_weight(w_base + idx);
+        precise float wn = w * norm;
+        s_o[s_base + idx] = rope_round(v * wn);
+      }
+    }
+  }
+  barrier();
+
+  // Prologue Phase B: Partial or full RoPE in-place on Q[0..3] (pre-scaled by
+  // s_scale) and K. Pairs (t, t + rot_half) are disjoint across t < rot_half.
+  uint rot_half = params.in_strides[0] != 0u ? params.in_strides[0] : HALF_D;
+  uint rot_dims = rot_half << 1u;
+  if (t < rot_half) {
+    float position =
+        uintBitsToFloat(params.shape[0]) * float(offset_data.values[params.dims]);
+    float inv = exp(-float(t) * params.beta);
+    float theta = position * inv;
+    float c = rope_round(omarchy_trig_cos(theta));
+    float s = rope_round(omarchy_trig_sin(theta));
+    for (uint r = 0u; r < 4u; ++r) {
+      uint base = r * D;
+      float qa = s_o[base + t];
+      float qb = s_o[base + t + rot_half];
+      s_o[base + t] = rope_round(rope_round(qa * c) - rope_round(qb * s)) * s_scale;
+      s_o[base + t + rot_half] =
+          rope_round(rope_round(qa * s) + rope_round(qb * c)) * s_scale;
+    }
+    float ka = s_o[1024u + t];
+    float kb = s_o[1024u + t + rot_half];
+    s_o[1024u + t] = rope_round(rope_round(ka * c) - rope_round(kb * s));
+    s_o[1024u + t + rot_half] =
+        rope_round(rope_round(ka * s) + rope_round(kb * c));
+  } else if (t >= rot_dims) {
+    for (uint r = 0u; r < 4u; ++r) {
+      s_o[r * D + t] = s_o[r * D + t] * s_scale;
+    }
+  }
+  barrier();
+
+  // Prologue Phase C: sg 0 packs rotated K into s_k_words[128] and writes
+  // k_cache (once per kv_head on split_id == 0). All 8 SGs load Q[0..3] into
+  // registers (32 floats/lane).
+  if (sg == 0u) {
+    uint w0 = bf16_bits(s_o[1024u + lane * 8u + 0u]) |
+        (bf16_bits(s_o[1024u + lane * 8u + 1u]) << 16u);
+    uint w1 = bf16_bits(s_o[1024u + lane * 8u + 2u]) |
+        (bf16_bits(s_o[1024u + lane * 8u + 3u]) << 16u);
+    uint w2 = bf16_bits(s_o[1024u + lane * 8u + 4u]) |
+        (bf16_bits(s_o[1024u + lane * 8u + 5u]) << 16u);
+    uint w3 = bf16_bits(s_o[1024u + lane * 8u + 6u]) |
+        (bf16_bits(s_o[1024u + lane * 8u + 7u]) << 16u);
+    s_k_words[lane * 4u + 0u] = w0;
+    s_k_words[lane * 4u + 1u] = w1;
+    s_k_words[lane * 4u + 2u] = w2;
+    s_k_words[lane * 4u + 3u] = w3;
+    if (write_k && split_id == 0u) {
+      uint k_write_idx =
+          params.count + kv_head * (params.shape[3] >> 3u) + lane;
+      key_data.values[k_write_idx] = uvec4(w0, w1, w2, w3);
+    }
+  }
+
+  uint k_per = (k_len + splits - 1u) / splits;
+  uint k_start = split_id * k_per;
+  uint k_end = min(k_len, k_start + k_per);
+  uint n_keys = (k_start < k_end) ? (k_end - k_start) : 0u;
+  uint last_key = k_len - 1u;
+
+  // Phase 1: K-only dot products (1 K load serves all 4 Q heads).
+  // Q[0..3] live only inside this scope so O[0..3] reuse the same registers.
+  {
+    float q0_0 = s_o[0u * D + lane * 8u + 0u];
+    float q0_1 = s_o[0u * D + lane * 8u + 1u];
+    float q0_2 = s_o[0u * D + lane * 8u + 2u];
+    float q0_3 = s_o[0u * D + lane * 8u + 3u];
+    float q0_4 = s_o[0u * D + lane * 8u + 4u];
+    float q0_5 = s_o[0u * D + lane * 8u + 5u];
+    float q0_6 = s_o[0u * D + lane * 8u + 6u];
+    float q0_7 = s_o[0u * D + lane * 8u + 7u];
+
+    float q1_0 = s_o[1u * D + lane * 8u + 0u];
+    float q1_1 = s_o[1u * D + lane * 8u + 1u];
+    float q1_2 = s_o[1u * D + lane * 8u + 2u];
+    float q1_3 = s_o[1u * D + lane * 8u + 3u];
+    float q1_4 = s_o[1u * D + lane * 8u + 4u];
+    float q1_5 = s_o[1u * D + lane * 8u + 5u];
+    float q1_6 = s_o[1u * D + lane * 8u + 6u];
+    float q1_7 = s_o[1u * D + lane * 8u + 7u];
+
+    float q2_0 = s_o[2u * D + lane * 8u + 0u];
+    float q2_1 = s_o[2u * D + lane * 8u + 1u];
+    float q2_2 = s_o[2u * D + lane * 8u + 2u];
+    float q2_3 = s_o[2u * D + lane * 8u + 3u];
+    float q2_4 = s_o[2u * D + lane * 8u + 4u];
+    float q2_5 = s_o[2u * D + lane * 8u + 5u];
+    float q2_6 = s_o[2u * D + lane * 8u + 6u];
+    float q2_7 = s_o[2u * D + lane * 8u + 7u];
+
+    float q3_0 = s_o[3u * D + lane * 8u + 0u];
+    float q3_1 = s_o[3u * D + lane * 8u + 1u];
+    float q3_2 = s_o[3u * D + lane * 8u + 2u];
+    float q3_3 = s_o[3u * D + lane * 8u + 3u];
+    float q3_4 = s_o[3u * D + lane * 8u + 4u];
+    float q3_5 = s_o[3u * D + lane * 8u + 5u];
+    float q3_6 = s_o[3u * D + lane * 8u + 6u];
+    float q3_7 = s_o[3u * D + lane * 8u + 7u];
+
+    barrier();
+
+    uint k_stride_v = params.shape[2] >> 3u;
+    uint k_base_v = ((params.rhs_offset + kv_head * params.shape[1]) >> 3u) + lane;
+
+    for (uint lk = sg; lk < n_keys; lk += SUBGROUPS) {
+      uint key = k_start + lk;
+      uvec4 kw;
+      if (key == last_key) {
+        kw = uvec4(
+            s_k_words[lane * 4u + 0u],
+            s_k_words[lane * 4u + 1u],
+            s_k_words[lane * 4u + 2u],
+            s_k_words[lane * 4u + 3u]);
+      } else {
+        kw = key_data.values[k_base_v + key * k_stride_v];
+      }
+      float k0 = uintBitsToFloat(kw.x << 16u);
+      float k1 = uintBitsToFloat(kw.x & 0xffff0000u);
+      float k2 = uintBitsToFloat(kw.y << 16u);
+      float k3 = uintBitsToFloat(kw.y & 0xffff0000u);
+      float k4 = uintBitsToFloat(kw.z << 16u);
+      float k5 = uintBitsToFloat(kw.z & 0xffff0000u);
+      float k6 = uintBitsToFloat(kw.w << 16u);
+      float k7 = uintBitsToFloat(kw.w & 0xffff0000u);
+
+      float d0 = fma(q0_0, k0, fma(q0_1, k1, fma(q0_2, k2, fma(q0_3, k3,
+                 fma(q0_4, k4, fma(q0_5, k5, fma(q0_6, k6, q0_7 * k7)))))));
+      float d1 = fma(q1_0, k0, fma(q1_1, k1, fma(q1_2, k2, fma(q1_3, k3,
+                 fma(q1_4, k4, fma(q1_5, k5, fma(q1_6, k6, q1_7 * k7)))))));
+      float d2 = fma(q2_0, k0, fma(q2_1, k1, fma(q2_2, k2, fma(q2_3, k3,
+                 fma(q2_4, k4, fma(q2_5, k5, fma(q2_6, k6, q2_7 * k7)))))));
+      float d3 = fma(q3_0, k0, fma(q3_1, k1, fma(q3_2, k2, fma(q3_3, k3,
+                 fma(q3_4, k4, fma(q3_5, k5, fma(q3_6, k6, q3_7 * k7)))))));
+
+      float sc0 = subgroupAdd(d0);
+      float sc1 = subgroupAdd(d1);
+      float sc2 = subgroupAdd(d2);
+      float sc3 = subgroupAdd(d3);
+      if (lane == 0u) {
+        s_p[0u * MAX_SPLIT_KEYS + lk] = sc0;
+        s_p[1u * MAX_SPLIT_KEYS + lk] = sc1;
+        s_p[2u * MAX_SPLIT_KEYS + lk] = sc2;
+        s_p[3u * MAX_SPLIT_KEYS + lk] = sc3;
+      }
+    }
+  }
+  barrier();
+
+  // Phase 2: Block softmax over n_keys <= 256; SGs 0..3 own heads 0..3 in parallel.
+  if (sg < 4u) {
+    uint r = sg;
+    if (n_keys == 0u) {
+      if (lane == 0u) {
+        s_max[r] = uintBitsToFloat(0xff800000u);
+        s_sum[r] = 0.0;
+      }
+    } else {
+      float neg_inf = uintBitsToFloat(0xff800000u);
+      float sc[8];
+      float lmax = neg_inf;
+      uint pbase = r * MAX_SPLIT_KEYS;
+      for (uint j = 0u; j < 8u; ++j) {
+        uint lk = lane + j * 32u;
+        float v = (lk < n_keys) ? s_p[pbase + lk] : neg_inf;
+        sc[j] = v;
+        lmax = max(lmax, v);
+      }
+      float gm = subgroupMax(lmax);
+      float lsum = 0.0;
+      for (uint j = 0u; j < 8u; ++j) {
+        uint lk = lane + j * 32u;
+        if (lk < n_keys) {
+          float p = exp2(sc[j] - gm);
+          s_p[pbase + lk] = p;
+          lsum += p;
+        }
+      }
+      float gs = subgroupAdd(lsum);
+      if (lane == 0u) {
+        s_max[r] = gm;
+        s_sum[r] = gs;
+      }
+    }
+  }
+  barrier();
+
+  // Phase 3: V-only accumulation (1 V load serves all 4 Q heads).
+  float o0_0 = 0.0, o0_1 = 0.0, o0_2 = 0.0, o0_3 = 0.0;
+  float o0_4 = 0.0, o0_5 = 0.0, o0_6 = 0.0, o0_7 = 0.0;
+  float o1_0 = 0.0, o1_1 = 0.0, o1_2 = 0.0, o1_3 = 0.0;
+  float o1_4 = 0.0, o1_5 = 0.0, o1_6 = 0.0, o1_7 = 0.0;
+  float o2_0 = 0.0, o2_1 = 0.0, o2_2 = 0.0, o2_3 = 0.0;
+  float o2_4 = 0.0, o2_5 = 0.0, o2_6 = 0.0, o2_7 = 0.0;
+  float o3_0 = 0.0, o3_1 = 0.0, o3_2 = 0.0, o3_3 = 0.0;
+  float o3_4 = 0.0, o3_5 = 0.0, o3_6 = 0.0, o3_7 = 0.0;
+
+  uint v_stride_v = params.in_strides[2] >> 3u;
+  uint v_base_v = ((params.aux_offset + kv_head * params.in_strides[1]) >> 3u) + lane;
+
+  for (uint lk = sg; lk < n_keys; lk += SUBGROUPS) {
+    uint key = k_start + lk;
+    uvec4 vw = value_data.values[v_base_v + key * v_stride_v];
+    float v0 = uintBitsToFloat(vw.x << 16u);
+    float v1 = uintBitsToFloat(vw.x & 0xffff0000u);
+    float v2 = uintBitsToFloat(vw.y << 16u);
+    float v3 = uintBitsToFloat(vw.y & 0xffff0000u);
+    float v4 = uintBitsToFloat(vw.z << 16u);
+    float v5 = uintBitsToFloat(vw.z & 0xffff0000u);
+    float v6 = uintBitsToFloat(vw.w << 16u);
+    float v7 = uintBitsToFloat(vw.w & 0xffff0000u);
+
+    float p0 = s_p[0u * MAX_SPLIT_KEYS + lk];
+    float p1 = s_p[1u * MAX_SPLIT_KEYS + lk];
+    float p2 = s_p[2u * MAX_SPLIT_KEYS + lk];
+    float p3 = s_p[3u * MAX_SPLIT_KEYS + lk];
+
+    o0_0 = fma(p0, v0, o0_0); o0_1 = fma(p0, v1, o0_1);
+    o0_2 = fma(p0, v2, o0_2); o0_3 = fma(p0, v3, o0_3);
+    o0_4 = fma(p0, v4, o0_4); o0_5 = fma(p0, v5, o0_5);
+    o0_6 = fma(p0, v6, o0_6); o0_7 = fma(p0, v7, o0_7);
+
+    o1_0 = fma(p1, v0, o1_0); o1_1 = fma(p1, v1, o1_1);
+    o1_2 = fma(p1, v2, o1_2); o1_3 = fma(p1, v3, o1_3);
+    o1_4 = fma(p1, v4, o1_4); o1_5 = fma(p1, v5, o1_5);
+    o1_6 = fma(p1, v6, o1_6); o1_7 = fma(p1, v7, o1_7);
+
+    o2_0 = fma(p2, v0, o2_0); o2_1 = fma(p2, v1, o2_1);
+    o2_2 = fma(p2, v2, o2_2); o2_3 = fma(p2, v3, o2_3);
+    o2_4 = fma(p2, v4, o2_4); o2_5 = fma(p2, v5, o2_5);
+    o2_6 = fma(p2, v6, o2_6); o2_7 = fma(p2, v7, o2_7);
+
+    o3_0 = fma(p3, v0, o3_0); o3_1 = fma(p3, v1, o3_1);
+    o3_2 = fma(p3, v2, o3_2); o3_3 = fma(p3, v3, o3_3);
+    o3_4 = fma(p3, v4, o3_4); o3_5 = fma(p3, v5, o3_5);
+    o3_6 = fma(p3, v6, o3_6); o3_7 = fma(p3, v7, o3_7);
+  }
+
+  uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
+  uint obase = sg * D + lane * 8u;
+
+  #define REDUCE_AND_STORE_HEAD(R, A0, A1, A2, A3, A4, A5, A6, A7) { \
+    s_o[obase + 0u] = (A0); s_o[obase + 1u] = (A1); \
+    s_o[obase + 2u] = (A2); s_o[obase + 3u] = (A3); \
+    s_o[obase + 4u] = (A4); s_o[obase + 5u] = (A5); \
+    s_o[obase + 6u] = (A6); s_o[obase + 7u] = (A7); \
+    barrier(); \
+    float acc = ((s_o[0u * D + t] + s_o[1u * D + t]) + \
+                 (s_o[2u * D + t] + s_o[3u * D + t])) + \
+                ((s_o[4u * D + t] + s_o[5u * D + t]) + \
+                 (s_o[6u * D + t] + s_o[7u * D + t])); \
+    uint head_r = head0 + (R); \
+    if (splits == 1u) { \
+      uint gate_base = params.out_strides[1] + head_r * params.out_strides[2]; \
+      output_data.values[params.output_offset + head_r * out_head + t] = \
+          apply_outgate(acc / s_sum[R], gate_base + t); \
+    } else { \
+      uint sb = (head_r * splits + split_id) * 260u; \
+      if (t == 0u) { \
+        split_scratch.values[sb + 0u] = s_max[R]; \
+        split_scratch.values[sb + 1u] = s_sum[R]; \
+      } \
+      split_scratch.values[sb + 2u + t] = acc; \
+    } \
+  }
+
+  REDUCE_AND_STORE_HEAD(0u, o0_0, o0_1, o0_2, o0_3, o0_4, o0_5, o0_6, o0_7)
+  barrier();
+  REDUCE_AND_STORE_HEAD(1u, o1_0, o1_1, o1_2, o1_3, o1_4, o1_5, o1_6, o1_7)
+  barrier();
+  REDUCE_AND_STORE_HEAD(2u, o2_0, o2_1, o2_2, o2_3, o2_4, o2_5, o2_6, o2_7)
+  barrier();
+  REDUCE_AND_STORE_HEAD(3u, o3_0, o3_1, o3_2, o3_3, o3_4, o3_5, o3_6, o3_7)
+  #undef REDUCE_AND_STORE_HEAD
+
+  if (splits == 1u) {
+    return;
+  }
+
+  // Phase 4: Single-dispatch atomic ticket merge (1 atomic per kv_head).
+  barrier();
+  memoryBarrierBuffer();
+  if (t == 0u) {
+    uint prev = atomicAdd(split_ticket.done[kv_head], 1u);
+    s_split_is_last = (prev == splits - 1u) ? 1u : 0u;
+  }
+  barrier();
+  if (s_split_is_last == 0u) {
+    return;
+  }
+  if (t == 0u) {
+    split_ticket.done[kv_head] = 0u;
+  }
+  memoryBarrierBuffer();
+
+  for (uint r = 0u; r < 4u; ++r) {
+    uint head_r = head0 + r;
+    uint hbase = head_r * splits * 260u;
+    float gm = uintBitsToFloat(0xff800000u);
+    for (uint s = 0u; s < splits; ++s) {
+      gm = max(gm, split_scratch.values[hbase + s * 260u + 0u]);
+    }
+    float gl = 0.0;
+    float gacc = 0.0;
+    for (uint s = 0u; s < splits; ++s) {
+      uint b = hbase + s * 260u;
+      float sl = split_scratch.values[b + 1u];
+      if (sl > 0.0) {
+        float ws = exp2(split_scratch.values[b + 0u] - gm);
+        gl = fma(sl, ws, gl);
+        gacc = fma(split_scratch.values[b + 2u + t], ws, gacc);
+      }
+    }
+    uint gate_base = params.out_strides[1] + head_r * params.out_strides[2];
+    output_data.values[params.output_offset + head_r * out_head + t] =
+        apply_outgate(gacc / gl, gate_base + t);
+  }
+}

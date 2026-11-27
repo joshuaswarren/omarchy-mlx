@@ -350,7 +350,7 @@ class MLX_API CommandEncoder
       return;
     }
     allocator().note_batch_buffer(buf);
-    batch_buffers_.insert(buf);
+    record_batch_buffer(buf);
   }
 
   // Record one dispatch binding's owning buffer exactly like
@@ -366,7 +366,7 @@ class MLX_API CommandEncoder
       return;
     }
     allocator().note_batch_buffer(buf);
-    batch_buffers_.insert(buf);
+    record_batch_buffer(buf);
   }
 
   // Handlers run on the device completion thread when this submission's
@@ -426,7 +426,7 @@ class MLX_API CommandEncoder
     std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return !recording_ && pending_.empty() && wait_semaphores_.empty() &&
         signal_semaphores_.empty() && completed_handlers_.empty() &&
-        batch_buffers_.empty();
+        batch_buffers_empty();
   }
 
   // Record a device-to-device buffer copy. Both buffers must have
@@ -563,7 +563,7 @@ class MLX_API CommandEncoder
   // weight/KV-heavy graphs.
   size_t open_batch_buffer_count() const {
     std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
-    return batch_buffers_.size();
+    return batch_buffers_count();
   }
 
  private:
@@ -754,7 +754,39 @@ class MLX_API CommandEncoder
   // binding. Owned by their arrays or, after free(), by the allocator
   // quarantine; the set only carries the completion stamp at submit
   // time.
+  static bool host_slim() {
+    static const bool on = env_flag("MLX_OMARCHY_HOST_SLIM");
+    return on;
+  }
+  void record_batch_buffer(VulkanBuffer* buf) {
+    if (host_slim()) {
+      batch_buffers_vec_.push_back(buf);
+    } else {
+      batch_buffers_.insert(buf);
+    }
+  }
+  bool batch_buffers_empty() const {
+    return host_slim() ? batch_buffers_vec_.empty() : batch_buffers_.empty();
+  }
+  size_t batch_buffers_count() const {
+    return host_slim() ? batch_buffers_vec_.size() : batch_buffers_.size();
+  }
+  bool batch_buffers_contains(VulkanBuffer* buf) const {
+    if (host_slim()) {
+      return std::find(batch_buffers_vec_.begin(), batch_buffers_vec_.end(), buf) !=
+          batch_buffers_vec_.end();
+    }
+    return batch_buffers_.count(buf) != 0;
+  }
+  void batch_buffers_clear() {
+    if (host_slim()) {
+      batch_buffers_vec_.clear();
+    } else {
+      batch_buffers_.clear();
+    }
+  }
   std::unordered_set<VulkanBuffer*> batch_buffers_;
+  std::vector<VulkanBuffer*> batch_buffers_vec_;
   mlx::core::allocator::Buffer sdpa_counter_buf_{nullptr};
   uint32_t sdpa_counter_words_{0};
   // Descriptor pools retired during recording. They ride the dispatcher
