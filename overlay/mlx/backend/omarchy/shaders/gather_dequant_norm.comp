@@ -1,0 +1,199 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Fused quantized-embedding GatherDequantBF16 + FastRmsNormAppleBF16 prologue
+// (bits == 4, group_size == 64, nrows == 1, row_length in {2048, 2560, 4096}).
+// One 256-thread workgroup replaces GatherDequantBF16 -> CDM barrier ->
+// FastRmsNormAppleBF16:
+//   h[i]        = bf16_store(scale * float(q_i) + bias)   (exact gather_dequant.comp)
+//   embed_out   = h
+//   norm_out    = bf16(widen(h) * (rsqrt(mean(widen(h)^2) + eps) * weight))
+// Bit-exact to the composed sequence: every bf16 rounding, per-thread element
+// grouping (8/10/16 contiguous elements per thread), 32-lane subgroupAdd, and
+// 8-subgroup combine match fast_norm_apple.comp verbatim.
+
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+#define STORAGE_TYPE uint16_t
+#define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+#define STORE_VALUE(f) bf16_store(f)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Ids {
+  int values[];
+} ids_data;
+layout(set = 0, binding = 1, std430) readonly buffer InputW {
+  uint values[];
+} input_w;
+layout(set = 0, binding = 2, std430) readonly buffer Scales {
+  STORAGE_TYPE values[];
+} scales_data;
+layout(set = 0, binding = 3, std430) readonly buffer Biases {
+  STORAGE_TYPE values[];
+} biases_data;
+layout(set = 0, binding = 4, std430) writeonly buffer EmbedOut {
+  STORAGE_TYPE values[];
+} embed_out;
+layout(set = 0, binding = 5, std430) readonly buffer NormWeight {
+  STORAGE_TYPE values[];
+} norm_weight;
+layout(set = 0, binding = 6, std430) writeonly buffer NormOut {
+  STORAGE_TYPE values[];
+} norm_out;
+
+layout(push_constant) uniform Params {
+  uint count;          // words_per_row (elems / 8)
+  uint operation;      // bits (4)
+  uint lhs_size;       // norm_weight size (1 => scalar broadcast)
+  uint rhs_size;       // norm_weight offset
+  uint reduce_size;    // row_length (2048, 2560, or 4096)
+  uint output_size;    // group_size (64)
+  uint lhs_offset;     // w offset
+  uint rhs_offset;     // scales offset
+  uint output_offset;  // norm_out offset (0)
+  uint aux_size;       // embed_out offset (0)
+  uint aux_offset;     // biases offset
+  uint matrix_m;       // vocab rows (for negative-index wrap)
+  uint matrix_n;       // words_per_row
+  uint matrix_k;       // groups_per_row
+  uint flags;          // bit 0: uint32 ids
+  float alpha;         // norm_eps
+  float beta;
+  uint dims;           // ids offset
+  uint shape[4];
+  uint in_strides[4];
+  uint out_strides[4];
+} params;
+
+shared float s_partial[8u];
+
+void main() {
+  uint thread = gl_LocalInvocationID.x;
+  uint sub_id = thread >> 5u;
+  uint lane = thread & 31u;
+  uint row_length = params.reduce_size;
+  float eps = params.alpha;
+
+  int src_row = ids_data.values[params.dims];
+  if ((params.flags & 1u) == 0u && src_row < 0) {
+    src_row += int(params.matrix_m);
+  }
+  uint src = uint(src_row);
+  uint w_row = params.lhs_offset + src * params.matrix_n;
+  uint s_row = params.rhs_offset + src * params.matrix_k;
+  uint b_row = params.aux_offset + src * params.matrix_k;
+
+  float reg_h[16u];
+  precise float reg_sq = 0.0;
+  uint n_reads = row_length / 256u;  // 8, 10, or 16
+  uint base = thread * n_reads;
+
+  if (n_reads == 8u) {
+    // 2048: 1 packed uint32 word (8 nibbles) per thread, 1 group per 8 threads.
+    uint word = input_w.values[w_row + thread];
+    uint grp = thread >> 3u;
+    float scale = LOAD_VALUE(scales_data.values[s_row + grp]);
+    float bias = LOAD_VALUE(biases_data.values[b_row + grp]);
+    for (uint i = 0u; i < 8u; ++i) {
+      uint q = (word >> (i * 4u)) & 0xFu;
+      uint16_t bv = STORE_VALUE(scale * float(q) + bias);
+      embed_out.values[params.aux_size + base + i] = bv;
+      float h = LOAD_VALUE(bv);
+      reg_h[i] = h;
+      reg_sq += h * h;
+    }
+  } else if (n_reads == 16u) {
+    // 4096: 2 packed uint32 words (16 nibbles) per thread.
+    uint u0 = thread * 2u;
+    uint word0 = input_w.values[w_row + u0];
+    uint word1 = input_w.values[w_row + u0 + 1u];
+    uint grp = u0 >> 3u;
+    float scale = LOAD_VALUE(scales_data.values[s_row + grp]);
+    float bias = LOAD_VALUE(biases_data.values[b_row + grp]);
+    for (uint i = 0u; i < 8u; ++i) {
+      uint q = (word0 >> (i * 4u)) & 0xFu;
+      uint16_t bv = STORE_VALUE(scale * float(q) + bias);
+      embed_out.values[params.aux_size + base + i] = bv;
+      float h = LOAD_VALUE(bv);
+      reg_h[i] = h;
+      reg_sq += h * h;
+    }
+    for (uint i = 0u; i < 8u; ++i) {
+      uint q = (word1 >> (i * 4u)) & 0xFu;
+      uint16_t bv = STORE_VALUE(scale * float(q) + bias);
+      embed_out.values[params.aux_size + base + 8u + i] = bv;
+      float h = LOAD_VALUE(bv);
+      reg_h[8u + i] = h;
+      reg_sq += h * h;
+    }
+  } else {
+    // 2560: 10 contiguous elements per thread (matches fast_norm_apple.comp).
+    for (uint i = 0u; i < 10u; ++i) {
+      uint idx = base + i;
+      uint word = input_w.values[w_row + (idx >> 3u)];
+      uint grp = idx >> 6u;
+      float scale = LOAD_VALUE(scales_data.values[s_row + grp]);
+      float bias = LOAD_VALUE(biases_data.values[b_row + grp]);
+      uint q = (word >> ((idx & 7u) * 4u)) & 0xFu;
+      uint16_t bv = STORE_VALUE(scale * float(q) + bias);
+      embed_out.values[params.aux_size + idx] = bv;
+      float h = LOAD_VALUE(bv);
+      reg_h[i] = h;
+      reg_sq += h * h;
+    }
+  }
+
+  float sub_partial = subgroupAdd(reg_sq);
+  if (lane == 0u) {
+    s_partial[sub_id] = sub_partial;
+  }
+  barrier();
+  float v = (lane < 8u) ? s_partial[lane] : 0.0;
+  float total_sq = subgroupAdd(v);
+  float mean_square = total_sq / float(row_length);
+  float norm = inversesqrt(mean_square + eps);
+
+  for (uint i = 0u; i < 8u; ++i) {
+    uint idx = base + i;
+    float weight = (params.lhs_size == 1u)
+        ? LOAD_VALUE(norm_weight.values[params.rhs_size])
+        : LOAD_VALUE(norm_weight.values[params.rhs_size + idx]);
+    precise float nw = norm * weight;
+    precise float res = reg_h[i] * nw;
+    norm_out.values[params.output_offset + idx] = STORE_VALUE(res);
+  }
+  if (n_reads == 10u) {
+    for (uint i = 8u; i < 10u; ++i) {
+      uint idx = base + i;
+      float weight = (params.lhs_size == 1u)
+          ? LOAD_VALUE(norm_weight.values[params.rhs_size])
+          : LOAD_VALUE(norm_weight.values[params.rhs_size + idx]);
+      precise float nw = norm * weight;
+      precise float res = reg_h[i] * nw;
+      norm_out.values[params.output_offset + idx] = STORE_VALUE(res);
+    }
+  } else if (n_reads == 16u) {
+    for (uint i = 8u; i < 16u; ++i) {
+      uint idx = base + i;
+      float weight = (params.lhs_size == 1u)
+          ? LOAD_VALUE(norm_weight.values[params.rhs_size])
+          : LOAD_VALUE(norm_weight.values[params.rhs_size + idx]);
+      precise float nw = norm * weight;
+      precise float res = reg_h[i] * nw;
+      norm_out.values[params.output_offset + idx] = STORE_VALUE(res);
+    }
+  }
+}

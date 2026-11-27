@@ -469,6 +469,37 @@ int main(int argc, char** argv) {
       ++failures;
     }
     unsetenv("MLX_OMARCHY_MULTI_R2S16");
+    unsetenv("MLX_OMARCHY_SDPA_HD256_FAST");
+    if (!mlx::core::omarchy::sdpa_g14c_hd256_fast_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::sdpa_g14c_hd256_fast_default_part("Apple M1 Max (G13C C0)") ||
+        mlx::core::omarchy::sdpa_g14c_hd256_fast_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: sdpa_g14c_hd256_fast_default_part part check\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_SDPA_HD256_FAST", "0", 1);
+    if (mlx::core::omarchy::sdpa_g14c_hd256_fast_default_part("Apple M2 Max (G14C B1)")) {
+      std::cout << "FAIL: sdpa_g14c_hd256_fast_default_part =0 override\n";
+      ++failures;
+    }
+    unsetenv("MLX_OMARCHY_SDPA_HD256_FAST");
+    unsetenv("MLX_OMARCHY_PROLOGUE_NORM");
+    if (!mlx::core::omarchy::prologue_norm_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::prologue_norm_default_part("Apple M1 Max (G13C C0)") ||
+        mlx::core::omarchy::prologue_norm_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: prologue_norm_default_part part check\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_PROLOGUE_NORM", "0", 1);
+    if (mlx::core::omarchy::prologue_norm_default_part("Apple M2 Max (G14C B1)")) {
+      std::cout << "FAIL: prologue_norm_default_part =0 override\n";
+      ++failures;
+    }
+    unsetenv("MLX_OMARCHY_PROLOGUE_NORM");
+    unsetenv("MLX_OMARCHY_SDPA_SPLIT_WIDE_MIN_KEYS");
+    if (mlx::core::omarchy::sdpa_split_wide_min_keys("Apple M2 Max (G14C B1)") != 768u) {
+      std::cout << "FAIL: sdpa_split_wide_min_keys G14C check\n";
+      ++failures;
+    }
   }
   // Low-register SwiGLU (R1S8W2 and R1S4W2) must be bit-identical to 2x4.
   {
@@ -615,7 +646,8 @@ int main(int argc, char** argv) {
         std::cout << "ok: " << c.label << " identical\n";
       }
     }
-    // Multi R2S16W2UpfrontFast must be 0-ULP bit-identical to Multi R2S8W2.
+    // Multi R2S16W2UpfrontFast (with epilogue) and MultiTrim3 R2S16 (plain
+    // 3-member QKV) must both be 0-ULP bit-identical to Multi R2S8W2.
     {
       std::string base = "/tmp/w7p-geom-base.bin";
       std::string other = "/tmp/w7p-geom-other.bin";
@@ -634,6 +666,75 @@ int main(int argc, char** argv) {
         ++failures;
       } else {
         std::cout << "ok: multi_r2s16_up_fast identical\n";
+      }
+      // Plain 2-member group (k512, no epilogue) exercises R2S16W2UpfrontFast3M.
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_Q4_UPFRONT", "0", 1);
+      setenv("MLX_OMARCHY_MULTI_R2S16", "0", 1);
+      int rc3 = run_child("k512", base.c_str());
+      setenv("MLX_OMARCHY_MULTI_R2S16", "1", 1);
+      int rc4 = run_child("k512", other.c_str());
+      unsetenv("MLX_OMARCHY_MULTI_R2S16");
+      unsetenv("MLX_OMARCHY_Q4_UPFRONT");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc3 != 0 || rc4 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: multi_r2s16_up_fast_3m differed from R2S8W2 (rc "
+                  << rc3 << "/" << rc4 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: multi_r2s16_up_fast_3m identical\n";
+      }
+    }
+    // G14C compile-time ResNormVec4 D2048/D4096 specializations and batch==1
+    // Word R2S4W2FastB1 must be 0-ULP bit-identical to the non-specialized
+    // fast variants.
+    for (const char* name : {"resnorm2048", "resnorm4096"}) {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_VEC4", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_R2S32", "1", 1);
+      setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_SPEC", "0", 1);
+      int rc1 = run_child(name, base.c_str());
+      setenv("MLX_OMARCHY_RESNORM_SPEC", "1", 1);
+      int rc2 = run_child(name, other.c_str());
+      unsetenv("MLX_OMARCHY_RESNORM_SPEC");
+      unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_RESNORM_R2S32");
+      unsetenv("MLX_OMARCHY_RESNORM_VEC4");
+      unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: " << name
+                  << "_spec differed from non-spec fast (rc " << rc1 << "/"
+                  << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: " << name << "_spec identical\n";
+      }
+    }
+    {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_WORD_R2S4", "1", 1);
+      setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
+      setenv("MLX_OMARCHY_WORD_B1", "0", 1);
+      int rc1 = run_child("single", base.c_str());
+      setenv("MLX_OMARCHY_WORD_B1", "1", 1);
+      int rc2 = run_child("single", other.c_str());
+      unsetenv("MLX_OMARCHY_WORD_B1");
+      unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_WORD_R2S4");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: word_r2s4_fast_b1 differed from non-b1 fast (rc "
+                  << rc1 << "/" << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: word_r2s4_fast_b1 identical\n";
       }
     }
   }
