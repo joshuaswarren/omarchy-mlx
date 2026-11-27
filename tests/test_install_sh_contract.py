@@ -330,7 +330,7 @@ class ServeCliContractTests(unittest.TestCase):
             self.assertIn(member, section.split("for serve_file in", 1)[1].split(";", 1)[0],
                           f"missing catalog/package file {member}")
         self.assertIn('"https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_laya/$laya_file"', section)
-        for member in ("__init__.py", "model.py", "sequence.py", "api.py",
+        for member in ("__init__.py", "jsonfile.py", "model.py", "sequence.py", "api.py",
                        "server.py", "convert.py", "qualify.py"):
             self.assertIn(member, section.split("for laya_file in", 1)[1].split(";", 1)[0],
                           f"missing laya package file {member}")
