@@ -466,6 +466,112 @@ def test_gelu_backward():
     print("test_gelu_backward PASS")
 
 
+def test_tanh_backward():
+    # PT-U4: aten.tanh_backward.default (PAR-41 census rank 29, 275 receipts).
+    # The aten signature is tanh_backward(grad_output, OUTPUT) — the forward
+    # result y=tanh(x), not x — so grad * (1 - y^2).
+    rng = np.random.RandomState(4)
+    x = rng.randn(6, 8).astype(np.float32) * 4.0  # saturating inputs: y -> +-1
+    dy = rng.randn(6, 8).astype(np.float32)
+    # fp32: exact formula vs the aten reference.
+    y = np.tanh(x)
+    ref = torch.ops.aten.tanh_backward.default(torch.tensor(dy), torch.tensor(y))
+    out = mlx_vulkan.ATEN_TABLE["tanh_backward"](mx.array(dy), mx.array(y))
+    assert np.abs(_np(out) - ref.numpy()).max() < 1e-5
+    # saturated edge: y=+-1 exactly must give grad*0, not a fp artifact.
+    ys = np.array([[-1.0, 1.0], [1.0, -1.0]], dtype=np.float32)
+    ds = np.array([[2.0, -3.0], [0.5, 4.0]], dtype=np.float32)
+    ref_s = torch.ops.aten.tanh_backward.default(torch.tensor(ds), torch.tensor(ys))
+    got_s = mlx_vulkan.ATEN_TABLE["tanh_backward"](mx.array(ds), mx.array(ys))
+    assert np.array_equal(_np(got_s), ref_s.numpy()), (_np(got_s), ref_s.numpy())
+    # bf16: aten runs the formula in fp32 opmath and rounds to bf16.
+    yb = torch.tensor(y, dtype=torch.bfloat16)
+    gb = torch.tensor(dy, dtype=torch.bfloat16)
+    ref_b = torch.ops.aten.tanh_backward.default(gb, yb)
+    mine = mlx_vulkan.ATEN_TABLE["tanh_backward"](
+        mx.array(gb.float().numpy()).astype(mx.bfloat16),
+        mx.array(yb.float().numpy()).astype(mx.bfloat16))
+    assert mine.dtype == mx.bfloat16, mine.dtype
+    got_b = torch.from_numpy(np.array(mine.astype(mx.float32)))
+    d = float((got_b - ref_b.float()).abs().max())
+    assert d < 0.02, f"bf16: {d:.3e}"
+    # executor path: the aten.tanh_backward.default node must land in
+    # stats["mlx"], not the CPU fallback.
+    gfx = torch.fx.Graph()
+    ph_g, ph_y = gfx.placeholder("g"), gfx.placeholder("y")
+    gfx.output(gfx.call_function(torch.ops.aten.tanh_backward.default, (ph_g, ph_y)))
+    gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out_e = run(torch.tensor(dy), torch.tensor(y))
+    assert np.abs(_np(out_e) - ref.numpy()).max() < 1e-5
+    assert "tanh_backward" in stats["mlx"], stats
+    assert "tanh_backward" not in stats["cpu"], stats
+    print("test_tanh_backward PASS")
+
+
+def test_comparisons():
+    # PT-U7: the comparison family — aten .default overloads are the
+    # (Scalar, Scalar) -> bool forms, which hit the has_mx gate with no mx
+    # operand (same miss class as PT-U8's scalar arith). The .Tensor and
+    # .Scalar overloads lower via the tensor operand already.
+    rng = np.random.RandomState(5)
+    a = rng.randn(4, 6).astype(np.float32)
+    b = rng.randn(4, 6).astype(np.float32)
+    OPS = [
+        ("eq", torch.ops.aten.eq.Tensor, mx.equal),
+        ("ne", torch.ops.aten.ne.Tensor, mx.not_equal),
+        ("lt", torch.ops.aten.lt.Tensor, mx.less),
+        ("le", torch.ops.aten.le.Tensor, mx.less_equal),
+        ("gt", torch.ops.aten.gt.Tensor, mx.greater),
+        ("ge", torch.ops.aten.ge.Tensor, mx.greater_equal),
+    ]
+    # elementwise Tensor forms: bool dtype + value parity vs aten
+    for name, aten_op, _ in OPS:
+        ref = aten_op(torch.tensor(a), torch.tensor(b))
+        got = mlx_vulkan.ATEN_TABLE[name](mx.array(a), mx.array(b))
+        assert got.dtype == mx.bool_, (name, got.dtype)
+        assert np.array_equal(_np(got), ref.numpy()), name
+    # Scalar overloads: (Scalar, Scalar) -> bool through the executor must
+    # lower despite no tensor operand (the _ALWAYS_LOWER fix).
+    for name, aten_default, _ in [
+            ("eq", torch.ops.aten.eq.default, None),
+            ("ne", torch.ops.aten.ne.default, None),
+            ("lt", torch.ops.aten.lt.default, None),
+            ("le", torch.ops.aten.le.default, None),
+            ("gt", torch.ops.aten.gt.default, None),
+            ("ge", torch.ops.aten.ge.default, None)]:
+        gfx = torch.fx.Graph()
+        gfx.output(gfx.call_function(aten_default, (2, 2)))
+        gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run()
+        exp = aten_default(2, 2)
+        assert bool(torch.as_tensor(out)) == exp, (name, out, exp)
+        assert name in stats["mlx"], (name, stats)
+        assert name not in stats["cpu"], (name, stats)
+    # .Scalar (Tensor, Scalar) forms: mixed dtype must still lower via the
+    # tensor operand, bool result parity.
+    for name, aten_scalar in [
+            ("eq", torch.ops.aten.eq.Scalar), ("ne", torch.ops.aten.ne.Scalar),
+            ("lt", torch.ops.aten.lt.Scalar), ("le", torch.ops.aten.le.Scalar),
+            ("gt", torch.ops.aten.gt.Scalar), ("ge", torch.ops.aten.ge.Scalar)]:
+        ref = aten_scalar(torch.tensor(a), 0.5)
+        got = mlx_vulkan.ATEN_TABLE[name](mx.array(a), mx.array(0.5))
+        assert got.dtype == mx.bool_, name
+        assert np.array_equal(_np(got), ref.numpy()), name
+    # executor path on a Tensor pair: lands in stats["mlx"]
+    gfx = torch.fx.Graph()
+    pa, pb = gfx.placeholder("a"), gfx.placeholder("b")
+    gfx.output(gfx.call_function(torch.ops.aten.eq.Tensor, (pa, pb)))
+    gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(torch.tensor(a), torch.tensor(b))
+    assert np.array_equal(_np(out), torch.eq(torch.tensor(a), torch.tensor(b)).numpy())
+    assert "eq" in stats["mlx"], stats
+    assert "eq" not in stats["cpu"], stats
+    print("test_comparisons PASS")
+
+
 def test_linear():
     rng = np.random.RandomState(3)
     x = rng.randn(2, 4, 8).astype(np.float32)   # batched input
@@ -2223,6 +2329,8 @@ if __name__ == "__main__":
     test_pcache_skips_static_weights()
     test_compiled_executor_nonarray_outputs()
     test_gelu_backward()
+    test_tanh_backward()
+    test_comparisons()
     test_linear()
     test_dispatch_registered()
     test_numel()
