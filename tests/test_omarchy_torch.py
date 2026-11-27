@@ -73,6 +73,11 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     torch.allclose(got, r, atol=1e-5, rtol=1e-5),
                     (ns_shape, tag, float((got - r).abs().max())))
 
+    def test_log1p_expm1_logaddexp(self):
+        """PT-AL-f: the wheel backend lowers aten.log1p, aten.expm1 and
+        aten.logaddexp with fp32/bf16 parity against the aten CPU ops,
+        including near-zero inputs where the naive log(1+x)/exp(x)-1
+        forms lose precision."""
     def test_unfold_last_dim(self):
         """PT-IM-b: aten.unfold lowers via gather + transpose — fp32 parity
         against the aten CPU op on the last dimension."""
@@ -81,6 +86,35 @@ class TestOmarchyTorchBackend(unittest.TestCase):
 
         from mlx.omarchy_torch import ATEN_TABLE
 
+        torch.manual_seed(0)
+        # near-zero inputs where log(1+x) and exp(x)-1 are catastrophic
+        x = torch.tensor([0.0, 1e-9, -1e-9, 1e-7, -1e-7, 1e-4, -1e-4,
+                          1e-2, -1e-2, -0.5, 0.5, 1.0, -0.9999, 2.0])
+        y = torch.tensor([0.0, 1e-9, -1e-9, -20.0, 20.0, 1e-4, -1.0,
+                          0.5, -0.5, 3.0, -3.0, 10.0, -10.0, 0.001])
+        cases = [
+            ("log1p", torch.ops.aten.log1p.default, (x,)),
+            ("expm1", torch.ops.aten.expm1.default, (x,)),
+            ("logaddexp", torch.ops.aten.logaddexp.default, (x, y)),
+        ]
+        np = __import__("numpy")
+        for name, aten_fn, args in cases:
+            lowering = ATEN_TABLE[name]
+            for dtype in (torch.float32, torch.bfloat16):
+                targs = [a.to(dtype) for a in args]
+                ref = aten_fn(*targs)
+                margs = [
+                    mx.array(a.float().numpy()).astype(
+                        mx.float32 if dtype == torch.float32 else mx.bfloat16)
+                    for a in targs
+                ]
+                got = torch.from_numpy(
+                    np.array(lowering(*margs).astype(mx.float32)))
+                tol = dict(atol=1e-6, rtol=1e-5) if dtype == torch.float32 \
+                    else dict(atol=1e-2, rtol=1e-2)
+                self.assertTrue(
+                    torch.allclose(got, ref.float(), **tol),
+                    (name, dtype, float((got - ref.float()).abs().max())))
         torch.manual_seed(1)
         lowering = ATEN_TABLE["unfold"]
         for shape, dim, size, step in [((2, 3, 10), 2, 4, 2), ((4, 10), 1, 3, 1),
