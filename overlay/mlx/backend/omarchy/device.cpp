@@ -980,7 +980,7 @@ bool Runtime::init_impl() {
     DeviceSupport support = classify_physical_device(
         props2.properties,
         static_cast<int32_t>(driver.driverID),
-        allow_non_apple);
+        allow_non_apple || icd_selection.foreign);
 
     VkPhysicalDeviceMemoryProperties2 mem2{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};

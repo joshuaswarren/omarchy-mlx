@@ -1,0 +1,18 @@
+0.00.185.399 I srv  llama_server: initializing ...
+0.00.185.410 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.185.714 W srv  server_setup: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
+0.00.187.250 I srv    load_model: loading model '/home/joshuawarren/scratch/serve-ab/Qwen3-4B-Instruct-2507-Q4_K_M.gguf'
+0.00.463.218 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.08.286.954 I cmn          init: llama threadpool init, n_threads = 10
+0.08.321.914 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 2048, kv_unified = 'false'
+0.08.326.921 I srv  server_run_i: model loaded
+0.08.326.931 I srv  server_on_li: listening on http://127.0.0.1:8157
+0.09.018.294 I slot get_availabl: id  0 | task -1 | selected slot by LRU, n_tokens = 0, t_last = -1
+0.09.018.322 I slot launch_slot_: id  0 | task 0 | processing task, is_child = 0
+0.10.319.692 I slot print_timing: id  0 | task 0 | prompt eval time =      26.52 ms /     9 tokens (    2.95 ms per token,   339.32 tokens per second)
+0.10.319.698 I slot print_timing: id  0 | task 0 |        eval time =    1274.83 ms /   128 tokens (   10.04 ms per token,    99.62 tokens per second)
+0.10.319.698 I slot print_timing: id  0 | task 0 |       total time =    1301.35 ms /   137 tokens
+0.10.319.703 I slot print_timing: id  0 | task 0 |    graphs reused =        126
+0.10.319.704 I slot print_timing: id  0 | task 0 |   graph reallocs =          0    /     0        (same size) / (changed size)
+0.10.319.727 I slot      release: id  0 | task 0 | stop processing: n_tokens = 136, truncated = 0
+0.10.320.752 I srv    operator(): operator(): cleaning up before exit...

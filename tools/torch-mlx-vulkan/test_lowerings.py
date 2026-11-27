@@ -59,6 +59,102 @@ def test_topk():
     print("test_topk PASS")
 
 
+def test_mode():
+    rng = np.random.RandomState(1)
+    # fp32 with duplicates: value must match torch.mode, index must point at
+    # a position holding the mode value (torch's exact duplicate pick is not
+    # stable-defined; the value and the position's value are the contract)
+    x = rng.randn(4, 9).astype(np.float32)
+    x[0, 0] = x[0, 1] = x[0, 2] = 0.5
+    x[1, :] = [1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0]  # tie 3/3 -> smallest 2.0
+    for dim in (1, 0, -1):
+        vals, idx = mlx_vulkan._mode(mx.array(x), dim)
+        tv, ti = torch.mode(torch.tensor(x), dim)
+        assert np.allclose(_np(vals), tv.numpy()), (dim, _np(vals), tv.numpy())
+        got = _np(idx)
+        # every returned index must point at a position holding the mode value
+        deff = dim % x.ndim
+        gax = got.reshape([1 if i == deff else got.size for i in range(x.ndim)])
+        held = np.take_along_axis(x, gax, axis=deff)
+        assert np.array_equal(held.reshape(-1), np.broadcast_to(
+            tv.reshape(-1).numpy(), held.size)), (dim, held.reshape(-1))
+    # int64
+    xi = rng.randint(0, 4, size=(3, 11)).astype(np.int64)
+    vi, ii = mlx_vulkan._mode(mx.array(xi), 1)
+    tvi, tii = torch.mode(torch.tensor(xi), 1)
+    assert np.array_equal(_np(vi), tvi.numpy())
+    assert np.array_equal(_np(ii), tii.numpy()), (_np(ii), tii.numpy())
+    # 1-D, keepdim both ways
+    x1 = np.array([7, 7, 7, 1, 2], dtype=np.int64)
+    v1, i1 = mlx_vulkan._mode(mx.array(x1), keepdim=True)
+    tv1, ti1 = torch.mode(torch.tensor(x1), keepdim=True)
+    assert v1.shape == tv1.shape and np.array_equal(_np(v1), tv1.numpy())
+    v2, i2 = mlx_vulkan._mode(mx.array(x1), 0, keepdim=False)
+    assert v2.shape == torch.mode(torch.tensor(x1), 0).values.shape
+    assert int(_np(v2)) == 7
+    # 3-D middle dim
+    x3 = rng.randint(0, 3, size=(2, 5, 3)).astype(np.int64)
+    v3, i3 = mlx_vulkan._mode(mx.array(x3), 1)
+    tv3, ti3 = torch.mode(torch.tensor(x3), 1)
+    assert np.array_equal(_np(v3), tv3.numpy())
+    assert np.array_equal(_np(i3), ti3.numpy())
+    print("test_mode PASS")
+
+
+def test_kthvalue():
+    rng = np.random.RandomState(2)
+    # fp32 distinct values: value and index must match exactly
+    x = rng.randn(4, 9).astype(np.float32)
+    for k, dim in ((1, 1), (3, 1), (5, 1), (2, 0), (1, 0), (4, -1)):
+        vals, idx = mlx_vulkan._kthvalue(mx.array(x), k, dim)
+        tv, ti = torch.kthvalue(torch.tensor(x), k, dim)
+        assert np.allclose(_np(vals), tv.numpy()), (k, dim)
+        # torch CPU's kthvalue index is a quickselect artifact (it can point
+        # at a different element than the returned value, even for distinct
+        # inputs), so the index is verified against the value contract: the
+        # element at the returned index must equal the returned k-th value
+        deff = dim % x.ndim
+        shape = [1] * x.ndim
+        free = [i for i in range(x.ndim) if i != deff][0]
+        shape[free] = _np(idx).size
+        gax = _np(idx).reshape(shape)
+        held = np.take_along_axis(x, gax, axis=deff)
+        ref = np.broadcast_to(_np(vals).reshape(shape).astype(np.float32), held.shape)
+        assert np.array_equal(held, ref), (k, dim, held, ref)
+    # int64 with duplicates: the k-th smallest VALUE must match torch
+    # exactly. torch CPU's index is a quickselect artifact and does not even
+    # point at the returned value on duplicates (x row 0, k=1: value -2.13 at
+    # index 2, torch's index 7 holds -1.24), so the lowering's index is
+    # verified against the value contract instead: the element at the
+    # returned index must equal the returned k-th value.
+    xi = np.array([[3, 1, 3, 2, 3, 1, 2], [5, 5, 5, 1, 1, 2, 2]], dtype=np.int64)
+    for k in (1, 2, 3, 4, 5, 6):
+        vals, idx = mlx_vulkan._kthvalue(mx.array(xi), k, 1)
+        tv, ti = torch.kthvalue(torch.tensor(xi), k, 1)
+        assert np.array_equal(_np(vals), tv.numpy()), (k, _np(vals), tv.numpy())
+        gshape = [1] * xi.ndim
+        gshape[1 - 1] = _np(idx).size
+        held = np.take_along_axis(xi, _np(idx).reshape(gshape), axis=1)
+        assert np.array_equal(held.reshape(-1), np.asarray(_np(vals)).reshape(-1)), (k, held.reshape(-1), _np(vals))
+    # 1-D + keepdim
+    x1 = np.array([9, 4, 7, 1, 8, 2], dtype=np.int64)
+    v1, i1 = mlx_vulkan._kthvalue(mx.array(x1), 3, 0, keepdim=True)
+    tv1, ti1 = torch.kthvalue(torch.tensor(x1), 3, 0, keepdim=True)
+    assert v1.shape == tv1.shape
+    assert np.array_equal(_np(v1), tv1.numpy())
+    assert int(_np(x1)[_np(i1)[0]]) == int(_np(v1)[0])
+    # 3-D middle dim
+    x3 = rng.randn(2, 6, 3).astype(np.float32)
+    v3, i3 = mlx_vulkan._kthvalue(mx.array(x3), 2, 1)
+    tv3, ti3 = torch.kthvalue(torch.tensor(x3), 2, 1)
+    assert np.allclose(_np(v3), tv3.numpy())
+    shape3 = list(x3.shape)
+    shape3[1] = 1
+    held = np.take_along_axis(x3, _np(i3).reshape(shape3), axis=1)
+    assert np.array_equal(held.reshape(-1), np.asarray(_np(v3)).reshape(-1))
+    print("test_kthvalue PASS")
+
+
 def test_multinomial():
     rng = np.random.RandomState(0)
     # peaked dist: sample must be the argmax row-wise (deterministic check)
@@ -2410,6 +2506,50 @@ def test_out_variants():
     assert np.allclose(torch.as_tensor(got).float().numpy(), ref.float().numpy(), atol=3e-2)
     assert np.allclose(torch.as_tensor(got_o).float().numpy(), ref_buf.float().numpy(), atol=3e-2)
     print("test_out_variants PASS")
+def test_cosine_similarity():
+    # PT-NORM-a: aten.cosine_similarity.default (embedding-eval family).
+    # sum(x1*x2, dim) / (clamp(norm1,eps) * clamp(norm2,eps)) - eps clamps
+    # each norm separately, pinned by the small-norm case below.
+    import numpy as np
+    a32 = torch.randn(4, 3)
+    b32 = torch.randn(4, 3)
+    a3d = torch.randn(2, 5, 4)
+    b3d = torch.randn(2, 5, 4)
+    tiny_a = torch.randn(4, 3) * 1e-3
+    tiny_b = torch.randn(4, 3) * 1e-3
+    cases = [
+        (torch.ops.aten.cosine_similarity.default, (a32, b32), {}, "cosine_similarity"),
+        (torch.ops.aten.cosine_similarity.default, (a32, b32), {"dim": 0}, "cosine_similarity"),
+        (torch.ops.aten.cosine_similarity.default, (a3d, b3d), {"dim": 2}, "cosine_similarity"),
+        (torch.ops.aten.cosine_similarity.default, (tiny_a, tiny_b), {"eps": 0.5}, "cosine_similarity"),
+        (torch.ops.aten.cosine_similarity.default, (a32.bfloat16(), b32.bfloat16()), {}, "cosine_similarity"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert fam in stats["mlx"], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert got.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and got.dtype == torch.float32), (
+            str(target), got.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            # Same dtype-fidelity contract as test_mul: _torch widens bf16
+            # to fp32 at the executor boundary (numpy has no bf16 buffer);
+            # the lowering itself must still produce bf16.
+            low = mlx_vulkan._FUNC_SPECS[fam](*(
+                mlx_vulkan._mx(a) if torch.is_tensor(a) else a for a in ins),
+                **kwargs)
+            assert low.dtype == mx.bfloat16, low.dtype
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=3e-2), (
+            str(target), kwargs, got, ref)
+    print("test_cosine_similarity PASS")
 
 
 if __name__ == "__main__":
@@ -2454,6 +2594,7 @@ if __name__ == "__main__":
     test_xlogy_xlog1py()
     test_softplus_mish()
     test_out_variants()
+    test_cosine_similarity()
     print("ALL PASS")
 
 

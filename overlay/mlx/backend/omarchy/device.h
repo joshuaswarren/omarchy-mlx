@@ -867,9 +867,10 @@ inline bool gdn_conv_coalesced_default(
 // models (Qwen3.5-9B, GatedDeltaDecodeConvNormBF16Sg32). Replaces 3 dispatches
 // (GdnConvDecode + GatedDeltaDecodeBF16Sg32 + RmsNormGated) with 1 dispatch
 // (-48 dispatches and -48 barriers/tok on 9B).
-// Default on G14C; MLX_OMARCHY_GDN_COALESCED=0 disables.
+// Default on G14C and G13C; MLX_OMARCHY_GDN_COALESCED=0 disables.
 inline bool gdn_conv_coalesced_f32a_default(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos;
 }
 
 // Fast Sg32 coalesced GDN conv + delta + gated-RMSNorm variant
@@ -879,10 +880,11 @@ inline bool gdn_conv_coalesced_f32a_default(const std::string& device_name) {
 // Measured on Apple M2 Max (G14C B1, DEFER_TOKENS=0, identical greedy token IDs):
 // Qwen3.8-2B ctx=512 +0.85% (190.79 -> 192.17 tok/s, -37.5 us/tok, 4/5 pairs),
 // Qwen3.5-9B ctx=512 +0.08% (62.31 -> 62.47 tok/s, -42 us/tok, 2/3 pairs).
-// Default on G14C and G13G; MLX_OMARCHY_GDN_SG32_FAST=0/1 overrides. Pure.
+// Default on G14C, G13G, and G13C; MLX_OMARCHY_GDN_SG32_FAST=0/1 overrides. Pure.
 inline bool gdn_conv_sg32_fast_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos ||
-      device_name.find("G13G") != std::string::npos;
+      device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos;
 }
 
 // Coalesced-state standalone GDN decode kernel (GatedDeltaDecodeBF16Sg32:
@@ -891,11 +893,13 @@ inline bool gdn_conv_sg32_fast_default(const std::string& device_name) {
 // Measured on Apple M2 Max (G14C B1) Qwen3.5-9B-MLX-4bit ctx=512 (3-pair ABBA,
 // DEFER_TOKENS=0, identical greedy token IDs): +5.12% (53.71 -> 56.50 tok/s,
 // -0.919 ms/tok, 3/3 wins).
-// Default on G14C for f32-A_log native GQA decode (hk != hv);
+// Default on G14C and G13C for f32-A_log native GQA decode (hk != hv);
 // MLX_OMARCHY_GDN_DECODE_COALESCED=0 disables.
 inline bool gdn_decode_coalesced_default(
     const std::string& device_name, int hk, int hv) {
-  return device_name.find("G14C") != std::string::npos && hk != hv;
+  return (device_name.find("G14C") != std::string::npos ||
+          device_name.find("G13C") != std::string::npos) &&
+      hk != hv;
 }
 
 // Low-register dedicated SwiGLU (QmmVecQ4SwigluBF16R1S8W2: ROWS_PER_SLOT=1,
@@ -1516,7 +1520,9 @@ inline uint32_t sdpa_online_rope_max_keys(
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
   if (device_name.find("G13C") != std::string::npos) {
-    return head_dim == 128 ? 2304u : 0u;
+    if (head_dim == 128) return 2304u;
+    if (head_dim == 256 && has_outgate) return 4096u;
+    return 0u;
   }
   if (device_name.find("G13G") != std::string::npos) {
     if (head_dim == 128) return 2304u;
@@ -1554,6 +1560,9 @@ inline uint32_t sdpa_online_rope_split_default(
   if (device_name.find("G13G") != std::string::npos) {
     return (heads <= 10u && k_len >= 128u) ? 2u : 1u;
   }
+  if (device_name.find("G13C") != std::string::npos) {
+    return (heads > 10u && heads <= 20u && k_len >= 64u) ? 2u : 1u;
+  }
   if (device_name.find("G14C") == std::string::npos) {
     return 1u;
   }
@@ -1576,10 +1585,14 @@ inline uint32_t sdpa_online_rope_split_default(
 // +0.14% (3/5); Qwen3-4B non-gated flat (-0.12%).
 // G13G (Apple M1, 8 GPU cores): paired with SDPA_ONLINE_ROPE on Qwen3.8-2B
 // ctx 512 +1.48% solo (42.13 -> 42.75 tok/s, 3/3) and +1.61% with split=2.
+// G13C (Apple M1 Max, 32 GPU cores): paired with GDN_COALESCED + GDN_SG32_FAST
+// + SDPA_ONLINE_ROPE (HD=256, split=2) on Qwen3.5-9B 4-bit decode (exact macOS
+// greedy token IDs).
 // Other parts stay off until measured. Pure.
 inline bool sdpa_outgate_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos ||
-      device_name.find("G13G") != std::string::npos;
+      device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos;
 }
 
 // Width-256 value-phase pass 1 (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Four query heads per
