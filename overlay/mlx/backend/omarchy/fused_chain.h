@@ -210,6 +210,7 @@ struct ResNormPlan {
   array out;
   array weight;
   float eps;
+  bool dead_qmm_out{false};
 };
 
 // GDN decode in_proj_a/b prologue fold: the single-consumer Q4/g64 affine

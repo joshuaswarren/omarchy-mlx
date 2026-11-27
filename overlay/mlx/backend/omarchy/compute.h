@@ -1427,6 +1427,20 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast,
   QmmVecQ4SwigluBF16R1S4W2Fast,
   QmmVecQ4ResNormVec4BF16R2S32W2Fast,
+  // Track M legal-0x1FF crown stack (all env-gated default OFF):
+  // Track K/L/J keepers + ResNormVec4 packed-32/dead-output0 elision +
+  // Word branchless store batching & R2S8/R2S16 upfront fast + Multi R2S16.
+  QmmVecQ4ResNormVec4BF16R2S32W2FastEpiHoist,
+  QmmVecQ4ResNormVec4BF16R2S32W2FastEpiPack,
+  GatedDeltaDecodeConvNormBF16Sg32Hoist,
+  SdpaDecodeOnlineRopeSg32BF16Hd256Fast,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast,
+  GatherDequantNormBF16,
+  ArgReduceSinglePassBF16,
+  QmmVecQ4WordSubgroupBF16R2S4W2FastBatch,
+  QmmVecQ4WordSubgroupBF16R2S8W2UpfrontFast,
+  QmmVecQ4WordSubgroupBF16R2S16W2UpfrontFast,
+  QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast,
   Count,
 };
 

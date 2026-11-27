@@ -174,6 +174,50 @@ void gdn_conv_state_out(uint channel) {
       conv_x.v[params.rhs_offset + channel];
 }
 
+#ifdef GDN_SG32_HOIST
+// Fused conv + conv_state_out for K==4 (km1==3): loads conv_state[0..2],
+// conv_x, and conv_w[0..3] once up front, writes shifted conv_state_out from
+// registers (zero redundant global loads/waits), and computes bit-exact SiLU.
+uint16_t gdn_conv_channel_and_state(uint channel, bool write_state) {
+  const uint km1 = params.lhs_size;
+  const uint channels = params.reduce_size;
+  if (params.operation == 4u && km1 == 3u) {
+    uint wb = params.aux_size + channel * 4u;
+    uint sb = params.lhs_offset + channel;
+    uint16_t s0_b = conv_state.v[sb];
+    uint16_t s1_b = conv_state.v[sb + channels];
+    uint16_t s2_b = conv_state.v[sb + 2u * channels];
+    uint16_t x_b = conv_x.v[params.rhs_offset + channel];
+    uint16_t w0_b = conv_w.v[wb];
+    uint16_t w1_b = conv_w.v[wb + 1u];
+    uint16_t w2_b = conv_w.v[wb + 2u];
+    uint16_t w3_b = conv_w.v[wb + 3u];
+    if (write_state) {
+      uint ob = params.out_strides[0] + channel;
+      conv_state_out.v[ob] = s1_b;
+      conv_state_out.v[ob + channels] = s2_b;
+      conv_state_out.v[ob + 2u * channels] = x_b;
+    }
+    float accumulator = 0.0;
+    accumulator += bf16_load(s0_b) * bf16_load(w0_b);
+    accumulator += bf16_load(s1_b) * bf16_load(w1_b);
+    accumulator += bf16_load(s2_b) * bf16_load(w2_b);
+    accumulator += bf16_load(x_b) * bf16_load(w3_b);
+    uint16_t conv_out = gdn_conv_bf16_store(accumulator);
+    float value = bf16_load(conv_out);
+    float sigmoid_value = 1.0 / (1.0 + exp(-value));
+    uint16_t sig_b = gdn_conv_bf16_store(sigmoid_value);
+    float silu = value * bf16_load(sig_b);
+    return gdn_conv_bf16_store(silu);
+  }
+  uint16_t act = gdn_conv_channel(channel);
+  if (write_state) {
+    gdn_conv_state_out(channel);
+  }
+  return act;
+}
+#endif
+
 #ifdef GDN_INPROJ_BA_FUSED
 float gdn_compute_beta_from_b(float b_in) {
   float beta_f = 1.0f / (1.0f + exp(-b_in));
@@ -356,8 +400,21 @@ void main() {
   // conv_state_out update. With GDN_INPROJ_BA_FUSED, idle subgroups 12 and 13
   // run in_proj_a -> g and in_proj_b -> beta concurrently before the existing
   // Phase-1 barrier (zero extra barriers, zero extra shared memory).
+#ifdef GDN_SG32_HOIST
+  // Precompute state addresses for all 32 subgroups so idle sg 12..31 (62.5%
+  // of the 1 MB DRAM state) issue all 4 coalesced vec4 loads before barrier 1,
+  // overlapping DRAM latency with sg 0..11's conv+SiLU AND Phase-1b Q/K norm.
+  uint head_base = head * 128u * 128u;
+  uint s_in_base_q = (params.shape[1] + head_base) >> 2u;
+  uint s_out_base_q = (params.shape[2] + head_base) >> 2u;
+  uint r0 = sg;
+  uint r1 = sg + 32u;
+  uint r2 = sg + 64u;
+  uint r3 = sg + 96u;
+  vec4 w0, w1, w2, w3;
+#endif
   uint16_t act_val = uint16_t(0u);
-  if (tid < 384u) {
+    if (tid < 384u) {
     const uint key_dim = params.rhs_size;
     const uint c = tid & 127u;
     bool lead = true;
@@ -366,6 +423,27 @@ void main() {
               (params.in_strides[2] / params.in_strides[3]) ==
           0u;
     }
+#ifdef GDN_SG32_HOIST
+    uint ch;
+    bool write_state;
+    if (tid < 128u) {
+      ch = khead * 128u + c;
+      write_state = lead;
+    } else if (tid < 256u) {
+      ch = key_dim + khead * 128u + c;
+      write_state = lead;
+    } else {
+      ch = 2u * key_dim + head * 128u + c;
+      write_state = true;
+    }
+    act_val = gdn_conv_channel_and_state(ch, write_state);
+    float v_act = bf16_load(act_val);
+    if (tid < 256u) {
+      s_norm_buf[tid] = v_act * v_act;
+    } else {
+      sv[c] = v_act;
+    }
+#else
     if (tid < 128u) {
       const uint ch = khead * 128u + c;
       act_val = gdn_conv_channel(ch);
@@ -388,6 +466,7 @@ void main() {
       sv[c] = bf16_load(act_val);
       gdn_conv_state_out(ch);
     }
+#endif
   }
 #ifdef GDN_INPROJ_BA_FUSED
   else if (sg == 12u) {
@@ -405,10 +484,24 @@ void main() {
           : b_in;
     }
   }
+#elif defined(GDN_SG32_HOIST)
+  else {
+    w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+    w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+    w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
+    w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
+  }
 #endif
   barrier();
 
-#ifdef GDN_SG32_FAST
+#ifdef GDN_SG32_HOIST
+  if (tid < 384u) {
+    w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+    w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+    w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
+    w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
+  }
+#elif defined(GDN_SG32_FAST)
   // Hoist all 4 coalesced vec4 state loads right after barrier 1 so all 32
   // subgroups overlap DRAM state fetches with Phase-1b Q/K norm.
   uint head_base = head * 128u * 128u;
@@ -543,6 +636,24 @@ void main() {
   // Phase 3: Gated RMSNorm epilogue with zero extra barriers (SGs 0..3 each
   // run the exact stride-64..1 tree_reduce32, bit-identical to gdn_norm_epilogue).
   if (tid < 128u) {
+#ifdef GDN_SG32_HOIST
+    float weight = bf16_load(norm_w.v[params.output_size + tid]);
+    float gate = bf16_load(norm_gate.v[params.shape[3] + head * 128u + tid]);
+    float so_val = so[tid];
+    float acc = (s_norm_buf[lane] + s_norm_buf[lane + 64u]) +
+        (s_norm_buf[lane + 32u] + s_norm_buf[lane + 96u]);
+    float sum = tree_reduce32(acc);
+    float mean_square = sum / 128.0f;
+    float norm = inversesqrt(mean_square + params.alpha);
+    precise float norm_weight = norm * weight;
+    precise float result = so_val * norm_weight;
+    float normed = bf16_load(gdn_conv_bf16_store(result));
+    float sigmoid_value = 1.0f / (1.0f + exp(-gate));
+    precise float silu = gate * sigmoid_value;
+    precise float prod = silu * normed;
+    y_buf.v[params.output_offset + head * 128u + tid] =
+        gdn_conv_bf16_store(prod);
+#else
     float acc = (s_norm_buf[lane] + s_norm_buf[lane + 64u]) +
         (s_norm_buf[lane + 32u] + s_norm_buf[lane + 96u]);
     float sum = tree_reduce32(acc);
@@ -558,5 +669,6 @@ void main() {
     precise float prod = silu * normed;
     y_buf.v[params.output_offset + head * 128u + tid] =
         gdn_conv_bf16_store(prod);
+#endif
   }
 }

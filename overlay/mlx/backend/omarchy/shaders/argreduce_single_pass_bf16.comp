@@ -1,0 +1,178 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Single-dispatch bf16 ArgMin/ArgMax over one wide 16-byte-aligned row
+// (MLX_OMARCHY_ARGREDUCE_SINGLE=1). Replaces ArgReduceChunkBF16 +
+// ArgReduceCombine + 1 CDM barrier with <=32 1024-thread workgroups:
+// - Coalesced 128-bit uvec4 loads (8 bf16/load vs 16 scalar loads).
+// - Subgroup shuffle-down reduction + 1 workgroup barrier (vs 8 barriers).
+// - Last-workgroup atomic ticket combine in one 32-lane subgroup (0 barriers).
+// Preserves the exact argreduce_suffix/chunk total preorder: strictly better
+// value wins, ties keep lower index, NaN beats non-NaN, first NaN wins.
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+
+#define ACC_LOWEST uintBitsToFloat(0xff800000u)
+#define ACC_HIGHEST uintBitsToFloat(0x7f800000u)
+
+layout(local_size_x = 1024) in;
+
+struct Partial {
+  float value;
+  uint index;
+};
+
+layout(set = 0, binding = 0, std430) readonly buffer Input {
+  uvec4 values[];
+} input_data;
+layout(set = 0, binding = 1, std430) coherent buffer Partials {
+  Partial values[];
+} partial_data;
+layout(set = 0, binding = 2, std430) writeonly buffer Output {
+  uint values[];
+} output_data;
+layout(set = 0, binding = 3, std430) coherent buffer Ticket {
+  uint done;
+} ticket;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;
+  uint rhs_offset;
+  uint output_offset;
+  uint aux_size;
+  uint aux_offset;
+  uint matrix_m;
+  uint matrix_n;
+  uint matrix_k;
+  uint flags;
+} params;
+
+shared float s_val[32];
+shared uint s_idx[32];
+shared uint s_is_last;
+
+bool challenges(float next, float incumbent, bool is_max) {
+  return isnan(next) ? !isnan(incumbent)
+                     : (!isnan(incumbent) &&
+                        (is_max ? next > incumbent : next < incumbent));
+}
+
+bool challenges_at(
+    float next, float incumbent, uint next_index, uint incumbent_index,
+    bool is_max) {
+  return isnan(next)
+      ? (!isnan(incumbent) || next_index < incumbent_index)
+      : (!isnan(incumbent) &&
+         ((is_max ? next > incumbent : next < incumbent) ||
+          (next == incumbent && next_index < incumbent_index)));
+}
+
+void main() {
+  uint tid = gl_LocalInvocationID.x;
+  uint sg = tid >> 5u;
+  uint lane = tid & 31u;
+  uint wg = gl_WorkGroupID.x;
+  uint num_wgs = gl_NumWorkGroups.x;
+
+  bool is_max = params.operation == 1u;
+  float never = is_max ? ACC_LOWEST : ACC_HIGHEST;
+
+  uint base_v = params.lhs_offset >> 3u;
+  uint total_vecs = params.reduce_size >> 3u;
+  uint stride = num_wgs * 1024u;
+
+  float local_val = never;
+  uint local_idx = 0u;
+
+  for (uint v = wg * 1024u + tid; v < total_vecs; v += stride) {
+    uvec4 raw = input_data.values[base_v + v];
+    uint base_i = v << 3u;
+
+    float f0 = uintBitsToFloat((raw.x & 0xFFFFu) << 16u);
+    if (challenges(f0, local_val, is_max)) { local_val = f0; local_idx = base_i + 0u; }
+    float f1 = uintBitsToFloat(raw.x & 0xFFFF0000u);
+    if (challenges(f1, local_val, is_max)) { local_val = f1; local_idx = base_i + 1u; }
+    float f2 = uintBitsToFloat((raw.y & 0xFFFFu) << 16u);
+    if (challenges(f2, local_val, is_max)) { local_val = f2; local_idx = base_i + 2u; }
+    float f3 = uintBitsToFloat(raw.y & 0xFFFF0000u);
+    if (challenges(f3, local_val, is_max)) { local_val = f3; local_idx = base_i + 3u; }
+    float f4 = uintBitsToFloat((raw.z & 0xFFFFu) << 16u);
+    if (challenges(f4, local_val, is_max)) { local_val = f4; local_idx = base_i + 4u; }
+    float f5 = uintBitsToFloat(raw.z & 0xFFFF0000u);
+    if (challenges(f5, local_val, is_max)) { local_val = f5; local_idx = base_i + 5u; }
+    float f6 = uintBitsToFloat((raw.w & 0xFFFFu) << 16u);
+    if (challenges(f6, local_val, is_max)) { local_val = f6; local_idx = base_i + 6u; }
+    float f7 = uintBitsToFloat(raw.w & 0xFFFF0000u);
+    if (challenges(f7, local_val, is_max)) { local_val = f7; local_idx = base_i + 7u; }
+  }
+
+  for (uint off = 16u; off > 0u; off >>= 1u) {
+    float ov = subgroupShuffleDown(local_val, off);
+    uint oi = subgroupShuffleDown(local_idx, off);
+    if (challenges_at(ov, local_val, oi, local_idx, is_max)) {
+      local_val = ov;
+      local_idx = oi;
+    }
+  }
+  if (lane == 0u) {
+    s_val[sg] = local_val;
+    s_idx[sg] = local_idx;
+  }
+  barrier();
+
+  if (sg == 0u) {
+    float v = s_val[lane];
+    uint i = s_idx[lane];
+    for (uint off = 16u; off > 0u; off >>= 1u) {
+      float ov = subgroupShuffleDown(v, off);
+      uint oi = subgroupShuffleDown(i, off);
+      if (challenges_at(ov, v, oi, i, is_max)) {
+        v = ov;
+        i = oi;
+      }
+    }
+    if (lane == 0u) {
+      partial_data.values[wg] = Partial(v, i);
+      memoryBarrierBuffer();
+      uint prev = atomicAdd(ticket.done, 1u);
+      s_is_last = (prev == num_wgs - 1u) ? 1u : 0u;
+    }
+  }
+  barrier();
+  if (s_is_last == 0u) {
+    return;
+  }
+  if (tid == 0u) {
+    ticket.done = 0u;
+  }
+  memoryBarrierBuffer();
+
+  if (sg == 0u) {
+    float fv = never;
+    uint fi = 0u;
+    if (lane < num_wgs) {
+      Partial p = partial_data.values[lane];
+      fv = p.value;
+      fi = p.index;
+    }
+    for (uint off = 16u; off > 0u; off >>= 1u) {
+      float ov = subgroupShuffleDown(fv, off);
+      uint oi = subgroupShuffleDown(fi, off);
+      if (challenges_at(ov, fv, oi, fi, is_max)) {
+        fv = ov;
+        fi = oi;
+      }
+    }
+    if (lane == 0u) {
+      output_data.values[params.output_offset] = fi;
+    }
+  }
+}
