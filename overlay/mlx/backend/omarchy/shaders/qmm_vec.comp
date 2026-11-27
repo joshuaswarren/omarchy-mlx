@@ -1044,6 +1044,15 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
       } \
     } \
   } else { \
+    Q4_ROWS_W2_FALLBACK(W, S, B) \
+  } \
+}
+#if defined(QMM_FAST_ONLY)
+// Host guarantees K % 512 == 0, N % 8 == 0, and even w_base; trimming the
+// unreachable slow-path loop cuts SPIR-V CFG size and AGX register pressure.
+#define Q4_ROWS_W2_FALLBACK(W, S, B)
+#else
+#define Q4_ROWS_W2_FALLBACK(W, S, B) \
     for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
       precise float dot[ROWS_PER_SLOT]; \
       precise float input_sum = 0.0; \
@@ -1056,9 +1065,8 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
       Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
       Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
       Q4_ROWS_FINISH(w, S, B) \
-    } \
-  } \
-}
+    }
+#endif
 #else
 #define Q4_ROWS(W, S, B) { \
   uint row_base[ROWS_PER_SLOT]; \
@@ -2369,6 +2377,7 @@ void main() {
     return;
   }
 #endif
+#if !defined(QMM_FAST_ONLY)
   if (lane < 256u) {
     if (reg_path) {
       uint base = lane * n_reads;
@@ -2436,6 +2445,7 @@ void main() {
       }
     }
   }
+#endif
 }
 #elif defined(QMM_VEC_SWIGLU)
 #define ROUND_STORAGE(f) LOAD_VALUE(bf16_store(f))
@@ -2563,7 +2573,9 @@ void main() {
         }
       }
 #endif
-    } else {
+    }
+#if !defined(QMM_FAST_ONLY)
+    else {
       for (uint w = lane_in_slot; w < words_per_row; w += LANES) {
         precise float dot_g[ROWS_PER_SLOT];
         precise float dot_u[ROWS_PER_SLOT];
@@ -2594,6 +2606,7 @@ void main() {
         }
       }
     }
+#endif
   }
   float total_g[ROWS_PER_SLOT];
   float total_u[ROWS_PER_SLOT];

@@ -930,6 +930,17 @@ inline bool resnorm_vec_default_part(const std::string& device_name) {
   return device_name.find("G13C") != std::string::npos;
 }
 
+// Fast-tile-only R2S8W2 Q4 decode variants (K % 512 == 0, N % 8 == 0, even
+// w_base): trims unreachable slow-path fallback loops to cut SPIR-V CFG size
+// and AGX register pressure (0-ULP bit-identical). Default on for G13C only;
+// MLX_OMARCHY_QMM_FAST_ONLY=1/0 overrides on any qualifying 2x8w2 part. Pure.
+inline bool qmm_fast_only_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_QMM_FAST_ONLY")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G13C") != std::string::npos;
+}
+
 inline bool vocab_tail_chunked_default(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_VOCAB_TAIL_CHUNKED")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;

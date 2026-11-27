@@ -9717,6 +9717,15 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
             qmm_groups = (params.matrix_n + 7u) / 8u;
           }
         }
+        if (vec_kernel ==
+                omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2 &&
+            params.matrix_k % 512u == 0u && params.matrix_n % 8u == 0u &&
+            (params.rhs_offset & 1u) == 0u && (params.shape[1] & 1u) == 0u &&
+            omarchy::qmm_fast_only_default_part(
+                encoder.device().capabilities().device_name)) {
+          vec_kernel =
+              omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2Fast;
+        }
       }
     }
     encoder.dispatch_compute(
@@ -11803,8 +11812,14 @@ bool dispatch_quantized_gemv_group(
             encoder.resnorm_ticket_binding(),
             binding(*members[0].epilogue),
             binding(res_norm->out)};
+        auto rn_k = ComputeKernel::QmmVecQ4ResNormBF16R2S8W2Vec;
+        if (params.matrix_k % 512u == 0u &&
+            omarchy::qmm_fast_only_default_part(
+                encoder.device().capabilities().device_name)) {
+          rn_k = ComputeKernel::QmmVecQ4ResNormBF16R2S8W2VecFast;
+        }
         encoder.dispatch_compute(
-            ComputeKernel::QmmVecQ4ResNormBF16R2S8W2Vec,
+            rn_k,
             rn_bindings,
             params,
             total_groups,
@@ -11846,8 +11861,15 @@ bool dispatch_quantized_gemv_group(
         binding(members[1].node.inputs()[2]),
         binding(members[1].node.inputs()[3]),
         binding(*swiglu_out)};
+    auto sw_k = swiglu_kernel;
+    if (sw_k == ComputeKernel::QmmVecQ4SwigluBF16R2S8W2 &&
+        params.matrix_k % 512u == 0u && params.shape[0] % 8u == 0u &&
+        omarchy::qmm_fast_only_default_part(
+            encoder.device().capabilities().device_name)) {
+      sw_k = ComputeKernel::QmmVecQ4SwigluBF16R2S8W2Fast;
+    }
     encoder.dispatch_compute(
-        swiglu_kernel,
+        sw_k,
         sw_bindings,
         params,
         total_groups,
@@ -11918,6 +11940,21 @@ bool dispatch_quantized_gemv_group(
             ComputeKernel::QmmVecQ4MultiF32,
             ComputeKernel::QmmVecQ4MultiF16,
             ComputeKernel::QmmVecQ4MultiBF16);
+  if (kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 &&
+      params.matrix_k % 512u == 0u) {
+    bool all_n8 = true;
+    for (size_t i = 0; i < members.size(); ++i) {
+      if ((params.shape[i] % 8u) != 0u) {
+        all_n8 = false;
+        break;
+      }
+    }
+    if (all_n8 &&
+        omarchy::qmm_fast_only_default_part(
+            encoder.device().capabilities().device_name)) {
+      kernel = ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast;
+    }
+  }
   if (token_route && rows > 8u) {
     // Pass 1: rows 0..7; pass 2: rows 8..rows-1 via lhs_offset += 8*k,
     // out_strides[0] = 8, and matrix_m = rows - 8 (the shader's
