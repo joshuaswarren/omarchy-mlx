@@ -385,6 +385,20 @@ layout(set = 0, binding = 2, std430) readonly buffer Scales0 {
 layout(set = 0, binding = 3, std430) readonly buffer Biases0 {
   STORAGE_TYPE values[];
 } biases0;
+#if defined(QMM_RESNORM_PACK32)
+#if !defined(QMM_FAST_ONLY) || !defined(QMM_RESNORM_VEC4)
+#error "QMM_RESNORM_PACK32 requires QMM_FAST_ONLY and QMM_RESNORM_VEC4"
+#endif
+layout(set = 0, binding = 4, std430) writeonly buffer Output0U32 {
+  uint values[];
+} output0_u32;
+layout(set = 0, binding = 5, std430) readonly buffer Addend0U32 {
+  uint values[];
+} addend0_u32;
+layout(set = 0, binding = 6, std430) coherent buffer Sum0U32 {
+  uint values[];
+} sum0_u32;
+#else
 layout(set = 0, binding = 4, std430) writeonly buffer Output0 {
   STORAGE_TYPE values[];
 } output0;
@@ -394,6 +408,7 @@ layout(set = 0, binding = 5, std430) readonly buffer Addend0 {
 layout(set = 0, binding = 6, std430) coherent buffer Sum0 {
   STORAGE_TYPE values[];
 } sum0;
+#endif
 layout(set = 0, binding = 7, std430) readonly buffer NormWeight {
   STORAGE_TYPE values[];
 } norm_weight;
@@ -2257,6 +2272,24 @@ void main() {
     total[r] = subgroupAdd(acc[r]);
   }
   if (lane_in_slot == 0u) {
+#if defined(QMM_RESNORM_PACK32) && (ROWS_PER_SLOT == 2)
+    // Host guarantees n in {2048, 4096} (even); checking column + 1u < n
+    // keeps the packed 2-bf16 store strictly in-bounds even if odd n arrived.
+    if (column + 1u < n) {
+      uint c2 = column >> 1u;
+      uint a01 = addend0_u32.values[c2];
+      float a0 = uintBitsToFloat((a01 & 0xFFFFu) << 16u);
+      float a1 = uintBitsToFloat(a01 & 0xFFFF0000u);
+      float r0 = ROUND_STORAGE(total[0]);
+      float r1 = ROUND_STORAGE(total[1]);
+      if ((params.flags & 0x1000000u) == 0u) {
+        output0_u32.values[c2] =
+            uint(STORE_VALUE(r0)) | (uint(STORE_VALUE(r1)) << 16u);
+      }
+      sum0_u32.values[c2] =
+          uint(STORE_VALUE(r0 + a0)) | (uint(STORE_VALUE(r1 + a1)) << 16u);
+    }
+#else
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
       uint col = column + r;
       if (col < n) {
@@ -2266,6 +2299,7 @@ void main() {
             STORE_VALUE(rounded + LOAD_VALUE(addend0.values[col]));
       }
     }
+#endif
   }
   barrier();
   memoryBarrierBuffer();
@@ -2309,8 +2343,16 @@ void main() {
     uint nw_base = params.rhs_offset >> 3u;
     if (row_length == 2048u) {
       uvec4 sv0 = uvec4(0u);
+#ifdef QMM_RESNORM_EPI_HOIST
+      uvec4 wv0 = uvec4(0u);
+#endif
       if (lane < 256u) {
         sv0 = sum0_v4.values[lane];
+#ifdef QMM_RESNORM_EPI_HOIST
+        // Issue norm_weight_v4 next to sum0_v4 before the barrier so its
+        // L2/DRAM latency overlaps reg_sq + subgroupAdd + barrier + inversesqrt.
+        wv0 = norm_weight_v4.values[nw_base + lane];
+#endif
         float a0 = uintBitsToFloat((sv0.x & 0xFFFFu) << 16u);
         float a1 = uintBitsToFloat(sv0.x & 0xFFFF0000u);
         float a2 = uintBitsToFloat((sv0.y & 0xFFFFu) << 16u);
@@ -2332,7 +2374,9 @@ void main() {
         float total_sq = subgroupAdd(v);
         float mean_square = total_sq / float(row_length);
         float norm = inversesqrt(mean_square + eps);
+#ifndef QMM_RESNORM_EPI_HOIST
         uvec4 wv0 = norm_weight_v4.values[nw_base + lane];
+#endif
         #define RN_PACK_PAIR(sv_w, wv_w, out_u) { \
           precise float _nw0 = norm * uintBitsToFloat(((wv_w) & 0xFFFFu) << 16u); \
           precise float _nw1 = norm * uintBitsToFloat((wv_w) & 0xFFFF0000u); \
@@ -2352,10 +2396,18 @@ void main() {
     } else {
       uvec4 sv0 = uvec4(0u);
       uvec4 sv1 = uvec4(0u);
+#ifdef QMM_RESNORM_EPI_HOIST
+      uvec4 wv0 = uvec4(0u);
+      uvec4 wv1 = uvec4(0u);
+#endif
       uint vidx = lane * 2u;
       if (lane < 256u) {
         sv0 = sum0_v4.values[vidx];
         sv1 = sum0_v4.values[vidx + 1u];
+#ifdef QMM_RESNORM_EPI_HOIST
+        wv0 = norm_weight_v4.values[nw_base + vidx];
+        wv1 = norm_weight_v4.values[nw_base + vidx + 1u];
+#endif
         {
           float a0 = uintBitsToFloat((sv0.x & 0xFFFFu) << 16u);
           float a1 = uintBitsToFloat(sv0.x & 0xFFFF0000u);
@@ -2391,8 +2443,10 @@ void main() {
         float total_sq = subgroupAdd(v);
         float mean_square = total_sq / float(row_length);
         float norm = inversesqrt(mean_square + eps);
+#ifndef QMM_RESNORM_EPI_HOIST
         uvec4 wv0 = norm_weight_v4.values[nw_base + vidx];
         uvec4 wv1 = norm_weight_v4.values[nw_base + vidx + 1u];
+#endif
         #define RN4_PACK_PAIR(sv_w, wv_w, out_u) { \
           precise float _nw0 = norm * uintBitsToFloat(((wv_w) & 0xFFFFu) << 16u); \
           precise float _nw1 = norm * uintBitsToFloat((wv_w) & 0xFFFF0000u); \

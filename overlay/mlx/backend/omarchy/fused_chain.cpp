@@ -2414,7 +2414,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         }
         const float eps =
             static_cast<const fast::RMSNorm&>(norm.primitive()).state().second;
-        group.res_norm = ResNormPlan{norm, nw, eps};
+        auto* qmm_u = uses.find(qmm.id());
+        auto* qmm_r = first_two_readers.find(qmm.id());
+        const bool dead_qmm_out = (qmm_u != nullptr && *qmm_u == 1u &&
+            qmm_r != nullptr && (*qmm_r)[0] == add.id());
+        group.res_norm = ResNormPlan{norm, nw, eps, dead_qmm_out};
         state->res_norm_skip_roles.put_if_absent(norm.id(), gi);
         claimed.put_if_absent(norm.id(), 1);
       }

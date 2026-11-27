@@ -1427,6 +1427,10 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast,
   QmmVecQ4SwigluBF16R1S4W2Fast,
   QmmVecQ4ResNormVec4BF16R2S32W2Fast,
+  // G14C-gated 512-thread upfront fast-tile-only Multi GEMV (32 cols/WG,
+  // halves QKV preamble launches on Apple M2 Max; 0-ULP bit-identical).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast,
   Count,
 };
 

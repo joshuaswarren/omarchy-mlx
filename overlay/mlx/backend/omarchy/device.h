@@ -1025,6 +1025,19 @@ inline bool qmm_g14c_fast_only_default_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// 512-thread upfront fast-tile-only Multi GEMV (R2S16W2, 32 cols/WG) for Apple
+// M2 Max (G14C): halves QKV preamble launches while keeping 64 half-regs and
+// 1024-thread occupancy (0-ULP bit-identical). Measured on Apple M2 Max
+// (G14C B1, DEFER_TOKENS=0): Qwen3.8-2B ctx=512 +0.22% (210.14 -> 210.43 tok/s,
+// 4/5, identical greedy digest). Default on G14C only;
+// MLX_OMARCHY_MULTI_R2S16=0/1 overrides. Pure.
+inline bool qmm_g14c_multi_r2s16_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_MULTI_R2S16")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G14C") != std::string::npos;
+}
+
 // G13C-gated HD=128 SdpaOnlineRope fast path (parallel Phase-A sg 2..3 RoPE
 // trig + 2-barrier subgroupShuffleDown K pack via disjoint s_q[128] + preloaded
 // epilogue with single 1/denom). Bit-identical (0 ULP) to the default HD=128
