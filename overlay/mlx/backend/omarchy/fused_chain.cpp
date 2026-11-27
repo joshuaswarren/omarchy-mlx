@@ -1618,19 +1618,23 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // group actually adopts the plan; otherwise every node evaluates
   // ordinarily.
   std::unordered_map<std::uintptr_t, OutgatePlan> outgate_plans;
-  const bool sdpa_outgate_on = sdpa_outgate_enabled();
   const char* outgate_raw = omarchy::env_str("MLX_OMARCHY_OUTGATE_FOLD");
   const bool outgate_explicit_on =
       outgate_raw != nullptr && outgate_raw[0] != '\0' &&
       !(outgate_raw[0] == '0' && outgate_raw[1] == '\0');
-  const bool outgate_on =
-      outgate_fold_enabled() && (!sdpa_outgate_on || outgate_explicit_on);
+  const bool outgate_on = outgate_fold_enabled();
   for (const auto& tail : tape) {
     if (!outgate_on || !is_op(&tail, typeid(Multiply)) ||
         tail.inputs().size() != 2 ||
         claimed.count(tail.id()) || uses[tail.id()] != 1 ||
         tail.dtype() == float32) {
       continue;
+    }
+    if (!outgate_explicit_on) {
+      if (const Device* td = stream_device(tail);
+          td != nullptr && sdpa_outgate_enabled(td->capabilities())) {
+        continue;
+      }
     }
     const array* left = lookup(tail.inputs()[0]);
     const array* right = lookup(tail.inputs()[1]);
@@ -2542,7 +2546,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // itself a post-SDPA Reshape of a pre-SDPA 4D (1,1,H,D) strided split view
   // (Qwen3.5/Qwen3.8 q_proj split), skips the gate CopyGeneral as well as
   // Sigmoid and Multiply, writing tail directly from SDPA.
-  if (sdpa_outgate_on && fused_chain_enabled()) {
+  if (fused_chain_enabled()) {
     auto use_count = [&](const array& value) {
       auto* it = uses.find(value.id());
       return it == nullptr ? size_t{0} : *it;
@@ -2565,6 +2569,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       if (!is_op(&tail, typeid(Multiply)) || tail.inputs().size() != 2 ||
           tail.dtype() != bfloat16 || claimed.count(tail.id()) ||
           tail.ndim() != 3 || tail.shape(0) != 1 || tail.shape(1) != 1) {
+        continue;
+      }
+      const Device* tail_dev = stream_device(tail);
+      if (tail_dev == nullptr ||
+          !sdpa_outgate_enabled(tail_dev->capabilities())) {
         continue;
       }
       const array* left = lookup(tail.inputs()[0]);
@@ -3047,11 +3056,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         continue;
       }
       const Device* sdpa_dev = stream_device(sdpa);
+      const bool has_outgate = state->sdpa_outgate_plans.count(sdpa.id()) != 0;
       if (sdpa_dev == nullptr ||
           !sdpa_online_rope_enabled(
               sdpa_dev->capabilities(),
               static_cast<uint32_t>(k_in->shape(2)),
-              head_dim)) {
+              head_dim,
+              has_outgate)) {
         continue;
       }
       if (!is_op(q_rope, typeid(fast::RoPE)) || uses[q_rope->id()] != 1 ||
@@ -3766,7 +3777,8 @@ bool rope_norm_pair_enabled() {
 bool sdpa_online_rope_enabled(
     const CapabilityReport& caps,
     uint32_t k_len,
-    int head_dim) {
+    int head_dim,
+    bool has_outgate) {
   if (!fused_chain_enabled() || (head_dim != 128 && head_dim != 256)) {
     return false;
   }
@@ -3789,10 +3801,10 @@ bool sdpa_online_rope_enabled(
   if (online_env != nullptr && std::strcmp(online_env, "0") == 0) {
     return false;
   }
-  if (!device_ok || head_dim != 128) {
+  if (!device_ok) {
     return false;
   }
-  return sdpa_online_rope_default(caps.device_name, k_len);
+  return sdpa_online_rope_default(caps.device_name, k_len, head_dim, has_outgate);
 }
 
 static bool resolve_sdpa_rope_head_stride(
@@ -4095,12 +4107,12 @@ void commit_sdpa_transpose_out(const array& out) {
   }
 }
 
-bool sdpa_outgate_enabled() {
+bool sdpa_outgate_enabled(const CapabilityReport& caps) {
   const char* v = omarchy::env_str("MLX_OMARCHY_SDPA_OUTGATE");
   if (v != nullptr && *v != '\0') {
     return !(v[0] == '0' && v[1] == '\0');
   }
-  return false;
+  return sdpa_outgate_default(caps.device_name);
 }
 
 const SdpaOutgatePlan* find_sdpa_outgate(const array& out) {

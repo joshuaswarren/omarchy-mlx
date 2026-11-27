@@ -342,7 +342,8 @@ struct CapabilityReport;
 bool sdpa_online_rope_enabled(
     const CapabilityReport& caps,
     uint32_t k_len,
-    int head_dim = 128);
+    int head_dim = 128,
+    bool has_outgate = false);
 
 struct SdpaOnlineRopeCtx {
   const array* q_raw{nullptr};
@@ -385,7 +386,7 @@ struct SdpaOutgatePlan {
   array tail;
   array gate_src;
 };
-bool sdpa_outgate_enabled();
+bool sdpa_outgate_enabled(const CapabilityReport& caps);
 const SdpaOutgatePlan* find_sdpa_outgate(const array& out);
 void commit_sdpa_outgate(const array& out);
 

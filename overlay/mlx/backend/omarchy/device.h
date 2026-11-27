@@ -1227,7 +1227,8 @@ inline bool sdpa_online_default(
 }
 
 // Single-dispatch fused Q/K RMSNorm + RoPE + KV-cache write + online-softmax
-// bf16 decode SDPA for head width 128 (shaders/sdpa_decode_online_rope.comp).
+// bf16 decode SDPA (shaders/sdpa_decode_online_rope.comp, HD=128 or HD=256,
+// with optional fused output-gate epilogue).
 // Largest cache length, in keys, up to which the fused route is the default
 // on a part. 0 keeps separate FastRopeNormBF16 + SdpaDecodeOnlineBF16.
 //
@@ -1235,19 +1236,54 @@ inline bool sdpa_online_default(
 // #997 + #984 wins +1.42% (ctx 256, 5/5), +1.36% (ctx 512, 5/5, 104.68 tok/s),
 // +1.63% (ctx 1024, 4/5), and +1.71% (ctx 2048, 5/5) with bit-identical greedy
 // token IDs; capped at 2304 keys to match sdpa_online_max_keys().
-inline uint32_t sdpa_online_rope_max_keys(const std::string& device_name) {
+//
+// G14C (Apple M2 Max, 38 GPU cores): 5-pair ABBA (MLX_OMARCHY_DEFER_TOKENS=0,
+// bit-identical greedy token IDs):
+// - HD=128 (Qwen3-4B 4-bit, ctx 512): +1.47% (88.59 -> 89.89 tok/s, 5/5);
+//   capped at 1024 keys to match sdpa_online_max_keys().
+// - HD=256 with fused output-gate epilogue (Qwen3.8-2B 4-bit ctx 512: +1.39%,
+//   150.87 -> 152.69 tok/s, 5/5; Qwen3.5-9B 4-bit ctx 512: +0.51%,
+//   53.35 -> 53.62 tok/s, 5/5); plain HD=256 without outgate measured -0.34%
+//   (1/5) so HD=256 defaults on only when paired with outgate, capped at 1024.
+inline uint32_t sdpa_online_rope_max_keys(
+    const std::string& device_name,
+    int head_dim = 128,
+    bool has_outgate = false) {
   if (const char* env =
           std::getenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_MAX_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
-  if (device_name.find("G13C") != std::string::npos) return 2304u;
+  if (device_name.find("G13C") != std::string::npos) {
+    return head_dim == 128 ? 2304u : 0u;
+  }
+  if (device_name.find("G14C") != std::string::npos) {
+    if (head_dim == 128) return 1024u;
+    if (head_dim == 256 && has_outgate) return 1024u;
+  }
   return 0u;
 }
 
 inline bool sdpa_online_rope_default(
-    const std::string& device_name, uint32_t k_len) {
-  uint32_t max_keys = sdpa_online_rope_max_keys(device_name);
+    const std::string& device_name,
+    uint32_t k_len,
+    int head_dim = 128,
+    bool has_outgate = false) {
+  uint32_t max_keys =
+      sdpa_online_rope_max_keys(device_name, head_dim, has_outgate);
   return max_keys != 0u && k_len <= max_keys;
+}
+
+// Fused SDPA output-gate epilogue (tail = Reshape(Transpose(SDPA)) *
+// Sigmoid(gate), deleting CopyGeneral + Sigmoid + Multiply and 2 CDM barriers
+// per gated full-attention layer; MLX_OMARCHY_SDPA_OUTGATE=0/1 overrides).
+//
+// G14C (Apple M2 Max, 38 GPU cores): 5-pair ABBA (MLX_OMARCHY_DEFER_TOKENS=0,
+// bit-identical greedy token IDs): Qwen3.8-2B ctx 512 +0.82% (5/5, online) and
+// ctx 2048 +0.38% (4/5, split-K); Qwen3.5-9B ctx 512 +0.50% (5/5) and ctx 2048
+// +0.14% (3/5); Qwen3-4B non-gated flat (-0.12%). Other parts stay off until
+// measured. Pure.
+inline bool sdpa_outgate_default(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
 }
 
 // Width-256 value-phase pass 1 (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Four query heads per
