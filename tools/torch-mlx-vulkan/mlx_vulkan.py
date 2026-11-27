@@ -2071,6 +2071,36 @@ def _pnorm(a, p=2, dim=None, keepdim=False):
                                   keepdims=keepdim), 1.0 / float(p))
 
 
+def _cdist(a, b, p=2.0, compute_mode=None):
+    # aten.cdist(x1, x2, p, compute_mode): pairwise p-norm distances
+    # between the rows of [.., N, D] and [.., M, D]. Broadcast-
+    # difference covers every p; compute_mode only picks a numerics
+    # strategy in aten, the values are unchanged.
+    a, b = _mx(a), _mx(b)
+    d = a[..., :, None, :] - b[..., None, :, :]
+    fp = float(p)
+    if fp == float("inf"):
+        return mx.max(mx.abs(d), axis=-1)
+    if fp == 0:
+        return mx.sum((d != 0).astype(mx.int32), axis=-1).astype(a.dtype)
+    return mx.power(mx.sum(mx.power(mx.abs(d), fp), axis=-1), 1.0 / fp)
+
+
+def _pdist(a, p=2.0):
+    # aten.pdist(self, p): condensed i<j pairwise distances of the N
+    # row vectors. mx has no compress/nonzero, so the condense order is
+    # built arithmetically: flat positions with jj>ii key below n*n and
+    # sort first; the keys are unique so the order is exact.
+    a = _mx(a)
+    n = a.shape[-2]
+    d = _cdist(a, a, p)
+    flat = mx.arange(n * n)
+    sel = flat % n > flat // n
+    key = mx.logical_not(sel).astype(mx.int32) * (n * n) + flat
+    m = n * (n - 1) // 2
+    return mx.flatten(d)[mx.argsort(key)[:m]]
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2317,6 +2347,9 @@ _FUNC_SPECS = {
     # PT-NORM-b: the linalg norm family (normalization, grad clipping)
     "linalg_vector_norm": lambda a, ord=2, dim=None, keepdim=False, *, dtype=None: _linalg_vector_norm(a, ord, dim, keepdim, dtype),
     "linalg_norm": lambda a, ord=None, dim=None, keepdim=False, *, dtype=None: _linalg_norm(a, ord, dim, keepdim, dtype),
+    # PT-PAIR-a: pairwise distances used in metric learning.
+    "cdist": lambda a, b, p=2.0, compute_mode=None: _cdist(a, b, p, compute_mode),
+    "pdist": lambda a, p=2.0: _pdist(a, p),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
     # aten.cosine_similarity clamps each l2 norm at eps separately, not
     # their product (device-checked against torch 2.15 CPU).

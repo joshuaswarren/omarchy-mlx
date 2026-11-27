@@ -414,6 +414,41 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 (kw, float((got - ref.float()).abs().max())))
 
 
+    def test_pdist_cdist_parity(self):
+        """PT-PAIR-a: aten.pdist + aten.cdist lower in the wheel
+        backend — parity vs torch across p=0.5/1/2/inf and batched
+        inputs."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        a = torch.randn(5, 3)
+        b = torch.randn(4, 3)
+        ab = torch.randn(2, 5, 3)
+        bb = torch.randn(2, 4, 3)
+        cases = [
+            ("cdist", (a, b), {}, torch.cdist(a, b)),
+            ("cdist", (a, b), {"p": 1.0}, torch.cdist(a, b, p=1.0)),
+            ("cdist", (a, b), {"p": 0.5}, torch.cdist(a, b, p=0.5)),
+            ("cdist", (a, b), {"p": float("inf")},
+             torch.cdist(a, b, p=float("inf"))),
+            ("cdist", (ab, bb), {}, torch.cdist(ab, bb)),
+            ("pdist", (a,), {}, torch.pdist(a)),
+            ("pdist", (a,), {"p": 1.0}, torch.pdist(a, p=1.0)),
+            ("pdist", (a,), {"p": float("inf")},
+             torch.pdist(a, p=float("inf"))),
+        ]
+        for name, ins, kw, ref in cases:
+            mins = tuple(mx.array(t.numpy()) for t in ins)
+            got = torch.from_numpy(
+                np.array(ATEN_TABLE[name](*mins, **kw).astype(mx.float32)))
+            self.assertTrue(
+                torch.allclose(got, ref.float(), atol=1e-5, rtol=1e-5),
+                (name, kw, float((got - ref.float()).abs().max())))
+
+
 
 if __name__ == "__main__":
     unittest.main()
