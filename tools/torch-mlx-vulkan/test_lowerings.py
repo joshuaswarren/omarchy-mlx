@@ -2769,6 +2769,41 @@ def test_logsumexp():
     print("test_logsumexp PASS")
 
 
+def test_pdist_cdist():
+    # PT-PAIR-a: aten.pdist + aten.cdist (pairwise distance, metric
+    # learning). Composed from broadcast-difference norms; the pdist
+    # condense order is built arithmetically (mx has no compress).
+    a = torch.randn(5, 3)
+    b = torch.randn(4, 3)
+    ab = torch.randn(2, 5, 3)
+    bb = torch.randn(2, 4, 3)
+    cases = [
+        (torch.ops.aten.cdist.default, (a, b), {}, "cdist"),
+        (torch.ops.aten.cdist.default, (a, b), {"p": 1.0}, "cdist"),
+        (torch.ops.aten.cdist.default, (a, b), {"p": 0.5}, "cdist"),
+        (torch.ops.aten.cdist.default, (a, b), {"p": float("inf")}, "cdist"),
+        (torch.ops.aten.cdist.default, (ab, bb), {}, "cdist"),
+        (torch.ops.aten.pdist.default, (a,), {}, "pdist"),
+        (torch.ops.aten.pdist.default, (a,), {"p": 1.0}, "pdist"),
+        (torch.ops.aten.pdist.default, (a,), {"p": float("inf")}, "pdist"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=1e-5), (
+            str(target), kwargs, got, ref)
+    print("test_pdist_cdist PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2818,6 +2853,7 @@ if __name__ == "__main__":
     test_reciprocal_frac()
     test_linalg_norm()
     test_cosine_similarity()
+    test_pdist_cdist()
     print("ALL PASS")
 
 
