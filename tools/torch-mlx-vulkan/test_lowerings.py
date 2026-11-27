@@ -466,7 +466,12 @@ def test_comparisons():
     # PT-U7: the comparison family — aten .default overloads are the
     # (Scalar, Scalar) -> bool forms, which hit the has_mx gate with no mx
     # operand (same miss class as PT-U8's scalar arith). The .Tensor and
-    # .Scalar overloads lower via the tensor operand already.
+    # .Scalar overloads lower via the tensor operand already. Extended
+    # below: an executor matrix over dtypes (int64, bf16), promotion,
+    # broadcast and the torch.* function forms. The in-place compare forms
+    # (eq_/ne_/...) are NOT registered: they fall to the torch CPU
+    # fallback, which is safe — comparisons produce a new bool tensor and
+    # dynamo emits the functional form in practice.
     rng = np.random.RandomState(5)
     a = rng.randn(4, 6).astype(np.float32)
     b = rng.randn(4, 6).astype(np.float32)
@@ -522,6 +527,69 @@ def test_comparisons():
     assert np.array_equal(_np(out), torch.eq(torch.tensor(a), torch.tensor(b)).numpy())
     assert "eq" in stats["mlx"], stats
     assert "eq" not in stats["cpu"], stats
+    # executor matrix: dtypes, promotion, broadcast, torch.* function
+    # forms — every case must lower (stats["cpu"] == []) and match torch
+    # bit-for-bit on the bool result.
+    x32 = torch.tensor([1.0, -2.0, 3.5, -4.0])
+    y32 = torch.tensor([1.0, 2.0, -3.5, -4.0])   # eq: [T,F,F,T]
+    i64 = torch.tensor([1, -2, 3, -4], dtype=torch.int64)
+    j64 = torch.tensor([1, 2, -3, -4], dtype=torch.int64)
+    cases = [
+        (torch.ops.aten.ne.Tensor, (x32, y32)),
+        (torch.ops.aten.lt.Tensor, (x32, y32)),
+        (torch.ops.aten.le.Tensor, (x32, y32)),
+        (torch.ops.aten.gt.Tensor, (x32, y32)),
+        (torch.ops.aten.ge.Tensor, (x32, y32)),
+        # int64 pair: integer compare must not go through float rounding
+        (torch.ops.aten.eq.Tensor, (i64, j64)),
+        (torch.ops.aten.lt.Tensor, (i64, j64)),
+        (torch.ops.aten.ge.Tensor, (i64, j64)),
+        # dtype promotion: f32 tensor vs i64 tensor
+        (torch.ops.aten.eq.Tensor, (x32, i64)),
+        (torch.ops.aten.gt.Tensor, (i64, x32)),
+        # bf16 operands: compare still yields bool
+        (torch.ops.aten.eq.Tensor, (x32.bfloat16(), y32.bfloat16())),
+        (torch.ops.aten.le.Tensor, (x32.bfloat16(), y32.bfloat16())),
+        # broadcast: (2,2) vs (2,1)
+        (torch.ops.aten.gt.Tensor,
+         (x32.reshape(2, 2), torch.tensor([[0.0], [1.0]]))),
+        # .Scalar overloads — ge.Scalar named in the row, int scalar arg
+        (torch.ops.aten.eq.Scalar, (x32, 3.5)),
+        (torch.ops.aten.ne.Scalar, (x32, 0.0)),
+        (torch.ops.aten.lt.Scalar, (i64, 0)),
+        (torch.ops.aten.le.Scalar, (x32, 3.5)),
+        (torch.ops.aten.gt.Scalar, (x32, -4.0)),
+        (torch.ops.aten.ge.Scalar, (x32, -4.0)),
+        # torch-level function forms (FUNC_TABLE name-keyed path)
+        (torch.eq, (x32, y32)),
+        (torch.ne, (x32, y32)),
+        (torch.lt, (x32, y32)),
+        (torch.ge, (x32, y32)),
+    ]
+    for target, ins in cases:
+        ref = target(*ins)
+        assert ref.dtype == torch.bool, (str(target), ref.dtype)
+        g = torch.fx.Graph()
+        targs = [a for a in ins if torch.is_tensor(a)]
+        phs = [g.placeholder(f"p{i}") for i in range(len(targs))]
+        pit = iter(phs)
+        args = tuple(next(pit) if torch.is_tensor(a) else a for a in ins)
+        n = g.call_function(target, args, {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*targs)
+        assert stats["cpu"] == [], (stats, str(target))
+        # stats["mlx"] holds the opname ("eq" for aten.eq.Tensor); torch.*
+        # targets record the raw "<built-in method eq ...>" repr, so match
+        # by substring the way test_mul does. OpOverload.__name__ is the
+        # "eq.Tensor" form — strip the overload suffix.
+        nm = getattr(target, "__name__", str(target))
+        fam = nm.split("aten.")[-1].split(".")[0]
+        assert any(fam == s or fam in s for s in stats["mlx"]), (stats, str(target))
+        got = torch.as_tensor(out)
+        assert got.dtype == torch.bool, (str(target), got.dtype)
+        assert torch.equal(got, ref), (str(target), got, ref)
     print("test_comparisons PASS")
 
 
@@ -1951,6 +2019,8 @@ def test_where_masked_fill():
     )
     assert torch.equal(torch.as_tensor(out).float(), ref.float())
     print("test_where_masked_fill PASS")
+
+
 
 
 if __name__ == "__main__":
