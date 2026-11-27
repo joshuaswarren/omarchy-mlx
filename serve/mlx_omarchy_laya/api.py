@@ -10,7 +10,6 @@ escalate/answer action head, output_tokens always 0 (single forward pass).
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
@@ -18,6 +17,7 @@ import mlx.core as mx
 import numpy as np
 
 from . import model as laya_model
+from .jsonfile import read_json_object
 from .sequence import LayaTokenizer, collate, encode_questions, temp_bucket
 
 
@@ -32,8 +32,7 @@ class LayaEngine:
                 "Apple-silicon hardware with the mlx-omarchy wheel, or pass "
                 "--allow-cpu explicitly for reference/testing runs." % mx.default_device()
             )
-        with open(model_dir / "rl_agent_config.json") as f:
-            self.cfg = json.load(f)
+        self.cfg = read_json_object(model_dir / "rl_agent_config.json")
         self.max_len = int(self.cfg["max_len"])
         self.head_max_len = int(self.cfg["head_max_len"])
         self.head_layers = int(self.cfg["head_layers"])
