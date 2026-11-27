@@ -11887,9 +11887,18 @@ bool dispatch_quantized_gemv_group(
             binding(res_norm->out)};
         auto rn_k = ComputeKernel::QmmVecQ4ResNormBF16R2S8W2Vec;
         if (params.matrix_k % 512u == 0u &&
+            params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u &&
+            (members[0].node.offset() & 3u) == 0u &&
+            (members[0].addend->offset() & 3u) == 0u &&
+            (members[0].epilogue->offset() & 15u) == 0u &&
+            (res_norm->weight.offset() & 15u) == 0u &&
+            (res_norm->out.offset() & 15u) == 0u &&
             omarchy::qmm_fast_only_default_part(
                 encoder.device().capabilities().device_name)) {
           rn_k = ComputeKernel::QmmVecQ4ResNormBF16R2S8W2VecFast;
+          if (res_norm->dead_qmm_out) {
+            params.flags |= 0x1000000u;
+          }
         }
         encoder.dispatch_compute(
             rn_k,

@@ -413,8 +413,8 @@ layout(set = 0, binding = 3, std430) readonly buffer Biases0 {
   STORAGE_TYPE values[];
 } biases0;
 #if defined(QMM_RESNORM_PACK32)
-#if !defined(QMM_FAST_ONLY) || !defined(QMM_RESNORM_VEC4)
-#error "QMM_RESNORM_PACK32 requires QMM_FAST_ONLY and QMM_RESNORM_VEC4"
+#if !defined(QMM_FAST_ONLY) || (!defined(QMM_RESNORM_VEC4) && !defined(QMM_RESNORM_VEC))
+#error "QMM_RESNORM_PACK32 requires QMM_FAST_ONLY and (QMM_RESNORM_VEC4 or QMM_RESNORM_VEC)"
 #endif
 layout(set = 0, binding = 4, std430) writeonly buffer Output0U32 {
   uint values[];
@@ -436,9 +436,15 @@ layout(set = 0, binding = 6, std430) coherent buffer Sum0 {
   STORAGE_TYPE values[];
 } sum0;
 #endif
+#if defined(QMM_RESNORM_VEC) && defined(QMM_RESNORM_VEC_REG_V4)
+layout(set = 0, binding = 7, std430) readonly buffer NormWeightV4 {
+  uvec4 values[];
+} norm_weight_v4;
+#else
 layout(set = 0, binding = 7, std430) readonly buffer NormWeight {
   STORAGE_TYPE values[];
 } norm_weight;
+#endif
 layout(set = 0, binding = 8, std430) writeonly buffer NormOutput {
   STORAGE_TYPE values[];
 } norm_output;
@@ -463,10 +469,16 @@ layout(set = 0, binding = 12, std430) writeonly buffer NormOutputV4 {
 layout(set = 0, binding = 10, std430) readonly coherent buffer Sum0Vec4 {
   uvec4 values[];
 } sum0_v4;
+#if defined(QMM_RESNORM_VEC_REG_V4)
+layout(set = 0, binding = 11, std430) writeonly buffer NormOutputV4 {
+  uvec4 values[];
+} norm_output_v4;
+#else
 layout(set = 0, binding = 11, std430) writeonly buffer NormOutputU32 {
   uint values[];
 } norm_output_u32;
 shared uint s_resnorm_sum[2048u];
+#endif
 #endif
 #if defined(QMM_VEC_OUTGATE)
 layout(set = 0, binding = 10, std430) readonly buffer OutgateOut {
@@ -2413,7 +2425,7 @@ void main() {
     ticket.done = 0u;
   }
   memoryBarrierBuffer();
-#ifndef QMM_RESNORM_VEC4
+#if !defined(QMM_RESNORM_VEC4) && !defined(QMM_RESNORM_VEC_REG_V4)
   barrier();
 #endif
 
@@ -2591,6 +2603,86 @@ void main() {
 #endif
 #if defined(QMM_RESNORM_VEC)
   if (reg_path) {
+#if defined(QMM_RESNORM_VEC_REG_V4)
+    // G13C-gated zero-shmem, single-barrier coalesced 128-bit uvec4 RMSNorm
+    // epilogue for D in {2048, 2560, 4096} (n_v4 in {256, 320, 512}): each
+    // thread 0..255 loads 1 or 2 uvec4 words from sum0_v4 and norm_weight_v4
+    // before the single reduction barrier, eliminating s_resnorm_sum[2048]
+    // (8 KB shmem) and three workgroup barriers per dispatch.
+    uint n_v4 = row_length >> 3u;
+    uint nw_base = params.rhs_offset >> 3u;
+    uvec4 sv0 = uvec4(0u);
+    uvec4 sv1 = uvec4(0u);
+    uvec4 wv0 = uvec4(0u);
+    uvec4 wv1 = uvec4(0u);
+    bool has1 = (lane + 256u < n_v4);
+    if (lane < 256u) {
+      sv0 = sum0_v4.values[lane];
+      wv0 = norm_weight_v4.values[nw_base + lane];
+      if (has1) {
+        sv1 = sum0_v4.values[lane + 256u];
+        wv1 = norm_weight_v4.values[nw_base + lane + 256u];
+      }
+      {
+        float a0 = uintBitsToFloat((sv0.x & 0xFFFFu) << 16u);
+        float a1 = uintBitsToFloat(sv0.x & 0xFFFF0000u);
+        float a2 = uintBitsToFloat((sv0.y & 0xFFFFu) << 16u);
+        float a3 = uintBitsToFloat(sv0.y & 0xFFFF0000u);
+        float a4 = uintBitsToFloat((sv0.z & 0xFFFFu) << 16u);
+        float a5 = uintBitsToFloat(sv0.z & 0xFFFF0000u);
+        float a6 = uintBitsToFloat((sv0.w & 0xFFFFu) << 16u);
+        float a7 = uintBitsToFloat(sv0.w & 0xFFFF0000u);
+        reg_sq += a0 * a0; reg_sq += a1 * a1; reg_sq += a2 * a2; reg_sq += a3 * a3;
+        reg_sq += a4 * a4; reg_sq += a5 * a5; reg_sq += a6 * a6; reg_sq += a7 * a7;
+      }
+      if (has1) {
+        float a0 = uintBitsToFloat((sv1.x & 0xFFFFu) << 16u);
+        float a1 = uintBitsToFloat(sv1.x & 0xFFFF0000u);
+        float a2 = uintBitsToFloat((sv1.y & 0xFFFFu) << 16u);
+        float a3 = uintBitsToFloat(sv1.y & 0xFFFF0000u);
+        float a4 = uintBitsToFloat((sv1.z & 0xFFFFu) << 16u);
+        float a5 = uintBitsToFloat(sv1.z & 0xFFFF0000u);
+        float a6 = uintBitsToFloat((sv1.w & 0xFFFFu) << 16u);
+        float a7 = uintBitsToFloat(sv1.w & 0xFFFF0000u);
+        reg_sq += a0 * a0; reg_sq += a1 * a1; reg_sq += a2 * a2; reg_sq += a3 * a3;
+        reg_sq += a4 * a4; reg_sq += a5 * a5; reg_sq += a6 * a6; reg_sq += a7 * a7;
+      }
+      float sub_partial = subgroupAdd(reg_sq);
+      if (sub_lane == 0u) {
+        s_resnorm_partial[sub_id] = sub_partial;
+      }
+    }
+    barrier();
+    if (lane < 256u) {
+      float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+      float total_sq = subgroupAdd(v);
+      float mean_square = total_sq / float(row_length);
+      float norm = inversesqrt(mean_square + eps);
+      #define RNV_PACK_PAIR(sv_w, wv_w, out_u) { \
+        precise float _nw0 = norm * uintBitsToFloat(((wv_w) & 0xFFFFu) << 16u); \
+        precise float _nw1 = norm * uintBitsToFloat((wv_w) & 0xFFFF0000u); \
+        precise float _r0 = uintBitsToFloat(((sv_w) & 0xFFFFu) << 16u) * _nw0; \
+        precise float _r1 = uintBitsToFloat((sv_w) & 0xFFFF0000u) * _nw1; \
+        (out_u) = uint(STORE_VALUE(_r0)) | (uint(STORE_VALUE(_r1)) << 16u); \
+      }
+      uvec4 o0;
+      RNV_PACK_PAIR(sv0.x, wv0.x, o0.x)
+      RNV_PACK_PAIR(sv0.y, wv0.y, o0.y)
+      RNV_PACK_PAIR(sv0.z, wv0.z, o0.z)
+      RNV_PACK_PAIR(sv0.w, wv0.w, o0.w)
+      norm_output_v4.values[lane] = o0;
+      if (has1) {
+        uvec4 o1;
+        RNV_PACK_PAIR(sv1.x, wv1.x, o1.x)
+        RNV_PACK_PAIR(sv1.y, wv1.y, o1.y)
+        RNV_PACK_PAIR(sv1.z, wv1.z, o1.z)
+        RNV_PACK_PAIR(sv1.w, wv1.w, o1.w)
+        norm_output_v4.values[lane + 256u] = o1;
+      }
+      #undef RNV_PACK_PAIR
+    }
+    return;
+#else
     // Cooperative 128-bit uvec4 coherent-L2 load into shared memory:
     // 16x fewer coherent L2 reads than 20 scalar uint16_t loads per thread
     // (320 uvec4 loads for D=2560 -> 1.25 loads/thread), zero extra QMV regs.
@@ -2658,6 +2750,7 @@ void main() {
       }
     }
     return;
+#endif
   }
 #endif
 #if !defined(QMM_FAST_ONLY)
