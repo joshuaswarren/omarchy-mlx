@@ -130,6 +130,37 @@ int scenario(const std::string& name, const std::string& out) {
     outs.push_back(oa);
     outs.push_back(ob);
     outs.push_back(oc);
+  } else if (name == "pair") {
+    // DEC-01: plain balanced 2-member MLP gate+up pair (no SwiGLU consumer)
+    auto x = make_x(2048, rng);
+    auto gate = make_lin(6144, 2048, rng);
+    auto up = make_lin(6144, 2048, rng);
+    eval(x, gate.w, gate.s, gate.b, up.w, up.s, up.b);
+    auto og = qmm(x, gate);
+    auto ou = qmm(x, up);
+    eval(og, ou);
+    outs.push_back(og);
+    outs.push_back(ou);
+  } else if (name == "gdn_pair") {
+    // DEC-01: the GDN in_proj window [6144, 2048, 16, 16] splits into the
+    // (6144, 2048) and (16, 16) balanced pairs
+    auto x1 = make_x(2048, rng);
+    auto a = make_lin(6144, 2048, rng);
+    auto b = make_lin(2048, 2048, rng);
+    auto x2 = make_x(16, rng);
+    auto c16 = make_lin(16, 16, rng);
+    auto d16 = make_lin(16, 16, rng);
+    eval(x1, a.w, a.s, a.b, b.w, b.s, b.b, x2, c16.w, c16.s, c16.b, d16.w,
+         d16.s, d16.b);
+    auto oa = qmm(x1, a);
+    auto ob = qmm(x1, b);
+    auto oc = qmm(x2, c16);
+    auto od = qmm(x2, d16);
+    eval(oa, ob, oc, od);
+    outs.push_back(oa);
+    outs.push_back(ob);
+    outs.push_back(oc);
+    outs.push_back(od);
   } else if (name == "swiglu") {
     auto x = make_x(2048, rng);
     auto gate = make_lin(6144, 2048, rng);
@@ -657,6 +688,8 @@ int main(int argc, char** argv) {
         {"resnorm2048_r2s16_fast", "resnorm2048", "MLX_OMARCHY_RESNORM_R2S32", "0"},
         {"resnorm2048_r2s16_liveqmm_fast", "resnorm2048_liveqmm", "MLX_OMARCHY_RESNORM_R2S32", "0"},
         {"resnorm4096_r2s16_fast", "resnorm4096", "MLX_OMARCHY_RESNORM_R2S32", "0"},
+        {"pair_swiglu_route_off", "pair", "MLX_OMARCHY_FUSED_GEMV_SWIGLU", "0"},
+        {"gdn_pair_swiglu_route_off", "gdn_pair", "MLX_OMARCHY_FUSED_GEMV_SWIGLU", "0"},
     };
     for (const auto& c : cases) {
       std::string base = "/tmp/w7p-geom-base.bin";
