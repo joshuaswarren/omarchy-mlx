@@ -793,6 +793,7 @@
 #include "qmm_vec_q4_word_subgroup_bf16_r1s4w2_fast.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r1s8w2_fast.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r1s1w2_fast.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r1s2w2_fast.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s1w2_fast.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s4w2.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s4w2_fast.h"
@@ -805,6 +806,7 @@
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_epi_pack.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_epi_no_out0.h"
 #include "gated_delta_decode_conv_norm_bf16_sg32_fast_interleave.h"
+#include "gated_delta_decode_conv_norm_ba_bf16_sg32_fast.h"
 #include "sdpa_decode_online_rope_sg32_bf16_hd256_fast.h"
 #include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast.h"
 #include "gather_dequant_norm_bf16.h"
@@ -2686,6 +2688,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_bf16_r1s1w2_fast,
           qmm_vec_q4_word_subgroup_bf16_r1s1w2_fast_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R1S2W2Fast:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r1s2w2_fast,
+          qmm_vec_q4_word_subgroup_bf16_r1s2w2_fast_size};
     case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S1W2Fast:
       return {
           qmm_vec_q4_word_subgroup_bf16_r2s1w2_fast,
@@ -2714,6 +2720,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_decode_conv_norm_bf16_sg32_fast_interleave,
           gated_delta_decode_conv_norm_bf16_sg32_fast_interleave_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32Fast:
+      return {
+          gated_delta_decode_conv_norm_ba_bf16_sg32_fast,
+          gated_delta_decode_conv_norm_ba_bf16_sg32_fast_size};
     case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256Fast:
       return {
           sdpa_decode_online_rope_sg32_bf16_hd256_fast,

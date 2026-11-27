@@ -393,6 +393,7 @@ omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast shaders/qmm_vec.comp -D
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r1s4w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=4 -DQMM_W2=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1 -DQMM_WORD_R1_W2=1)
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r1s8w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1 -DQMM_WORD_R1_W2=1)
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r1s1w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=1 -DQMM_W2=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1 -DQMM_WORD_R1_W2=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r1s2w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=2 -DQMM_W2=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1 -DQMM_WORD_R1_W2=1)
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s1w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=1 -DQMM_W2=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1)
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s32w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_W2=1 -DQMM_W2_UPFRONT=1)
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_W2=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1)
@@ -623,6 +624,7 @@ omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32 shaders/gated_delta_decode
 omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32_fast shaders/gated_delta_decode_conv_coalesced.comp -DGDN_SG32_FAST=1)
 omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32_fast_interleave shaders/gated_delta_decode_conv_coalesced.comp -DGDN_SG32_FAST=1 -DGDN_P2_INTERLEAVE=1)
 omarchy_shader(gated_delta_decode_conv_norm_ba_bf16_sg32 shaders/gated_delta_decode_conv_coalesced.comp -DGDN_INPROJ_BA_FUSED=1)
+omarchy_shader(gated_delta_decode_conv_norm_ba_bf16_sg32_fast shaders/gated_delta_decode_conv_coalesced.comp -DGDN_INPROJ_BA_FUSED=1 -DGDN_SG32_FAST=1)
 # Coalesced-state standalone GDN decode (Dk == Dv == 128, f32 state, bf16/f32 A_log, native GQA; 1024 threads, 32 SGs).
 omarchy_shader(gated_delta_decode_bf16_sg32 shaders/gated_delta_decode_coalesced.comp)
 omarchy_shader(gated_delta_decode_composed_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_COMPOSED_ORDER=1)

@@ -484,6 +484,14 @@ void main() {
           : b_in;
     }
   }
+#ifdef GDN_SG32_FAST
+  else {
+    w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+    w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+    w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
+    w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
+  }
+#endif
 #elif defined(GDN_SG32_FAST)
   else {
     w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
@@ -495,7 +503,11 @@ void main() {
   barrier();
 
 #ifdef GDN_SG32_FAST
+#ifdef GDN_INPROJ_BA_FUSED
+  if (tid < 448u) {
+#else
   if (tid < 384u) {
+#endif
     w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
     w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
     w2 = s_in.v[s_in_base_q + r2 * 32u + lane];

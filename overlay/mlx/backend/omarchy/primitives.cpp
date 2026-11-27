@@ -9714,6 +9714,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               vec_kernel =
                   omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R1S1W2Fast;
               qmm_groups = params.matrix_n;
+            } else if (std::strcmp(wsn_env, "r1s2") == 0 &&
+                w_caps.max_compute_work_group_invocations >= 64u &&
+                w_caps.max_compute_work_group_size[0] >= 64u) {
+              vec_kernel =
+                  omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R1S2W2Fast;
+              qmm_groups = (params.matrix_n + 1u) / 2u;
             } else if (std::strcmp(wsn_env, "r2s1") == 0) {
               vec_kernel =
                   omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S1W2Fast;
@@ -18525,8 +18531,11 @@ void GdnConvDeltaUpdate::eval_gpu(
         binding(ba_fold->s_b),
         binding(ba_fold->b_b)};
     omarchy::commit_gdn_inproj_ba_fold(outputs.at(0));
+    const auto ba_kernel = omarchy::env_flag("MLX_OMARCHY_GDN_BA_FAST")
+        ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32Fast
+        : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32;
     encoder.dispatch_compute(
-        omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32,
+        ba_kernel,
         ba_bindings,
         params,
         static_cast<uint32_t>(B * Hv),
