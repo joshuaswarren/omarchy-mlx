@@ -850,6 +850,10 @@ bool Runtime::init_impl() {
               compat, std::getenv("AGX_HOIST_LOADS"))) {
         ::setenv("AGX_HOIST_LOADS", "1", /*overwrite=*/0);
       }
+      if (should_auto_enable_hk_perftest_batch(
+              compat, std::getenv("HK_PERFTEST"))) {
+        ::setenv("HK_PERFTEST", "batch", /*overwrite=*/0);
+      }
     }
   }
 

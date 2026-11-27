@@ -332,6 +332,26 @@ inline bool should_auto_enable_agx_hoist_loads(
   return compatible_has_token(dt_compatible, "apple,t6021");
 }
 
+// Whether Runtime::init_impl() should default HK_PERFTEST=batch before
+// vkCreateInstance so Mesa Honeykrisp batches up to 64 control streams per
+// DRM_IOCTL_ASAHI_SUBMIT (hk_queue.c max_commands_per_submit).
+// Strictly gated to Apple M6 (apple,t8152 / G18G): on the m6usb kernel the
+// GPU sits behind a USB mailbox transport, so the default one-ioctl-per-
+// control-stream slicing turns every vkQueueSubmit into ~150 synchronous
+// USB round-trips (~80% of decode wall at 6.7 tok/s on the 2B, DEC-40).
+// On native-bus parts the same ioctl costs ~20us and hides under GPU time.
+// The upstream flake caveat for batched submits is VDM lossless-compression
+// specific; omarchy submits CDM (compute) streams only. Respects any
+// explicit HK_PERFTEST setting. Pure.
+inline bool should_auto_enable_hk_perftest_batch(
+    std::string_view dt_compatible,
+    const char* hk_perftest_env) {
+  if (hk_perftest_env != nullptr) {
+    return false;
+  }
+  return compatible_has_token(dt_compatible, "apple,t8152");
+}
+
 // A pending wait fails after 10 seconds with neither completion progress nor
 // a submission that reached device execution. Recorded submissions set a
 // VkEvent after their semaphore waits; vkGetEventStatus checks it without
