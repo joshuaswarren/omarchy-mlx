@@ -3283,6 +3283,28 @@ TEST_CASE("the backend leaves HK_SUBMIT_POLL_US unset and keeps a value the user
   CHECK(zero.second == "0");
 }
 
+TEST_CASE("G14C AGX_HOIST_LOADS launcher gate matches only apple,t6021 and honors overrides") {
+  const std::string m2max("apple,j414c\0apple,t6021\0apple,arm-platform\0", 43);
+  const std::string m1max("apple,j316c\0apple,t6001\0apple,arm-platform\0", 43);
+  const std::string m1("apple,j293\0apple,t8103\0apple,arm-platform\0", 42);
+  const std::string prefix_trap("apple,t60210\0apple,arm-platform\0", 32);
+
+  CHECK(omarchy::compatible_has_token(m2max, "apple,t6021"));
+  CHECK_FALSE(omarchy::compatible_has_token(m1max, "apple,t6021"));
+  CHECK_FALSE(omarchy::compatible_has_token(m1, "apple,t6021"));
+  CHECK_FALSE(omarchy::compatible_has_token(prefix_trap, "apple,t6021"));
+  CHECK_FALSE(omarchy::compatible_has_token("", "apple,t6021"));
+  CHECK_FALSE(omarchy::compatible_has_token(m2max, ""));
+
+  CHECK(omarchy::should_auto_enable_agx_hoist_loads(m2max, nullptr));
+  CHECK_FALSE(omarchy::should_auto_enable_agx_hoist_loads(m2max, "0"));
+  CHECK_FALSE(omarchy::should_auto_enable_agx_hoist_loads(m2max, "1"));
+  CHECK_FALSE(omarchy::should_auto_enable_agx_hoist_loads(m2max, ""));
+  CHECK_FALSE(omarchy::should_auto_enable_agx_hoist_loads(m1max, nullptr));
+  CHECK_FALSE(omarchy::should_auto_enable_agx_hoist_loads(m1, nullptr));
+  CHECK_FALSE(omarchy::should_auto_enable_agx_hoist_loads(prefix_trap, nullptr));
+}
+
 TEST_CASE("unrelated active work does not extend an unsignaled Event wait") {
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");

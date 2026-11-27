@@ -295,6 +295,43 @@ inline bool submission_timestamps_supported(std::string_view device_name) {
   return true;
 }
 
+// Exact NUL-delimited token check against Linux /proc/device-tree/compatible.
+// Pure.
+inline bool compatible_has_token(
+    std::string_view dt_compatible,
+    std::string_view token) {
+  if (token.empty()) {
+    return false;
+  }
+  size_t pos = 0;
+  while (pos < dt_compatible.size()) {
+    size_t end = dt_compatible.find('\0', pos);
+    if (end == std::string_view::npos) {
+      end = dt_compatible.size();
+    }
+    if (dt_compatible.substr(pos, end - pos) == token) {
+      return true;
+    }
+    pos = end + 1;
+  }
+  return false;
+}
+
+// Whether Runtime::init_impl() should default AGX_HOIST_LOADS=1 before
+// vkCreateInstance so Mesa Honeykrisp enables AGX compiler load hoisting in
+// both pipeline cache UUIDs (hk_physical_device_compiler_flags) and NIR
+// compilation (hk_compile_nir).
+// Strictly gated to Apple M2 Max (apple,t6021 / G14C); respects any explicit
+// AGX_HOIST_LOADS setting (including "0"). Pure.
+inline bool should_auto_enable_agx_hoist_loads(
+    std::string_view dt_compatible,
+    const char* agx_hoist_env) {
+  if (agx_hoist_env != nullptr) {
+    return false;
+  }
+  return compatible_has_token(dt_compatible, "apple,t6021");
+}
+
 // A pending wait fails after 10 seconds with neither completion progress nor
 // a submission that reached device execution. Recorded submissions set a
 // VkEvent after their semaphore waits; vkGetEventStatus checks it without
