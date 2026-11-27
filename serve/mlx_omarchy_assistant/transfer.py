@@ -305,7 +305,7 @@ def verify_venv_records(venv_path: Path, requirements: dict[str, str]) -> None:
     seen: dict[str, str] = {}
     for dist_info in sorted(site.glob("*.dist-info")):
         name = version = None
-        for line in (dist_info / "METADATA").read_text(errors="replace").splitlines():
+        for line in _read_text(dist_info / "METADATA", _LOCAL_FILE_MAX_BYTES).splitlines():
             if line.startswith("Name:"):
                 name = line.split(":", 1)[1].strip()
             elif line.startswith("Version:"):
@@ -330,7 +330,7 @@ def _verify_single_record(dist_info: Path, want_version: str, name: str, version
     if not record.is_file():
         raise TransferError(f"provenance: {name} has no RECORD")
     base = dist_info.parent
-    for line in record.read_text().splitlines():
+    for line in _read_text(record, _LOCAL_FILE_MAX_BYTES).splitlines():
         if not line.strip():
             continue
         path, digest, _size = (line.split(",") + ["", ""])[:3]
@@ -339,8 +339,8 @@ def _verify_single_record(dist_info: Path, want_version: str, name: str, version
         target = base / path
         if not target.is_file():
             raise TransferError(f"provenance: {name} missing installed file {path}")
-        actual = base64.urlsafe_b64encode(
-            hashlib.sha256(target.read_bytes()).digest()).rstrip(b"=").decode()
+        hexdigest, _ = _hash_file(target, max_bytes=MAX_FILE_BYTES)
+        actual = base64.urlsafe_b64encode(bytes.fromhex(hexdigest)).rstrip(b"=").decode()
         if actual != digest[len("sha256="):]:
             raise TransferError(
                 f"provenance: {name} file {path} does not match its wheel RECORD"
@@ -574,7 +574,7 @@ def install_sh_packages(install_sh: Path) -> dict[str, list[str]]:
     transfer bundle ship the same package files without this module keeping a
     second list. The script is only read, never executed.
     """
-    text = Path(install_sh).read_text()
+    text = _read_text(Path(install_sh), _LOCAL_FILE_MAX_BYTES)
     pkg_vars = {var.upper(): name for var, name in re.findall(
         r'^(\w+)_PKG="\$PREFIX/([A-Za-z0-9_]+)"$', text, re.M)}
     out: dict[str, list[str]] = {}
@@ -611,7 +611,8 @@ def _collect_package_tree(pkg_dir: Path, prefix: str, members: dict[str, bytes])
             raise TransferError(f"refusing symlinked app file: {path}")
         if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
             continue
-        members[f"{prefix}/{path.relative_to(pkg_dir).as_posix()}"] = path.read_bytes()
+        rel = path.relative_to(pkg_dir).as_posix()
+        members[f"{prefix}/{rel}"] = _read_regular(pkg_dir, _LOCAL_FILE_MAX_BYTES, rel)
 
 
 def _app_wheel_from_repo(wheel_dir: Path, repo: Path) -> dict:
@@ -626,7 +627,7 @@ def _app_wheel_from_repo(wheel_dir: Path, repo: Path) -> dict:
             src = serve / pkg / name
             if not src.is_file():
                 raise TransferError(f"install.sh packaging lists missing file: {src}")
-            members[f"{pkg}/{name}"] = src.read_bytes()
+            members[f"{pkg}/{name}"] = _read_regular(src, _LOCAL_FILE_MAX_BYTES)
     _collect_package_tree(serve / APP_MODULE, APP_MODULE, members)
     tools = repo / STT_TOOLS_REPO_DIR / "coreml"
     if not tools.is_dir():
@@ -635,11 +636,11 @@ def _app_wheel_from_repo(wheel_dir: Path, repo: Path) -> dict:
     demo = repo / DEMO_CHAT
     if not demo.is_file():
         raise TransferError(f"repo packaging missing: {demo}")
-    members["chat.py"] = demo.read_bytes()
+    members["chat.py"] = _read_regular(demo, _LOCAL_FILE_MAX_BYTES)
     paths_module = serve / "mlx_omarchy_paths.py"
     if not paths_module.is_file():
         raise TransferError(f"repo packaging missing: {paths_module}")
-    members["mlx_omarchy_paths.py"] = paths_module.read_bytes()
+    members["mlx_omarchy_paths.py"] = _read_regular(paths_module, _LOCAL_FILE_MAX_BYTES)
     wheel = _write_app_wheel(Path(wheel_dir), members)
     digest, size = _hash_file(wheel)
     return {"wheel": wheel.name, "version": APP_VERSION, "sha256": digest, "size": size}
@@ -669,8 +670,7 @@ def _app_wheel_from_installed(wheel_dir: Path) -> dict:
         rel = PurePosixPath(str(file))
         if rel.parts[0] == ".." or len(rel.parts) > 1 and rel.parts[0].endswith(".dist-info"):
             continue
-        path = site / rel
-        data = path.read_bytes()
+        data = _read_regular(site / rel, _LOCAL_FILE_MAX_BYTES)
         if file.hash is not None:
             actual = base64.urlsafe_b64encode(
                 hashlib.sha256(data).digest()).rstrip(b"=").decode()
@@ -807,7 +807,7 @@ def load_lock(home: Path, pair_id: str) -> dict | None:
         path = home / "assistant" / "pair-locks" / f"{pair_id}.json"
         if not path.is_file():
             return None
-        return json.loads(path.read_text())
+        return _json_object(_read_regular(path, _PAYLOAD_JSON_MAX_BYTES), f"pair lock {path}")
     return pairs.load_pair_lock(home, pair_id)
 
 
@@ -965,6 +965,31 @@ def _read_chunks(stream, path, limit: int | None = None):
             break
         read += len(chunk)
         yield chunk
+
+
+# Metadata, RECORD, install.sh and app package files are read whole into
+# memory, so each read stops at this cap, far above any real one.
+_LOCAL_FILE_MAX_BYTES = 64 << 20
+
+
+def _read_regular(path: Path, max_bytes: int, rel: str | None = None) -> bytes:
+    """One regular file's bytes, at most max_bytes; a FIFO, device, directory
+    or larger file is refused without blocking or reading past the cap."""
+    display = _display_path(path, rel)
+    with _open_regular(path, rel) as (stream, st):
+        if st.st_size > max_bytes:
+            raise TransferError(f"file exceeds {max_bytes} bytes: {display}")
+        data = b"".join(_read_chunks(stream, display, max_bytes))
+    if len(data) > max_bytes:  # st_size can understate (a growing file, /proc)
+        raise TransferError(f"file exceeds {max_bytes} bytes: {display}")
+    return data
+
+
+def _read_text(path: Path, max_bytes: int) -> str:
+    try:
+        return _read_regular(path, max_bytes).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TransferError(f"{path} is not valid UTF-8: {exc}") from exc
 
 
 def _walk_artifact(directory: Path) -> list[str]:
@@ -1159,7 +1184,8 @@ class _BundleBuilder:
         receipt_path = pack_dir / "manifest.json"
         if not receipt_path.is_file():
             raise TransferError(f"voice pack missing manifest.json: {pack_dir}")
-        receipt = json.loads(receipt_path.read_text())
+        receipt_bytes = _read_regular(pack_dir, _PAYLOAD_JSON_MAX_BYTES, "manifest.json")
+        receipt = _json_object(receipt_bytes, f"voice pack receipt {receipt_path}")
         pack_id = receipt.get("pack_id")
         if not isinstance(pack_id, str) or not _safe_name(pack_id):
             raise TransferError(f"voice pack manifest has invalid pack_id: {pack_dir}")
@@ -1174,7 +1200,7 @@ class _BundleBuilder:
         rollup = self.license_rollup.setdefault(lic, {"models": [], "bytes": 0})
         if pack_id not in rollup["models"]:
             rollup["models"].append(pack_id)
-        pack_bytes = self.add_blob(f"voice/{pack_id}/manifest.json", receipt_path.read_bytes())
+        pack_bytes = self.add_blob(f"voice/{pack_id}/manifest.json", receipt_bytes)
         count = 1
         for name in _walk_artifact(pack_dir):
             if name == "manifest.json":
@@ -1570,9 +1596,16 @@ def _activate_lock(home: Path, pair_id: str, lock: dict, backup_root: Path) -> t
             pairs.write_pair_lock(home, pair_id, lock)
         else:
             final.parent.mkdir(parents=True, exist_ok=True)
-            tmp = final.with_name(f"{pair_id}.json.tmp")
-            tmp.write_text(json.dumps(lock, sort_keys=True, indent=1) + "\n")
-            os.replace(tmp, final)
+            # A unique O_EXCL name: a link planted at a fixed temp name is never followed.
+            fd, tmp = tempfile.mkstemp(dir=final.parent, prefix=final.name, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(json.dumps(lock, sort_keys=True, indent=1) + "\n")
+                os.replace(tmp, final)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                raise
     except BaseException as exc:
         if backup is not None and backup.exists():
             if final.exists():
@@ -1643,9 +1676,10 @@ def commit_import(home: Path, staged: dict) -> dict:
             source.rename(dest)
             moved_new.append((source, dest))
         for pair in manifest["pairs"]:
-            lock = json.loads(
-                (_dest_for_top(home, pair["pair_id"]) / "transfer-lock.json")
-                .read_text())
+            lock_dir = _dest_for_top(home, pair["pair_id"])
+            lock = _json_object(
+                _read_regular(lock_dir, _PAYLOAD_JSON_MAX_BYTES, "transfer-lock.json"),
+                f"transfer lock {lock_dir}/transfer-lock.json")
             final, backup = _activate_lock(home, pair["pair_id"], lock, backup_root)
             locks_activated.append((final, backup))
     except BaseException:
@@ -1748,7 +1782,8 @@ def _materialize_pair(staging: Path, imports: Path, pair: dict, manifest: dict) 
     pair_id = pair["pair_id"]
     pair_dir = staging / pair_id
     final_dir = imports / pair_id
-    lock = json.loads((pair_dir / "lock.json").read_bytes())  # same parse as the check
+    lock = _json_object(  # same parse as the check
+        _read_regular(pair_dir, _PAYLOAD_JSON_MAX_BYTES, "lock.json"), f"pair {pair_id} lock")
     for role, model in lock["models"].items():
         model["path"] = str(final_dir / role)
     (pair_dir / "transfer-lock.json").write_text(
@@ -1817,17 +1852,28 @@ _PAYLOAD_JSON_MAX_BYTES = 1 << 20  # a pair lock or voice receipt is a few KB
 
 
 def _json_member(zf: zipfile.ZipFile, name: str, what: str, *, max_bytes: int) -> object:
-    data = b"".join(_member_chunks(zf, name, max_bytes))
+    return _parse_json(b"".join(_member_chunks(zf, name, max_bytes)), what, UnsafeArchive)
+
+
+def _json_object(data: bytes, what: str) -> dict:
+    """A local lock or receipt file's bytes, parsed the same way as a bundle member."""
+    value = _parse_json(data, what, TransferError)
+    if not isinstance(value, dict):
+        raise TransferError(f"{what} is not a JSON object")
+    return value
+
+
+def _parse_json(data: bytes, what: str, error: type[TransferError]) -> object:
     try:
         value = json.loads(data)
     except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, int digit cap, nesting
-        raise UnsafeArchive(f"{what} unreadable: {exc}") from exc
+        raise error(f"{what} unreadable: {exc}") from exc
     stack = [(value, 1)]
     while stack:
         item, depth = stack.pop()
         if isinstance(item, (dict, list)):
             if depth > _JSON_MAX_DEPTH:
-                raise UnsafeArchive(f"{what} nests deeper than {_JSON_MAX_DEPTH} levels")
+                raise error(f"{what} nests deeper than {_JSON_MAX_DEPTH} levels")
             children = item.values() if isinstance(item, dict) else item
             stack.extend((child, depth + 1) for child in children
                          if isinstance(child, (dict, list)))
@@ -2172,7 +2218,9 @@ def _plan_bundle(home: Path, *, pair_ids: list[str], roots: list[str],
     voice_summary = []
     if voice:
         for pack in voice_packs(home):
-            receipt = json.loads((pack / "manifest.json").read_text())
+            receipt = _json_object(
+                _read_regular(pack, _PAYLOAD_JSON_MAX_BYTES, "manifest.json"),
+                f"voice pack receipt {pack}/manifest.json")
             voice_summary.append({
                 "pack_id": pack.name,
                 "license": receipt.get("license"),
