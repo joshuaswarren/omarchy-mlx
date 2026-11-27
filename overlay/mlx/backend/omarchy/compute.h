@@ -1407,6 +1407,11 @@ enum class ComputeKernel : uint16_t {
   // kernel ids stable.
   SdpaDecodeOnlineRopeSg32BF16Hd128G13C,
   SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C,
+  // G14C-gated fast Sg32 coalesced GDN conv+delta+norm: subgroupAdd reductions,
+  // 4x vec4 s_in burst hoisted after barrier 1, and straight-line 4-row Phase-2
+  // epilogue (MLX_OMARCHY_GDN_SG32_FAST=0/1). Appended to keep profile kernel
+  // ids stable.
+  GatedDeltaDecodeConvNormBF16Sg32Fast,
   Count,
 };
 

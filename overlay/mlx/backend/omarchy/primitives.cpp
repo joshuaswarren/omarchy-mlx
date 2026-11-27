@@ -18285,7 +18285,13 @@ void GdnConvDeltaUpdate::eval_gpu(
                  : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16Pf);
   if (gdn_coal_sg32_ok &&
       (params.shape[1] % 4u) == 0u && (params.shape[2] % 4u) == 0u) {
-    kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
+    const char* sg32_fast_env = omarchy::env_str("MLX_OMARCHY_GDN_SG32_FAST");
+    const bool sg32_fast = (sg32_fast_env != nullptr && sg32_fast_env[0] != '\0')
+        ? (std::strcmp(sg32_fast_env, "0") != 0)
+        : omarchy::gdn_conv_sg32_fast_default(device_name);
+    kernel = sg32_fast
+        ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast
+        : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
   }
   encoder.dispatch_compute(
       kernel,

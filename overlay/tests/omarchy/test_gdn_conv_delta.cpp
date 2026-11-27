@@ -521,3 +521,59 @@ TEST_CASE("coalesced GDN Sg32 f32 A_log GQA 3-in-1 fusion policy, accuracy, and 
   CHECK(array_equal(on.out[1], off.out[1], s).item<bool>());
   CHECK(array_equal(on.out[2], off.out[2], s).item<bool>());
 }
+
+TEST_CASE("coalesced GDN Sg32Fast default policy, accuracy, and off-switch") {
+  CHECK(omarchy::gdn_conv_sg32_fast_default("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M4 Pro (G16S B1)"));
+  CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M6 (G18G B1)"));
+  CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default(""));
+
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  auto max_diff = [&](const array& a, const array& b) {
+    auto d = max(abs(astype(a, float32, s) - astype(b, float32, s)), s);
+    eval({d});
+    return d.item<float>();
+  };
+
+  // Equal-head bf16 A_log (Qwen3.8-2B shape)
+  for (uint32_t seed : {10u, 20u}) {
+    Inputs in = make_inputs(seed, 0.25f, s, 16, 16);
+    setenv("MLX_OMARCHY_GDN_COALESCED", "1", 1);
+    setenv("MLX_OMARCHY_GDN_SG32_FAST", "0", 1);
+    Run base = fused(in, s, true, 16);
+    setenv("MLX_OMARCHY_GDN_SG32_FAST", "1", 1);
+    fused(in, s, true, 16);  // warm pipeline
+    Run fast = fused(in, s, true, 16);
+    unsetenv("MLX_OMARCHY_GDN_SG32_FAST");
+    unsetenv("MLX_OMARCHY_GDN_COALESCED");
+    REQUIRE(fast.out.size() == 3);
+    CHECK(array_equal(fast.out[2], base.out[2], s).item<bool>());
+    CHECK_MESSAGE(max_diff(fast.out[1], base.out[1]) <= 2e-5f, "equal-head hf diff seed=", seed);
+    CHECK_MESSAGE(max_diff(fast.out[0], base.out[0]) <= 1e-2f, "equal-head y diff seed=", seed);
+    if (fast.dispatches != base.dispatches) {
+      CHECK(fast.dispatches == 1u);
+    }
+  }
+
+  // Unequal-head f32 A_log (Qwen3.5-9B shape)
+  {
+    Inputs in = make_inputs(101u, 0.2f, s, 16, 32);
+    in.a_log = pattern({32}, 107u, 0.5f, 1.0f);
+    eval({in.a_log});
+    setenv("MLX_OMARCHY_GDN_COALESCED", "1", 1);
+    setenv("MLX_OMARCHY_GDN_SG32_FAST", "0", 1);
+    Run base = fused(in, s, true, 16);
+    setenv("MLX_OMARCHY_GDN_SG32_FAST", "1", 1);
+    fused(in, s, true, 16);  // warm pipeline
+    Run fast = fused(in, s, true, 16);
+    unsetenv("MLX_OMARCHY_GDN_SG32_FAST");
+    unsetenv("MLX_OMARCHY_GDN_COALESCED");
+    REQUIRE(fast.out.size() == 3);
+    CHECK(array_equal(fast.out[2], base.out[2], s).item<bool>());
+    CHECK(max_diff(fast.out[1], base.out[1]) <= 2e-5f);
+    CHECK(max_diff(fast.out[0], base.out[0]) <= 1e-2f);
+  }
+}
