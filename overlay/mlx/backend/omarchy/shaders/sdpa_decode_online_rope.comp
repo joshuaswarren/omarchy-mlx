@@ -137,6 +137,8 @@ shared float s_o[SUBGROUPS * S_O_STRIDE];
 shared uint s_k_words[HALF_D];
 #if HD == 128 && defined(SDPA_G13C_FAST)
 shared float s_q[TILE_D];
+#elif HD == 256 && defined(SDPA_HD256_FAST)
+shared float s_q[D];
 #endif
 
 float load_q_raw(uint abs_index) {
@@ -194,6 +196,14 @@ uint16_t apply_outgate(float val, uint gate_idx) {
   uint16_t raw_sig = bf16_store(1.0 / (1.0 + exp(-g)));
   return bf16_store(bf16_load(raw_out) * bf16_load(raw_sig));
 }
+#ifdef SDPA_HD256_FAST
+uint16_t apply_outgate_val(float val, uint16_t raw_g) {
+  uint16_t raw_out = bf16_store(val);
+  float g = bf16_load(raw_g);
+  uint16_t raw_sig = bf16_store(1.0 / (1.0 + exp(-g)));
+  return bf16_store(bf16_load(raw_out) * bf16_load(raw_sig));
+}
+#endif
 #endif
 
 float tree_reduce32(float v) {
@@ -536,7 +546,24 @@ void main() {
   // flags bit 2 selects Apple 8-subgroup blocked reduction (bit-identical to
   // FastRopeNormAppleBF16); cleared uses stride-128..1 tree reduction
   // (bit-identical to FastRopeNormBF16). Both branches are workgroup-uniform.
+#ifdef SDPA_HD256_FAST
+  uint rot_half = params.in_strides[0] != 0u ? params.in_strides[0] : HALF_D;
+  uint rot_dims = rot_half << 1u;
+  // Single copy of RoPE (cos, sin) on idle sg 16..19 (t = 512..512+rot_half-1),
+  // completely disjoint from sg 0..15 (Q/K RMSNorm) — avoids I-cache duplication.
+  if (t >= 512u && t < 512u + rot_half) {
+    uint d = t - 512u;
+    float position =
+        uintBitsToFloat(params.shape[0]) * float(offset_data.values[params.dims]);
+    float inv = exp(-float(d) * params.beta);
+    float theta = position * inv;
+    s_o[512u + d] = rope_round(omarchy_trig_cos(theta));
+    s_o[640u + d] = rope_round(omarchy_trig_sin(theta));
+  }
+#endif
+#ifndef SDPA_APPLE_NORM_ONLY
   bool use_apple_norm = (params.flags & 4u) != 0u;
+#endif
   if (!has_norm) {
     if (sg < 8u) {
       uint q_row_base = params.lhs_offset + head * params.reduce_size;
@@ -546,7 +573,11 @@ void main() {
       uint k_row_base = params.aux_size + kv_head * params.output_size;
       s_o[256u + d] = load_k_raw(k_row_base + d);
     }
+#ifdef SDPA_APPLE_NORM_ONLY
+  } else {
+#else
   } else if (use_apple_norm) {
+#endif
     precise float value = 0.0;
     if (sg < 8u) {
       uint q_row_base = params.lhs_offset + head * params.reduce_size;
@@ -587,6 +618,7 @@ void main() {
       precise float weight_norm = weight * norm;
       s_o[256u + d] = rope_round(value * weight_norm);
     }
+#ifndef SDPA_APPLE_NORM_ONLY
   } else {
     // Stride-128..1 tree reduction on 256 elements: sg 0 owns Q, sg 1 owns K.
     if (sg < 2u) {
@@ -624,9 +656,64 @@ void main() {
         s_o[s_base + idx] = rope_round(v * wn);
       }
     }
+#endif
   }
   barrier();
 
+#ifdef SDPA_HD256_FAST
+  // Prologue Phase B (HD256 fast path): read precomputed (cos, sin) from
+  // s_o[512..767], write rotated pre-scaled Q into disjoint s_q[256], and pack
+  // rotated/passthrough K directly into s_k_words[128] via subgroupShuffleDown
+  // (requires even rot_half) — deleting the third prologue barrier.
+  if (t < rot_half) {
+    float c = s_o[512u + t];
+    float s = s_o[640u + t];
+
+    float qa = s_o[t];
+    float qb = s_o[t + rot_half];
+    s_q[t] = rope_round(rope_round(qa * c) - rope_round(qb * s)) * s_scale;
+    s_q[t + rot_half] =
+        rope_round(rope_round(qa * s) + rope_round(qb * c)) * s_scale;
+
+    float ka = s_o[256u + t];
+    float kb = s_o[256u + t + rot_half];
+    uint b0 = bf16_bits(rope_round(rope_round(ka * c) - rope_round(kb * s)));
+    uint b1 = bf16_bits(rope_round(rope_round(ka * s) + rope_round(kb * c)));
+    uint n0 = subgroupShuffleDown(b0, 1u);
+    uint n1 = subgroupShuffleDown(b1, 1u);
+    if ((t & 1u) == 0u) {
+      s_k_words[t >> 1u] = b0 | (n0 << 16u);
+      s_k_words[(rot_half + t) >> 1u] = b1 | (n1 << 16u);
+    }
+  } else if (t >= rot_dims && t < D) {
+    s_q[t] = s_o[t] * s_scale;
+    uint bk = bf16_bits(s_o[256u + t]);
+    uint bkn = subgroupShuffleDown(bk, 1u);
+    if ((t & 1u) == 0u) {
+      s_k_words[t >> 1u] = bk | (bkn << 16u);
+    }
+  }
+  barrier();
+
+  float q0 = s_q[lane * 8u + 0u];
+  float q1 = s_q[lane * 8u + 1u];
+  float q2 = s_q[lane * 8u + 2u];
+  float q3 = s_q[lane * 8u + 3u];
+  float q4 = s_q[lane * 8u + 4u];
+  float q5 = s_q[lane * 8u + 5u];
+  float q6 = s_q[lane * 8u + 6u];
+  float q7 = s_q[lane * 8u + 7u];
+
+  if (sg == 0u && write_k && split_id == 0u && head == kv_head * repeats) {
+    uint k_write_idx =
+        params.count + kv_head * (params.shape[3] >> 3u) + lane;
+    key_data.values[k_write_idx] = uvec4(
+        s_k_words[lane * 4u + 0u],
+        s_k_words[lane * 4u + 1u],
+        s_k_words[lane * 4u + 2u],
+        s_k_words[lane * 4u + 3u]);
+  }
+#else
   // Prologue Phase B: Partial or full RoPE (rot_half in in_strides[0], default
   // 128) on Q -> s_o[512..767] (pre-scaled by s_scale) and K -> s_o[768..1023].
   uint rot_half = params.in_strides[0] != 0u ? params.in_strides[0] : HALF_D;
@@ -687,6 +774,7 @@ void main() {
     }
   }
   barrier();
+#endif
 
   float o0 = 0.0;
   float o1 = 0.0;
@@ -868,6 +956,44 @@ void main() {
   uint gate_base = params.out_strides[1] + head * params.out_strides[2];
 #endif
 
+#ifdef SDPA_HD256_FAST
+  {
+    float x0 = lane_active ? (s_o[rbase + 0u] * w) : 0.0;
+    float x1 = lane_active ? (s_o[rbase + 1u] * w) : 0.0;
+    float x2 = lane_active ? (s_o[rbase + 2u] * w) : 0.0;
+    float x3 = lane_active ? (s_o[rbase + 3u] * w) : 0.0;
+    float a0 = subgroupAdd(x0);
+    float a1 = subgroupAdd(x1);
+    float a2 = subgroupAdd(x2);
+    float a3 = subgroupAdd(x3);
+    if (lane == 0u) {
+#ifdef SDPA_SPLIT_K
+      split_scratch.values[sb + 2u + d0 + 0u] = a0;
+      split_scratch.values[sb + 2u + d0 + 1u] = a1;
+      split_scratch.values[sb + 2u + d0 + 2u] = a2;
+      split_scratch.values[sb + 2u + d0 + 3u] = a3;
+#else
+#ifdef SDPA_OUTGATE
+      uint16_t g0 = gate_data.values[gate_base + d0 + 0u];
+      uint16_t g1 = gate_data.values[gate_base + d0 + 1u];
+      uint16_t g2 = gate_data.values[gate_base + d0 + 2u];
+      uint16_t g3 = gate_data.values[gate_base + d0 + 3u];
+      float inv_d = 1.0 / denom;
+      output_data.values[out_base + d0 + 0u] = apply_outgate_val(a0 * inv_d, g0);
+      output_data.values[out_base + d0 + 1u] = apply_outgate_val(a1 * inv_d, g1);
+      output_data.values[out_base + d0 + 2u] = apply_outgate_val(a2 * inv_d, g2);
+      output_data.values[out_base + d0 + 3u] = apply_outgate_val(a3 * inv_d, g3);
+#else
+      float inv_d = 1.0 / denom;
+      output_data.values[out_base + d0 + 0u] = bf16_store(a0 * inv_d);
+      output_data.values[out_base + d0 + 1u] = bf16_store(a1 * inv_d);
+      output_data.values[out_base + d0 + 2u] = bf16_store(a2 * inv_d);
+      output_data.values[out_base + d0 + 3u] = bf16_store(a3 * inv_d);
+#endif
+#endif
+    }
+  }
+#else
   for (uint k = 0u; k < D_PER_SG; ++k) {
     float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
     if (lane == 0u) {
@@ -881,6 +1007,7 @@ void main() {
 #endif
     }
   }
+#endif
 
   barrier();
 
@@ -898,6 +1025,48 @@ void main() {
 
   barrier();
 
+#ifdef SDPA_HD256_FAST
+  {
+    float x0 = lane_active ? (s_o[rbase + 0u] * w) : 0.0;
+    float x1 = lane_active ? (s_o[rbase + 1u] * w) : 0.0;
+    float x2 = lane_active ? (s_o[rbase + 2u] * w) : 0.0;
+    float x3 = lane_active ? (s_o[rbase + 3u] * w) : 0.0;
+    float a0 = subgroupAdd(x0);
+    float a1 = subgroupAdd(x1);
+    float a2 = subgroupAdd(x2);
+    float a3 = subgroupAdd(x3);
+    if (lane == 0u) {
+#ifdef SDPA_SPLIT_K
+      split_scratch.values[sb + 2u + TILE_D + d0 + 0u] = a0;
+      split_scratch.values[sb + 2u + TILE_D + d0 + 1u] = a1;
+      split_scratch.values[sb + 2u + TILE_D + d0 + 2u] = a2;
+      split_scratch.values[sb + 2u + TILE_D + d0 + 3u] = a3;
+#else
+#ifdef SDPA_OUTGATE
+      uint16_t g0 = gate_data.values[gate_base + TILE_D + d0 + 0u];
+      uint16_t g1 = gate_data.values[gate_base + TILE_D + d0 + 1u];
+      uint16_t g2 = gate_data.values[gate_base + TILE_D + d0 + 2u];
+      uint16_t g3 = gate_data.values[gate_base + TILE_D + d0 + 3u];
+      float inv_d = 1.0 / denom;
+      output_data.values[out_base + TILE_D + d0 + 0u] =
+          apply_outgate_val(a0 * inv_d, g0);
+      output_data.values[out_base + TILE_D + d0 + 1u] =
+          apply_outgate_val(a1 * inv_d, g1);
+      output_data.values[out_base + TILE_D + d0 + 2u] =
+          apply_outgate_val(a2 * inv_d, g2);
+      output_data.values[out_base + TILE_D + d0 + 3u] =
+          apply_outgate_val(a3 * inv_d, g3);
+#else
+      float inv_d = 1.0 / denom;
+      output_data.values[out_base + TILE_D + d0 + 0u] = bf16_store(a0 * inv_d);
+      output_data.values[out_base + TILE_D + d0 + 1u] = bf16_store(a1 * inv_d);
+      output_data.values[out_base + TILE_D + d0 + 2u] = bf16_store(a2 * inv_d);
+      output_data.values[out_base + TILE_D + d0 + 3u] = bf16_store(a3 * inv_d);
+#endif
+#endif
+    }
+  }
+#else
   for (uint k = 0u; k < D_PER_SG; ++k) {
     float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
     if (lane == 0u) {
@@ -911,6 +1080,7 @@ void main() {
 #endif
     }
   }
+#endif
 #ifdef SDPA_SPLIT_K
   barrier();
   memoryBarrierBuffer();

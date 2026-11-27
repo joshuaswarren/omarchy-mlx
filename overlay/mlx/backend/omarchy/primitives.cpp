@@ -11794,7 +11794,9 @@ bool dispatch_quantized_gemv_group(
           params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u &&
           omarchy::qmm_g14c_fast_only_default_part(
               encoder.device().capabilities().device_name)) {
-        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Fast;
+        resnorm_kernel = omarchy::env_flag("MLX_OMARCHY_RESNORM_EPI_HOIST")
+            ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastEpiHoist
+            : ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Fast;
       }
       encoder.dispatch_compute(
           resnorm_kernel,
@@ -18395,13 +18397,17 @@ void GdnConvDeltaUpdate::eval_gpu(
                  : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16Pf);
   if (gdn_coal_sg32_ok &&
       (params.shape[1] % 4u) == 0u && (params.shape[2] % 4u) == 0u) {
-    const char* sg32_fast_env = omarchy::env_str("MLX_OMARCHY_GDN_SG32_FAST");
-    const bool sg32_fast = (sg32_fast_env != nullptr && sg32_fast_env[0] != '\0')
-        ? (std::strcmp(sg32_fast_env, "0") != 0)
-        : omarchy::gdn_conv_sg32_fast_default(device_name);
-    kernel = sg32_fast
-        ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast
-        : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
+    if (omarchy::env_flag("MLX_OMARCHY_GDN_SG32_HOIST")) {
+      kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Hoist;
+    } else {
+      const char* sg32_fast_env = omarchy::env_str("MLX_OMARCHY_GDN_SG32_FAST");
+      const bool sg32_fast = (sg32_fast_env != nullptr && sg32_fast_env[0] != '\0')
+          ? (std::strcmp(sg32_fast_env, "0") != 0)
+          : omarchy::gdn_conv_sg32_fast_default(device_name);
+      kernel = sg32_fast
+          ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast
+          : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
+    }
   }
   encoder.dispatch_compute(
       kernel,
@@ -19518,8 +19524,16 @@ void ScaledDotProductAttention::eval_gpu(
                 !is_hd256 &&
                 omarchy::sdpa_g13c_fast_default_part(
                     encoder.device().capabilities().device_name);
+            const bool sdpa_hd256_fast = is_hd256 &&
+                (!rope_ctx->has_norm || use_apple_norm) &&
+                (rot_half & 1u) == 0u &&
+                omarchy::env_flag("MLX_OMARCHY_SDPA_HD256_FAST");
             const auto og_kernel = is_hd256
-                ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256
+                ? (sdpa_hd256_fast
+                       ? omarchy::ComputeKernel::
+                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast
+                       : omarchy::ComputeKernel::
+                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd256)
                 : (sdpa_g13c
                        ? omarchy::ComputeKernel::
                              SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C
@@ -19547,8 +19561,16 @@ void ScaledDotProductAttention::eval_gpu(
               !is_hd256 &&
               omarchy::sdpa_g13c_fast_default_part(
                   encoder.device().capabilities().device_name);
+          const bool sdpa_hd256_fast = is_hd256 &&
+              (!rope_ctx->has_norm || use_apple_norm) &&
+              (rot_half & 1u) == 0u &&
+              omarchy::env_flag("MLX_OMARCHY_SDPA_HD256_FAST");
           const auto kernel = is_hd256
-              ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256
+              ? (sdpa_hd256_fast
+                     ? omarchy::ComputeKernel::
+                           SdpaDecodeOnlineRopeSg32BF16Hd256Fast
+                     : omarchy::ComputeKernel::
+                           SdpaDecodeOnlineRopeSg32BF16Hd256)
               : (sdpa_g13c
                      ? omarchy::ComputeKernel::
                            SdpaDecodeOnlineRopeSg32BF16Hd128G13C

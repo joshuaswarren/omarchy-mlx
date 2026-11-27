@@ -795,6 +795,11 @@
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_fast.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_epi_hoist.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_hoist.h"
+#include "sdpa_decode_online_rope_sg32_bf16_hd256_fast.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast.h"
+#include "gather_dequant_norm_bf16.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
@@ -2661,6 +2666,26 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast,
           qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastEpiHoist:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_epi_hoist,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_epi_hoist_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Hoist:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_hoist,
+          gated_delta_decode_conv_norm_bf16_sg32_hoist_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256Fast:
+      return {
+          sdpa_decode_online_rope_sg32_bf16_hd256_fast,
+          sdpa_decode_online_rope_sg32_bf16_hd256_fast_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast_size};
+    case ComputeKernel::GatherDequantNormBF16:
+      return {
+          gather_dequant_norm_bf16,
+          gather_dequant_norm_bf16_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;
