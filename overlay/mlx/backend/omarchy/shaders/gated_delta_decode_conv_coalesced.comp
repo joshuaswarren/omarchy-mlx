@@ -38,6 +38,11 @@ layout(set = 0, binding = 9, std430) readonly buffer DtBuf     { uint16_t v[]; }
 layout(set = 0, binding = 10, std430) buffer ConvStateOut      { uint16_t v[]; } conv_state_out;
 layout(set = 0, binding = 11, std430) readonly buffer NormGate { uint16_t v[]; } norm_gate;
 layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[]; } norm_w;
+#ifdef GDN_CONV_SPLIT2
+layout(set = 0, binding = 13, std430) coherent buffer GdnScratch { float v[]; } gdn_scratch;
+layout(set = 0, binding = 14, std430) coherent buffer GdnTicket { uint done[]; } gdn_ticket;
+shared uint s_split_last;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -112,6 +117,16 @@ uint16_t gdn_conv_channel(uint channel) {
   const uint km1 = params.lhs_size;
   const uint channels = params.reduce_size;
   float accumulator = 0.0;
+#if defined(GDN_CONV_PREF4) || defined(GDN_CONV_SPLIT2)
+  if (params.operation == 4u && km1 == 3u) {
+    uint wb = params.aux_size + channel * 4u;
+    uint sb = params.lhs_offset + channel;
+    accumulator += bf16_load(conv_state.v[sb]) * bf16_load(conv_w.v[wb]);
+    accumulator += bf16_load(conv_state.v[sb + channels]) * bf16_load(conv_w.v[wb + 1u]);
+    accumulator += bf16_load(conv_state.v[sb + 2u * channels]) * bf16_load(conv_w.v[wb + 2u]);
+    accumulator += bf16_load(conv_x.v[params.rhs_offset + channel]) * bf16_load(conv_w.v[wb + 3u]);
+  } else
+#endif
   for (uint tap = 0u; tap < params.operation; ++tap) {
     float value = tap < km1
         ? bf16_load(conv_state.v[params.lhs_offset + tap * channels + channel])
@@ -182,7 +197,13 @@ vec2 gdn_compute_gates(uint head) {
 }
 
 void main() {
+#ifdef GDN_CONV_SPLIT2
+  uint head = gl_WorkGroupID.x >> 1u;
+  uint split_id = gl_WorkGroupID.x & 1u;
+#else
   uint head = gl_WorkGroupID.x;
+  uint split_id = 0u;
+#endif
   uint hv = params.matrix_k;
   if (head >= hv) {
     return;
@@ -222,7 +243,7 @@ void main() {
       act_val = gdn_conv_channel(ch);
       float qv = bf16_load(act_val);
       s_norm_buf[c] = qv * qv;
-      if (lead) {
+      if (lead && split_id == 0u) {
         gdn_conv_state_out(ch);
       }
     } else if (tid < 256u) {
@@ -230,14 +251,16 @@ void main() {
       act_val = gdn_conv_channel(ch);
       float kv = bf16_load(act_val);
       s_norm_buf[128u + c] = kv * kv;
-      if (lead) {
+      if (lead && split_id == 0u) {
         gdn_conv_state_out(ch);
       }
     } else {
       const uint ch = 2u * key_dim + head * 128u + c;
       act_val = gdn_conv_channel(ch);
       sv[c] = bf16_load(act_val);
-      gdn_conv_state_out(ch);
+      if (split_id == 0u) {
+        gdn_conv_state_out(ch);
+      }
     }
   }
   barrier();
@@ -280,6 +303,93 @@ void main() {
   float sq2 = sq[c0 + 2u];
   float sq3 = sq[c0 + 3u];
 
+#ifdef GDN_CONV_SPLIT2
+  {
+    uint r0 = split_id * 64u + sg;
+    uint r1 = r0 + 32u;
+    vec4 w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+    vec4 w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+    float sv0 = sv[r0];
+    float sv1 = sv[r1];
+    #define GDN_SP_ROW(w, r, svr) { \
+      float kv_part = fma((w).x, skg0, fma((w).y, skg1, fma((w).z, skg2, (w).w * skg3))); \
+      float kv_acc = subgroupAdd(kv_part); \
+      float delta = ((svr) - kv_acc) * beta; \
+      float n0 = fma((w).x, g, gdn_dk_term(delta, sk0)); \
+      float n1 = fma((w).y, g, gdn_dk_term(delta, sk1)); \
+      float n2 = fma((w).z, g, gdn_dk_term(delta, sk2)); \
+      float n3 = fma((w).w, g, gdn_dk_term(delta, sk3)); \
+      s_out.v[s_out_base_q + (r) * 32u + lane] = vec4(n0, n1, n2, n3); \
+      float o_part = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3))); \
+      float o_acc = subgroupAdd(o_part); \
+      if (lane == 0u) { \
+        gdn_scratch.v[head * 128u + (r)] = bf16_load(bf16_store(o_acc)); \
+      } \
+    }
+    GDN_SP_ROW(w0, r0, sv0)
+    GDN_SP_ROW(w1, r1, sv1)
+    #undef GDN_SP_ROW
+  }
+  barrier();
+  memoryBarrierBuffer();
+  if (tid == 0u) {
+    uint prev = atomicAdd(gdn_ticket.done[head], 1u);
+    s_split_last = (prev == 1u) ? 1u : 0u;
+  }
+  barrier();
+  if (s_split_last == 0u) {
+    return;
+  }
+  if (tid == 0u) {
+    gdn_ticket.done[head] = 0u;
+  }
+  memoryBarrierBuffer();
+  barrier();
+  if (tid < 128u) {
+    float ov = gdn_scratch.v[head * 128u + tid];
+    so[tid] = ov;
+    s_norm_buf[tid] = ov * ov;
+  }
+  barrier();
+#elif defined(GDN_CONV_PREF4)
+  {
+    uint r0 = sg;
+    uint r1 = sg + 32u;
+    uint r2 = sg + 64u;
+    uint r3 = sg + 96u;
+    vec4 w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+    vec4 w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+    vec4 w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
+    vec4 w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
+    float sv0 = sv[r0];
+    float sv1 = sv[r1];
+    float sv2 = sv[r2];
+    float sv3 = sv[r3];
+    #define GDN_P4_ROW(w, r, svr) { \
+      float kv_part = fma((w).x, skg0, fma((w).y, skg1, fma((w).z, skg2, (w).w * skg3))); \
+      float kv_acc = subgroupAdd(kv_part); \
+      float delta = ((svr) - kv_acc) * beta; \
+      float n0 = fma((w).x, g, gdn_dk_term(delta, sk0)); \
+      float n1 = fma((w).y, g, gdn_dk_term(delta, sk1)); \
+      float n2 = fma((w).z, g, gdn_dk_term(delta, sk2)); \
+      float n3 = fma((w).w, g, gdn_dk_term(delta, sk3)); \
+      s_out.v[s_out_base_q + (r) * 32u + lane] = vec4(n0, n1, n2, n3); \
+      float o_part = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3))); \
+      float o_acc = subgroupAdd(o_part); \
+      if (lane == 0u) { \
+        float ov = bf16_load(bf16_store(o_acc)); \
+        so[r] = ov; \
+        s_norm_buf[r] = ov * ov; \
+      } \
+    }
+    GDN_P4_ROW(w0, r0, sv0)
+    GDN_P4_ROW(w1, r1, sv1)
+    GDN_P4_ROW(w2, r2, sv2)
+    GDN_P4_ROW(w3, r3, sv3)
+    #undef GDN_P4_ROW
+  }
+  barrier();
+#else
   const uint sg_count = uint(GDN_CONV_WG) >> 5u;
   for (uint r = sg; r < 128u; r += sg_count) {
     vec4 w = s_in.v[s_in_base_q + r * 32u + lane];
@@ -304,6 +414,7 @@ void main() {
     }
   }
   barrier();
+#endif
 
   // Phase 3 (zero extra barriers): SGs 0..3 each compute bit-exact tree_reduce32.
   if (tid < 128u) {

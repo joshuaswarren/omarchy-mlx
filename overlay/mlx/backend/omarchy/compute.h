@@ -1380,6 +1380,12 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4ResNormVec4BF16R2S32W2B1,
   QmmVecQ4ResNormVec4BF16R2S32W2Sg1,
   QmmVecQ4ResNormVec4BF16R4S16W2,
+  // Wave 3R screening variants.
+  GatedDeltaDecodeConvNormBF16Sg32FastP4,
+  GatedDeltaDecodeConvNormBF16Sg32FastSplit2,
+  QmmVecQ4MultiSubgroupBF16R1S8W2,
+  QmmVecQ4WordSubgroupBF16R2S16W2,
+  QmmVecQ4WordSubgroupBF16R2S32W2,
   Count,
 };
 

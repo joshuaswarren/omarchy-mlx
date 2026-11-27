@@ -1836,8 +1836,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           for (const auto& m : group.members) {
             widths.push_back(m.node.inputs()[1].shape(0));
           }
-          balanced_qkv = group.members.size() == 3 &&
-              gemv_balanced_qkv_widths_ok(widths);
+          balanced_qkv = (group.members.size() == 3 &&
+              gemv_balanced_qkv_widths_ok(widths)) ||
+              (group.members.size() == 4 &&
+               env_flag("MLX_OMARCHY_GDN_4WAY"));
           if (!balanced_qkv) {
             // Split-pair admission: each consecutive member pair whose
             // widths sit within a 4:1 ratio plans as its own dispatch,

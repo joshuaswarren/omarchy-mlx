@@ -785,6 +785,11 @@
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_b1.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_sg1.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r4s16w2.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_fast_p4.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_fast_split2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r1s8w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s16w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s32w2.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
@@ -2604,6 +2609,26 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_resnorm_vec4_bf16_r4s16w2,
           qmm_vec_q4_resnorm_vec4_bf16_r4s16w2_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32FastP4:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_fast_p4,
+          gated_delta_decode_conv_norm_bf16_sg32_fast_p4_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32FastSplit2:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_fast_split2,
+          gated_delta_decode_conv_norm_bf16_sg32_fast_split2_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R1S8W2:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r1s8w2,
+          qmm_vec_q4_multi_subgroup_bf16_r1s8w2_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s16w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s16w2_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;
