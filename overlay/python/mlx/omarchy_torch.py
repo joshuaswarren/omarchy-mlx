@@ -307,6 +307,17 @@ def _celu(a, alpha=1.0):
     return out.astype(a.dtype)
 
 
+def _glu(a, dim=-1):
+    # aten.glu(input, dim=-1): halves along dim, a * sigmoid(b). A scalar
+    # or an odd-sized dim is an error in aten too.
+    a = _mx(a)
+    if a.ndim == 0 or a.shape[dim % a.ndim] % 2:
+        return _raise("glu")
+    f = a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a
+    lo, hi = mx.split(f, 2, axis=dim % a.ndim)
+    return (lo * mx.sigmoid(hi)).astype(a.dtype)
+
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -368,6 +379,8 @@ _FUNC_SPECS = {
     "selu_": _selu,
     "celu": _celu,
     "celu_": _celu,
+    # aten.glu (GDN gate, Conformer), PT-AL-d
+    "glu": _glu,
     # the piecewise activation family (MobileNetV3 et al.), PT-AL-b
     "hardsigmoid": lambda a, inplace=False: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
     "hardswish": lambda a, inplace=False: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),

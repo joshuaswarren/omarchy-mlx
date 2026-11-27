@@ -1080,6 +1080,34 @@ def test_rfft():
             t = torch.randn(4, 12)
         else:
             t = (torch.randn(4, 7) + 1j * torch.randn(4, 7))
+def test_fft2():
+    # PT-AU-c: aten.fft_fft2 / aten.fft_ifft2 -> mx.fft — the 2-D
+    # transforms (vision, spectrogram models). Parity vs torch CPU over
+    # fp32 and complex64 inputs, exercising s (per-axis pad/truncate),
+    # dim (axis pair) and norm.
+    rng = np.random.RandomState(41)
+    xr = rng.randn(4, 6, 10).astype(np.float32)
+    xc = (rng.randn(4, 6, 10) + 1j * rng.randn(4, 6, 10)).astype(np.complex64)
+    for name, torch_op in (("fft_fft2", torch.ops.aten.fft_fft2),
+                           ("fft_ifft2", torch.ops.aten.fft_ifft2)):
+        low = mlx_vulkan._FUNC_SPECS[name]
+        for x_np in (xr, xc):
+            tx = torch.tensor(x_np)
+            a = mx.array(x_np)
+            for pos, kw in [
+                ((), {}),                                # all defaults
+                (([8, 12],), {}),                        # positional s
+                ((), {"s": [3, 5]}),                     # truncate both
+                ((), {"dim": [0, 1]}),                   # leading axes
+                ((), {"dim": [-1, -2], "norm": "ortho"}),  # swapped axes
+                ((), {"s": [4, 6], "dim": [0, 2],
+                      "norm": "forward"}),               # all three
+            ]:
+                exp = torch_op(tx, *pos, **kw).resolve_conj().numpy()
+                got = low(a, *pos, **kw)
+                assert np.allclose(_np(got), exp, rtol=2e-4, atol=2e-5), \
+                    (name, x_np.dtype, pos, kw)
+        t = torch.randn(4, 12, 8)
         g = torch.fx.Graph()
         ph = g.placeholder("x")
         n = g.call_function(torch_op, (ph,), {})
@@ -1092,6 +1120,7 @@ def test_rfft():
         assert name in stats["mlx"], stats
         assert name not in stats["cpu"], stats
     print("test_rfft PASS")
+    print("test_fft2 PASS")
 
 
 def test_transpose_expand():
@@ -2566,6 +2595,44 @@ def test_cosine_similarity():
     print("test_cosine_similarity PASS")
 
 
+def test_glu():
+    # PT-AL-d: aten.glu.default (GDN gate, Conformer).
+    # aten.glu(input, dim=-1): the input halves along dim; a * sigmoid(b).
+    x2 = torch.randn(3, 8)
+    x3 = torch.randn(2, 6, 4)
+    x1 = torch.randn(10)
+    F = torch.nn.functional
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        cases = [
+            (torch.ops.aten.glu.default, (x2.to(dtype),), {},
+             F.glu(x2.to(dtype)), "glu"),
+            (torch.ops.aten.glu.default, (x3.to(dtype),), {"dim": 0},
+             F.glu(x3.to(dtype), dim=0), "glu"),
+            (torch.ops.aten.glu.default, (x3.to(dtype),), {"dim": 1},
+             F.glu(x3.to(dtype), dim=1), "glu"),
+            (torch.ops.aten.glu.default, (x1.to(dtype),), {},
+             F.glu(x1.to(dtype)), "glu"),
+            (F.glu, (x2.to(dtype),), {},
+             F.glu(x2.to(dtype)), "glu"),
+            (F.glu, (x3.to(dtype),), {"dim": -2},
+             F.glu(x3.to(dtype), dim=-2), "glu"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert any(name in s for s in stats["mlx"]), (stats, str(target))
+            got = out.float().numpy()
+            assert np.allclose(got, ref.float().numpy(), atol=tol), \
+                (str(target), kw, dtype, got, ref.float().numpy())
+    print("test_glu PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2589,6 +2656,7 @@ if __name__ == "__main__":
     test_slice()
     test_fft()
     test_rfft()
+    test_fft2()
     test_transpose_expand()
     test_cat_clone()
     test_sum()
@@ -2609,6 +2677,7 @@ if __name__ == "__main__":
     test_xlogy_xlog1py()
     test_softplus_mish()
     test_elu_selu_celu()
+    test_glu()
     test_cosine_similarity()
     print("ALL PASS")
 
