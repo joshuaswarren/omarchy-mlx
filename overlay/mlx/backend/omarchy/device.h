@@ -918,8 +918,11 @@ inline bool gdn_g18g_composed_default(const std::string& device_name) {
 // Cooperative 128-bit uvec4 coherent-L2 -> shmem load in the last-workgroup
 // R2S8W2 ResNorm epilogue (QmmVecQ4ResNormBF16R2S8W2Vec, widths 2048/2560/4096).
 // Bit-identical to QmmVecQ4ResNormBF16R2S8W2 with zero extra QMV registers.
-// Default on for G13C (Apple M1 Max); MLX_OMARCHY_RESNORM_VEC=1/0 overrides on
-// any qualifying 2x8w2 part. Pure.
+// Default on for G13C (Apple M1 Max, Qwen3-4B 4-bit decode, DEFER_TOKENS=0:
+// +1.14% / -0.118 ms/tok at ctx=512 5/5 pairs and +1.36% / -0.155 ms/tok at
+// ctx=2048 3/3 pairs, 0-ULP parity and identical greedy tokens;
+// receipts/2026-11-26-g13c-resnorm-vec.md); MLX_OMARCHY_RESNORM_VEC=1/0
+// overrides on any qualifying 2x8w2 part. Pure.
 inline bool resnorm_vec_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_RESNORM_VEC")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
