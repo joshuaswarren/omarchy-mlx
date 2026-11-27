@@ -155,11 +155,12 @@ def target_dispatch_counts(results, target_kid):
     the census. Presence of the key proves a DISPATCH line was emitted."""
     a = b = 0
     for r in results:
-        events = r.get("dispatch_events", {}).get(str(target_kid), 0)
+        events = r.get("dispatch_events", {})
+        n = events.get(target_kid, events.get(str(target_kid), 0))
         if r["arm"] == "A":
-            a += events
+            a += n
         else:
-            b += events
+            b += n
     return a, b
 
 
