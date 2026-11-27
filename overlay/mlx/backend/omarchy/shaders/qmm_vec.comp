@@ -271,9 +271,9 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 #else
 #define QMM_VEC_OUTPUT_ACCESS writeonly
 #endif
-#ifdef QMM_MULTI_3M_PLAIN
-// 3-member plain+KV trimmed multi-weight layout (16 bindings: x + 3x5).
-// Host guarantees members.size() <= 3, !any_epilogue, !any_out_view, !swiglu.
+#if defined(QMM_MULTI_2M_PLAIN) || defined(QMM_MULTI_3M_PLAIN)
+// 2- or 3-member plain+KV trimmed multi-weight layout (11 or 16 bindings).
+// Host guarantees members.size() <= 2 (or 3), !any_epilogue, !any_out_view, !swiglu.
 #define QMM_VEC_MULTI_WEIGHT_3M(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
   WVEC_T values[]; \
@@ -292,7 +292,9 @@ layout(set = 0, binding = B + 4, std430) QMM_VEC_SUM_ACCESS buffer Sum##I { \
 } sum##I;
 QMM_VEC_MULTI_WEIGHT_3M(0, 1)
 QMM_VEC_MULTI_WEIGHT_3M(1, 6)
+#ifndef QMM_MULTI_2M_PLAIN
 QMM_VEC_MULTI_WEIGHT_3M(2, 11)
+#endif
 #else
 #define QMM_VEC_MULTI_WEIGHT(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
@@ -1436,7 +1438,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   (total) = reduce_scratch[lane]; \
 }
 #endif
-#ifdef QMM_MULTI_3M_PLAIN
+#if defined(QMM_MULTI_2M_PLAIN) || defined(QMM_MULTI_3M_PLAIN)
 #define Q4_MULTI_STORE(I, rounded) { \
   output##I.values[column] = STORE_VALUE(rounded); \
   if (((params.flags & 262144u) != 0u) && ((params.flags & (4096u << I)) != 0u)) { \
@@ -2083,19 +2085,32 @@ void main() {
   uint lane_in_slot = lane % LANES;
   uint n0 = params.shape[0];
   uint n1 = params.shape[1];
+#ifndef QMM_MULTI_2M_PLAIN
   uint n2 = params.shape[2];
-#ifndef QMM_MULTI_3M_PLAIN
+#endif
+#if !defined(QMM_MULTI_2M_PLAIN) && !defined(QMM_MULTI_3M_PLAIN)
   uint n3 = params.shape[3];
 #endif
   uint groups0 = (n0 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+#ifndef QMM_MULTI_2M_PLAIN
   uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
-#ifndef QMM_MULTI_3M_PLAIN
+#endif
+#if !defined(QMM_MULTI_2M_PLAIN) && !defined(QMM_MULTI_3M_PLAIN)
   uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
 #endif
   uint workgroup = gl_WorkGroupID.x;
   uint which;
   uint n;
-#ifdef QMM_MULTI_3M_PLAIN
+#ifdef QMM_MULTI_2M_PLAIN
+  if (workgroup < groups0) {
+    which = 0u;
+    n = n0;
+  } else {
+    which = 1u;
+    workgroup -= groups0;
+    n = n1;
+  }
+#elif defined(QMM_MULTI_3M_PLAIN)
   if (workgroup < groups0) {
     which = 0u;
     n = n0;
@@ -2173,13 +2188,19 @@ void main() {
   if (column_active) {
     if (which == 0u) {
       Q4_ROWS(input_w0, scales0, biases0)
+#ifdef QMM_MULTI_2M_PLAIN
+    } else {
+      Q4_ROWS(input_w1, scales1, biases1)
+    }
+#elif defined(QMM_MULTI_3M_PLAIN)
     } else if (which == 1u) {
       Q4_ROWS(input_w1, scales1, biases1)
-#ifdef QMM_MULTI_3M_PLAIN
     } else {
       Q4_ROWS(input_w2, scales2, biases2)
     }
 #else
+    } else if (which == 1u) {
+      Q4_ROWS(input_w1, scales1, biases1)
     } else if (which == 2u) {
       Q4_ROWS(input_w2, scales2, biases2)
     } else {
@@ -2196,13 +2217,19 @@ void main() {
         float rounded = ROUND_STORAGE(total[r]);
         if (which == 0u) {
           Q4_MULTI_STORE(0, rounded)
+#ifdef QMM_MULTI_2M_PLAIN
+        } else {
+          Q4_MULTI_STORE(1, rounded)
+        }
+#elif defined(QMM_MULTI_3M_PLAIN)
         } else if (which == 1u) {
           Q4_MULTI_STORE(1, rounded)
-#ifdef QMM_MULTI_3M_PLAIN
         } else {
           Q4_MULTI_STORE(2, rounded)
         }
 #else
+        } else if (which == 1u) {
+          Q4_MULTI_STORE(1, rounded)
         } else if (which == 2u) {
           Q4_MULTI_STORE(2, rounded)
         } else {
@@ -2442,7 +2469,13 @@ void main() {
   if ((row_length == 2048u || row_length == 4096u) &&
       params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
     uint nw_base = params.rhs_offset >> 3u;
+#if defined(QMM_RESNORM_D2048)
+    if (true) {
+#elif defined(QMM_RESNORM_D4096)
+    if (false) {
+#else
     if (row_length == 2048u) {
+#endif
       uvec4 sv0 = uvec4(0u);
 #ifdef QMM_RESNORM_EPI_HOIST
       uvec4 wv0 = uvec4(0u);
@@ -4109,9 +4142,11 @@ void main() {
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;
   uint lane_in_slot = lane % LANES;
+#ifndef QMM_WORD_BATCH1
   uint batch = params.shape[0];
   uint w_batch_words = params.shape[1];
   uint param_batch = params.shape[2];
+#endif
   uint column = gl_WorkGroupID.x * COLUMNS_PER_GROUP +
       column_slot * uint(ROWS_PER_SLOT);
   uint n = params.matrix_n;
@@ -4121,6 +4156,28 @@ void main() {
 #if QBITS == 8
   uint row_words = params.matrix_k / 4u;
 #endif
+#ifdef QMM_WORD_BATCH1
+  {
+    precise float acc[ROWS_PER_SLOT];
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      acc[r] = 0.0;
+    }
+    if (column_active) {
+      uint w_base = params.rhs_offset;
+      uint s_base = params.aux_offset;
+      uint b_base = params.aux_size;
+      uint x_row = params.lhs_offset;
+      Q4_ROWS(input_w, scales, biases)
+    }
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      float total = subgroupAdd(acc[r]);
+      if (lane_in_slot == 0u && column + r < n) {
+        output_data.values[params.output_offset + column + r] =
+            STORE_VALUE(total);
+      }
+    }
+  }
+#else
   for (uint b = 0u; b < batch; ++b) {
     precise float acc[ROWS_PER_SLOT];
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
@@ -4141,6 +4198,7 @@ void main() {
       }
     }
   }
+#endif
 }
 #endif
 #elif defined(QMM_VEC_GREEDY_WORD)

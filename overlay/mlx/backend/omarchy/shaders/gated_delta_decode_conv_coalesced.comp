@@ -181,7 +181,12 @@ void gdn_conv_state_out(uint channel) {
 uint16_t gdn_conv_channel_and_state(uint channel, bool write_state) {
   const uint km1 = params.lhs_size;
   const uint channels = params.reduce_size;
+#ifdef GDN_POW2_TRIM
+  // Host guarantees K==4 (operation==4, km1==3) when GDN_POW2_TRIM is active.
+  {
+#else
   if (params.operation == 4u && km1 == 3u) {
+#endif
     uint wb = params.aux_size + channel * 4u;
     uint sb = params.lhs_offset + channel;
     uint16_t s0_b = conv_state.v[sb];
@@ -210,11 +215,13 @@ uint16_t gdn_conv_channel_and_state(uint channel, bool write_state) {
     float silu = value * bf16_load(sig_b);
     return gdn_conv_bf16_store(silu);
   }
+#ifndef GDN_POW2_TRIM
   uint16_t act = gdn_conv_channel(channel);
   if (write_state) {
     gdn_conv_state_out(channel);
   }
   return act;
+#endif
 }
 #endif
 
@@ -225,7 +232,11 @@ float gdn_compute_beta_from_b(float b_in) {
 }
 
 float gdn_compute_g_from_a(uint head, float a_in) {
+#ifdef GDN_POW2_TRIM
+  uint ph = head;
+#else
   uint ph = head % params.in_strides[2];
+#endif
   float a_log;
   if ((params.flags & 512u) != 0u) {
     uint base = params.in_strides[0] + 2u * ph;
@@ -344,7 +355,11 @@ vec2 gdn_compute_gates(uint head) {
     float beta_f = 1.0f / (1.0f + exp(-b_in));
     beta = bf16_load(bf16_store(beta_f));
     float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
+#ifdef GDN_POW2_TRIM
+    uint ph = head;
+#else
     uint ph = head % params.in_strides[2];
+#endif
     float a_log;
     if ((params.flags & 512u) != 0u) {
       uint base = params.in_strides[0] + 2u * ph;
@@ -381,11 +396,19 @@ void main() {
   uint lane = tid & 31u;
 
   uint khead = head;
+#ifdef GDN_POW2_TRIM
+  uint gqa_shift = (params.in_strides[3] != 0u)
+      ? (uint(findLSB(params.in_strides[2])) -
+         uint(findLSB(params.in_strides[3])))
+      : 0u;
+  khead = head >> gqa_shift;
+#else
   if (params.in_strides[3] != 0u) {
     uint hv_b = params.in_strides[2];
     uint hk_b = params.in_strides[3];
     khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
   }
+#endif
 
 #ifndef GDN_INPROJ_BA_FUSED
   // Single-thread gate computation (avoids 1023x redundant exp/log SFU traffic).
@@ -418,11 +441,15 @@ void main() {
     const uint key_dim = params.rhs_size;
     const uint c = tid & 127u;
     bool lead = true;
+#ifdef GDN_POW2_TRIM
+    lead = (head & ((1u << gqa_shift) - 1u)) == 0u;
+#else
     if (params.in_strides[3] != 0u) {
       lead = (head % params.in_strides[2]) %
               (params.in_strides[2] / params.in_strides[3]) ==
           0u;
     }
+#endif
 #ifdef GDN_SG32_FAST
     uint ch;
     bool write_state;

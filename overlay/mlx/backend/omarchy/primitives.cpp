@@ -9736,6 +9736,13 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u) &&
             params.matrix_n >= 2048u) {
           const auto& w_caps = encoder.device().capabilities();
+          const char* wr4_env = omarchy::env_str("MLX_OMARCHY_WORD_R4");
+          const bool wr4_s2 =
+              (wr4_env != nullptr && std::strcmp(wr4_env, "s2") == 0);
+          const bool wr4_s4 =
+              (wr4_env != nullptr && std::strcmp(wr4_env, "s4") == 0);
+          const bool wb1_ok = (batch == 1u) && (params.matrix_k % 512u == 0u) &&
+              (params.matrix_n % 8u == 0u);
           const char* wr1_env = omarchy::env_str("MLX_OMARCHY_WORD_R1S4");
           const bool wr1_8 =
               (wr1_env != nullptr && std::strcmp(wr1_env, "8") == 0);
@@ -9744,7 +9751,40 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                std::strcmp(wr1_env, "0") != 0);
           const bool wr1_ok = params.matrix_n < 65536u &&
               (params.matrix_k % 512u == 0u) && (params.matrix_n % 8u == 0u);
-          if (wr1_8 && wr1_ok &&
+          if (params.matrix_n >= 65536u && wb1_ok &&
+              omarchy::env_flag("MLX_OMARCHY_LM_R4") &&
+              w_caps.max_compute_work_group_invocations >= 512u &&
+              w_caps.max_compute_work_group_size[0] >= 512u) {
+            vec_kernel =
+                omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R4S16W2FastB1;
+            qmm_groups = (params.matrix_n + 63u) / 64u;
+          } else if (params.matrix_n >= 65536u && wb1_ok &&
+              omarchy::env_flag("MLX_OMARCHY_LM_B1") &&
+              w_caps.max_compute_work_group_invocations >= 1024u &&
+              w_caps.max_compute_work_group_size[0] >= 1024u) {
+            vec_kernel =
+                omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2FastB1;
+            qmm_groups = (params.matrix_n + 63u) / 64u;
+          } else if (params.matrix_n < 65536u && wb1_ok && wr4_s2 &&
+              w_caps.max_compute_work_group_invocations >= 64u &&
+              w_caps.max_compute_work_group_size[0] >= 64u) {
+            vec_kernel =
+                omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R4S2W2FastB1;
+            qmm_groups = (params.matrix_n + 7u) / 8u;
+          } else if (params.matrix_n < 65536u && wb1_ok && wr4_s4 &&
+              w_caps.max_compute_work_group_invocations >= 128u &&
+              w_caps.max_compute_work_group_size[0] >= 128u) {
+            vec_kernel =
+                omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R4S4W2FastB1;
+            qmm_groups = (params.matrix_n + 15u) / 16u;
+          } else if (params.matrix_n < 65536u && wb1_ok &&
+              omarchy::env_flag("MLX_OMARCHY_WORD_B1") &&
+              w_caps.max_compute_work_group_invocations >= 128u &&
+              w_caps.max_compute_work_group_size[0] >= 128u) {
+            vec_kernel =
+                omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2FastB1;
+            qmm_groups = (params.matrix_n + 7u) / 8u;
+          } else if (wr1_8 && wr1_ok &&
               w_caps.max_compute_work_group_invocations >= 256u &&
               w_caps.max_compute_work_group_size[0] >= 256u) {
             vec_kernel =
@@ -11255,6 +11295,7 @@ bool dispatch_quantized_gemv_group(
   }
   // Optional 3-member plain+KV trimmed multi-weight decode (MLX_OMARCHY_MULTI_TRIM3=16/32)
   // and R2S16 upfront fast (MLX_OMARCHY_MULTI_R2S16=1).
+  bool multi_trim2_active = false;
   bool multi_trim3_active = false;
   bool multi_trim3_32 = false;
   bool multi_r2s16_active = false;
@@ -11275,13 +11316,21 @@ bool dispatch_quantized_gemv_group(
       }
     }
     if (all_n8) {
+      if (members.size() == 2u && !any_epi_or_view &&
+          omarchy::env_flag("MLX_OMARCHY_MULTI_TRIM2") &&
+          encoder.device().capabilities().max_compute_work_group_invocations >=
+              512u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >=
+              512u) {
+        multi_trim2_active = true;
+      }
       const char* t3_env = omarchy::env_str("MLX_OMARCHY_MULTI_TRIM3");
       const bool t3_want_32 =
           (t3_env != nullptr && std::strcmp(t3_env, "32") == 0);
       const bool t3_want_16 = !t3_want_32 &&
           (t3_env != nullptr && t3_env[0] != '\0' &&
            std::strcmp(t3_env, "0") != 0);
-      if (members.size() <= 3u && !any_epi_or_view &&
+      if (!multi_trim2_active && members.size() <= 3u && !any_epi_or_view &&
           (t3_want_32 || t3_want_16)) {
         const uint32_t need_t = t3_want_32 ? 1024u : 512u;
         if (encoder.device().capabilities().max_compute_work_group_invocations >=
@@ -11292,7 +11341,7 @@ bool dispatch_quantized_gemv_group(
           multi_trim3_32 = t3_want_32;
         }
       }
-      if (!multi_trim3_active && omarchy::env_flag("MLX_OMARCHY_MULTI_R2S16") &&
+      if (!multi_trim2_active && !multi_trim3_active && omarchy::env_flag("MLX_OMARCHY_MULTI_R2S16") &&
           encoder.device().capabilities().max_compute_work_group_invocations >=
               512u &&
           encoder.device().capabilities().max_compute_work_group_size[0] >=
@@ -11311,6 +11360,8 @@ bool dispatch_quantized_gemv_group(
                                    : resnorm_cols))
       : dedicated_swiglu_active
       ? swiglu_cols
+      : multi_trim2_active
+      ? 32u
       : multi_trim3_active
       ? (multi_trim3_32 ? 64u : 32u)
       : multi_r2s16_active
@@ -11921,7 +11972,18 @@ bool dispatch_quantized_gemv_group(
             binding(res_norm->weight),
             binding(res_norm->out)};
         if (rn_fast_elig) {
-          if (omarchy::env_flag("MLX_OMARCHY_RESNORM_NO_OUT0") ||
+          if (omarchy::env_flag("MLX_OMARCHY_RESNORM_SPEC") &&
+              (params.shape[0] == 2048u || params.shape[0] == 4096u)) {
+            resnorm_kernel = (params.shape[0] == 2048u)
+                ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastEpiPackD2048
+                : ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastEpiPackD4096;
+            const char* dead_env = omarchy::env_str("MLX_OMARCHY_RESNORM_DEAD_OUT");
+            const bool allow_dead = (dead_env == nullptr ||
+                dead_env[0] == '\0' || std::strcmp(dead_env, "0") != 0);
+            if (allow_dead && res_norm->dead_qmm_out) {
+              params.flags |= 0x1000000u;
+            }
+          } else if (omarchy::env_flag("MLX_OMARCHY_RESNORM_NO_OUT0") ||
               omarchy::env_flag("MLX_OMARCHY_RESNORM_PACK32")) {
             resnorm_kernel =
                 ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastEpiPack;
@@ -12029,6 +12091,29 @@ bool dispatch_quantized_gemv_group(
     encoder.dispatch_compute(
         sw_k,
         sw_bindings,
+        params,
+        total_groups,
+        1u,
+        1u);
+    return true;
+  }
+  if (multi_trim2_active) {
+    std::array<ComputeBinding, 11> bindings2m{};
+    bindings2m[0] = binding(x);
+    for (uint32_t i = 0; i < 2u; ++i) {
+      const uint32_t base = 1u + i * 5u;
+      const auto& member = members[i];
+      bindings2m[base] = binding(member.node.inputs()[1]);
+      bindings2m[base + 1] = binding(member.node.inputs()[2]);
+      bindings2m[base + 2] = binding(member.node.inputs()[3]);
+      bindings2m[base + 3] = binding(member.node);
+      bindings2m[base + 4] = member.sum_window
+          ? binding(member.sum_window->node)
+          : binding(member.node);
+    }
+    encoder.dispatch_compute(
+        ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast2M,
+        bindings2m,
         params,
         total_groups,
         1u,
@@ -17726,9 +17811,17 @@ void GreedyQuantizedArgmax::eval_gpu(
           const bool lm_fo = (static_cast<uint32_t>(x.shape(-1)) % 512u == 0u) &&
               (n % 8u == 0u) &&
               omarchy::qmm_g14c_fast_only_default_part(caps.device_name);
-          gemv_kernel = lm_fo
-              ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2Fast
-              : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
+          if (lm_fo && omarchy::env_flag("MLX_OMARCHY_LM_R4")) {
+            gemv_kernel =
+                omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R4S16W2FastB1;
+          } else if (lm_fo && omarchy::env_flag("MLX_OMARCHY_LM_B1")) {
+            gemv_kernel =
+                omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2FastB1;
+          } else {
+            gemv_kernel = lm_fo
+                ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2Fast
+                : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
+          }
           gemv_groups = (n + 63u) / 64u;
         }
       } else {
@@ -18531,9 +18624,15 @@ void GdnConvDeltaUpdate::eval_gpu(
         binding(ba_fold->s_b),
         binding(ba_fold->b_b)};
     omarchy::commit_gdn_inproj_ba_fold(outputs.at(0));
-    const auto ba_kernel = omarchy::env_flag("MLX_OMARCHY_GDN_BA_FAST")
-        ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32Fast
-        : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32;
+    const bool gdn_pow2_ok = (B == 1) && (params.operation == 4u) &&
+        (params.lhs_size == 3u) &&
+        (equal_heads || (((Hv & (Hv - 1)) == 0) && ((Hk & (Hk - 1)) == 0) && Hv >= Hk));
+    auto ba_kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32;
+    if (omarchy::env_flag("MLX_OMARCHY_GDN_BA_FAST")) {
+      ba_kernel = (gdn_pow2_ok && omarchy::env_flag("MLX_OMARCHY_GDN_TRIM"))
+          ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32FastTrim
+          : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32Fast;
+    }
     encoder.dispatch_compute(
         ba_kernel,
         ba_bindings,
@@ -18571,7 +18670,13 @@ void GdnConvDeltaUpdate::eval_gpu(
     const bool sg32_fast = (sg32_fast_env != nullptr && sg32_fast_env[0] != '\0')
         ? (std::strcmp(sg32_fast_env, "0") != 0)
         : omarchy::gdn_conv_sg32_fast_default(device_name);
-    if (sg32_fast && omarchy::env_flag("MLX_OMARCHY_GDN_P2_INTERLEAVE")) {
+    const bool gdn_pow2_ok = (B == 1) && (params.operation == 4u) &&
+        (params.lhs_size == 3u) &&
+        (equal_heads || (((Hv & (Hv - 1)) == 0) && ((Hk & (Hk - 1)) == 0) && Hv >= Hk));
+    if (sg32_fast && omarchy::env_flag("MLX_OMARCHY_GDN_TRIM") && gdn_pow2_ok) {
+      kernel = omarchy::ComputeKernel::
+          GatedDeltaDecodeConvNormBF16Sg32FastInterleaveTrim;
+    } else if (sg32_fast && omarchy::env_flag("MLX_OMARCHY_GDN_P2_INTERLEAVE")) {
       kernel = omarchy::ComputeKernel::
           GatedDeltaDecodeConvNormBF16Sg32FastInterleave;
     } else {
@@ -19698,12 +19803,21 @@ void ScaledDotProductAttention::eval_gpu(
             const bool sdpa_hd256_fast = is_hd256 &&
                 (rot_half & 1u) == 0u &&
                 omarchy::env_flag("MLX_OMARCHY_SDPA_HD256_FAST");
+            const bool sdpa_pow2_ok = sdpa_hd256_fast &&
+                omarchy::env_flag("MLX_OMARCHY_SDPA_POW2_GQA") &&
+                rp.matrix_m > 0u && rp.matrix_n > 0u &&
+                ((rp.matrix_m & (rp.matrix_m - 1u)) == 0u) &&
+                ((rp.matrix_n & (rp.matrix_n - 1u)) == 0u) &&
+                rp.matrix_m >= rp.matrix_n;
             const auto og_kernel = is_hd256
-                ? (sdpa_hd256_fast
+                ? (sdpa_pow2_ok
                        ? omarchy::ComputeKernel::
-                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast
-                       : omarchy::ComputeKernel::
-                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd256)
+                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd256FastTrim
+                       : (sdpa_hd256_fast
+                              ? omarchy::ComputeKernel::
+                                    SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast
+                              : omarchy::ComputeKernel::
+                                    SdpaDecodeOnlineRopeOutgateSg32BF16Hd256))
                 : (sdpa_g13c
                        ? omarchy::ComputeKernel::
                              SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C

@@ -1444,6 +1444,19 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeOnlineRopeSg32BF16Hd256Fast,
   SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast,
   GatherDequantNormBF16,
+  // Track P G14C parity: GDN pow2 trim, ResNorm D2048/D4096 spec, Word B1/R4,
+  // Multi 2M trim, SDPA pow2 GQA (all env-gated default off).
+  GatedDeltaDecodeConvNormBF16Sg32FastInterleaveTrim,
+  GatedDeltaDecodeConvNormBaBF16Sg32FastTrim,
+  QmmVecQ4ResNormVec4BF16R2S32W2FastEpiPackD2048,
+  QmmVecQ4ResNormVec4BF16R2S32W2FastEpiPackD4096,
+  QmmVecQ4WordSubgroupBF16R2S4W2FastB1,
+  QmmVecQ4WordSubgroupBF16R4S2W2FastB1,
+  QmmVecQ4WordSubgroupBF16R4S4W2FastB1,
+  QmmVecQ4WordSubgroupBF16R2S32W2FastB1,
+  QmmVecQ4WordSubgroupBF16R4S16W2FastB1,
+  QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast2M,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256FastTrim,
   Count,
 };
 

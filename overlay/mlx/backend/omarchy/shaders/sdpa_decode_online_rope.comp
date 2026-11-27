@@ -224,8 +224,14 @@ void main() {
     return;
   }
 
+#ifdef SDPA_POW2_GQA
+  uint rep_shift = uint(findLSB(heads)) - uint(findLSB(kv_heads));
+  uint repeats = 1u << rep_shift;
+  uint kv_head = head >> rep_shift;
+#else
   uint repeats = heads / kv_heads;
   uint kv_head = head / repeats;
+#endif
 
   uint t = gl_LocalInvocationID.x;
   uint sg = t >> 5u;
@@ -840,7 +846,11 @@ void main() {
         o7 = fma(o7, factor, p * uintBitsToFloat(vw.w & 0xffff0000u));
       }
 
+#ifdef SDPA_POW2_GQA
+      if (global_sg == (last_key & (total_sgs - 1u))) {
+#else
       if (global_sg == (last_key % total_sgs)) {
+#endif
         kw = uvec4(
             s_k_words[lane * 4u + 0u],
             s_k_words[lane * 4u + 1u],
