@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import inspect
 import logging
 import math
 import operator
@@ -1896,6 +1897,7 @@ _FUNC_SPECS = {
     "silu_backward": _silu_backward,
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
+    "relu_": lambda a: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,
@@ -1995,6 +1997,27 @@ def _resolve(dotted):
         obj = getattr(obj, part)
     return obj
 
+
+def _bd_inner(tgt, args, kwargs):
+    """Resolve torch.nn.functional.boolean_dispatch.<locals>.fn wrappers
+    (F.max_pool2d's return_indices arm and friends) to the inner torch
+    function the call actually selects, so table lookups can hit; returns
+    the wrapper unchanged when the closure cannot be read."""
+    if not getattr(tgt, "__qualname__", "").startswith("boolean_dispatch"):
+        return tgt
+    try:
+        nv = inspect.getclosurevars(tgt).nonlocals
+        aname, aidx = nv.get("arg_name"), nv.get("arg_index")
+        use_true = False
+        if aname and aname in kwargs:
+            use_true = bool(kwargs[aname])
+        elif isinstance(aidx, int) and 0 <= aidx < len(args):
+            use_true = bool(args[aidx])
+        inner = nv.get("if_true" if use_true else "if_false")
+        return inner if inner is not None else tgt
+    except Exception:
+        return tgt
+
 def _build_func_table():
     candidates = []
     for fn_name, lowering in _FUNC_SPECS.items():
@@ -2077,7 +2100,7 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "threshold_backward", "native_batch_norm_backward",
                  "Float",
                  "add", "sub", "mul", "div", "truediv", "true_divide",
-                 "remainder"}
+                 "remainder", "relu", "relu_"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
@@ -2239,8 +2262,11 @@ def make_executor(gm):
             val = None
             on_mlx = False
             if node.op == "call_function":
-                lowering = (FUNC_TABLE.get(node.target)
-                            or FUNC_TABLE_BY_NAME.get(getattr(node.target, "__name__", ""))
+                tgt = _bd_inner(node.target, args, kwargs)
+                tn = getattr(tgt, "__name__", "")
+                lowering = (FUNC_TABLE.get(tgt)
+                            or FUNC_TABLE_BY_NAME.get(tn)
+                            or FUNC_TABLE_BY_NAME.get(tn.lstrip("_"))
                             or ATEN_TABLE.get(name))
                 is_producer = (getattr(node.target, "__name__", "") in _PRODUCERS
                                or getattr(node.target, "__name__", "") in _ALWAYS_LOWER
@@ -3024,8 +3050,11 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                         f"unlowerable node {name}: mx.compile freezes "
                         "mx.random draws; sampling stays on the "
                         "per-node path")
-                low = (FUNC_TABLE.get(n.target)
-                       or FUNC_TABLE_BY_NAME.get(getattr(n.target, "__name__", ""))
+                tgt = _bd_inner(n.target, args, kwargs)
+                tn = getattr(tgt, "__name__", "")
+                low = (FUNC_TABLE.get(tgt)
+                       or FUNC_TABLE_BY_NAME.get(tn)
+                       or FUNC_TABLE_BY_NAME.get(tn.lstrip("_"))
                        or ATEN_TABLE.get(name))
                 if low is not None:
                     kw2 = {k: v for k, v in kwargs.items() if k != "device"}
