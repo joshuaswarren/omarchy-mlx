@@ -2456,6 +2456,52 @@ def test_cosine_similarity():
     print("test_cosine_similarity PASS")
 
 
+
+
+def test_glu():
+    # PT-AL-d: aten.glu.default lowers to first * sigmoid(second) of the
+    # split axis. Pins the dim parameter across -1/0/1 (the Conformer FFN
+    # and GDN gate call it on the trailing axis, but aten takes any dim)
+    # and fp32/bf16, and that the op reaches stats["mlx"], not the torch
+    # fallback.
+    import numpy as np
+    m32 = torch.randn(4, 6, 8)
+    cases = [
+        (torch.ops.aten.glu.default, (m32,), {"dim": -1}, "glu"),
+        (torch.ops.aten.glu.default, (m32,), {"dim": 0}, "glu"),
+        (torch.ops.aten.glu.default, (m32,), {"dim": 1}, "glu"),
+        (torch.ops.aten.glu.default, (m32.bfloat16(),), {"dim": -1}, "glu"),
+        (torch.ops.aten.glu.default, (m32.bfloat16(),), {"dim": 0}, "glu"),
+        (torch.ops.aten.glu.default, (m32.bfloat16(),), {"dim": 1}, "glu"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert fam in stats["mlx"], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert got.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and got.dtype == torch.float32), (
+            str(target), kwargs, got.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            # Same dtype-fidelity contract as test_mul: _torch widens bf16
+            # to fp32 at the executor boundary (numpy has no bf16 buffer);
+            # the lowering itself must still produce bf16.
+            low = mlx_vulkan._FUNC_SPECS[fam](*(
+                mlx_vulkan._mx(a) if torch.is_tensor(a) else a for a in ins),
+                **kwargs)
+            assert low.dtype == mx.bfloat16, low.dtype
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=3e-2), (
+            str(target), kwargs, got, ref)
+    print("test_glu PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()

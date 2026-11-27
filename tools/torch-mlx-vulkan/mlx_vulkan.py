@@ -1186,6 +1186,17 @@ def _kthvalue(a, k, dim=-1, keepdim=False):
     return (vals.astype(a.dtype), sel_idx.astype(mx.int64))
 
 
+
+def _glu_halves(a, dim):
+    dim = dim % a.ndim
+    n = a.shape[dim]
+    half = n // 2
+    sl = [slice(None)] * a.ndim
+    sl[dim] = slice(0, half)
+    first = a[tuple(sl)]
+    sl[dim] = slice(half, n)
+    return first, a[tuple(sl)]
+
 def _is_integral_dtype(dt):
     return mx.issubdtype(dt, mx.integer) or mx.issubdtype(dt, mx.bool_)
 
@@ -2076,6 +2087,7 @@ _FUNC_SPECS = {
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),
     "topk": _topk,
     "multinomial": _multinomial,
+    "glu": lambda a, dim=-1: (_glu_halves(_mx(a), dim)[0] * mx.sigmoid(_glu_halves(_mx(a), dim)[1])).astype(_mx(a).dtype),
     "mode": _mode,
     "kthvalue": _kthvalue,
     "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
