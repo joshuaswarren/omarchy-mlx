@@ -1454,6 +1454,12 @@ enum class ComputeKernel : uint16_t {
   // which==3 loop/store when members.size() <= 3 and orders wv -> xa,xb -> s,b
   // before quads; 0-ULP bit-identical). Appended to keep profile kernel ids stable.
   QmmVecQ4MultiSubgroupBF16R2S8W2Fast3w,
+  // Compile-time ResNormVec4 R2S16W2 D2048/D4096 specializations and 16-binding
+  // 3-member plain+KV trimmed Multi R2S8W2UpfrontFast (0-ULP bit-identical).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4ResNormVec4BF16R2S16W2FastD2048,
+  QmmVecQ4ResNormVec4BF16R2S16W2FastD4096,
+  QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast3M,
   Count,
 };
 
