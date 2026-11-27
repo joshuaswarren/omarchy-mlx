@@ -973,6 +973,21 @@ inline bool qmm_fast_only_default_part(const std::string& device_name) {
   return device_name.find("G13C") != std::string::npos;
 }
 
+// Fast-tile-only upfront Q4 decode variants for Apple M2 Max (G14C): trims
+// unreachable slow-path fallback loops and uses uniform sb_delta across Word
+// R2S4W2, lm_head R2S32W2, Multi R2S8W2Upfront, SwiGLU R1S4W2, and ResNormVec4
+// R2S32W2 (0-ULP bit-identical).
+// Measured on Apple M2 Max (G14C B1, DEFER_TOKENS=0, identical greedy digests):
+// Qwen3.8-2B ctx=512 +1.50% (191.17 -> 194.14 tok/s, -80.1 us/tok, 5/5),
+// Qwen3.5-9B ctx=512 +0.60% (62.34 -> 62.76 tok/s, -106.3 us/tok, 3/3).
+// Default on G14C only; MLX_OMARCHY_G14C_FAST_ONLY=0/1 overrides. Pure.
+inline bool qmm_g14c_fast_only_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_G14C_FAST_ONLY")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G14C") != std::string::npos;
+}
+
 // G13C-gated HD=128 SdpaOnlineRope fast path (parallel Phase-A sg 2..3 RoPE
 // trig + 2-barrier subgroupShuffleDown K pack via disjoint s_q[128] + preloaded
 // epilogue with single 1/denom). Bit-identical (0 ULP) to the default HD=128

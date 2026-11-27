@@ -1417,6 +1417,16 @@ enum class ComputeKernel : uint16_t {
   // subgroups 12 and 13 during Phase 1 (18 bindings, zero extra barriers).
   // Appended to keep profile kernel ids stable.
   GatedDeltaDecodeConvNormBaBF16Sg32,
+  // G14C-gated fast-tile-only upfront Q4 decode variants (K % 512 == 0,
+  // N % 8 == 0, even w_base; ResNormVec4 also requires row_length in {2048,4096},
+  // norm_w_size != 1, and 8-element-aligned norm_w offset). Trims unreachable
+  // slow-path loops and uses uniform sb_delta (0-ULP bit-identical). Appended
+  // to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S4W2Fast,
+  QmmVecQ4WordSubgroupBF16R2S32W2Fast,
+  QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast,
+  QmmVecQ4SwigluBF16R1S4W2Fast,
+  QmmVecQ4ResNormVec4BF16R2S32W2Fast,
   Count,
 };
 

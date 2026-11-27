@@ -9713,7 +9713,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                   : omarchy::qmm_word_r2s4_default(w_caps.device_name);
           if (wr2s4_want && w_caps.max_compute_work_group_invocations >= 128u &&
               w_caps.max_compute_work_group_size[0] >= 128u) {
-            vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2;
+            const bool fo = (params.matrix_k % 512u == 0u) &&
+                (params.matrix_n % 8u == 0u) &&
+                omarchy::qmm_g14c_fast_only_default_part(w_caps.device_name);
+            vec_kernel = fo
+                ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2Fast
+                : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2;
             qmm_groups = (params.matrix_n + 7u) / 8u;
           }
         }
@@ -11783,6 +11788,14 @@ bool dispatch_quantized_gemv_group(
           binding(*members[0].epilogue),
           binding(res_norm->weight),
           binding(res_norm->out)};
+      if (resnorm_kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2 &&
+          params.matrix_k % 512u == 0u &&
+          (params.shape[0] == 2048u || params.shape[0] == 4096u) &&
+          params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u &&
+          omarchy::qmm_g14c_fast_only_default_part(
+              encoder.device().capabilities().device_name)) {
+        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Fast;
+      }
       encoder.dispatch_compute(
           resnorm_kernel,
           rn_bindings,
@@ -11867,6 +11880,11 @@ bool dispatch_quantized_gemv_group(
         omarchy::qmm_fast_only_default_part(
             encoder.device().capabilities().device_name)) {
       sw_k = ComputeKernel::QmmVecQ4SwigluBF16R2S8W2Fast;
+    } else if (sw_k == ComputeKernel::QmmVecQ4SwigluBF16R1S4W2 &&
+        params.matrix_k % 512u == 0u && params.shape[0] % 8u == 0u &&
+        omarchy::qmm_g14c_fast_only_default_part(
+            encoder.device().capabilities().device_name)) {
+      sw_k = ComputeKernel::QmmVecQ4SwigluBF16R1S4W2Fast;
     }
     encoder.dispatch_compute(
         sw_k,
@@ -11953,7 +11971,8 @@ bool dispatch_quantized_gemv_group(
             ComputeKernel::QmmVecQ4MultiF32,
             ComputeKernel::QmmVecQ4MultiF16,
             ComputeKernel::QmmVecQ4MultiBF16);
-  if (kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 &&
+  if ((kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 ||
+       kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Upfront) &&
       params.matrix_k % 512u == 0u) {
     bool all_n8 = true;
     for (size_t i = 0; i < members.size(); ++i) {
@@ -11962,10 +11981,17 @@ bool dispatch_quantized_gemv_group(
         break;
       }
     }
-    if (all_n8 &&
-        omarchy::qmm_fast_only_default_part(
-            encoder.device().capabilities().device_name)) {
-      kernel = ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast;
+    if (all_n8) {
+      if (kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 &&
+          omarchy::qmm_fast_only_default_part(
+              encoder.device().capabilities().device_name)) {
+        kernel = ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast;
+      } else if (kernel ==
+                     ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Upfront &&
+          omarchy::qmm_g14c_fast_only_default_part(
+              encoder.device().capabilities().device_name)) {
+        kernel = ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast;
+      }
     }
   }
   if (token_route && rows > 8u) {
@@ -17528,7 +17554,12 @@ void GreedyQuantizedArgmax::eval_gpu(
         if (lm_r2s32_want && n >= 65536u && (params.rhs_offset % 2u == 0u) &&
             caps.max_compute_work_group_invocations >= 1024u &&
             caps.max_compute_work_group_size[0] >= 1024u) {
-          gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
+          const bool lm_fo = (static_cast<uint32_t>(x.shape(-1)) % 512u == 0u) &&
+              (n % 8u == 0u) &&
+              omarchy::qmm_g14c_fast_only_default_part(caps.device_name);
+          gemv_kernel = lm_fo
+              ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2Fast
+              : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
           gemv_groups = (n + 63u) / 64u;
         }
       } else {
