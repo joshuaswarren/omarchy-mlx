@@ -9704,7 +9704,11 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         vec_kernel = geometry.word;
         qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
         if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u) &&
-            params.matrix_n >= 2048u) {
+            (params.matrix_n >= 2048u ||
+             (params.matrix_n <= 64u && (params.matrix_k % 512u == 0u) &&
+              (params.matrix_n % 8u == 0u) &&
+              omarchy::qmm_g14c_fast_only_default_part(
+                  encoder.device().capabilities().device_name)))) {
           const auto& w_caps = encoder.device().capabilities();
           const char* wr2s4_env = omarchy::env_str("MLX_OMARCHY_WORD_R2S4");
           const bool wr2s4_want =
@@ -11205,6 +11209,7 @@ bool dispatch_quantized_gemv_group(
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
   // resnorm epilogue kernels.
   bool multi_r2s16_active = false;
+  bool multi_r2s16_trim3_active = false;
   if (!res_norm_active && !dedicated_swiglu_active && !swiglu_out &&
       !token_route && outgate == nullptr && dtype == bfloat16 &&
       subgroup_ready &&
@@ -11214,7 +11219,11 @@ bool dispatch_quantized_gemv_group(
       encoder.device().capabilities().max_compute_work_group_size[0] >= 512u &&
       omarchy::qmm_g14c_multi_r2s16_default_part(qmm_dev_name)) {
     bool all_n8 = true;
+    bool any_epi_or_view = false;
     for (const auto& m : members) {
+      if (m.epilogue || m.out_view) {
+        any_epi_or_view = true;
+      }
       if (m.node.inputs().size() != 4 || m.node.inputs()[1].ndim() != 2 ||
           (m.node.inputs()[1].shape(0) % 8) != 0) {
         all_n8 = false;
@@ -11222,6 +11231,7 @@ bool dispatch_quantized_gemv_group(
       }
     }
     multi_r2s16_active = all_n8;
+    multi_r2s16_trim3_active = all_n8 && members.size() <= 3u && !any_epi_or_view;
   }
   const uint32_t group_columns = res_norm_active
       ? (token_route
@@ -11915,6 +11925,36 @@ bool dispatch_quantized_gemv_group(
     encoder.dispatch_compute(
         sw_k,
         sw_bindings,
+        params,
+        total_groups,
+        1u,
+        1u);
+    return true;
+  }
+  if (multi_r2s16_trim3_active) {
+    std::array<ComputeBinding, 16> bindings3m{};
+    bindings3m[0] = binding(x);
+    const ComputeBinding filler3m = binding(members[0].node);
+    for (uint32_t i = 0; i < 3u; ++i) {
+      const uint32_t base = 1u + i * 5u;
+      if (i < members.size()) {
+        const auto& member = members[i];
+        bindings3m[base] = binding(member.node.inputs()[1]);
+        bindings3m[base + 1] = binding(member.node.inputs()[2]);
+        bindings3m[base + 2] = binding(member.node.inputs()[3]);
+        bindings3m[base + 3] = binding(member.node);
+        bindings3m[base + 4] = member.sum_window
+            ? binding(member.sum_window->node)
+            : binding(member.node);
+      } else {
+        for (uint32_t j = 0; j < 5u; ++j) {
+          bindings3m[base + j] = filler3m;
+        }
+      }
+    }
+    encoder.dispatch_compute(
+        ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast3M,
+        bindings3m,
         params,
         total_groups,
         1u,
@@ -18430,7 +18470,14 @@ void GdnConvDeltaUpdate::eval_gpu(
     const bool sg32_fast = (sg32_fast_env != nullptr && sg32_fast_env[0] != '\0')
         ? (std::strcmp(sg32_fast_env, "0") != 0)
         : omarchy::gdn_conv_sg32_fast_default(device_name);
-    kernel = sg32_fast
+    const uint32_t hv_b = params.in_strides[2];
+    const uint32_t hk_b = params.in_strides[3];
+    const bool pow2_gqa = (hk_b == 0u) ||
+        (hv_b != 0u && (hv_b & (hv_b - 1u)) == 0u &&
+         (hk_b & (hk_b - 1u)) == 0u && hv_b >= hk_b);
+    const bool sg32_fast_elig = sg32_fast && B == 1 &&
+        params.operation == 4u && params.lhs_size == 3u && pow2_gqa;
+    kernel = sg32_fast_elig
         ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast
         : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
   }
@@ -19549,8 +19596,16 @@ void ScaledDotProductAttention::eval_gpu(
                 !is_hd256 &&
                 omarchy::sdpa_g13c_fast_default_part(
                     encoder.device().capabilities().device_name);
+            const bool sdpa_hd256_fast = is_hd256 &&
+                (rot_half & 1u) == 0u &&
+                omarchy::sdpa_g14c_hd256_fast_default_part(
+                    encoder.device().capabilities().device_name);
             const auto og_kernel = is_hd256
-                ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256
+                ? (sdpa_hd256_fast
+                       ? omarchy::ComputeKernel::
+                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast
+                       : omarchy::ComputeKernel::
+                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd256)
                 : (sdpa_g13c
                        ? omarchy::ComputeKernel::
                              SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C
@@ -19578,8 +19633,16 @@ void ScaledDotProductAttention::eval_gpu(
               !is_hd256 &&
               omarchy::sdpa_g13c_fast_default_part(
                   encoder.device().capabilities().device_name);
+          const bool sdpa_hd256_fast = is_hd256 &&
+              (rot_half & 1u) == 0u &&
+              omarchy::sdpa_g14c_hd256_fast_default_part(
+                  encoder.device().capabilities().device_name);
           const auto kernel = is_hd256
-              ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256
+              ? (sdpa_hd256_fast
+                     ? omarchy::ComputeKernel::
+                           SdpaDecodeOnlineRopeSg32BF16Hd256Fast
+                     : omarchy::ComputeKernel::
+                           SdpaDecodeOnlineRopeSg32BF16Hd256)
               : (sdpa_g13c
                      ? omarchy::ComputeKernel::
                            SdpaDecodeOnlineRopeSg32BF16Hd128G13C

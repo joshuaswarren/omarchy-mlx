@@ -271,6 +271,32 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 #else
 #define QMM_VEC_OUTPUT_ACCESS writeonly
 #endif
+#ifdef QMM_MULTI_3M_PLAIN
+#if defined(QMM_VEC_TOKENS)
+#error "QMM_MULTI_3M_PLAIN is only supported for single-token QMM_VEC_MULTI"
+#endif
+// 3-member plain+KV trimmed multi-weight layout (16 bindings: x + 3x5).
+// Host guarantees members.size() <= 3, !any_epilogue, !any_out_view, !swiglu.
+#define QMM_VEC_MULTI_WEIGHT_3M(I, B) \
+layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
+  WVEC_T values[]; \
+} input_w##I; \
+layout(set = 0, binding = B + 1, std430) readonly buffer Scales##I { \
+  STORAGE_TYPE values[]; \
+} scales##I; \
+layout(set = 0, binding = B + 2, std430) readonly buffer Biases##I { \
+  STORAGE_TYPE values[]; \
+} biases##I; \
+layout(set = 0, binding = B + 3, std430) QMM_VEC_OUTPUT_ACCESS buffer Output##I { \
+  STORAGE_TYPE values[]; \
+} output##I; \
+layout(set = 0, binding = B + 4, std430) QMM_VEC_SUM_ACCESS buffer Sum##I { \
+  STORAGE_TYPE values[]; \
+} sum##I;
+QMM_VEC_MULTI_WEIGHT_3M(0, 1)
+QMM_VEC_MULTI_WEIGHT_3M(1, 6)
+QMM_VEC_MULTI_WEIGHT_3M(2, 11)
+#else
 #define QMM_VEC_MULTI_WEIGHT(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
   WVEC_T values[]; \
@@ -294,6 +320,7 @@ QMM_VEC_MULTI_WEIGHT(0, 1)
 QMM_VEC_MULTI_WEIGHT(1, 7)
 QMM_VEC_MULTI_WEIGHT(2, 13)
 QMM_VEC_MULTI_WEIGHT(3, 19)
+#endif
 #if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_RESNORM)
 // Token residual+norm epilogue: single-member groups only (weights 1..3
 // stay filler-bound), so the norm weight/output and the last-workgroup
@@ -1419,6 +1446,17 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   (total) = reduce_scratch[lane]; \
 }
 #endif
+#ifdef QMM_MULTI_3M_PLAIN
+#define Q4_MULTI_STORE(I, rounded) { \
+  output##I.values[column] = STORE_VALUE(rounded); \
+  if (((params.flags & 262144u) != 0u) && ((params.flags & (4096u << I)) != 0u)) { \
+    uint sum_column = params.out_strides[I] + \
+        (column / params.matrix_m) * params.in_strides[I] + \
+        (column % params.matrix_m); \
+    sum##I.values[sum_column] = STORE_VALUE(rounded); \
+  } \
+}
+#else
 #define Q4_MULTI_STORE(I, rounded) { \
   bool dual_i = ((params.flags & (1048576u << I)) != 0u) && \
       ((params.flags & (4096u << I)) == 0u); \
@@ -1439,6 +1477,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
                  : ((rounded) + LOAD_VALUE(addend##I.values[column]))); \
   } \
 }
+#endif
 #if defined(QMM_VEC_TOKENS)
 // Multi-token main: same workgroup -> weight partition, fold contract
 // and reduction structure as the single-token main, with the token
@@ -2055,13 +2094,31 @@ void main() {
   uint n0 = params.shape[0];
   uint n1 = params.shape[1];
   uint n2 = params.shape[2];
+#ifndef QMM_MULTI_3M_PLAIN
   uint n3 = params.shape[3];
+#endif
   uint groups0 = (n0 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+#ifndef QMM_MULTI_3M_PLAIN
   uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+#endif
   uint workgroup = gl_WorkGroupID.x;
   uint which;
   uint n;
+#ifdef QMM_MULTI_3M_PLAIN
+  if (workgroup < groups0) {
+    which = 0u;
+    n = n0;
+  } else if (workgroup < groups0 + groups1) {
+    which = 1u;
+    workgroup -= groups0;
+    n = n1;
+  } else {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  }
+#else
   if ((params.flags & 65536u) != 0u) {
     which = 0u;
     n = n0;
@@ -2081,6 +2138,7 @@ void main() {
     workgroup -= groups0 + groups1 + groups2;
     n = n3;
   }
+#endif
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
   bool column_active = column < n;
   uint words_per_row = params.matrix_k / 8u;
@@ -2127,11 +2185,17 @@ void main() {
       Q4_ROWS(input_w0, scales0, biases0)
     } else if (which == 1u) {
       Q4_ROWS(input_w1, scales1, biases1)
+#ifdef QMM_MULTI_3M_PLAIN
+    } else {
+      Q4_ROWS(input_w2, scales2, biases2)
+    }
+#else
     } else if (which == 2u) {
       Q4_ROWS(input_w2, scales2, biases2)
     } else {
       Q4_ROWS(input_w3, scales3, biases3)
     }
+#endif
   }
   Q4_ROWS_REDUCE(total)
   if (lane_in_slot == 0u) {
@@ -2144,11 +2208,17 @@ void main() {
           Q4_MULTI_STORE(0, rounded)
         } else if (which == 1u) {
           Q4_MULTI_STORE(1, rounded)
+#ifdef QMM_MULTI_3M_PLAIN
+        } else {
+          Q4_MULTI_STORE(2, rounded)
+        }
+#else
         } else if (which == 2u) {
           Q4_MULTI_STORE(2, rounded)
         } else {
           Q4_MULTI_STORE(3, rounded)
         }
+#endif
       }
     }
   }
