@@ -7,18 +7,22 @@ stubbed, so CI stays CPU-fast with no model download; the real-model
 mini50 table is the receipt, not CI.
 """
 
+import hashlib
+import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "serve"))
 
-from mlx_omarchy_assistant import vad  # noqa: E402
+from mlx_omarchy_assistant import vad, wake_word  # noqa: E402
 from mlx_omarchy_assistant.voice_loop import Endpointer  # noqa: E402
 
 SAMPLE_RATE = 16_000
@@ -160,6 +164,143 @@ class PreparePinTests(unittest.TestCase):
             fetch=lambda url: self.DATA, digest=self.DIGEST)
         self.assertEqual(path.read_bytes(), self.DATA)
         self.assertIn("vad", str(path))
+
+
+def bounded(call, seconds=5.0):
+    """Run call() on a daemon thread; fail instead of hanging the suite."""
+    box = {}
+
+    def run():
+        try:
+            box["value"] = call()
+        except BaseException as exc:  # re-raised in the test thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise AssertionError(f"call still blocked after {seconds} s")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+class StagedModelPathTests(unittest.TestCase):
+    """prepared() reads anything unusual as "not prepared" and returns at
+    once; prepare() refuses what it must not touch and refetches what it
+    may replace. Every source here is finite."""
+
+    DATA = b"silero-model-bytes" * 4
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp(prefix="vad-staged-"))
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        self.dir = self.home / "vad"
+        self.dir.mkdir()
+        self.path = self.dir / "silero_vad.onnx"
+        self.digest = hashlib.sha256(self.DATA).hexdigest()
+        pin = mock.patch.object(vad, "MODEL_SHA256", self.digest)
+        pin.start()
+        self.addCleanup(pin.stop)
+        self.fetched = []
+
+    def fetch(self, url):
+        self.fetched.append(url)
+        return self.DATA
+
+    def prepared(self):
+        return bounded(lambda: vad.prepared(self.home))
+
+    def prepare(self):
+        return bounded(lambda: vad.prepare(self.home, fetch=self.fetch, digest=self.digest))
+
+    def make_special(self, label):
+        good = self.home / "good.onnx"
+        good.write_bytes(self.DATA)
+        if label == "symlink to the right bytes":
+            os.symlink(good, self.path)
+        elif label == "symlink to /dev/null":
+            os.symlink("/dev/null", self.path)
+        elif label == "fifo without a writer":
+            os.mkfifo(self.path)
+        elif label == "fifo with a writer":
+            os.mkfifo(self.path)
+            fd = os.open(self.path, os.O_RDWR | os.O_NONBLOCK)
+            os.write(fd, b"x" * 64)
+            self.addCleanup(os.close, fd)
+        elif label == "directory":
+            self.path.mkdir()
+
+    SPECIAL = ("symlink to the right bytes", "symlink to /dev/null",
+               "fifo without a writer", "fifo with a writer", "directory")
+
+    def test_a_verified_regular_file_is_prepared(self):
+        self.path.write_bytes(self.DATA)
+        self.assertEqual(self.prepared(), self.path)
+        self.assertEqual(self.prepare(), self.path)
+        self.assertEqual(self.fetched, [])
+
+    def test_non_regular_paths_read_as_not_prepared(self):
+        for label in self.SPECIAL:
+            with self.subTest(label):
+                shutil.rmtree(self.home)
+                self.dir.mkdir(parents=True)
+                self.make_special(label)
+                self.assertIsNone(self.prepared())
+
+    def test_prepare_refuses_non_regular_paths_without_a_fetch(self):
+        for label in self.SPECIAL:
+            with self.subTest(label):
+                shutil.rmtree(self.home)
+                self.dir.mkdir(parents=True)
+                self.make_special(label)
+                with self.assertRaises(vad.VadModelError):
+                    self.prepare()
+                self.assertEqual(self.fetched, [])
+                self.assertEqual(os.listdir(self.dir), ["silero_vad.onnx"])
+
+    def test_an_oversized_file_is_not_prepared_and_is_refetched(self):
+        with open(self.path, "wb") as handle:  # sparse: no bytes on disk
+            handle.truncate(wake_word.MAX_MODEL_BYTES + 1)
+        self.assertIsNone(self.prepared())
+        self.assertEqual(self.prepare(), self.path)
+        self.assertEqual(self.fetched, [vad.MODEL_URL])
+        self.assertEqual(self.prepared(), self.path)
+
+    def test_exact_cap_is_prepared_and_one_byte_more_is_refused(self):
+        self.path.write_bytes(self.DATA)
+        with mock.patch.object(wake_word, "MAX_MODEL_BYTES", len(self.DATA)):
+            self.assertEqual(self.prepared(), self.path)
+        with mock.patch.object(wake_word, "MAX_MODEL_BYTES", len(self.DATA) - 1):
+            self.assertIsNone(self.prepared())
+            self.path.unlink()
+            with self.assertRaises(vad.VadModelError):
+                self.prepare()
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_unreadable_or_misplaced_files_read_as_not_prepared(self):
+        if os.geteuid() != 0:
+            self.path.write_bytes(self.DATA)
+            self.path.chmod(0)
+            self.assertIsNone(self.prepared())
+            self.path.chmod(0o600)
+        shutil.rmtree(self.dir)
+        self.dir.write_bytes(b"a file where the vad directory belongs")
+        self.assertIsNone(self.prepared())
+
+    def test_invalid_path_reads_as_not_prepared(self):
+        self.assertIsNone(vad.prepared(Path("bad\0home")))
+
+    def test_an_old_part_symlink_is_left_alone(self):
+        victim = self.home / "victim"
+        victim.write_bytes(b"keep me")
+        os.symlink(victim, self.dir / "silero_vad.onnx.part")
+        self.assertEqual(self.prepare(), self.path)
+        self.assertEqual(victim.read_bytes(), b"keep me")
+        self.assertEqual(self.path.read_bytes(), self.DATA)
+        self.assertEqual(sorted(os.listdir(self.dir)),
+                         ["silero_vad.onnx", "silero_vad.onnx.part"])
 
 
 class PinAgreementTests(unittest.TestCase):

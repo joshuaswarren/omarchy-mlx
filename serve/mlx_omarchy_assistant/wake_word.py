@@ -11,8 +11,13 @@ never a silently used file.
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import hashlib
+import os
 import queue
+import secrets
+import stat
 import threading
 import urllib.request
 from datetime import datetime, timezone
@@ -51,12 +56,113 @@ def model_dir(home) -> Path:
     return Path(home) / "wake" / MODEL_RELEASE
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Ceiling on one pinned model file, cached or downloaded. The largest pin
+# (silero_vad.onnx, 2.3 MB) sits far below it; anything past it is refused
+# before it can fill memory or disk.
+MAX_MODEL_BYTES = 16 << 20
+_BLOCK = 1 << 20
+
+
+def _blocks(read, limit: int):
+    """Yield read(n) blocks until EOF, asking for at most limit + 1 bytes in
+    all: one byte past the ceiling is enough to refuse."""
+    left = limit + 1
+    while left > 0:
+        block = read(min(_BLOCK, left))
+        if not block:
+            return
+        left -= len(block)
+        yield block
+
+
+def pinned_file_ok(path: Path, digest: str, error: type[Exception]) -> bool:
+    """True when `path` is a regular file of at most MAX_MODEL_BYTES whose
+    SHA-256 is `digest`; False when it is absent, larger, or different.
+
+    Never follows a symlink and never waits on a FIFO: a symlink, FIFO,
+    directory, device or unreadable file raises `error`.
+    """
+    limit = MAX_MODEL_BYTES
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise error(f"{path} is a symlink or under a symlink loop; refusing to follow it") from None
+        raise error(f"cannot open {path}: {exc.strerror}") from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise error(f"{path} is not a regular file; refusing to use it")
+        if info.st_size > limit:
+            return False
+        sha, size = hashlib.sha256(), 0
+        for block in _blocks(lambda n: os.read(fd, n), limit):
+            size += len(block)
+            sha.update(block)
+        return size <= limit and sha.hexdigest() == digest
+    except OSError as exc:
+        raise error(f"cannot read {path}: {exc.strerror}") from None
+    finally:
+        os.close(fd)
+
+
+class _DropRedirectBody(urllib.request.HTTPRedirectHandler):
+    """Close 3xx responses unread so urllib does not drain an unbounded body."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open(url: str):
+    return urllib.request.build_opener(_DropRedirectBody).open(url, timeout=120)
+
+
+def _stage(path: Path, blocks, digest: str, error: type[Exception]) -> None:
+    """Write blocks to a fresh hidden file beside `path`, check size and
+    SHA-256, then atomically replace `path`. Removal of the temp file on
+    error or interrupt is best effort: a failed unlink keeps the original
+    error and can leave the file behind."""
+    limit = MAX_MODEL_BYTES
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.part")
+    out = open(
+        tmp, "xb",
+        opener=lambda name, flags: os.open(
+            name, flags | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666))
+    try:
+        with out:
+            sha, size = hashlib.sha256(), 0
+            for block in blocks:
+                size += len(block)
+                if size > limit:
+                    raise error(f"{path.name} is larger than {limit} bytes; refusing to use it")
+                sha.update(block)
+                out.write(block)
+        if sha.hexdigest() != digest:
+            raise error(f"{path.name} does not match the pinned SHA-256; refusing to use it")
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def fetch_pinned_file(path: Path, url: str, digest: str, error: type[Exception],
+                      fetch=None) -> None:
+    """Leave a verified copy of `url` at `path`, downloading only when the
+    cached file is absent, oversized or corrupt. `fetch(url) -> bytes`
+    replaces the network for tests."""
+    if pinned_file_ok(path, digest, error):
+        return
+    if fetch is not None:
+        _stage(path, [fetch(url)], digest, error)
+        return
+    with _open(url) as response:
+        if response.status != 200:
+            raise error(f"{url} returned HTTP {response.status}")
+        _stage(path, _blocks(response.read, MAX_MODEL_BYTES), digest, error)
 
 
 def prepare(home, model: str = "hey_jarvis", fetch=None) -> Path:
@@ -72,23 +178,7 @@ def prepare(home, model: str = "hey_jarvis", fetch=None) -> Path:
     directory = model_dir(home)
     directory.mkdir(parents=True, exist_ok=True)
     for name, (url, digest) in MODEL_FILES.items():
-        path = directory / name
-        if path.exists() and _sha256(path) == digest:
-            continue
-        if fetch is not None:
-            data = fetch(url)
-        else:
-            with urllib.request.urlopen(url, timeout=120) as response:
-                if response.status != 200:
-                    raise WakeModelError(f"{url} returned HTTP {response.status}")
-                data = response.read()
-        staging = path.with_name(path.name + ".part")
-        staging.write_bytes(data)
-        if _sha256(staging) != digest:
-            staging.unlink()
-            raise WakeModelError(
-                f"{name} does not match the pinned SHA-256; refusing to use it")
-        staging.replace(path)
+        fetch_pinned_file(directory / name, url, digest, WakeModelError, fetch)
     return directory / WAKE_MODELS[model]
 
 
