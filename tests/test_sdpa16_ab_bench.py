@@ -80,11 +80,12 @@ class CensusGuardTests(unittest.TestCase):
         self.assertGreaterEqual(kid, 0)
 
     def test_target_dispatch_counts_separates_arms(self):
+        # A rows keyed by int (in-memory) and str (json-loaded) both count.
         results = [
-            {"arm": "A", "dispatch_census": {"770": 3}},
-            {"arm": "B", "dispatch_census": {"770": 0, "12": 5}},
-            {"arm": "B", "dispatch_census": {"770": 1}},
-            {"arm": "A", "dispatch_census": {}},
+            {"arm": "A", "dispatch_events": {770: 3}},
+            {"arm": "B", "dispatch_events": {"770": 0, "12": 5}},
+            {"arm": "B", "dispatch_events": {"770": 1}},
+            {"arm": "A", "dispatch_events": {}},
         ]
         a, b = bench.target_dispatch_counts(results, 770)
         self.assertEqual(a, 3)
