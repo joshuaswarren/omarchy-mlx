@@ -1999,6 +1999,16 @@ def _mish(a, inplace=False):
     return (f * mx.tanh(sp)).astype(a.dtype)
 
 
+def _glu(a, dim=-1):
+    # aten.glu(input, dim=-1): halves along dim, a * sigmoid(b). A scalar
+    # or an odd-sized dim is an error in aten too.
+    a, f = _opmath_f32(a)
+    if a.ndim == 0 or a.shape[dim % a.ndim] % 2:
+        return _raise("glu")
+    lo, hi = mx.split(f, 2, axis=dim % a.ndim)
+    return (lo * mx.sigmoid(hi)).astype(a.dtype)
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2147,6 +2157,8 @@ _FUNC_SPECS = {
     "selu_": _selu,
     "celu": _celu,
     "celu_": _celu,
+    # PT-AL-d: aten.glu (GDN gate, Conformer)
+    "glu": _glu,
     # PT-AL-b: the piecewise activation family (MobileNetV3 et al.)
     "hardsigmoid": lambda a, inplace=False: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
     "hardswish": lambda a, inplace=False: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),

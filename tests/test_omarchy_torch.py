@@ -184,6 +184,39 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     torch.allclose(got, ref.float(), atol=tol, rtol=tol),
                     (name, dtype, float((got - ref.float()).abs().max())))
 
+    def test_glu_parity(self):
+        """PT-AL-d: aten.glu lowers in the wheel backend — fp32 and
+        bf16 parity against torch across dim=-1/0/1."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x2 = torch.randn(3, 8)
+        x3 = torch.randn(2, 6, 4)
+        F = torch.nn.functional
+        cases = [
+            ((x2,), {}, F.glu(x2)),
+            ((x3,), {"dim": 0}, F.glu(x3, dim=0)),
+            ((x3,), {"dim": 1}, F.glu(x3, dim=1)),
+            ((x3,), {"dim": -2}, F.glu(x3, dim=-2)),
+        ]
+        lowering = ATEN_TABLE["glu"]
+        for ins, kw, ref in cases:
+            for dtype, tol in ((torch.float32, 1e-5),
+                               (torch.bfloat16, 2e-2)):
+                mins = tuple(
+                    (mx.array(t.float().numpy()).astype(mx.bfloat16)
+                     if dtype == torch.bfloat16 else mx.array(t.numpy()))
+                    for t in ins)
+                got = torch.from_numpy(
+                    np.array(lowering(*mins, **kw).astype(mx.float32)))
+                self.assertTrue(
+                    torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                    (kw, dtype,
+                     float((got - ref.float()).abs().max())))
+
 
 
     def test_elu_family(self):
