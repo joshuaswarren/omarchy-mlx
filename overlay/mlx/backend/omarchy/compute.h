@@ -1394,6 +1394,11 @@ enum class ComputeKernel : uint16_t {
   // coalescing while leaving G13C on low-reg QmmVecQ4MultiSubgroupBF16R2S8W2).
   // Appended to keep profile kernel ids stable.
   QmmVecQ4MultiSubgroupBF16R2S8W2Upfront,
+  // Wave 4C GDN ConvNorm Sg32 subgroupAdd & Dv-split (2x/4x WGs/head) screen.
+  GatedDeltaDecodeConvNormBF16Sg32SgAdd,
+  GatedDeltaDecodeConvNormBF16Sg32Dv2,
+  GatedDeltaDecodeConvNormBF16Sg32Dv2SgAdd,
+  GatedDeltaDecodeConvNormBF16Sg32Dv4,
   Count,
 };
 

@@ -18248,7 +18248,45 @@ void GdnConvDeltaUpdate::eval_gpu(
                  : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16Pf);
   if (gdn_coal_sg32_ok &&
       (params.shape[1] % 4u) == 0u && (params.shape[2] % 4u) == 0u) {
+    const char* gdn_opt = omarchy::env_str("MLX_OMARCHY_GDN_OPT");
+    uint32_t dv_split = 1u;
     kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
+    if (gdn_opt != nullptr && gdn_opt[0] != '\0') {
+      if (std::strcmp(gdn_opt, "sgadd") == 0) {
+        kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32SgAdd;
+      } else if (B * Hv <= 64 && encoder.device().compute().binding_limit() >= 15u) {
+        if (std::strcmp(gdn_opt, "dv2") == 0) {
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Dv2;
+          dv_split = 2u;
+        } else if (std::strcmp(gdn_opt, "dv2_sgadd") == 0) {
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Dv2SgAdd;
+          dv_split = 2u;
+        } else if (std::strcmp(gdn_opt, "dv4") == 0) {
+          kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Dv4;
+          dv_split = 4u;
+        }
+      }
+    }
+    if (dv_split > 1u) {
+      array gdn_scratch(
+          Shape{static_cast<int>(B * Hv * 4)}, float32, nullptr, {});
+      gdn_scratch.set_data(allocate_omarchy(gdn_scratch.nbytes()));
+      encoder.add_temporary(gdn_scratch);
+      std::array<omarchy::ComputeBinding, 15> split_bindings{
+          bindings[0], bindings[1], bindings[2], bindings[3], bindings[4],
+          bindings[5], bindings[6], bindings[7], bindings[8], bindings[9],
+          bindings[10], bindings[11], bindings[12],
+          binding(gdn_scratch),
+          encoder.resnorm_ticket_binding()};
+      encoder.dispatch_compute(
+          kernel,
+          split_bindings,
+          params,
+          static_cast<uint32_t>(B * Hv) * dv_split,
+          1,
+          1);
+      return;
+    }
   }
   encoder.dispatch_compute(
       kernel,

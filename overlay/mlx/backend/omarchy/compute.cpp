@@ -423,6 +423,10 @@
 #include "gated_delta_decode_bf16.h"
 #include "gated_delta_decode_bf16_sg32.h"
 #include "gated_delta_decode_conv_norm_bf16_sg32.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_sgadd.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_dv2.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_dv2_sgadd.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_dv4.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
 #include "gated_delta_decode_composed_bf16.h"
@@ -2597,6 +2601,22 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up,
           qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32SgAdd:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_sgadd,
+          gated_delta_decode_conv_norm_bf16_sg32_sgadd_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Dv2:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_dv2,
+          gated_delta_decode_conv_norm_bf16_sg32_dv2_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Dv2SgAdd:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_dv2_sgadd,
+          gated_delta_decode_conv_norm_bf16_sg32_dv2_sgadd_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Dv4:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_dv4,
+          gated_delta_decode_conv_norm_bf16_sg32_dv4_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;
