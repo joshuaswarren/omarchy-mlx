@@ -814,6 +814,15 @@ inline bool gdn_conv_coalesced_default(
   return device_name.find("G14C") != std::string::npos && hk == hv;
 }
 
+// Coalesced-state fused GDN decode conv + delta + gated-RMSNorm for f32 A_log
+// models (Qwen3.5-9B, GatedDeltaDecodeConvNormBF16Sg32). Replaces 3 dispatches
+// (GdnConvDecode + GatedDeltaDecodeBF16Sg32 + RmsNormGated) with 1 dispatch
+// (-48 dispatches and -48 barriers/tok on 9B).
+// Default on G14C; MLX_OMARCHY_GDN_COALESCED=0 disables.
+inline bool gdn_conv_coalesced_f32a_default(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
 // Coalesced-state standalone GDN decode kernel (GatedDeltaDecodeBF16Sg32:
 // 1024 threads, 32 subgroups x 32 lanes, 4 Dv rows/SG via coalesced 512-byte
 // vec4 state loads/stores, native GQA key-head indexing, f32 A_log).

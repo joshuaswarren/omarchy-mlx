@@ -123,7 +123,7 @@
      const std::vector<array>& primals,
 --- a/mlx/fast_primitives.h	2026-11-03 12:54:14.309018451 -0600
 +++ b/mlx/fast_primitives.h	2026-11-03 12:54:14.311018434 -0600
-@@ -705,6 +705,101 @@
+@@ -705,6 +705,105 @@
    float qk_eps_{0.0f};
  };
  
@@ -148,8 +148,9 @@
 +        qk_scale_k_{qk_scale_k},
 +        qk_eps_{qk_eps},
 +        norm_eps_{norm_eps} {}
++  static bool f32_a_log_supported(Stream s);
 +  // Inputs: conv state [1, K-1, C], qkv [1, 1, C], conv weight [C, K, 1], a [1, 1, Hv], b [1, 1, Hv],
-+  // A_log [Hv], dt_bias [Hv] (all bf16), recurrent state [1, Hv, 128, 128] (f32); with the gated norm
++  // A_log [Hv] (bf16, or f32 when f32_a_log_supported(s) with norm), dt_bias [Hv] (bf16), recurrent state [1, Hv, 128, 128] (f32); with the gated norm
 +  // also the gate [1, 1, Hv, 128] and the norm weight [128] (bf16).
 +  static bool use_fallback(
 +      const std::vector<array>& in,
@@ -171,9 +172,12 @@
 +    const int C = x.shape(2);
 +    const int Hv = (C - 2 * key_dim) / 128;
 +    for (int i = 0; i < 7; ++i) {
-+      if (in[i].dtype() != bfloat16) {
++      if (in[i].dtype() != bfloat16 && !(i == 5 && in[i].dtype() == float32)) {
 +        return true;
 +      }
++    }
++    if (in[5].dtype() == float32 && (!with_norm || !f32_a_log_supported(s))) {
++      return true;
 +    }
 +    if (with_norm &&
 +        (in[8].dtype() != bfloat16 || in[9].dtype() != bfloat16 ||
