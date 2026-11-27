@@ -778,6 +778,13 @@
 #include "matmul_direct_f16_c16_tn.h"
 #include "matmul_direct_f16_c16_tt.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s32w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s9w2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s9w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s9w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s6w2.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s27w2.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s27w2_noo0.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s14w2.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
@@ -2571,6 +2578,32 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_bf16_r2s32w2,
           qmm_vec_q4_word_subgroup_bf16_r2s32w2_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S9W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s9w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s9w2_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S9W2:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s9w2,
+          qmm_vec_q4_multi_subgroup_bf16_r2s9w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S9W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s9w2, qmm_vec_q4_swiglu_bf16_r1s9w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S6W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s6w2, qmm_vec_q4_swiglu_bf16_r1s6w2_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S27W2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s27w2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s27w2_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S27W2NoO0:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s27w2_noo0,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s27w2_noo0_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S14W2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s14w2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s14w2_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

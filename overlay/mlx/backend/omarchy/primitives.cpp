@@ -9703,6 +9703,13 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           (params.shape[1] % 2u == 0u))) {
         vec_kernel = geometry.word;
         qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+        if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u) &&
+            params.matrix_n >= 2048u &&
+            omarchy::env_flag("MLX_OMARCHY_WORD_R2S9") &&
+            encoder.device().capabilities().max_compute_work_group_invocations >= 288u) {
+          vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S9W2;
+          qmm_groups = (params.matrix_n + 17u) / 18u;
+        }
       }
     }
     encoder.dispatch_compute(
@@ -11132,6 +11139,17 @@ bool dispatch_quantized_gemv_group(
     if (sw_r1_on) {
       swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
       swiglu_cols = 8u;
+      if (const char* sw3 = omarchy::env_str("MLX_OMARCHY_SWIGLU_3U");
+          sw3 != nullptr && sw3[0] != '\0') {
+        if (std::strcmp(sw3, "r1s9w2") == 0 &&
+            encoder.device().capabilities().max_compute_work_group_invocations >= 288u) {
+          swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S9W2;
+          swiglu_cols = 9u;
+        } else if (std::strcmp(sw3, "r1s6w2") == 0) {
+          swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S6W2;
+          swiglu_cols = 6u;
+        }
+      }
     }
   }
   ComputeKernel resnorm_kernel = geom.resnorm;
@@ -11159,8 +11177,31 @@ bool dispatch_quantized_gemv_group(
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
         resnorm_cols = 32u;
       }
+      if (const char* rn3 = omarchy::env_str("MLX_OMARCHY_RESNORM_3U");
+          rn3 != nullptr && rn3[0] != '\0') {
+        if (std::strcmp(rn3, "r2s27w2") == 0 &&
+            encoder.device().capabilities().max_compute_work_group_invocations >= 864u) {
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S27W2;
+          resnorm_cols = 54u;
+        } else if (std::strcmp(rn3, "r2s27noo0") == 0 &&
+            encoder.device().capabilities().max_compute_work_group_invocations >= 864u) {
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S27W2NoO0;
+          resnorm_cols = 54u;
+        } else if (std::strcmp(rn3, "r2s14w2") == 0) {
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S14W2;
+          resnorm_cols = 28u;
+        }
+      }
       resnorm_vec4_active = true;
     }
+  }
+  ComputeKernel multi_bf16_kernel = geom.multi;
+  uint32_t multi_bf16_cols = geom.columns;
+  if (!token_route && outgate == nullptr && dtype == bfloat16 && subgroup_ready &&
+      omarchy::env_flag("MLX_OMARCHY_MULTI_R2S9") &&
+      encoder.device().capabilities().max_compute_work_group_invocations >= 288u) {
+    multi_bf16_kernel = ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S9W2;
+    multi_bf16_cols = 18u;
   }
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
@@ -11174,7 +11215,7 @@ bool dispatch_quantized_gemv_group(
       ? swiglu_cols
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
-             ? geom.columns
+             ? multi_bf16_cols
              : 8u);
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
@@ -11857,7 +11898,7 @@ bool dispatch_quantized_gemv_group(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
-            qmm_geometry().multi)
+            multi_bf16_kernel)
       : select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiF32,

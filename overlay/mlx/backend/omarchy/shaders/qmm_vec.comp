@@ -2134,7 +2134,9 @@ void main() {
       uint col = column + r;
       if (col < n) {
         float rounded = ROUND_STORAGE(total[r]);
+#ifndef QMM_RESNORM_NO_OUT0
         output0.values[col] = STORE_VALUE(rounded);
+#endif
         sum0.values[col] =
             STORE_VALUE(rounded + LOAD_VALUE(addend0.values[col]));
       }
