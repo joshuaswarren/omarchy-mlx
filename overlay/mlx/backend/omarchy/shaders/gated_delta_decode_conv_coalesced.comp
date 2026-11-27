@@ -181,7 +181,12 @@ void gdn_conv_state_out(uint channel) {
 uint16_t gdn_conv_channel_and_state(uint channel, bool write_state) {
   const uint km1 = params.lhs_size;
   const uint channels = params.reduce_size;
+#ifdef GDN_POW2_TRIM
+  // Host guarantees K==4 (operation==4, km1==3) when GDN_POW2_TRIM is active.
+  {
+#else
   if (params.operation == 4u && km1 == 3u) {
+#endif
     uint wb = params.aux_size + channel * 4u;
     uint sb = params.lhs_offset + channel;
     uint16_t s0_b = conv_state.v[sb];
@@ -210,11 +215,13 @@ uint16_t gdn_conv_channel_and_state(uint channel, bool write_state) {
     float silu = value * bf16_load(sig_b);
     return gdn_conv_bf16_store(silu);
   }
+#ifndef GDN_POW2_TRIM
   uint16_t act = gdn_conv_channel(channel);
   if (write_state) {
     gdn_conv_state_out(channel);
   }
   return act;
+#endif
 }
 #endif
 
@@ -225,7 +232,11 @@ float gdn_compute_beta_from_b(float b_in) {
 }
 
 float gdn_compute_g_from_a(uint head, float a_in) {
+#ifdef GDN_POW2_TRIM
+  uint ph = head;
+#else
   uint ph = head % params.in_strides[2];
+#endif
   float a_log;
   if ((params.flags & 512u) != 0u) {
     uint base = params.in_strides[0] + 2u * ph;
@@ -344,7 +355,11 @@ vec2 gdn_compute_gates(uint head) {
     float beta_f = 1.0f / (1.0f + exp(-b_in));
     beta = bf16_load(bf16_store(beta_f));
     float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
+#ifdef GDN_POW2_TRIM
+    uint ph = head;
+#else
     uint ph = head % params.in_strides[2];
+#endif
     float a_log;
     if ((params.flags & 512u) != 0u) {
       uint base = params.in_strides[0] + 2u * ph;
@@ -381,11 +396,19 @@ void main() {
   uint lane = tid & 31u;
 
   uint khead = head;
+#ifdef GDN_POW2_TRIM
+  uint gqa_shift = (params.in_strides[3] != 0u)
+      ? (uint(findLSB(params.in_strides[2])) -
+         uint(findLSB(params.in_strides[3])))
+      : 0u;
+  khead = head >> gqa_shift;
+#else
   if (params.in_strides[3] != 0u) {
     uint hv_b = params.in_strides[2];
     uint hk_b = params.in_strides[3];
     khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
   }
+#endif
 
 #ifndef GDN_INPROJ_BA_FUSED
   // Single-thread gate computation (avoids 1023x redundant exp/log SFU traffic).
@@ -418,11 +441,15 @@ void main() {
     const uint key_dim = params.rhs_size;
     const uint c = tid & 127u;
     bool lead = true;
+#ifdef GDN_POW2_TRIM
+    lead = (head & ((1u << gqa_shift) - 1u)) == 0u;
+#else
     if (params.in_strides[3] != 0u) {
       lead = (head % params.in_strides[2]) %
               (params.in_strides[2] / params.in_strides[3]) ==
           0u;
     }
+#endif
 #ifdef GDN_SG32_FAST
     uint ch;
     bool write_state;
@@ -501,6 +528,12 @@ void main() {
     w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
     w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
   }
+  // sv[0..127] was written in Phase 1 before barrier 1; hoist all 4 loads now
+  // so Phase 2 starts immediately with zero shared-memory load latency.
+  float sv0 = sv[r0];
+  float sv1 = sv[r1];
+  float sv2 = sv[r2];
+  float sv3 = sv[r3];
 #endif
 
   // SGs 0..3 (Q) and SGs 4..7 (K) each compute the exact stride-64..1
@@ -550,36 +583,65 @@ void main() {
 
   {
 #ifdef GDN_SG32_FAST
-    // Straight-line 4-row Phase 2: defers lane==0 shared writes to one block
-    // after all 4 rows so all 4 vec4 s_out stores issue without per-row waits.
-    #define GDN_P4_ROW_FAST(wv, r, svr, o_out) { \
-      float kv_part = fma((wv).x, skg0, fma((wv).y, skg1, fma((wv).z, skg2, (wv).w * skg3))); \
-      float kv_acc = subgroupAdd(kv_part); \
-      float delta = ((svr) - kv_acc) * beta; \
-      float n0 = fma((wv).x, g, gdn_dk_term(delta, sk0)); \
-      float n1 = fma((wv).y, g, gdn_dk_term(delta, sk1)); \
-      float n2 = fma((wv).z, g, gdn_dk_term(delta, sk2)); \
-      float n3 = fma((wv).w, g, gdn_dk_term(delta, sk3)); \
-      s_out.v[s_out_base_q + (r) * 32u + lane] = vec4(n0, n1, n2, n3); \
-      float o_part = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3))); \
-      (o_out) = subgroupAdd(o_part); \
+    // 4-way interleaved Phase 2: computes all 4 kv_part dots, pipelines all 4
+    // kv subgroupAdds back-to-back, writes all 4 s_out vec4 stores without
+    // intervening subgroupAdds, then pipelines all 4 o_part subgroupAdds.
+    // Exact same arithmetic and rounding order per row as the serial path.
+    float kvp0 = fma(w0.x, skg0, fma(w0.y, skg1, fma(w0.z, skg2, w0.w * skg3)));
+    float kvp1 = fma(w1.x, skg0, fma(w1.y, skg1, fma(w1.z, skg2, w1.w * skg3)));
+    float kvp2 = fma(w2.x, skg0, fma(w2.y, skg1, fma(w2.z, skg2, w2.w * skg3)));
+    float kvp3 = fma(w3.x, skg0, fma(w3.y, skg1, fma(w3.z, skg2, w3.w * skg3)));
+    float kva0 = subgroupAdd(kvp0);
+    float kva1 = subgroupAdd(kvp1);
+    float kva2 = subgroupAdd(kvp2);
+    float kva3 = subgroupAdd(kvp3);
+    float op0, op1, op2, op3;
+    {
+      float delta = (sv0 - kva0) * beta;
+      float n0 = fma(w0.x, g, gdn_dk_term(delta, sk0));
+      float n1 = fma(w0.y, g, gdn_dk_term(delta, sk1));
+      float n2 = fma(w0.z, g, gdn_dk_term(delta, sk2));
+      float n3 = fma(w0.w, g, gdn_dk_term(delta, sk3));
+      s_out.v[s_out_base_q + r0 * 32u + lane] = vec4(n0, n1, n2, n3);
+      op0 = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3)));
     }
-    float sv0 = sv[r0];
-    float sv1 = sv[r1];
-    float sv2 = sv[r2];
-    float sv3 = sv[r3];
-    float oa0, oa1, oa2, oa3;
-    GDN_P4_ROW_FAST(w0, r0, sv0, oa0)
-    GDN_P4_ROW_FAST(w1, r1, sv1, oa1)
-    GDN_P4_ROW_FAST(w2, r2, sv2, oa2)
-    GDN_P4_ROW_FAST(w3, r3, sv3, oa3)
+    {
+      float delta = (sv1 - kva1) * beta;
+      float n0 = fma(w1.x, g, gdn_dk_term(delta, sk0));
+      float n1 = fma(w1.y, g, gdn_dk_term(delta, sk1));
+      float n2 = fma(w1.z, g, gdn_dk_term(delta, sk2));
+      float n3 = fma(w1.w, g, gdn_dk_term(delta, sk3));
+      s_out.v[s_out_base_q + r1 * 32u + lane] = vec4(n0, n1, n2, n3);
+      op1 = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3)));
+    }
+    {
+      float delta = (sv2 - kva2) * beta;
+      float n0 = fma(w2.x, g, gdn_dk_term(delta, sk0));
+      float n1 = fma(w2.y, g, gdn_dk_term(delta, sk1));
+      float n2 = fma(w2.z, g, gdn_dk_term(delta, sk2));
+      float n3 = fma(w2.w, g, gdn_dk_term(delta, sk3));
+      s_out.v[s_out_base_q + r2 * 32u + lane] = vec4(n0, n1, n2, n3);
+      op2 = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3)));
+    }
+    {
+      float delta = (sv3 - kva3) * beta;
+      float n0 = fma(w3.x, g, gdn_dk_term(delta, sk0));
+      float n1 = fma(w3.y, g, gdn_dk_term(delta, sk1));
+      float n2 = fma(w3.z, g, gdn_dk_term(delta, sk2));
+      float n3 = fma(w3.w, g, gdn_dk_term(delta, sk3));
+      s_out.v[s_out_base_q + r3 * 32u + lane] = vec4(n0, n1, n2, n3);
+      op3 = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3)));
+    }
+    float oa0 = subgroupAdd(op0);
+    float oa1 = subgroupAdd(op1);
+    float oa2 = subgroupAdd(op2);
+    float oa3 = subgroupAdd(op3);
     if (lane == 0u) {
       float ov0 = bf16_load(bf16_store(oa0)); so[r0] = ov0; s_norm_buf[r0] = ov0 * ov0;
       float ov1 = bf16_load(bf16_store(oa1)); so[r1] = ov1; s_norm_buf[r1] = ov1 * ov1;
       float ov2 = bf16_load(bf16_store(oa2)); so[r2] = ov2; s_norm_buf[r2] = ov2 * ov2;
       float ov3 = bf16_load(bf16_store(oa3)); so[r3] = ov3; s_norm_buf[r3] = ov3 * ov3;
     }
-    #undef GDN_P4_ROW_FAST
 #else
     uint r0 = sg;
     uint r1 = sg + 32u;

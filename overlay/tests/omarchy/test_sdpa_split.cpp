@@ -409,13 +409,13 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK(omarchy::sdpa_split_min_keys("Apple M5 Max (G17C B1)") == 320);
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M5 Max (G17C B1)", 319));
   CHECK(omarchy::sdpa_split_default("Apple M5 Max (G17C B1)", 320));
-  // Head width 256: G16S starts at 768 keys, G14C at 256, G15S at 1408; every other part keeps its width-128 threshold.
+  // Head width 256: G16S and G14C start at 768 keys, G15S at 1408; every other part keeps its width-128 threshold.
   CHECK(omarchy::sdpa_split_wide_min_keys("Apple M4 Pro (G16S B1)") == 768);
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M4 Pro (G16S B1)", 767, 256));
   CHECK(omarchy::sdpa_split_default("Apple M4 Pro (G16S B1)", 768, 256));
-  CHECK(omarchy::sdpa_split_wide_min_keys("Apple M2 Max (G14C B1)") == 256);
-  CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 255, 256));
-  CHECK(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 256, 256));
+  CHECK(omarchy::sdpa_split_wide_min_keys("Apple M2 Max (G14C B1)") == 768);
+  CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 767, 256));
+  CHECK(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 768, 256));
   CHECK(omarchy::sdpa_split_wide_min_keys("Apple M5 Max (G17C B1)") == 320);
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M5 Max (G17C B1)", 319, 256));
   CHECK(omarchy::sdpa_split_default("Apple M5 Max (G17C B1)", 320, 256));
