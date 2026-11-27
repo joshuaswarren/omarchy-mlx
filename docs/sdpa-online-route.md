@@ -46,7 +46,7 @@ online included).
 
 | part | `max_keys` | basis |
 |---|---|---|
-| G13C (16-inch M1 Max) | **2304** | Qwen3-4B 4-bit decode ABBA vs shipped defaults: +8.68% to +11.32% (−0.95 to −1.35 ms/tok, bit-identical greedy ids) at ctx 128–2048; −7.25% at ctx 4096 once redundant KV reads spill SLC. 2304 covers ctx 2048 + 256 generated tokens; ctx 4096 stays on split-K. |
+| G13C (16-inch M1 Max) | **2304** | Qwen3-4B 4-bit decode ABBA vs shipped defaults: +8.53% to +10.91% (−0.93 to −1.30 ms/tok, bit-identical greedy ids) at ctx 256–2048; −7.25% at ctx 4096 once redundant KV reads spill SLC. 2304 covers ctx 2048 + 256 generated tokens; ctx 4096 stays on split-K. |
 | every other part | 0 (never default) | unmeasured; add a row only with an ABBA receipt |
 
 ## Overrides
