@@ -816,10 +816,14 @@ inline int gdn_conv_delta_resolved_mode(const std::string& device_name) {
 // Measured on Apple M2 Max (G14C B1) Qwen3.8-2B (5-pair ABBA, DEFER_TOKENS=0,
 // identical greedy token IDs): +11.34% solo at ctx=512 (151.32 -> 168.49 tok/s,
 // 5/5 wins) and +11.38% at ctx=2048 stacked (144.17 -> 160.57 tok/s, 5/5 wins).
-// Default on G14C equal-head (hk == hv); MLX_OMARCHY_GDN_COALESCED=0 disables.
+// Measured on Apple M1 (G13G B1) Qwen3.8-2B (DEFER_TOKENS=0, bit-exact IDs
+// 4784df039da0): +3.31% solo at ctx=512 (42.13 -> 43.52 tok/s, 3/3 rounds).
+// Default on G14C and G13G equal-head (hk == hv); MLX_OMARCHY_GDN_COALESCED=0 disables.
 inline bool gdn_conv_coalesced_default(
     const std::string& device_name, int hk, int hv) {
-  return device_name.find("G14C") != std::string::npos && hk == hv;
+  return (device_name.find("G14C") != std::string::npos ||
+          device_name.find("G13G") != std::string::npos) &&
+      hk == hv;
 }
 
 // Coalesced-state fused GDN decode conv + delta + gated-RMSNorm for f32 A_log
@@ -858,9 +862,12 @@ inline bool gdn_decode_coalesced_default(
 
 // Low-register dedicated SwiGLU (QmmVecQ4SwigluBF16R1S8W2: ROWS_PER_SLOT=1,
 // 8 subgroups, uvec2 weight loads — 2 live rows/SG across gate+up instead of 4,
-// bit-identical to R2S8W2). Default on G14C; MLX_OMARCHY_SWIGLU_R1=0 disables.
+// bit-identical to R2S8W2). Default on G14C and G13G (Apple M1: +0.37% on 4B
+// ctx512 and contributes to +8.19%/+8.23% stacked 5/5 ABBA on 2B);
+// MLX_OMARCHY_SWIGLU_R1=0 disables.
 inline bool qmm_swiglu_r1_default(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 // 128-thread (4 subgroups, 4 cols/WG) dedicated SwiGLU
@@ -883,9 +890,12 @@ inline bool qmm_word_r2s4_default(const std::string& device_name) {
 // (QmmVecQ4ResNormVec4BF16R2S16W2: 32 cols/WG halving ticket.done atomic
 // contention + single-pass coherent sum0_v4 load held in registers across the
 // RMSNorm barriers, bit-identical to fast_norm_apple.comp for 2048 and 4096).
-// Default on G14C; MLX_OMARCHY_RESNORM_VEC4=0 disables.
+// Default on G14C and G13G (R2S32 stays G14C-only; G13G keeps R2S16W2, which
+// wins +0.30% on 4B and stacks in +8.19%/+8.23% 5/5 ABBA on 2B);
+// MLX_OMARCHY_RESNORM_VEC4=0 disables.
 inline bool qmm_resnorm_vec4_default(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 // 1024-thread (32 subgroups, 64 cols/WG) coalesced uvec4 ResNormVec4
@@ -900,10 +910,12 @@ inline bool qmm_resnorm_r2s32_default(const std::string& device_name) {
 // 1024-thread (32 subgroups, 64 cols/WG) Q4 word decode GEMV for large
 // vocabulary lm_head (n >= 65536) in GreedyQuantizedArgmax. Cuts 248320-vocab
 // workgroup count from 15520 (R2S8W2) to 3880 for 4x better x L1 reuse and
-// lower workgroup dispatch overhead. Default on G14C; MLX_OMARCHY_LM_R2S32=0
+// lower workgroup dispatch overhead. Default on G14C and G13G (+0.56% on 4B
+// ctx512 and stacks to +8.19%/+8.23% 5/5 ABBA on 2B); MLX_OMARCHY_LM_R2S32=0
 // restores geometry.word. Pure.
 inline bool qmm_lm_r2s32_default(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 // Upfront 8-load Q4_ROWS Multi GEMV (QmmVecQ4MultiSubgroupBF16R2S8W2Upfront):
@@ -1408,6 +1420,10 @@ inline uint32_t sdpa_online_rope_max_keys(
   if (device_name.find("G13C") != std::string::npos) {
     return head_dim == 128 ? 2304u : 0u;
   }
+  if (device_name.find("G13G") != std::string::npos) {
+    if (head_dim == 128) return 2304u;
+    if (head_dim == 256 && has_outgate) return 4096u;
+  }
   if (device_name.find("G14C") != std::string::npos) {
     if (head_dim == 128) return 1024u;
     if (head_dim == 256 && has_outgate) return 4096u;
@@ -1429,11 +1445,17 @@ inline bool sdpa_online_rope_default(
 // Targets ~32 WGs (1 full wave on 38-core G14C): split=4 for <=10 Q-heads
 // (Qwen3.8-2B: 8 heads x 4 = 32 WGs) at k_len >= 128, split=2 for 11..20 Q-heads
 // (Qwen3.5-9B: 16 heads x 2 = 32 WGs) at k_len >= 64.
+// On 8-core G13G (Apple M1): split=2 for <=10 Q-heads (8 heads x 2 = 16 WGs,
+// 2 WGs/core) at k_len >= 128 (+1.61% on Qwen3.8-2B; split=4 oversubscribes
+// at -0.22%).
 // MLX_OMARCHY_SDPA_ONLINE_ROPE_SPLIT=0/1/2/4/8 overrides. Pure.
 inline uint32_t sdpa_online_rope_split_default(
     const std::string& device_name,
     uint32_t heads,
     uint32_t k_len) {
+  if (device_name.find("G13G") != std::string::npos) {
+    return (heads <= 10u && k_len >= 128u) ? 2u : 1u;
+  }
   if (device_name.find("G14C") == std::string::npos) {
     return 1u;
   }
@@ -1453,10 +1475,13 @@ inline uint32_t sdpa_online_rope_split_default(
 // G14C (Apple M2 Max, 38 GPU cores): 5-pair ABBA (MLX_OMARCHY_DEFER_TOKENS=0,
 // bit-identical greedy token IDs): Qwen3.8-2B ctx 512 +0.82% (5/5, online) and
 // ctx 2048 +0.38% (4/5, split-K); Qwen3.5-9B ctx 512 +0.50% (5/5) and ctx 2048
-// +0.14% (3/5); Qwen3-4B non-gated flat (-0.12%). Other parts stay off until
-// measured. Pure.
+// +0.14% (3/5); Qwen3-4B non-gated flat (-0.12%).
+// G13G (Apple M1, 8 GPU cores): paired with SDPA_ONLINE_ROPE on Qwen3.8-2B
+// ctx 512 +1.48% solo (42.13 -> 42.75 tok/s, 3/3) and +1.61% with split=2.
+// Other parts stay off until measured. Pure.
 inline bool sdpa_outgate_default(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 // Width-256 value-phase pass 1 (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Four query heads per
@@ -1549,10 +1574,12 @@ inline bool gemv_balanced_qkv_part(const std::string& device_name) {
 // slower at 128 on G13C (NormApple3, the note at
 // apple_norm_shape_selected), so this predicate is consulted only where
 // RoPE::eval_gpu fuses the norm. G13C (16-inch M1 Max): measured for
-// receipts/20261125T-w7T-m1md5. MLX_OMARCHY_NORM_APPLE_128=1/0
+// receipts/20261125T-w7T-m1md5. G13G (13-inch M1): +0.30% on 4B ctx512 and
+// stacks in +8.19%/+8.23% 5/5 ABBA on 2B. MLX_OMARCHY_NORM_APPLE_128=1/0
 // overrides on any part. Pure.
 inline bool norm_apple_128_default_part(const std::string& device_name) {
-  return device_name.find("G13C") != std::string::npos;
+  return device_name.find("G13C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 inline bool gemv_balanced_qkv_widths_ok(const std::vector<int64_t>& widths) {
@@ -1617,9 +1644,12 @@ inline bool greedy_prune_enabled(const std::string& device_name) {
 // word route runs geometry.word (QmmVecQ4WordSubgroupBF16R2S8W2) plus two tiny
 // chunk/combine dispatches, beating the 8-stage staged path by +8.08% (5/5 wins)
 // and matching/edging the 5-dispatch composed tail with bit-identical token IDs.
+// On G13G (Apple M1) Qwen3.8-2B ctx 512 it wins +1.69% solo (42.13 -> 42.84
+// tok/s, bit-exact 4784df039da0).
 // MLX_OMARCHY_GREEDY_WORD=1/0 overrides on any part. Pure.
 inline bool greedy_word_over_staged_part(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 inline bool greedy_word_preferred(const std::string& device_name) {

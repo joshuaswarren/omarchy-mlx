@@ -4310,7 +4310,7 @@ TEST_CASE("norm apple 128 part rule") {
     CHECK(!omarchy::norm_apple_128_default_part("Apple M2 Max (G14C B1)"));
   }
   CHECK(omarchy::norm_apple_128_default_part("Apple M1 Max (G13C B1)"));
-  CHECK(!omarchy::norm_apple_128_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::norm_apple_128_default_part("Apple M1 (G13G B1)"));
   CHECK(!omarchy::norm_apple_128_default_part("Apple M4 (G16G B1)"));
   CHECK(!omarchy::norm_apple_128_default_part("Apple M5 Max (G17C B1)"));
   CHECK(!omarchy::norm_apple_128_default_part("Apple M6 (G18G B1)"));
