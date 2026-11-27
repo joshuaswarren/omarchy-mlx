@@ -1398,6 +1398,10 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4MultiSubgroupBF16R2S8W2Fast,
   QmmVecQ4SwigluBF16R2S8W2Fast,
   QmmVecQ4ResNormBF16R2S8W2VecFast,
+  // Upfront 8-load 256-thread Multi GEMV for G14C (preserves 2-wait load
+  // coalescing while leaving G13C on low-reg QmmVecQ4MultiSubgroupBF16R2S8W2).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiSubgroupBF16R2S8W2Upfront,
   Count,
 };
 
