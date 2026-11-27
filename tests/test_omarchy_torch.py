@@ -42,6 +42,37 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         self.assertTrue(torch.allclose(out.cpu(), want.cpu()),
                         (out.cpu(), want.cpu()))
 
+    def test_native_layer_norm_backward(self):
+        """PT-U2: the wheel backend lowers aten.native_layer_norm_backward —
+        the dX/dW/dB triple from the saved mean/rstd — with fp32 parity
+        against the aten CPU op."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(0)
+        lowering = ATEN_TABLE["native_layer_norm_backward"]
+        for ns_shape, xshape in [((128,), (4, 64, 128)), ((64,), (8, 64)),
+                                 ((8, 16), (4, 8, 16))]:
+            x = torch.randn(*xshape)
+            w = torch.randn(*ns_shape)
+            b = torch.randn(*ns_shape)
+            out, mean, rstd = torch.native_layer_norm(
+                x, list(ns_shape), w, b, 1e-5)
+            g = torch.randn_like(out)
+            ref = torch.ops.aten.native_layer_norm_backward(
+                g, x, list(ns_shape), mean, rstd, w, b, [True, True, True])
+            mine = lowering(mx.array(g.numpy()), mx.array(x.numpy()),
+                            list(ns_shape), mx.array(mean.numpy()),
+                            mx.array(rstd.numpy()), mx.array(w.numpy()),
+                            mx.array(b.numpy()), [True, True, True])
+            for tag, m, r in zip(("dx", "dw", "db"), mine, ref):
+                got = torch.from_numpy(__import__("numpy").array(m))
+                self.assertTrue(
+                    torch.allclose(got, r, atol=1e-5, rtol=1e-5),
+                    (ns_shape, tag, float((got - r).abs().max())))
+
 
 if __name__ == "__main__":
     unittest.main()
