@@ -865,6 +865,15 @@ inline bool qmm_resnorm_r2s32_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// 1024-thread (32 subgroups, 64 cols/WG) Q4 word decode GEMV for large
+// vocabulary lm_head (n >= 65536) in GreedyQuantizedArgmax. Cuts 248320-vocab
+// workgroup count from 15520 (R2S8W2) to 3880 for 4x better x L1 reuse and
+// lower workgroup dispatch overhead. Default on G14C; MLX_OMARCHY_LM_R2S32=0
+// restores geometry.word. Pure.
+inline bool qmm_lm_r2s32_default(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
 // Fused GatedDeltaUpdate on G18G (Apple M6): the fused update and raw
 // decode routes miscompute there. On the 2026-11-24 PAR-35 A/B the fused
 // path diverged from the ops reference from layer 1 prefill on, while the

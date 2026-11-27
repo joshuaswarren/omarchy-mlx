@@ -920,3 +920,20 @@ TEST_CASE("fused greedy word head: K = 2560 (Qwen3.5-4B) matches") {
     CHECK(run.token < static_cast<uint32_t>(n));
   }
 }
+
+TEST_CASE("fused greedy word head: LM_R2S32=1 matches LM_R2S32=0 and composed argmax at n=65536") {
+  if (!compute_available() || !word_caps() || !subgroup_ready() ||
+      !greedy_bindings_fit(2560, 65536)) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  auto in = make_greedy_inputs(
+      65536, 0xdec53, kScales, kBiases, {}, {}, false, stream, 2560);
+  setenv("MLX_OMARCHY_LM_R2S32", "0", 1);
+  auto r0 = fused_argmax(in, stream);
+  setenv("MLX_OMARCHY_LM_R2S32", "1", 1);
+  auto r1 = fused_argmax(in, stream);
+  unsetenv("MLX_OMARCHY_LM_R2S32");
+  CHECK_EQ(r0.token, r1.token);
+  CHECK_EQ(r1.token, composed_argmax(in, stream));
+}
