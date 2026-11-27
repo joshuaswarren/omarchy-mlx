@@ -312,6 +312,52 @@ def test_remainder():
     print("test_remainder PASS")
 
 
+
+def test_xlogy_xlog1py():
+    # PT-AL-h: aten.xlogy/xlog1py (KL-divergence / custom-loss paths):
+    # self * log(other) / self * log1p(other) with aten's zero rule —
+    # self == 0 gives 0 for every other, including other <= 0 where the
+    # product form is 0 * -inf. fp32 + bf16 parity vs torch CPU on zero
+    # and negative operands.
+    x = torch.tensor([[0.0, 2.0], [-3.0, 0.5], [0.0, -1.0]])
+    y = torch.tensor([[4.0, 0.0], [2.0, -1.0], [-2.0, 0.25]])
+    xb, yb = x.bfloat16(), y.bfloat16()
+    cases = [
+        (torch.ops.aten.xlogy.Tensor, (x, y), torch.xlogy(x, y), "xlogy", None),
+        (torch.ops.aten.xlogy.Tensor, (xb, yb), torch.xlogy(xb, yb), "xlogy", (xb, yb)),
+        (torch.xlogy, (x, y), torch.xlogy(x, y), "xlogy", None),
+        (torch.ops.aten.xlogy.Scalar_Self, (y,), torch.ops.aten.xlogy.Scalar_Self(0.0, y), "xlogy", (0.0, y)),
+        (torch.ops.aten.special_xlog1py.default, (x, y), torch.special.xlog1py(x, y), "xlog1py", None),
+        (torch.ops.aten.special_xlog1py.default, (xb, yb), torch.special.xlog1py(xb, yb), "xlog1py", (xb, yb)),
+        (torch.special.xlog1py, (x, y), torch.special.xlog1py(x, y), "xlog1py", None),
+        (torch.ops.aten.special_xlog1py.self_scalar, (y,), torch.ops.aten.special_xlog1py.self_scalar(0.0, y), "xlog1py", (0.0, y)),
+    ]
+    for target, ins, ref, name, low_in in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        # the *_scalar overloads carry the scalar in the op call, not a placeholder
+        args = (0.0, phs[0]) if ("Scalar_Self" in str(target) or "self_scalar" in str(target)) else tuple(phs)
+        n = g.call_function(target, args, {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        ref = torch.as_tensor(ref)
+        assert stats["cpu"] == [], (stats, [str(t.target) for t in gm.graph.nodes])
+        assert any(name in s for s in stats["mlx"]), stats
+        got = out.float().numpy()
+        tol = 2e-2 if ref.dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got, ref.float().numpy(), atol=tol,
+                           equal_nan=True), (str(target), got)
+        assert out.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
+            (str(target), out.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            low = mlx_vulkan._FUNC_SPECS[name](
+                *[mlx_vulkan._mx(v) for v in low_in])
+            assert low.dtype == mx.bfloat16, low.dtype
+    print("test_xlogy_xlog1py PASS")
+
 def test_scalar_tensor_factory_lowering():
     # BERT emits scalar_tensor factory nodes (scalar arg, no tensor inputs):
     # the eager executor only lowers call_function nodes with an mx input or
@@ -1945,6 +1991,7 @@ if __name__ == "__main__":
     test_group_norm()
     test_where_masked_fill()
     test_mv_addmv()
+    test_xlogy_xlog1py()
     print("ALL PASS")
 
 

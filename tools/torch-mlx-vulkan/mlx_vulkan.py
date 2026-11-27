@@ -1767,6 +1767,24 @@ def _gn_native(a, w, b, N, C, HxW, group, eps):
     return out, mu.reshape(N, group), rstd.reshape(N, group)
 
 
+def _xlogy(a, b):
+    # aten.xlogy(self, other): self * log(other), except self == 0 -> 0 for
+    # every other, including other <= 0 where the product form is 0 * -inf.
+    # The wheel has no fused xlogy; mask the NaN lanes with where. Same
+    # shape works for xlog1py (self * log1p(other)) on the other arg.
+    a, b = _mx(a), _mx(b)
+    r = a * mx.log(b)
+    return _ar(mx.where(mx.equal(a, 0), mx.zeros_like(r), r))
+
+
+def _xlog1py(a, b):
+    # aten.xlog1py(self, other): self * log1p(other) with the same self==0
+    # mask (KL-divergence / custom-loss graphs use both forms).
+    a, b = _mx(a), _mx(b)
+    r = a * mx.log1p(b)
+    return _ar(mx.where(mx.equal(a, 0), mx.zeros_like(r), r))
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -1905,6 +1923,9 @@ _FUNC_SPECS = {
     "gt": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "lt": lambda a, b: mx.less(_mx(a), _mx(b)),
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
+    "xlogy": _xlogy, "xlog1py": _xlog1py,
+    # aten registers torch.special.xlog1py as special_xlog1py
+    "special_xlog1py": _xlog1py,
     "sinh": _sinh, "cosh": _cosh,
     "asinh": _asinh, "acosh": _acosh, "atanh": mx.atanh,
     "acos": mx.acos, "asin": mx.asin, "atan": mx.atan, "atan2": _atan2,
@@ -2098,7 +2119,7 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "threshold_backward", "native_batch_norm_backward",
                  "Float",
                  "add", "sub", "mul", "div", "truediv", "true_divide",
-                 "remainder", "relu", "relu_"}
+                 "remainder", "xlogy", "special_xlog1py", "relu", "relu_"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
