@@ -792,6 +792,8 @@
 #include "qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r1s4w2_fast.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r1s8w2_fast.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r1s1w2_fast.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s1w2_fast.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s4w2.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s4w2_fast.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up.h"
@@ -2680,6 +2682,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_bf16_r1s8w2_fast,
           qmm_vec_q4_word_subgroup_bf16_r1s8w2_fast_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R1S1W2Fast:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r1s1w2_fast,
+          qmm_vec_q4_word_subgroup_bf16_r1s1w2_fast_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S1W2Fast:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s1w2_fast,
+          qmm_vec_q4_word_subgroup_bf16_r2s1w2_fast_size};
     case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastEpiPack:
       return {
           qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_epi_pack,

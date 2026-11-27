@@ -9704,6 +9704,30 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         vec_kernel = geometry.word;
         qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
         if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u) &&
+            params.matrix_n <= 64u && (params.matrix_k % 512u == 0u) &&
+            (params.matrix_n % 8u == 0u)) {
+          const char* wsn_env = omarchy::env_str("MLX_OMARCHY_WORD_SMALL_N");
+          if (wsn_env != nullptr && wsn_env[0] != '\0' &&
+              std::strcmp(wsn_env, "0") != 0) {
+            const auto& w_caps = encoder.device().capabilities();
+            if (std::strcmp(wsn_env, "r1s1") == 0) {
+              vec_kernel =
+                  omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R1S1W2Fast;
+              qmm_groups = params.matrix_n;
+            } else if (std::strcmp(wsn_env, "r2s1") == 0) {
+              vec_kernel =
+                  omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S1W2Fast;
+              qmm_groups = (params.matrix_n + 1u) / 2u;
+            } else if (std::strcmp(wsn_env, "r2s4") == 0 &&
+                w_caps.max_compute_work_group_invocations >= 128u &&
+                w_caps.max_compute_work_group_size[0] >= 128u) {
+              vec_kernel =
+                  omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2Fast;
+              qmm_groups = (params.matrix_n + 7u) / 8u;
+            }
+          }
+        }
+        if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u) &&
             params.matrix_n >= 2048u) {
           const auto& w_caps = encoder.device().capabilities();
           const char* wr1_env = omarchy::env_str("MLX_OMARCHY_WORD_R1S4");
