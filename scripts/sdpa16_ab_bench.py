@@ -149,14 +149,17 @@ def target_kernel_id():
 
 
 def target_dispatch_counts(results, target_kid):
-    """(arm A target count, arm B target count) over the traced legs."""
+    """(arm A dispatch events, arm B dispatch events) over traced legs.
+    Dispatch events, not the params.count census sum: the sdpa kernels do
+    not populate params.count, so a kernel that dispatched reports 0 in
+    the census. Presence of the key proves a DISPATCH line was emitted."""
     a = b = 0
     for r in results:
-        count = r.get("dispatch_census", {}).get(str(target_kid), 0)
+        events = r.get("dispatch_events", {}).get(str(target_kid), 0)
         if r["arm"] == "A":
-            a += count
+            a += events
         else:
-            b += count
+            b += events
     return a, b
 
 
@@ -185,13 +188,16 @@ def run_leg(driver, env_extra, args, logits_path, trace):
         print(proc.stderr[-4000:], file=sys.stderr)
         raise SystemExit(f"leg failed rc={proc.returncode} (env {env_extra})")
     census = {}
+    events = {}
     for line in proc.stderr.splitlines():
         if "DISPATCH kernel=" in line:
             kid = int(line.split("kernel=")[1].split()[0])
             census[kid] = census.get(kid, 0) + int(
                 line.split("count=")[1].split()[0])
+            events[kid] = events.get(kid, 0) + 1
     row = json.loads(proc.stdout.strip().splitlines()[-1])
     row["dispatch_census"] = census
+    row["dispatch_events"] = events
     return row
 
 
@@ -278,6 +284,8 @@ def main():
                         "top10_same": top10_same},
         "census_A": a[0]["dispatch_census"],
         "census_B": b[0]["dispatch_census"],
+        "events_A": a[0]["dispatch_events"],
+        "events_B": b[0]["dispatch_events"],
     }
     print(json.dumps(summary, indent=1, sort_keys=True))
     (out / "summary.json").write_text(json.dumps(summary, indent=1, sort_keys=True))
