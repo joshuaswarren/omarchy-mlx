@@ -814,6 +814,19 @@ inline bool gdn_conv_coalesced_default(
   return device_name.find("G14C") != std::string::npos && hk == hv;
 }
 
+// Coalesced-state standalone GDN decode kernel (GatedDeltaDecodeBF16Sg32:
+// 1024 threads, 32 subgroups x 32 lanes, 4 Dv rows/SG via coalesced 512-byte
+// vec4 state loads/stores, native GQA key-head indexing, f32 A_log).
+// Measured on Apple M2 Max (G14C B1) Qwen3.5-9B-MLX-4bit ctx=512 (3-pair ABBA,
+// DEFER_TOKENS=0, identical greedy token IDs): +5.12% (53.71 -> 56.50 tok/s,
+// -0.919 ms/tok, 3/3 wins).
+// Default on G14C for f32-A_log native GQA decode (hk != hv);
+// MLX_OMARCHY_GDN_DECODE_COALESCED=0 disables.
+inline bool gdn_decode_coalesced_default(
+    const std::string& device_name, int hk, int hv) {
+  return device_name.find("G14C") != std::string::npos && hk != hv;
+}
+
 // Fused GatedDeltaUpdate on G18G (Apple M6): the fused update and raw
 // decode routes miscompute there. On the 2026-11-24 PAR-35 A/B the fused
 // path diverged from the ops reference from layer 1 prefill on, while the
