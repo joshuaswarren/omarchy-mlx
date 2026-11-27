@@ -19726,8 +19726,11 @@ void ScaledDotProductAttention::eval_gpu(
                      : omarchy::ComputeKernel::
                            SdpaDecodeOnlineRopeSg32BF16Hd256)
               : (sdpa_g13c
-                     ? omarchy::ComputeKernel::
-                           SdpaDecodeOnlineRopeSg32BF16Hd128G13C
+                     ? (rp.matrix_k >= 1024u
+                            ? omarchy::ComputeKernel::
+                                  SdpaDecodeOnlineRopeSg32BF16Hd128G13CB4
+                            : omarchy::ComputeKernel::
+                                  SdpaDecodeOnlineRopeSg32BF16Hd128G13C)
                      : omarchy::ComputeKernel::
                            SdpaDecodeOnlineRopeSg32BF16Hd128);
           encoder.dispatch_compute(kernel, rb, rp, rp.matrix_m);
