@@ -291,6 +291,94 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         got = np.array(ATEN_TABLE["frac"](mx.array([-2.3])))
         self.assertTrue(abs(float(got[0]) - (-0.3)) < 1e-6, got)
 
+    def test_linalg_norm_parity(self):
+        """PT-NORM-b: linalg_vector_norm/linalg_norm lower in the wheel
+        backend — parity vs torch across ord=1/2/inf, dims, keepdim,
+        dtype cast; plus the aten.norm inf/-inf pin."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x = torch.randn(3, 4)
+        x3 = torch.randn(2, 3, 4)
+        cases = [
+            ("linalg_vector_norm", (x,), {},
+             torch.linalg.vector_norm(x)),
+            ("linalg_vector_norm", (x,), {"ord": 1.0},
+             torch.linalg.vector_norm(x, ord=1.0)),
+            ("linalg_vector_norm", (x,),
+             {"ord": float("inf"), "dim": [1]},
+             torch.linalg.vector_norm(x, ord=float("inf"), dim=[1])),
+            ("linalg_vector_norm", (x3,),
+             {"ord": 0.5, "dim": [1, 2], "keepdim": True},
+             torch.linalg.vector_norm(x3, ord=0.5, dim=[1, 2],
+                                      keepdim=True)),
+            ("linalg_vector_norm", (x,), {"dtype": torch.float64},
+             torch.linalg.vector_norm(x, dtype=torch.float64)),
+            ("linalg_norm", (x,), {}, torch.linalg.norm(x)),
+            ("linalg_norm", (x,), {"ord": float("-inf"), "dim": [0]},
+             torch.linalg.norm(x, ord=float("-inf"), dim=[0])),
+            ("linalg_norm", (x3,), {"ord": 2.0, "dim": [2]},
+             torch.linalg.norm(x3, ord=2.0, dim=[2])),
+        ]
+        for name, ins, kw, ref in cases:
+            lowering = ATEN_TABLE[name]
+            mins = tuple(mx.array(t.numpy()) for t in ins)
+            got = torch.from_numpy(
+                np.array(lowering(*mins, **kw).astype(mx.float32)))
+            self.assertTrue(
+                torch.allclose(got, ref.float(), atol=1e-5, rtol=1e-5),
+                (name, kw, float((got - ref.float()).abs().max())))
+        m = mx.array(x.numpy())
+        for p, ref in ((float("inf"), torch.norm(x, float("inf"))),
+                       (float("-inf"), torch.norm(x, float("-inf")))):
+            got = float(np.array(ATEN_TABLE["norm"](m, p)))
+            self.assertTrue(abs(got - float(ref)) < 1e-5, (p, got))
+
+
+
+    def test_elu_family(self):
+        """PT-AL-a: elu/selu/celu lower in the wheel backend — fp32 and
+        bf16 parity against the torch functions, including the
+        scale/input_scale parameters and the in-place aten aliases."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x = torch.tensor([[-8.0, -2.5, -0.3, 0.0], [0.25, 1.5, 6.0, -0.001]])
+        F = torch.nn.functional
+        cases = [
+            ("elu", (x,), F.elu(x)),
+            ("elu", (x, 2.0), F.elu(x, alpha=2.0)),
+            ("elu", (x, 1.5, 1.2, 0.8),
+             torch.ops.aten.elu.default(x, 1.5, 1.2, 0.8)),
+            ("selu", (x,), F.selu(x)),
+            ("celu", (x,), F.celu(x)),
+            ("celu", (x, 2.5), F.celu(x, alpha=2.5)),
+            ("elu_", (x, 1.7), F.elu(x, alpha=1.7)),
+            ("selu_", (x,), F.selu(x)),
+            ("celu_", (x, 2.2), F.celu(x, alpha=2.2)),
+        ]
+        for name, ins, ref in cases:
+            lowering = ATEN_TABLE[name]
+            for dtype, tol in ((torch.float32, 1e-5),
+                               (torch.bfloat16, 2e-2)):
+                mins = tuple(
+                    (mx.array(t.float().numpy()).astype(mx.bfloat16)
+                     if dtype == torch.bfloat16 else mx.array(t.numpy()))
+                    if torch.is_tensor(t) else t for t in ins)
+                got = torch.from_numpy(
+                    np.array(lowering(*mins).astype(mx.float32)))
+                self.assertTrue(
+                    torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                    (name, ins[1:], dtype,
+                     float((got - ref.float()).abs().max())))
+
+
 
 if __name__ == "__main__":
     unittest.main()

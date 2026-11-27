@@ -2018,6 +2018,59 @@ def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
 
+def _linalg_norm(a, ord=None, dim=None, keepdim=False, dtype=None):
+    # aten.linalg_norm: mx.linalg.norm shares the vector/matrix
+    # ord/axis/keepdims contract (ord=None + axis=None flattens, a
+    # 2-axis dim is a matrix norm); dtype is an output cast.
+    a = _mx(a)
+    out = mx.linalg.norm(a, ord=ord, axis=dim, keepdims=keepdim)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("linalg_norm dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
+
+
+def _linalg_vector_norm(a, ord=2, dim=None, keepdim=False, dtype=None):
+    # aten.linalg_vector_norm always means a VECTOR norm — flattening
+    # when dim is None and reducing every listed dim. mx.linalg.norm
+    # reads ord+axis=None or a 2-axis dim as a MATRIX norm, so compose
+    # from power/sum instead.
+    a = _mx(a)
+    ax = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    if ax is None:
+        ax = tuple(range(a.ndim))
+    o = float(ord)
+    if o == float("inf"):
+        out = mx.max(mx.abs(a), axis=ax, keepdims=keepdim)
+    elif o == float("-inf"):
+        out = mx.min(mx.abs(a), axis=ax, keepdims=keepdim)
+    elif o == 0:
+        out = mx.sum((a != 0).astype(mx.int32), axis=ax,
+                     keepdims=keepdim).astype(a.dtype)
+    else:
+        out = mx.power(
+            mx.sum(mx.power(mx.abs(a), o), axis=ax, keepdims=keepdim),
+            1.0 / o)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("linalg_vector_norm dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
+
+
+def _pnorm(a, p=2, dim=None, keepdim=False):
+    # aten.norm: sum(|x|^p)^(1/p); inf/-inf take the max/min magnitude,
+    # not the 2-norm.
+    a = _mx(a)
+    ax = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    if str(p) in ("inf", "-inf"):
+        m = mx.max if str(p) == "inf" else mx.min
+        return m(mx.abs(a), axis=ax, keepdims=keepdim)
+    return mx.power(mx.sum(mx.power(mx.abs(a), float(p)), axis=ax,
+                                  keepdims=keepdim), 1.0 / float(p))
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2257,7 +2310,10 @@ _FUNC_SPECS = {
     "_log_softmax": _log_softmax_fwd,
     "_log_softmax_backward_data": _log_softmax_bwd,
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
-    "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
+    "norm": _pnorm,
+    # PT-NORM-b: the linalg norm family (normalization, grad clipping)
+    "linalg_vector_norm": lambda a, ord=2, dim=None, keepdim=False, *, dtype=None: _linalg_vector_norm(a, ord, dim, keepdim, dtype),
+    "linalg_norm": lambda a, ord=None, dim=None, keepdim=False, *, dtype=None: _linalg_norm(a, ord, dim, keepdim, dtype),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
     # aten.cosine_similarity clamps each l2 norm at eps separately, not
     # their product (device-checked against torch 2.15 CPU).
