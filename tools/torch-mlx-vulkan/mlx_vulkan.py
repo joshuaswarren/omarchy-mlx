@@ -2007,6 +2007,11 @@ def _glu(a, dim=-1):
         return _raise("glu")
     lo, hi = mx.split(f, 2, axis=dim % a.ndim)
     return (lo * mx.sigmoid(hi)).astype(a.dtype)
+def _frac(a):
+    # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
+    # NOT x - floor(x) which would give +0.7).
+    a = _mx(a)
+    return a - mx.trunc(a)
 
 
 def _l2_clamped(a, dim, eps):
@@ -2048,6 +2053,9 @@ _FUNC_SPECS = {
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
+    # PT-AL-e: basic math ops used in normalization chains
+    "reciprocal": mx.reciprocal, "frac": _frac,
+    "reciprocal_": mx.reciprocal, "frac_": _frac,
     "sigmoid": mx.sigmoid, "tanh": mx.tanh, "erf": mx.erf,
     "transpose": lambda a, d0, d1: mx.transpose(a, axes=_perm_swap(a, d0, d1)),
     "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),

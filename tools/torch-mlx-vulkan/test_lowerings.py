@@ -2633,6 +2633,47 @@ def test_glu():
     print("test_glu PASS")
 
 
+def test_reciprocal_frac():
+    # PT-AL-e: aten.reciprocal + aten.frac (rsqrt was already lowered).
+    # frac is x - trunc(x), sign-kept: frac(-2.3) == -0.3, NOT x - floor(x)
+    # (+0.7) — the negative inputs below pin that contract.
+    x = torch.tensor([[-2.3, -0.7, -0.5, 0.0], [0.25, 1.9, 8.0, -4.0]])
+    F = torch.nn.functional
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        xd = x.to(dtype)
+        cases = [
+            (torch.ops.aten.reciprocal.default, (xd,), {},
+             torch.ops.aten.reciprocal.default(xd), "reciprocal"),
+            (torch.ops.aten.frac.default, (xd,), {},
+             torch.ops.aten.frac.default(xd), "frac"),
+            (torch.ops.aten.reciprocal_.default, (xd,), {},
+             torch.ops.aten.reciprocal.default(xd), "reciprocal"),
+            (torch.ops.aten.frac_.default, (xd,), {},
+             torch.ops.aten.frac.default(xd), "frac"),
+            (torch.frac, (xd,), {}, torch.frac(xd), "frac"),
+            (torch.reciprocal, (xd,), {},
+             torch.reciprocal(xd), "reciprocal"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert any(name in s for s in stats["mlx"]), (stats, str(target))
+            got = out.float().numpy()
+            assert np.allclose(got, ref.float().numpy(), atol=tol), \
+                (str(target), kw, dtype, got, ref.float().numpy())
+    # sign pin: frac of a negative keeps the negative part.
+    m = mx.array([-2.3, -0.7, 1.9])
+    got = np.array(mlx_vulkan.ATEN_TABLE["frac"](m))
+    assert np.allclose(got, [-0.3, -0.7, 0.9], atol=1e-6), got
+    print("test_reciprocal_frac PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2678,6 +2719,7 @@ if __name__ == "__main__":
     test_softplus_mish()
     test_elu_selu_celu()
     test_glu()
+    test_reciprocal_frac()
     test_cosine_similarity()
     print("ALL PASS")
 
