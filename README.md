@@ -223,7 +223,7 @@ macOS decode: 100% means parity, higher is faster on Linux.
 | 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | **107.16 tok/s** | 894.77 tok/s | 104.53 tok/s | 660.26 tok/s | **102.5% (+2.5%)** | 5 pairs / 25 runs | `efb521ae04af` | `#1117` | `53ad9af196f5` |
 | 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | **96.69 tok/s** | 786.10 tok/s | pending | 638.54 tok/s | pending | 5 pairs / 25 runs | `542524d1f692` | `#1117` | `53ad9af196f5` |
 | 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | **63.47 tok/s** | 470.32 tok/s | 57.77 tok/s | 339.27 tok/s | **109.9% (+9.9%)** | 5 pairs / 25 runs | `697272134f42` | `#1117` | `53ad9af196f5` |
-| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | pending | pending | 57.05 tok/s | pending | pending | pending | `7dd7261b2fb8` | pending | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | **62.96 tok/s** | 449.39 tok/s | 57.05 tok/s | pending | **110.4% (+10.4%)** | 5 pairs / 25 runs | `7dd7261b2fb8` | `#1117` | `53ad9af196f5` |
 | 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 | **215.41 tok/s** | 2282.75 tok/s | 212.82 tok/s | 1766.07 tok/s | **101.2% (+1.2%)** | 5 pairs / 25 runs | `4784df039da0` | `#1101` | `53ad9af196f5` |
 | 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 | **211.38 tok/s** | 2347.61 tok/s | 209.28 tok/s | 1786.03 tok/s | **101.0% (+1.0%)** | 5 pairs / 25 runs | `c5fb4074d0b5` | `#1101` | `53ad9af196f5` |
 
