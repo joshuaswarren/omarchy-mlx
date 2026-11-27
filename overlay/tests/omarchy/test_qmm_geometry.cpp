@@ -420,27 +420,49 @@ int main(int argc, char** argv) {
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_word_r2s4_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_word_r2s4_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_word_r2s4_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_word_r2s4_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_word_r2s4_default part check\n";
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_multi_upfront_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_multi_upfront_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_multi_upfront_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_multi_upfront_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_multi_upfront_default part check\n";
       ++failures;
     }
+    unsetenv("MLX_OMARCHY_QMM_FAST_ONLY");
+    if (!mlx::core::omarchy::qmm_fast_only_default_part("Apple M1 Max (G13C C0)") ||
+        !mlx::core::omarchy::qmm_fast_only_default_part("Apple M1 (G13G B1)") ||
+        mlx::core::omarchy::qmm_fast_only_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_fast_only_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: qmm_fast_only_default_part part check\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_QMM_FAST_ONLY", "0", 1);
+    if (mlx::core::omarchy::qmm_fast_only_default_part("Apple M1 (G13G B1)")) {
+      std::cout << "FAIL: qmm_fast_only_default_part =0 override\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_QMM_FAST_ONLY", "1", 1);
+    if (!mlx::core::omarchy::qmm_fast_only_default_part("Apple M2 Max (G14C B1)")) {
+      std::cout << "FAIL: qmm_fast_only_default_part =1 override\n";
+      ++failures;
+    }
+    unsetenv("MLX_OMARCHY_QMM_FAST_ONLY");
     unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
     if (!mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 Max (G13C C0)") ||
-        mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_g14c_fast_only_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_g14c_fast_only_default_part part check\n";
       ++failures;
     }
     setenv("MLX_OMARCHY_G14C_FAST_ONLY", "0", 1);
-    if (mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)")) {
+    if (mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 (G13G B1)")) {
       std::cout << "FAIL: qmm_g14c_fast_only_default_part =0 override\n";
       ++failures;
     }
