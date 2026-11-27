@@ -2970,5 +2970,659 @@ class ArtifactFilesTests(unittest.TestCase):
                 os.close(fd)
 
 
+class BoundedManagedLogTests(BasePairTest):
+    """Download, conversion, and worker logs must stay on regular files:
+    never follow symlinks, never block on FIFOs, and never read unbounded
+    logs into memory."""
+
+    def setUp(self):
+        super().setUp()
+        self.logs_dir = self.home / "assistant" / "logs"
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+
+    def _run_bounded(self, fn, *, timeout=5.0):
+        outcome = {}
+
+        def target():
+            try:
+                outcome["value"] = fn()
+            except BaseException as exc:
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=target, daemon=True)
+        worker.start()
+        worker.join(timeout=timeout)
+        self.assertFalse(worker.is_alive(), "operation blocked past timeout")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("value")
+
+    def _new_manager(self):
+        manager = pairs.PairManager(self.home)
+        manager._available_bytes_override = PAIR_MANAGER_MEM_AVAILABLE_BYTES
+        self.addCleanup(manager._close_lifetime)
+        return manager
+
+    def test_download_refuses_symlink_fifo_and_dir_at_spawn_and_resets_state(self):
+        self.make_converted_laya()
+        log_path = self.logs_dir / f"download-{CHAT_SMALL_ID}.log"
+        sentinel = self.home / "sentinel.txt"
+        sentinel.write_text("keep-me\n", encoding="utf-8")
+
+        cases = [
+            ("symlink", lambda p: os.symlink(sentinel, p)),
+            ("directory", os.mkdir),
+        ]
+        if hasattr(os, "mkfifo"):
+            cases.append(("fifo", os.mkfifo))
+
+        for name, make in cases:
+            with self.subTest(kind=name):
+                if log_path.is_dir() and not log_path.is_symlink():
+                    log_path.rmdir()
+                elif log_path.is_symlink() or log_path.exists():
+                    log_path.unlink()
+                make(log_path)
+                manager = self._new_manager()
+                with mock.patch.dict(os.environ, {"MLX_OMARCHY_OFFLINE": ""}), \
+                        mock.patch.object(subprocess, "Popen",
+                                          side_effect=AssertionError("must not spawn")):
+                    with self.assertRaisesRegex(pairs.PairError, "could not start download"):
+                        self._run_bounded(
+                            lambda: manager.setup(
+                                "everyday", approve_download=True,
+                                available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES))
+                self.assertEqual(manager.status()["state"], "idle")
+                self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep-me\n")
+
+    def test_download_reads_bounded_tail_and_refuses_swapped_nonregular_log(self):
+        snap = self.make_chat_snapshot(CHAT_SMALL_ID)
+        manager = self._new_manager()
+        chat = manager.catalog_models[CHAT_SMALL_ID]
+        resolved = pairs.serve_cli.Resolved(
+            chat["id"], chat, None, chat["repo"], chat["revision"])
+        patterns = pairs.serve_cli.download_patterns_for(chat)
+        log_path = self.logs_dir / f"download-{CHAT_SMALL_ID}.log"
+
+        # 4 MiB sparse log + split UTF-8 + invalid UTF-8 noise + final snapshot path
+        def fake_spawn_large(_argv, **kwargs):
+            lp = kwargs["log_path"]
+            with open(lp, "wb") as fh:
+                fh.truncate(4 * 1024 * 1024)
+                fh.seek(0, os.SEEK_END)
+                fh.write("█".encode("utf-8") * 50 + b"\nwarn \xff\xfe\n")
+                fh.write((str(snap) + "\n").encode("utf-8"))
+            return types.SimpleNamespace(poll=lambda: 0, returncode=0)
+
+        tracing = tracemalloc.is_tracing()
+        if not tracing:
+            tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            before = tracemalloc.get_traced_memory()[0]
+            with mock.patch.object(managed, "spawn_supervised", fake_spawn_large):
+                got = manager._download_snapshot_supervised(
+                    resolved, patterns, lambda *a, **kw: None, CHAT_SMALL_ID)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            if not tracing:
+                tracemalloc.stop()
+        self.assertEqual(got, snap)
+        self.assertLess(peak - before, 8 * managed.LOG_TAIL_MAX_BYTES)
+
+        # Swapped symlink, directory, empty/oversized-unbroken/NUL logs are refused
+        fake_target = self.home / "fake-snap-log.txt"
+        fake_target.write_text("/SECRET-DOWNLOAD-TARGET\n", encoding="utf-8")
+
+        def run_with_log(setup_log):
+            def fake_spawn(_argv, **kwargs):
+                lp = kwargs["log_path"]
+                if lp.is_dir() and not lp.is_symlink():
+                    lp.rmdir()
+                elif lp.is_symlink() or lp.exists():
+                    lp.unlink()
+                setup_log(lp)
+                return types.SimpleNamespace(poll=lambda: 0, returncode=0)
+            with mock.patch.object(managed, "spawn_supervised", fake_spawn):
+                return manager._download_snapshot_supervised(
+                    resolved, patterns, lambda *a, **kw: None, CHAT_SMALL_ID)
+
+        for name, setup_log in (
+            ("symlink", lambda p: os.symlink(fake_target, p)),
+            ("directory", os.mkdir),
+            ("empty", lambda p: p.write_bytes(b"")),
+            ("oversize-single-line",
+             lambda p: p.write_bytes(b"a" * (managed.LOG_TAIL_MAX_BYTES + 100) + b"\n")),
+            ("nul-byte", lambda p: p.write_bytes(b"/tmp/bad\x00path\n")),
+        ):
+            with self.subTest(kind=name):
+                with self.assertRaisesRegex(
+                        pairs.PairError, "reported no snapshot path") as ctx:
+                    run_with_log(setup_log)
+                self.assertNotIn("SECRET-DOWNLOAD-TARGET", str(ctx.exception))
+
+        if hasattr(os, "mkfifo"):
+            if log_path.is_dir() and not log_path.is_symlink():
+                log_path.rmdir()
+            elif log_path.is_symlink() or log_path.exists():
+                log_path.unlink()
+            os.mkfifo(log_path)
+            for writer in (False, True):
+                with self.subTest(fifo_writer=writer), \
+                        mock.patch.object(
+                            managed, "spawn_supervised",
+                            lambda *_a, **_kw: types.SimpleNamespace(poll=lambda: 0, returncode=0)), \
+                        self.assertRaisesRegex(pairs.PairError, "reported no snapshot path"):
+                    _call_on_fifo(
+                        self, log_path,
+                        lambda: manager._download_snapshot_supervised(
+                            resolved, patterns, lambda *a, **kw: None, CHAT_SMALL_ID),
+                        writer=writer,
+                        payload=(str(snap) + "\n").encode("utf-8"),
+                    )
+
+    def test_conversion_refuses_symlink_fifo_at_spawn_and_bounds_failure_tail(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        snap = self.home / "hf" / "models--org--laya" / "snapshots" / ("a" * 40)
+        (snap / "encoder").mkdir(parents=True)
+        (snap / "tokenizer").mkdir()
+        (snap / "encoder" / "config.json").write_text("{}", encoding="utf-8")
+        (snap / "rl_agent_config.json").write_text("{}", encoding="utf-8")
+        (snap / "tokenizer" / "tokenizer.json").write_text("{}", encoding="utf-8")
+        (snap / "model.safetensors").write_bytes(b"w" * 16)
+
+        log_path = self.logs_dir / f"convert-{DECISION_ID}.log"
+        sentinel = self.home / "convert-sentinel.txt"
+        sentinel.write_text("SECRET-DO-NOT-TOUCH\n", encoding="utf-8")
+
+        # 1. Spawn refusal on symlink & FIFO, state resets to idle
+        spawn_cases = [("symlink", lambda p: os.symlink(sentinel, p))]
+        if hasattr(os, "mkfifo"):
+            spawn_cases.append(("fifo", os.mkfifo))
+        for name, make in spawn_cases:
+            with self.subTest(spawn=name):
+                if log_path.is_symlink() or log_path.exists():
+                    log_path.unlink()
+                make(log_path)
+                manager = self._new_manager()
+                with mock.patch.object(subprocess, "Popen",
+                                       side_effect=AssertionError("must not spawn")):
+                    with self.assertRaisesRegex(pairs.PairError, "could not start conversion"):
+                        self._run_bounded(
+                            lambda: manager.setup(
+                                "everyday", approve_download=True,
+                                available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES))
+                self.assertEqual(manager.status()["state"], "idle")
+                self.assertEqual(sentinel.read_text(encoding="utf-8"), "SECRET-DO-NOT-TOUCH\n")
+
+        # 2. Large sparse log failure -> bounded read, exact last 5 lines
+        def fake_spawn_large_fail(_argv, **kwargs):
+            lp = kwargs["log_path"]
+            if lp.is_symlink() or lp.exists():
+                lp.unlink()
+            with open(lp, "wb") as fh:
+                fh.truncate(4 * 1024 * 1024)
+                fh.seek(0, os.SEEK_END)
+                fh.write(b"\nline1\nline2\nline3\nline4\nline5\nline6\n")
+            return types.SimpleNamespace(poll=lambda: 2, returncode=2)
+
+        manager = self._new_manager()
+        tracing = tracemalloc.is_tracing()
+        if not tracing:
+            tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            before = tracemalloc.get_traced_memory()[0]
+            with mock.patch.object(managed, "spawn_supervised", fake_spawn_large_fail):
+                with self.assertRaises(pairs.PairError) as ctx:
+                    manager.setup(
+                        "everyday", approve_download=True,
+                        available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            if not tracing:
+                tracemalloc.stop()
+        msg = str(ctx.exception)
+        self.assertIn("conversion failed (exit 2): line2 | line3 | line4 | line5 | line6", msg)
+        self.assertNotIn("line1", msg)
+        self.assertLess(peak - before, 8 * managed.LOG_TAIL_MAX_BYTES)
+
+        # 3. Empty/unbroken-oversize log and post-spawn symlink swap fall back to log path
+        for name, make_log in (
+            ("empty", lambda p: p.write_bytes(b"")),
+            ("oversize-single-line",
+             lambda p: p.write_bytes(b"x" * (managed.LOG_TAIL_MAX_BYTES + 100) + b"\n")),
+            ("symlink", lambda p: os.symlink(sentinel, p)),
+        ):
+            with self.subTest(convert_fallback=name):
+                def fake_spawn_fallback(_argv, _make=make_log, **kwargs):
+                    lp = kwargs["log_path"]
+                    if lp.is_symlink() or lp.exists():
+                        lp.unlink()
+                    _make(lp)
+                    return types.SimpleNamespace(poll=lambda: 2, returncode=2)
+
+                with mock.patch.object(managed, "spawn_supervised", fake_spawn_fallback):
+                    with self.assertRaises(pairs.PairError) as ctx:
+                        manager.setup(
+                            "everyday", approve_download=True,
+                            available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+                self.assertIn(f"log: {log_path}", str(ctx.exception))
+                self.assertNotIn("SECRET-DO-NOT-TOUCH", str(ctx.exception))
+
+        if hasattr(os, "mkfifo"):
+            log_path.unlink()
+            os.mkfifo(log_path)
+            for writer in (False, True):
+                with self.subTest(convert_fifo_writer=writer), \
+                        mock.patch.object(
+                            managed, "spawn_supervised",
+                            lambda *_a, **_kw: types.SimpleNamespace(poll=lambda: 2, returncode=2)):
+                    with self.assertRaises(pairs.PairError) as ctx:
+                        _call_on_fifo(
+                            self, log_path,
+                            lambda: manager.setup(
+                                "everyday", approve_download=True,
+                                available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES),
+                            writer=writer,
+                            payload=b"secret-fifo-line\n",
+                        )
+                    self.assertIn(f"log: {log_path}", str(ctx.exception))
+                    self.assertNotIn("secret-fifo-line", str(ctx.exception))
+
+    def test_start_refuses_symlink_or_fifo_worker_log_and_cleans_up_reservations(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        sentinel = self.home / "worker-sentinel.txt"
+        sentinel.write_text("intact\n", encoding="utf-8")
+
+        cases = [("symlink", lambda p: os.symlink(sentinel, p))]
+        if hasattr(os, "mkfifo"):
+            cases.append(("fifo", os.mkfifo))
+
+        for role in ("chat", "decision"):
+            log_path = self.logs_dir / f"everyday-{role}.log"
+            for name, make in cases:
+                with self.subTest(role=role, kind=name):
+                    for lp in (self.logs_dir / "everyday-chat.log",
+                               self.logs_dir / "everyday-decision.log"):
+                        if lp.is_symlink() or lp.exists():
+                            lp.unlink()
+                    make(log_path)
+                    manager = self._new_manager()
+                    with mock.patch.object(pairs, "_chat_worker_argv", stub_argv_builder("chat")), \
+                            mock.patch.object(pairs, "_decision_worker_argv",
+                                              stub_argv_builder("decision")):
+                        manager.setup(
+                            "everyday", approve_download=True,
+                            available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+                        with self.assertRaisesRegex(pairs.PairError, "pair start failed"):
+                            self._run_bounded(manager.start)
+                    self.assertEqual(sentinel.read_text(encoding="utf-8"), "intact\n")
+                    self.assertEqual(budget.load_reservations(self.home), {})
+                    self.assertEqual(manager._children, {})
+                    self.assertEqual(manager.status()["state"], "error")
+
+    def test_symlinked_logs_dir_and_lifetime_pipe_failure_roll_back_cleanly(self):
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        outside = Path(self.tmp.name) / "outside-logs"
+        outside.mkdir()
+        outside_log = outside / "everyday-chat.log"
+        outside_log.write_text("OUTSIDE-INTACT\n", encoding="utf-8")
+
+        # Replace assistant/logs with a symlink to outside directory
+        self.logs_dir.rmdir()
+        os.symlink(outside, self.logs_dir)
+        manager = self._new_manager()
+        with mock.patch.object(pairs, "_chat_worker_argv", stub_argv_builder("chat")), \
+                mock.patch.object(pairs, "_decision_worker_argv",
+                                  stub_argv_builder("decision")):
+            manager.setup("everyday", approve_download=True,
+                          available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+            with self.assertRaisesRegex(pairs.PairError, "pair start failed"):
+                manager.start()
+        self.assertEqual(outside_log.read_text(encoding="utf-8"), "OUTSIDE-INTACT\n")
+        self.assertEqual(budget.load_reservations(self.home), {})
+
+        # Restore real logs dir and verify lifetime pipe EMFILE rolls back start() & setup()
+        self.logs_dir.unlink()
+        self.logs_dir.mkdir()
+        with mock.patch.object(os, "pipe",
+                               side_effect=OSError(errno.EMFILE, "Too many open files")):
+            with self.assertRaisesRegex(pairs.PairError, "pair start failed"):
+                manager.start()
+        self.assertEqual(budget.load_reservations(self.home), {})
+        self.assertEqual(manager.status()["state"], "error")
+
+        # Also check download setup resets state from preparing on pipe EMFILE
+        manager2 = self._new_manager()
+        (self.home / "hf").rename(self.home / "hf-hidden")
+        try:
+            with mock.patch.dict(os.environ, {"MLX_OMARCHY_OFFLINE": ""}), \
+                    mock.patch.object(os, "pipe",
+                                      side_effect=OSError(errno.EMFILE, "Too many open files")):
+                with self.assertRaisesRegex(pairs.PairError, "could not start download"):
+                    manager2.setup("everyday", approve_download=True,
+                                   available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+            self.assertEqual(manager2.status()["state"], "idle")
+        finally:
+            (self.home / "hf-hidden").rename(self.home / "hf")
+
+    def test_ensure_context_refuses_swapped_symlink_or_fifo_log_and_settles_pair(self):
+        cat = fixture_catalog()
+        for m in cat["models"]:
+            if m["id"] == CHAT_SMALL_ID:
+                m["extension"] = {"backend_context_qualified_tokens": 16384}
+        write_home_catalog(self.home, cat)
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        sentinel = self.home / "grow-sentinel.txt"
+        sentinel.write_text("grow-intact\n", encoding="utf-8")
+        chat_log = self.logs_dir / "everyday-chat.log"
+
+        cases = [("symlink", lambda p: os.symlink(sentinel, p))]
+        if hasattr(os, "mkfifo"):
+            cases.append(("fifo", os.mkfifo))
+
+        for name, make in cases:
+            with self.subTest(kind=name):
+                if chat_log.is_symlink() or chat_log.exists():
+                    chat_log.unlink()
+                manager = self._new_manager()
+                self.addCleanup(manager.stop)
+                with mock.patch.object(pairs, "_chat_worker_argv", stub_argv_builder("chat")), \
+                        mock.patch.object(pairs, "_decision_worker_argv",
+                                          stub_argv_builder("decision")):
+                    manager.setup("everyday", approve_download=True, context_tokens=4096,
+                                  available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+                    self.assertEqual(manager.start()["state"], "ready")
+                    chat_log.unlink()
+                    make(chat_log)
+                    with self.assertRaisesRegex(pairs.PairError, "failed to spawn"):
+                        self._run_bounded(lambda: manager.ensure_context(8192))
+                self.assertEqual(sentinel.read_text(encoding="utf-8"), "grow-intact\n")
+                self.assertEqual(budget.load_reservations(self.home), {})
+                status = manager.status()
+                self.assertEqual(status["state"], "prepared")
+                self.assertIsNone(status["chat_url"])
+                self.assertEqual(status["children"], [])
+
+    def test_ensure_context_settles_pair_when_free_port_fails(self):
+        cat = fixture_catalog()
+        for m in cat["models"]:
+            if m["id"] == CHAT_SMALL_ID:
+                m["extension"] = {"backend_context_qualified_tokens": 16384}
+        write_home_catalog(self.home, cat)
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        manager = self._new_manager()
+        self.addCleanup(manager.stop)
+        with mock.patch.object(pairs, "_chat_worker_argv", stub_argv_builder("chat")), \
+                mock.patch.object(pairs, "_decision_worker_argv",
+                                  stub_argv_builder("decision")):
+            manager.setup("everyday", approve_download=True, context_tokens=4096,
+                          available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+            self.assertEqual(manager.start()["state"], "ready")
+            with mock.patch.object(managed, "free_port",
+                                   side_effect=OSError(errno.EMFILE, "Too many open files")):
+                with self.assertRaisesRegex(pairs.PairError, "the pair was stopped"):
+                    manager.ensure_context(8192)
+        self.assertEqual(budget.load_reservations(self.home), {})
+        status = manager.status()
+        self.assertEqual(status["state"], "prepared")
+        self.assertIsNone(status["chat_url"])
+        self.assertEqual(status["children"], [])
+
+    def test_unverified_claim_failure_retains_handle_and_reservation_in_start_and_ensure_context(self):
+        cat = fixture_catalog()
+        for m in cat["models"]:
+            if m["id"] == CHAT_SMALL_ID:
+                m["extension"] = {"backend_context_qualified_tokens": 16384}
+        write_home_catalog(self.home, cat)
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+
+        # 1. During start(): chat claim delivery fails and terminate() cannot confirm exit
+        real_popen = subprocess.Popen
+        real_terminate = managed.terminate
+        spawned_start = []
+
+        def capture_start_popen(*args, **kwargs):
+            proc = real_popen(*args, **kwargs)
+            self.addCleanup(self._reap_proc, proc)
+            spawned_start.append(proc)
+            return proc
+
+        manager = self._new_manager()
+        with mock.patch.object(pairs, "_chat_worker_argv",
+                               lambda _spec: [sys.executable, "-c", "import time; time.sleep(60)"]), \
+                mock.patch.object(pairs, "_decision_worker_argv", stub_argv_builder("decision")), \
+                mock.patch.object(subprocess, "Popen", capture_start_popen), \
+                mock.patch.object(managed, "_write_claim",
+                                  side_effect=BrokenPipeError(errno.EPIPE, "broken pipe")), \
+                mock.patch.object(managed, "terminate", return_value=False):
+            manager.setup("everyday", approve_download=True, context_tokens=4096,
+                          available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+            with self.assertRaisesRegex(pairs.PairError, "did not confirm termination"):
+                manager.start()
+        self.assertEqual(len(spawned_start), 1)
+        self.assertIn("chat", manager._children)
+        self.assertIs(manager._children["chat"].popen, spawned_start[0])
+        held = budget.load_reservations(self.home)
+        self.assertIn(CHAT_SMALL_ID, held)
+        self.assertNotIn(DECISION_ID, held)
+        # A second manager that adopts the pair cannot clear the first manager's
+        # retained, unclaimed reservation (it does not hold the owner token).
+        bystander = self._new_manager()
+        bystander._pair_id = "everyday"
+        bystander.stop()
+        self.assertIn(CHAT_SMALL_ID, budget.load_reservations(self.home))
+        # Clean up the surviving child and release its record before the next phase
+        self.assertTrue(real_terminate(spawned_start[0]))
+        self.assertTrue(manager.stop()["stopped"])
+        self.assertEqual(budget.load_reservations(self.home), {})
+
+        # 1b. If terminate() raises OSError during start() rollback, cleanup still
+        # finishes: closes lifetime pipe, releases unrelated records, sets state="error".
+        spawned_raise = []
+
+        def capture_raise_popen(*args, **kwargs):
+            proc = real_popen(*args, **kwargs)
+            self.addCleanup(self._reap_proc, proc)
+            spawned_raise.append(proc)
+            return proc
+
+        manager_err = self._new_manager()
+        with mock.patch.object(pairs, "_chat_worker_argv",
+                               lambda _spec: [sys.executable, "-c", "import time; time.sleep(60)"]), \
+                mock.patch.object(pairs, "_decision_worker_argv", stub_argv_builder("decision")), \
+                mock.patch.object(subprocess, "Popen", capture_raise_popen), \
+                mock.patch.object(managed, "_write_claim",
+                                  side_effect=BrokenPipeError(errno.EPIPE, "broken pipe")), \
+                mock.patch.object(managed, "terminate",
+                                  side_effect=PermissionError(errno.EPERM, "cannot signal")):
+            manager_err.setup("everyday", approve_download=True, context_tokens=4096,
+                              available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+            with self.assertRaisesRegex(pairs.PairError, "termination errored"):
+                manager_err.start()
+        self.assertEqual(manager_err.status()["state"], "error")
+        self.assertIsNone(manager_err._lifetime_read_fd)
+        self.assertIn("chat", manager_err._children)
+        held_err = budget.load_reservations(self.home)
+        self.assertIn(CHAT_SMALL_ID, held_err)
+        self.assertNotIn(DECISION_ID, held_err)
+        self.assertTrue(real_terminate(spawned_raise[0]))
+        self.assertTrue(manager_err.stop()["stopped"])
+        self.assertEqual(budget.load_reservations(self.home), {})
+
+        # 2. During ensure_context(): old chat exits, replacement claim delivery fails and
+        # terminate() cannot confirm exit -> new handle & reservation are retained, and
+        # stop_note() reports unverified stop (never "the pair was stopped").
+        manager2 = self._new_manager()
+        self.addCleanup(manager2.stop)
+        with mock.patch.object(pairs, "_chat_worker_argv", stub_argv_builder("chat")), \
+                mock.patch.object(pairs, "_decision_worker_argv", stub_argv_builder("decision")):
+            manager2.setup("everyday", approve_download=True, context_tokens=4096,
+                           available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+            self.assertEqual(manager2.start()["state"], "ready")
+            old_chat_pid = manager2._children["chat"].popen.pid
+            spawned_grow = []
+
+            def capture_grow_popen(*args, **kwargs):
+                proc = real_popen(*args, **kwargs)
+                self.addCleanup(self._reap_proc, proc)
+                spawned_grow.append(proc)
+                return proc
+
+            def refuse_new_chat_terminate(proc, *args, **kwargs):
+                if spawned_grow and proc is spawned_grow[0]:
+                    return False
+                return real_terminate(proc, *args, **kwargs)
+
+            with mock.patch.object(
+                    pairs, "_chat_worker_argv",
+                    lambda _spec: [sys.executable, "-c", "import time; time.sleep(60)"]), \
+                    mock.patch.object(subprocess, "Popen", capture_grow_popen), \
+                    mock.patch.object(managed, "_write_claim",
+                                      side_effect=BrokenPipeError(errno.EPIPE, "broken pipe")), \
+                    mock.patch.object(managed, "terminate", refuse_new_chat_terminate):
+                with self.assertRaises(pairs.PairError) as ctx:
+                    manager2.ensure_context(8192)
+            msg = str(ctx.exception)
+            self.assertIn("stop did not verify", msg)
+            self.assertNotIn("the pair was stopped", msg)
+            self.assertEqual(len(spawned_grow), 1)
+            self.assertIn("chat", manager2._children)
+            self.assertIs(manager2._children["chat"].popen, spawned_grow[0])
+            self.assertNotEqual(manager2._children["chat"].popen.pid, old_chat_pid)
+            held2 = budget.load_reservations(self.home)
+            self.assertIn(CHAT_SMALL_ID, held2)
+            self.assertNotIn(DECISION_ID, held2)
+            self.assertTrue(real_terminate(spawned_grow[0]))
+            self.assertTrue(manager2.stop()["stopped"])
+            self.assertEqual(budget.load_reservations(self.home), {})
+
+    def test_concurrent_status_during_ensure_context_does_not_reap_or_error(self):
+        cat = fixture_catalog()
+        for m in cat["models"]:
+            if m["id"] == CHAT_SMALL_ID:
+                m["extension"] = {"backend_context_qualified_tokens": 16384}
+        write_home_catalog(self.home, cat)
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        self.make_converted_laya()
+        manager = self._new_manager()
+        self.addCleanup(manager.stop)
+        real_free_port = managed.free_port
+        real_reap = managed.reap_pair_records
+
+        with mock.patch.object(pairs, "_chat_worker_argv", stub_argv_builder("chat")), \
+                mock.patch.object(pairs, "_decision_worker_argv", stub_argv_builder("decision")):
+            manager.setup("everyday", approve_download=True, context_tokens=4096,
+                          available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+            self.assertEqual(manager.start()["state"], "ready")
+
+            # Interleaving A: another thread calls status() while ensure_context() has
+            # already terminated old_child and is allocating the replacement port.
+            at_gap = threading.Event()
+            resume_grow = threading.Event()
+
+            def pause_at_free_port():
+                at_gap.set()
+                self.assertTrue(resume_grow.wait(timeout=10))
+                return real_free_port()
+
+            grow_outcome = {}
+
+            def run_grow():
+                try:
+                    grow_outcome["res"] = manager.ensure_context(8192)
+                except BaseException as exc:
+                    grow_outcome["err"] = exc
+
+            with mock.patch.object(managed, "free_port", pause_at_free_port):
+                t_grow = threading.Thread(target=run_grow, daemon=True)
+                t_grow.start()
+                self.assertTrue(at_gap.wait(timeout=10))
+                # Concurrent status() from main thread must not block, reap, or error
+                mid_status = self._run_bounded(manager.status, timeout=5.0)
+                mid_res = budget.load_reservations(self.home)
+                resume_grow.set()
+                t_grow.join(timeout=15)
+            self.assertFalse(t_grow.is_alive())
+            self.assertNotIn("err", grow_outcome)
+            self.assertTrue(grow_outcome["res"]["ok"])
+            self.assertEqual(grow_outcome["res"]["context_tokens"], 8192)
+            self.assertEqual(mid_status["state"], "ready")
+            self.assertIn(CHAT_SMALL_ID, mid_res)
+
+            # Interleaving B: another thread enters status() and pauses inside
+            # reap_pair_records() BEFORE ensure_context() starts -> ensure_context()
+            # waits for status() to release _op_lock before terminating old_child.
+            in_reap = threading.Event()
+            release_reap = threading.Event()
+            reap_observed_alive = []
+
+            def paused_reap(*args, **kwargs):
+                in_reap.set()
+                self.assertTrue(release_reap.wait(timeout=10))
+                reap_observed_alive.append(
+                    all(c.popen.poll() is None for c in kwargs.get("children", ())))
+                return real_reap(*args, **kwargs)
+
+            status_done = {}
+
+            def run_status():
+                try:
+                    status_done["val"] = manager.status()
+                except BaseException as exc:
+                    status_done["err"] = exc
+
+            with mock.patch.object(managed, "reap_pair_records", paused_reap):
+                t_status = threading.Thread(target=run_status, daemon=True)
+                t_status.start()
+                self.assertTrue(in_reap.wait(timeout=10))
+                grow2_outcome = {}
+
+                def run_grow2():
+                    try:
+                        grow2_outcome["res"] = manager.ensure_context(16384)
+                    except BaseException as exc:
+                        grow2_outcome["err"] = exc
+
+                t_grow2 = threading.Thread(target=run_grow2, daemon=True)
+                t_grow2.start()
+                time.sleep(0.1)
+                release_reap.set()
+                t_status.join(timeout=10)
+                t_grow2.join(timeout=15)
+            self.assertFalse(t_status.is_alive())
+            self.assertFalse(t_grow2.is_alive())
+            self.assertNotIn("err", status_done)
+            self.assertNotIn("err", grow2_outcome)
+            self.assertEqual(reap_observed_alive, [True])
+            self.assertTrue(grow2_outcome["res"]["ok"])
+            self.assertEqual(grow2_outcome["res"]["context_tokens"], 16384)
+            self.assertEqual(manager.status()["state"], "ready")
+
+    def test_setup_download_and_convert_handle_unverified_worker_error_and_reset_state(self):
+        self.make_converted_laya()
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(self._reap_proc, sleeper)
+        manager = self._new_manager()
+        err = managed.WorkerError("post-spawn failure and did not confirm termination",
+                                  proc=sleeper)
+        with mock.patch.dict(os.environ, {"MLX_OMARCHY_OFFLINE": ""}), \
+                mock.patch.object(managed, "spawn_supervised", side_effect=err):
+            with self.assertRaisesRegex(pairs.PairError, "could not start download"):
+                manager.setup("everyday", approve_download=True,
+                              available_bytes=PAIR_MANAGER_MEM_AVAILABLE_BYTES)
+        self.assertEqual(manager.status()["state"], "idle")
+        self.assertTrue(any(c.popen is sleeper for c in manager._children.values()))
+        self.assertTrue(manager.stop()["stopped"])
+        self.assertEqual(manager._children, {})
+        self.assertIsNotNone(sleeper.poll())
+
+
 if __name__ == "__main__":
     unittest.main()
