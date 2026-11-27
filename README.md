@@ -226,7 +226,7 @@ macOS decode: 100% means parity, higher is faster on Linux.
 | 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | pending | pending | pending | pending | pending | pending | pending | pending | `53ad9af196f5` |
 | 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 | pending | pending | pending | 1577.47 tok/s | pending | pending | `4784df039da0` | pending | `53ad9af196f5` |
 | 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 | pending | pending | pending | pending | pending | pending | `c5fb4074d0b5` | pending | `53ad9af196f5` |
-| 14-inch M2 Max MacBook Pro (38-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | pending | pending | pending | pending | pending | pending | `cedd5549b251` | pending | `53ad9af196f5` |
+| 14-inch M2 Max MacBook Pro (38-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | pending | pending | pending | 322.71 tok/s | pending | pending | `cedd5549b251` | pending | `53ad9af196f5` |
 | 14-inch M2 Max MacBook Pro (38-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | pending | pending | pending | pending | pending | pending | `5b327e139ad9` | pending | `53ad9af196f5` |
 
 ### Earlier M1 Max model sweep (October 2026)
