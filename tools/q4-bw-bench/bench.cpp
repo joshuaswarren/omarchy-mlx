@@ -1425,7 +1425,8 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
       // the f16 uvec4 view; it does not compile under the --2b bf16
       // defines, so it is skipped there rather than killing the screen.
       if (g_gap_bf16 && std::string(c.tag) == "loadfirst") continue;
-      std::string cdefs = std::string(q4_defines) +
+      std::string cdefs = (g_base_defs.empty() ? std::string(q4_defines)
+                                               : g_base_defs) +
           (std::string(c.tag) == "cand" ? g_cand_defs : std::string());
       if (compile_shader(c.src, cdefs.c_str(), c.spv) != 0)
         die("compile gap cand %s", c.tag);
@@ -1864,9 +1865,23 @@ int main(int argc, char** argv) {
   for (int i = 0; i < num_sides; ++i) {
     // loadfirst cannot compile under bf16 defines (f16-only form).
     if (bf16_eq && std::string(specs[i].tag) == "loadfirst") continue;
-    std::string sdefs = std::string(variant_defines) +
-        (std::string(specs[i].tag) == "cand" ? g_cand_defs : std::string());
-    if (compile_shader(specs[i].src, sdefs.c_str(), specs[i].spv) != 0)
+    // The candidate rides the overridden base build (same source, same
+    // defines) plus its own delta, so a screen never compares across
+    // builds by accident.
+    std::string sdefs =
+        (std::string(specs[i].tag) == "cand"
+                ? (g_base_defs.empty() ? std::string(variant_defines)
+                                       : g_base_defs) + g_cand_defs
+                : (specs[i].src == g_base_src && !g_base_defs.empty()
+                       ? g_base_defs
+                       : std::string(variant_defines)));
+    if (compile_shader(
+            std::string(specs[i].src) == "tools/q4-bw-bench/shaders/"
+                                        "qmm_vec_base.comp" &&
+                    !g_base_src.empty()
+                ? g_base_src.c_str()
+                : specs[i].src,
+            sdefs.c_str(), specs[i].spv) != 0)
       die("compile %s", specs[i].tag);
   }
 

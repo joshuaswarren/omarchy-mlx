@@ -24,13 +24,22 @@ echo "== AGX register/occupancy dump (driver compile of both variants) =="
 AGX_DEBUG=shaderdb,verbose /tmp/q4-bw-bench-w4 --gap --2b --quick --inc /tmp \
   --base-src "$SH" \
   --base-defs "$B -DQMM_W2=1" \
-  --cand "$SH:8" --cand-def "-DQMM_W4=1" > /tmp/w4-dec06-agx.log 2>&1 || true
+  --cand "$SH:8" --cand-def "$B -DQMM_W4=1" > /tmp/w4-dec06-agx.log 2>&1 || true
 grep -aE "half|regs|loop|shader|SHADER" /tmp/w4-dec06-agx.log | head -40 || true
 for leg in a b; do
   /tmp/q4-bw-bench-w4 --gap --2b --quick --inc /tmp \
     --base-src "$SH" \
     --base-defs "$B -DQMM_W2=1" \
-    --cand "$SH:8" --cand-def "-DQMM_W4=1" 2>&1 \
+    --cand "$SH:8" --cand-def "$B -DQMM_W4=1" 2>&1 \
     | tee "/tmp/w4-dec06-$leg.ndjson" | grep -aE '"k":"eq"|MM |widedep_cand|iso4_cand|widedep_base|iso4_base'
+done
+# k % 1024 != 0 shapes (kv512, qkv) never dispatch W4 in production (the
+# host gate requires K % 1024 == 0); their W4-arm output is out of
+# contract, so the verdict counts only the eligible shapes.
+for leg in a b; do
+  ok=$(grep -a '"k":"eq"' "/tmp/w4-dec06-$leg.ndjson" \
+    | grep -avE '"shape":"(kv512|qkv)"' \
+    | awk -F'bit_mismatches":' '{s += $2 + 0; n += 1} END {print s "/" n}')
+  echo "leg-$leg eligible-shape bit-mismatches/total: $ok"
 done
 echo W4-DEC06-DONE
