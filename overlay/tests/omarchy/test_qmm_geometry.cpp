@@ -609,14 +609,19 @@ int main(int argc, char** argv) {
       const char* label;
       const char* scenario;
       const char* extra_env;
+      const char* extra_val;
     };
     const FoCase cases[] = {
-        {"word_r2s4_fast", "single", "MLX_OMARCHY_WORD_R2S4"},
-        {"multi_up_fast", "group", "MLX_OMARCHY_Q4_UPFRONT"},
-        {"swiglu_r1s4_fast", "swiglu", "MLX_OMARCHY_SWIGLU_R1S4"},
-        {"resnorm2048_fast", "resnorm2048", "MLX_OMARCHY_RESNORM_R2S32"},
-        {"resnorm2048_liveqmm_fast", "resnorm2048_liveqmm", "MLX_OMARCHY_RESNORM_R2S32"},
-        {"resnorm4096_fast", "resnorm4096", "MLX_OMARCHY_RESNORM_R2S32"},
+        {"word_r2s4_fast", "single", "MLX_OMARCHY_WORD_R2S4", "1"},
+        {"multi_up_fast", "group", "MLX_OMARCHY_Q4_UPFRONT", "1"},
+        {"swiglu_r1s4_fast", "swiglu", "MLX_OMARCHY_SWIGLU_R1S4", "1"},
+        {"swiglu_r1s8_fast", "swiglu", "MLX_OMARCHY_SWIGLU_R1S4", "0"},
+        {"resnorm2048_fast", "resnorm2048", "MLX_OMARCHY_RESNORM_R2S32", "1"},
+        {"resnorm2048_liveqmm_fast", "resnorm2048_liveqmm", "MLX_OMARCHY_RESNORM_R2S32", "1"},
+        {"resnorm4096_fast", "resnorm4096", "MLX_OMARCHY_RESNORM_R2S32", "1"},
+        {"resnorm2048_r2s16_fast", "resnorm2048", "MLX_OMARCHY_RESNORM_R2S32", "0"},
+        {"resnorm2048_r2s16_liveqmm_fast", "resnorm2048_liveqmm", "MLX_OMARCHY_RESNORM_R2S32", "0"},
+        {"resnorm4096_r2s16_fast", "resnorm4096", "MLX_OMARCHY_RESNORM_R2S32", "0"},
     };
     for (const auto& c : cases) {
       std::string base = "/tmp/w7p-geom-base.bin";
@@ -626,7 +631,7 @@ int main(int argc, char** argv) {
       setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
       setenv("MLX_OMARCHY_RESNORM_VEC4", "1", 1);
       setenv("MLX_OMARCHY_MULTI_R2S16", "0", 1);
-      setenv(c.extra_env, "1", 1);
+      setenv(c.extra_env, c.extra_val, 1);
       setenv("MLX_OMARCHY_G14C_FAST_ONLY", "0", 1);
       int rc1 = run_child(c.scenario, base.c_str());
       setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
