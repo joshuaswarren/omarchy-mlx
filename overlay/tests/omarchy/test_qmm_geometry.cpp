@@ -742,6 +742,34 @@ int main(int argc, char** argv) {
         std::cout << "ok: word_r2s4_fast_b1 identical\n";
       }
     }
+    // G13C ResNormVec Fast (QMM_RESNORM_PACK32 + dead output0 +
+    // QMM_RESNORM_VEC_REG_V4) must be 0-ULP bit-identical to ResNormVec
+    // fallback across dead and live qmm_out paths (D=2048 and D=4096).
+    for (const char* name : {"resnorm2048", "resnorm2048_liveqmm", "resnorm4096"}) {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_VEC4", "0", 1);
+      setenv("MLX_OMARCHY_RESNORM_VEC", "1", 1);
+      setenv("MLX_OMARCHY_QMM_FAST_ONLY", "0", 1);
+      int rc1 = run_child(name, base.c_str());
+      setenv("MLX_OMARCHY_QMM_FAST_ONLY", "1", 1);
+      int rc2 = run_child(name, other.c_str());
+      unsetenv("MLX_OMARCHY_QMM_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_RESNORM_VEC");
+      unsetenv("MLX_OMARCHY_RESNORM_VEC4");
+      unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: " << name
+                  << "_g13c_resnorm_vec_fast differed from fallback (rc "
+                  << rc1 << "/" << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: " << name << "_g13c_resnorm_vec_fast identical\n";
+      }
+    }
   }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")
             << " failures " << failures << "\n";
