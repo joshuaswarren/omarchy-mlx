@@ -792,10 +792,12 @@
 #include "qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s4w2.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s4w2_fast.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s8w2_fast.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_fast.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast_3m.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast.h"
 #include "sdpa_decode_online_rope_sg32_bf16_hd256_fast.h"
 #include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast.h"
@@ -2706,6 +2708,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast_b1,
           qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast_b1_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S8W2Fast:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s8w2_fast,
+          qmm_vec_q4_swiglu_bf16_r1s8w2_fast_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2Fast:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

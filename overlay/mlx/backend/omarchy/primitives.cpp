@@ -11826,7 +11826,8 @@ bool dispatch_quantized_gemv_group(
           binding(*members[0].epilogue),
           binding(res_norm->weight),
           binding(res_norm->out)};
-      if (resnorm_kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2 &&
+      if ((resnorm_kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2 ||
+           resnorm_kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2) &&
           params.matrix_k % 512u == 0u &&
           (params.shape[0] == 2048u || params.shape[0] == 4096u) &&
           params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u &&
@@ -11836,16 +11837,20 @@ bool dispatch_quantized_gemv_group(
           (res_norm->out.offset() & 15u) == 0u &&
           omarchy::qmm_g14c_fast_only_default_part(
               encoder.device().capabilities().device_name)) {
-        const char* spec_env = omarchy::env_str("MLX_OMARCHY_RESNORM_SPEC");
-        const bool spec_allow =
-            (spec_env == nullptr || spec_env[0] == '\0' ||
-             std::strcmp(spec_env, "0") != 0);
-        if (spec_allow) {
-          resnorm_kernel = (params.shape[0] == 2048u)
-              ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD2048
-              : ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD4096;
+        if (resnorm_kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2) {
+          const char* spec_env = omarchy::env_str("MLX_OMARCHY_RESNORM_SPEC");
+          const bool spec_allow =
+              (spec_env == nullptr || spec_env[0] == '\0' ||
+               std::strcmp(spec_env, "0") != 0);
+          if (spec_allow) {
+            resnorm_kernel = (params.shape[0] == 2048u)
+                ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD2048
+                : ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD4096;
+          } else {
+            resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Fast;
+          }
         } else {
-          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Fast;
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2Fast;
         }
         if (res_norm->dead_qmm_out) {
           params.flags |= 0x1000000u;
@@ -11940,6 +11945,11 @@ bool dispatch_quantized_gemv_group(
         omarchy::qmm_g14c_fast_only_default_part(
             encoder.device().capabilities().device_name)) {
       sw_k = ComputeKernel::QmmVecQ4SwigluBF16R1S4W2Fast;
+    } else if (sw_k == ComputeKernel::QmmVecQ4SwigluBF16R1S8W2 &&
+        params.matrix_k % 512u == 0u && params.shape[0] % 8u == 0u &&
+        omarchy::qmm_g14c_fast_only_default_part(
+            encoder.device().capabilities().device_name)) {
+      sw_k = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2Fast;
     }
     encoder.dispatch_compute(
         sw_k,

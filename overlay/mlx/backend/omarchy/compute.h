@@ -1444,6 +1444,12 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4ResNormVec4BF16R2S32W2FastD4096,
   QmmVecQ4WordSubgroupBF16R2S4W2FastB1,
   QmmVecQ4WordSubgroupBF16R2S32W2FastB1,
+  // Fast-tile-only SwiGLU R1S8W2 (256 threads, 8 cols/WG) and upfront
+  // fast-tile-only ResNormVec4 R2S16W2 (512 threads, 32 cols/WG, epilogue
+  // norm_weight_v4 hoist + Pack32 + dead QMM output elision; 0-ULP
+  // bit-identical). Appended to keep profile kernel ids stable.
+  QmmVecQ4SwigluBF16R1S8W2Fast,
+  QmmVecQ4ResNormVec4BF16R2S16W2Fast,
   Count,
 };
 
