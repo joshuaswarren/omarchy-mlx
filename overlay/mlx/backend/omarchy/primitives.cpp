@@ -17947,11 +17947,7 @@ void GdnConvDeltaUpdate::eval_gpu(
         VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
     if (gdn_caps.subgroup_size == 32u &&
         (gdn_caps.subgroup_operations & kGdnSgFeatures) == kGdnSgFeatures) {
-      if (std::strcmp(gdn_coal_env, "tile32") == 0 &&
-          gdn_caps.max_compute_shared_memory_size >= 20480u) {
-        kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Tile32;
-      } else if (
-          std::strcmp(gdn_coal_env, "sg8") == 0 &&
+      if (std::strcmp(gdn_coal_env, "sg8") == 0 &&
           gdn_caps.max_compute_work_group_invocations >= 256u &&
           gdn_caps.max_compute_work_group_size[0] >= 256u) {
         kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg8;
@@ -17960,6 +17956,16 @@ void GdnConvDeltaUpdate::eval_gpu(
           gdn_caps.max_compute_work_group_invocations >= 512u &&
           gdn_caps.max_compute_work_group_size[0] >= 512u) {
         kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg16;
+      } else if (
+          std::strcmp(gdn_coal_env, "sg16u2") == 0 &&
+          gdn_caps.max_compute_work_group_invocations >= 512u &&
+          gdn_caps.max_compute_work_group_size[0] >= 512u) {
+        kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg16U2;
+      } else if (
+          std::strcmp(gdn_coal_env, "sg32") == 0 &&
+          gdn_caps.max_compute_work_group_invocations >= 1024u &&
+          gdn_caps.max_compute_work_group_size[0] >= 1024u) {
+        kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
       }
     }
   }

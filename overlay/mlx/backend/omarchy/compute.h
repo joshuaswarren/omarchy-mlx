@@ -1348,11 +1348,11 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeOnlineRopeSg32BF16Hd256,
   SdpaDecodeOnlineRopeOutgateSg32BF16Hd256,
   // Coalesced-state fused GDN decode conv + gated-delta + gated-RMSNorm
-  // (Dk == Dv == 128, f32 state, bf16 qkv/gates/out; Tile32 is bit-exact to
-  // PfWide; Sg8/Sg16 use coalesced 1-row-per-subgroup vec4 with subgroupAdd).
-  GatedDeltaDecodeConvNormBF16Tile32,
+  // (Dk == Dv == 128, f32 state, bf16 qkv/gates/out; coalesced 1-row/SG vec4).
   GatedDeltaDecodeConvNormBF16Sg8,
   GatedDeltaDecodeConvNormBF16Sg16,
+  GatedDeltaDecodeConvNormBF16Sg16U2,
+  GatedDeltaDecodeConvNormBF16Sg32,
   Count,
 };
 
