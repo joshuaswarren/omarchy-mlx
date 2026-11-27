@@ -416,6 +416,7 @@
 #include "sdpa_vjp_reduce_f16.h"
 #include "sdpa_vjp_reduce_bf16.h"
 #include "gated_delta_decode_bf16.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
 #include "gated_delta_decode_composed_bf16.h"
@@ -2533,6 +2534,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           sdpa_decode_online_rope_outgate_sg32_bf16_hd256,
           sdpa_decode_online_rope_outgate_sg32_bf16_hd256_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32,
+          gated_delta_decode_conv_norm_bf16_sg32_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

@@ -185,6 +185,7 @@ TEST_CASE("the fused op does not read the flag: with the variable unset it fuses
   // fused op must therefore still be one dispatch where the unfused route is two (and three with the gated norm), with the production bytes. The
   // dispatch assertions need the untiled prefetch kernel, so they are required only where the part runs it (GDN_CONV_DELTA_REQUIRE_ENGAGED=1).
   unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  setenv("MLX_OMARCHY_GDN_COALESCED", "0", 1);
   Stream s = gpu_stream();
   Inputs in = make_inputs(10, 0.05f, s);
   Run pair = production_pair(in, s);
@@ -197,6 +198,7 @@ TEST_CASE("the fused op does not read the flag: with the variable unset it fuses
   for (int i = 0; i < 3; ++i) {
     CHECK(array_equal(two.out[i], seq.out[i], s).item<bool>());
   }
+  unsetenv("MLX_OMARCHY_GDN_COALESCED");
   if (one.dispatches == pair.dispatches && std::getenv("GDN_CONV_DELTA_REQUIRE_ENGAGED") == nullptr) {
     std::cout << "Skipping dispatch check: this device's unfused route is not the untiled prefetch kernel\n";
     return;
@@ -208,6 +210,7 @@ TEST_CASE("the fused op does not read the flag: with the variable unset it fuses
 TEST_CASE("the conv + delta + gated norm step returns the production sequence's bytes") {
   if (!have_gpu()) return;
   setenv("MLX_OMARCHY_GDN_CONV_DELTA", "2", 1);
+  setenv("MLX_OMARCHY_GDN_COALESCED", "0", 1);
   Stream s = gpu_stream();
   const char* names[3] = {"normed output", "recurrent state", "conv carry-out state"};
   for (uint32_t seed : {10u, 20u, 30u}) {
@@ -224,6 +227,7 @@ TEST_CASE("the conv + delta + gated norm step returns the production sequence's 
       }
     }
   }
+  unsetenv("MLX_OMARCHY_GDN_COALESCED");
 }
 
 TEST_CASE("the conv + delta + gated norm step is one dispatch where the sequence is three") {
@@ -288,6 +292,7 @@ TEST_CASE("the GDN conv + delta default is the 13-inch and the 14-inch, and the 
 
 TEST_CASE("the op's form follows its inputs, not the flag: norm arguments select the norm form with the flag unset or any value") {
   if (!have_gpu()) return;
+  setenv("MLX_OMARCHY_GDN_COALESCED", "0", 1);
   Stream s = gpu_stream();
   Inputs in = make_inputs(10, 0.05f, s);
   Run want = production_pair(in, s, true);
@@ -306,6 +311,7 @@ TEST_CASE("the op's form follows its inputs, not the flag: norm arguments select
     CHECK(got.dispatches == fused(in, s, true).dispatches);
   }
   unsetenv("MLX_OMARCHY_GDN_CONV_DELTA");
+  unsetenv("MLX_OMARCHY_GDN_COALESCED");
 }
 
 TEST_CASE("the fused conv + delta + gated norm covers unequal key and value head counts") {
@@ -428,6 +434,50 @@ TEST_CASE("GdnConvUpdate reads offset-carrying inputs, not flat bindings") {
       CHECK_MESSAGE(
           array_equal(got[i], want[i], s).item<bool>(),
           "GdnConvUpdate output ", i, " read a flat binding instead of the offset view (seed ", seed, ")");
+    }
+  }
+}
+
+TEST_CASE("coalesced GDN Sg32 default policy, accuracy, dispatch count, and off-switch") {
+  // Chip default: G14C equal-head only; every other part and unequal-head GQA stay off.
+  CHECK(omarchy::gdn_conv_coalesced_default("Apple M2 Max (G14C B1)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M2 Max (G14C B1)", 16, 32));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M1 (G13G B1)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M1 Max (G13C C0)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M6 (G18G B1)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_default("", 16, 16));
+
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  for (uint32_t seed : {10u, 20u, 30u}) {
+    for (float state_scale : {0.05f, 2.0f}) {
+      Inputs in = make_inputs(seed, state_scale, s);
+      setenv("MLX_OMARCHY_GDN_COALESCED", "0", 1);
+      Run want = production_pair(in, s, true);
+      Run pf = fused(in, s, true);
+      for (int i = 0; i < 3; ++i) {
+        CHECK(array_equal(pf.out[i], want.out[i], s).item<bool>());
+      }
+      setenv("MLX_OMARCHY_GDN_COALESCED", "1", 1);
+      fused(in, s, true); // warm pipeline
+      Run coal = fused(in, s, true);
+      unsetenv("MLX_OMARCHY_GDN_COALESCED");
+      REQUIRE(coal.out.size() == 3);
+      // Conv carry-out is untouched by the state reduction order and must be bit-exact.
+      CHECK(array_equal(coal.out[2], want.out[2], s).item<bool>());
+      // Normed bf16 output and f32 recurrent state match within subgroupAdd rounding (<= 1e-5 f32, <= 1 bf16 ULP).
+      auto max_diff = [&](const array& a, const array& b) {
+        auto d = max(abs(astype(a, float32, s) - astype(b, float32, s)), s);
+        eval({d});
+        return d.item<float>();
+      };
+      const float hf_err = max_diff(coal.out[1], want.out[1]);
+      const float y_err = max_diff(coal.out[0], want.out[0]);
+      CHECK_MESSAGE(hf_err <= 2e-5f, "hf max_diff=", hf_err, " seed=", seed, " scale=", state_scale);
+      CHECK_MESSAGE(y_err <= 1e-2f, "y max_diff=", y_err, " seed=", seed, " scale=", state_scale);
+      if (coal.dispatches != want.dispatches) {
+        CHECK(coal.dispatches == 1);
+      }
     }
   }
 }

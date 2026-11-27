@@ -17928,7 +17928,11 @@ void GdnConvDeltaUpdate::eval_gpu(
       binding(conv_state_out),
       binding(norm_gate),
       binding(norm_weight)};
-  const omarchy::ComputeKernel kernel = !equal_heads
+  const char* gdn_coal_env = omarchy::env_str("MLX_OMARCHY_GDN_COALESCED");
+  const bool gdn_coal_want = (gdn_coal_env != nullptr && gdn_coal_env[0] != '\0')
+      ? (std::strcmp(gdn_coal_env, "0") != 0)
+      : omarchy::gdn_conv_coalesced_default(device_name, Hk, Hv);
+  omarchy::ComputeKernel kernel = !equal_heads
       ? (with_norm ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16PfGqa
                    : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfGqa)
       : with_norm
@@ -17936,6 +17940,20 @@ void GdnConvDeltaUpdate::eval_gpu(
                  : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Pf)
       : (pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfWide
                  : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16Pf);
+  if (gdn_coal_want && with_norm && dk == 128u &&
+      (params.shape[1] % 4u) == 0u && (params.shape[2] % 4u) == 0u) {
+    const auto& gdn_caps = encoder.device().capabilities();
+    constexpr VkSubgroupFeatureFlags kGdnSgFeatures =
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+        VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+    if (gdn_caps.subgroup_size == 32u &&
+        (gdn_caps.subgroup_operations & kGdnSgFeatures) == kGdnSgFeatures &&
+        gdn_caps.max_compute_work_group_invocations >= 1024u &&
+        gdn_caps.max_compute_work_group_size[0] >= 1024u) {
+      kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
+    }
+  }
   encoder.dispatch_compute(
       kernel,
       std::span<const omarchy::ComputeBinding>(bindings.data(), with_norm ? 13u : 11u),
