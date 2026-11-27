@@ -834,6 +834,24 @@ bool Runtime::init_impl() {
   // wait (about 21000 expired waits per decoded token on a 13-inch M1): 5 s more process CPU and about 1 W more system power over a 400-token decode,
   // for no change in tok/s, and no gain in Parakeet tdt_decode either (receipts/2026-11-03-hk-submit-poll). The variable stays available: a value set in
   // the environment reaches the driver untouched.
+  //
+  // On Apple M2 Max (apple,t6021 / G14C), Mesa Honeykrisp leaves AGX_HOIST_LOADS
+  // off on Gen 14 today. Setting AGX_HOIST_LOADS=1 before vkCreateInstance
+  // enables it consistently in both pipeline/disk cache UUIDs and shader
+  // compilation while leaving any explicit AGX_HOIST_LOADS value (including "0")
+  // untouched.
+  {
+    std::ifstream dt("/proc/device-tree/compatible", std::ios::binary);
+    if (dt.is_open()) {
+      std::string compat(
+          (std::istreambuf_iterator<char>(dt)),
+          std::istreambuf_iterator<char>());
+      if (should_auto_enable_agx_hoist_loads(
+              compat, std::getenv("AGX_HOIST_LOADS"))) {
+        ::setenv("AGX_HOIST_LOADS", "1", /*overwrite=*/0);
+      }
+    }
+  }
 
   if (!vk::load_loader()) {
     error =
