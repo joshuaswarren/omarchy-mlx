@@ -471,6 +471,20 @@ TEST_CASE("vocab tail default: the part rule") {
   CHECK_FALSE(omarchy::vocab_tail_chunked_default("Apple M1 (G13G B1)"));
 }
 
+TEST_CASE("resnorm vec default: the part rule and env override") {
+  unsetenv("MLX_OMARCHY_RESNORM_VEC");
+  CHECK(omarchy::resnorm_vec_default_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::resnorm_vec_default_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::resnorm_vec_default_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::resnorm_vec_default_part(""));
+  setenv("MLX_OMARCHY_RESNORM_VEC", "0", 1);
+  CHECK_FALSE(omarchy::resnorm_vec_default_part("Apple M1 Max (G13C C0)"));
+  setenv("MLX_OMARCHY_RESNORM_VEC", "1", 1);
+  CHECK(omarchy::resnorm_vec_default_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::resnorm_vec_default_part("Apple M1 (G13G B1)"));
+  unsetenv("MLX_OMARCHY_RESNORM_VEC");
+}
+
 // Launches of one ArgMax or one LogSumExp over the row with the flags as the environment holds them.
 static uint64_t tail_launches(const array& x, bool arg, const Stream& stream) {
   uint64_t before = dispatches();

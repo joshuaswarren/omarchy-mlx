@@ -417,6 +417,15 @@ layout(set = 0, binding = 12, std430) writeonly buffer NormOutputV4 {
   uvec4 values[];
 } norm_output_v4;
 #endif
+#if defined(QMM_RESNORM_VEC)
+layout(set = 0, binding = 10, std430) readonly coherent buffer Sum0Vec4 {
+  uvec4 values[];
+} sum0_v4;
+layout(set = 0, binding = 11, std430) writeonly buffer NormOutputU32 {
+  uint values[];
+} norm_output_u32;
+shared uint s_resnorm_sum[2048u];
+#endif
 #if defined(QMM_VEC_OUTGATE)
 layout(set = 0, binding = 10, std430) readonly buffer OutgateOut {
   uvec4 values[];
@@ -2288,6 +2297,77 @@ void main() {
       }
       return;
     }
+  }
+#endif
+#if defined(QMM_RESNORM_VEC)
+  if (reg_path) {
+    // Cooperative 128-bit uvec4 coherent-L2 load into shared memory:
+    // 16x fewer coherent L2 reads than 20 scalar uint16_t loads per thread
+    // (320 uvec4 loads for D=2560 -> 1.25 loads/thread), zero extra QMV regs.
+    // Paired 32-bit uint stores to norm_output halve store instructions;
+    // every intermediate and reduction matches FastRmsNormAppleBF16 bit-for-bit.
+    uint n_v4 = row_length >> 3u;
+    for (uint vi = lane; vi < n_v4; vi += 256u) {
+      uvec4 v = sum0_v4.values[vi];
+      uint sb = vi << 2u;
+      s_resnorm_sum[sb] = v.x;
+      s_resnorm_sum[sb + 1u] = v.y;
+      s_resnorm_sum[sb + 2u] = v.z;
+      s_resnorm_sum[sb + 3u] = v.w;
+    }
+    barrier();
+    if (lane < 256u) {
+      uint base_w = (lane * n_reads) >> 1u;
+      uint n_words = n_reads >> 1u;
+      for (uint i = 0u; i < n_words; ++i) {
+        uint w = s_resnorm_sum[base_w + i];
+        float x0 = uintBitsToFloat((w & 0xFFFFu) << 16u);
+        float x1 = uintBitsToFloat(w & 0xFFFF0000u);
+        reg_sq += x0 * x0;
+        reg_sq += x1 * x1;
+      }
+      float sub_partial = subgroupAdd(reg_sq);
+      if (sub_lane == 0u) {
+        s_resnorm_partial[sub_id] = sub_partial;
+      }
+    }
+    barrier();
+    if (sub_id == 0u) {
+      float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+      float total_sq = subgroupAdd(v);
+      if (sub_lane == 0u) {
+        s_resnorm_partial[0] = total_sq;
+      }
+    }
+    barrier();
+    float mean_square = s_resnorm_partial[0] / float(row_length);
+    float norm = inversesqrt(mean_square + eps);
+    if (lane < 256u) {
+      uint base = lane * n_reads;
+      uint base_w = base >> 1u;
+      uint n_words = n_reads >> 1u;
+      for (uint i = 0u; i < n_words; ++i) {
+        uint w = s_resnorm_sum[base_w + i];
+        uint idx0 = base + (i << 1u);
+        uint idx1 = idx0 + 1u;
+        float val0 = uintBitsToFloat((w & 0xFFFFu) << 16u);
+        float val1 = uintBitsToFloat(w & 0xFFFF0000u);
+        float wt0 = (params.lhs_size == 1u)
+            ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+            : LOAD_VALUE(norm_weight.values[params.rhs_offset + idx0]);
+        float wt1 = (params.lhs_size == 1u)
+            ? LOAD_VALUE(norm_weight.values[params.rhs_offset])
+            : LOAD_VALUE(norm_weight.values[params.rhs_offset + idx1]);
+        precise float nw0 = norm * wt0;
+        precise float nw1 = norm * wt1;
+        precise float r0 = val0 * nw0;
+        precise float r1 = val1 * nw1;
+        uint b0 = uint(STORE_VALUE(r0));
+        uint b1 = uint(STORE_VALUE(r1));
+        norm_output_u32.values[base_w + i] = b0 | (b1 << 16u);
+      }
+    }
+    return;
   }
 #endif
   if (lane < 256u) {
