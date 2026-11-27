@@ -306,14 +306,14 @@ void main() {
     float sv1 = sv[r1];
     float sv2 = sv[r2];
     float sv3 = sv[r3];
-    #define GDN_P4_ROW(w, r, svr) { \
-      float kv_part = fma((w).x, skg0, fma((w).y, skg1, fma((w).z, skg2, (w).w * skg3))); \
+    #define GDN_P4_ROW(wv, r, svr) { \
+      float kv_part = fma((wv).x, skg0, fma((wv).y, skg1, fma((wv).z, skg2, (wv).w * skg3))); \
       float kv_acc = subgroupAdd(kv_part); \
       float delta = ((svr) - kv_acc) * beta; \
-      float n0 = fma((w).x, g, gdn_dk_term(delta, sk0)); \
-      float n1 = fma((w).y, g, gdn_dk_term(delta, sk1)); \
-      float n2 = fma((w).z, g, gdn_dk_term(delta, sk2)); \
-      float n3 = fma((w).w, g, gdn_dk_term(delta, sk3)); \
+      float n0 = fma((wv).x, g, gdn_dk_term(delta, sk0)); \
+      float n1 = fma((wv).y, g, gdn_dk_term(delta, sk1)); \
+      float n2 = fma((wv).z, g, gdn_dk_term(delta, sk2)); \
+      float n3 = fma((wv).w, g, gdn_dk_term(delta, sk3)); \
       s_out.v[s_out_base_q + (r) * 32u + lane] = vec4(n0, n1, n2, n3); \
       float o_part = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3))); \
       float o_acc = subgroupAdd(o_part); \
