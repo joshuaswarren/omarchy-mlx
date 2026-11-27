@@ -36,6 +36,7 @@ import inspect
 import json
 import math
 import os
+import stat
 import sys
 import threading
 import time
@@ -70,7 +71,8 @@ def _wheel_commit(version: str | None) -> str | None:
 
 
 def resolve_stamp_mismatch(stamp, wheel_version, drift_allowed=False,
-                           installed=True, record_verified=False):
+                           installed=True, record_verified=False,
+                           wheel_present=False):
     """Compare the serve copies' build stamp with the installed wheel.
 
     Returns (refusal, warning): refusal is a loud error string when the
@@ -80,6 +82,8 @@ def resolve_stamp_mismatch(stamp, wheel_version, drift_allowed=False,
     subprocess tests stay unaffected. `record_verified` marks the copies
     as hash-identical to the wheel's dist-info RECORD, which replaces a
     missing stamp instead of refusing byte-identical content.
+    `wheel_present` distinguishes an installed wheel whose metadata was
+    unreadable from an absent wheel.
     """
     build = _wheel_commit(wheel_version)
     demote = not installed
@@ -90,7 +94,7 @@ def resolve_stamp_mismatch(stamp, wheel_version, drift_allowed=False,
                     + ("; continuing on " + STAMP_ENV + "=1"
                        if drift_allowed else "; the serve-drift check "
                        "cannot run here"))
-        if not stamp:
+        if not stamp and not wheel_present:
             return (None, "no build stamp and no installed mlx-omarchy "
                     "wheel; the serve-drift check cannot run")
         return ("cannot read the installed mlx-omarchy wheel version; "
@@ -123,13 +127,292 @@ def resolve_stamp_mismatch(stamp, wheel_version, drift_allowed=False,
             f"set {STAMP_ENV}=1 to continue", None)
 
 
-def read_build_stamp(directory=None):
-    """Read the install.sh stamp next to this module; missing means the
-    copies predate stamping."""
-    path = (Path(directory) if directory else Path(__file__).parent) / STAMP_FILE
+BUILD_STAMP_MAX_BYTES = 4096
+METADATA_MAX_BYTES = 1 << 20
+RECORD_MAX_BYTES = 4 << 20
+SERVE_COPY_MAX_BYTES = 4 << 20
+_MAX_WALK_DIRS = 1024
+_READ_CHUNK_BYTES = 64 << 10
+_REGULAR_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_NONBLOCK", 0)
+    | getattr(os, "O_NOCTTY", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+
+
+def _read_regular_bounded(path: Path, max_bytes: int, sink) -> bool:
+    """Stream up to max_bytes from a regular file into sink(chunk).
+
+    Follows symlinks (venv or editable installs may symlink regular files),
+    opens with O_NONBLOCK so a FIFO without a writer cannot hang, requires
+    S_ISREG and st_size <= max_bytes on the opened fd, and loops in unbuffered
+    chunks up to max_bytes + 1 so files that grow after fstat (or report
+    st_size == 0) stay bounded. Returns True only on EOF within max_bytes.
+    """
+    fd = None
     try:
-        return path.read_text().strip() or None
+        fd = os.open(path, _REGULAR_OPEN_FLAGS)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return False
+        if info.st_size > max_bytes:
+            return False
+        total = 0
+        while True:
+            chunk = os.read(fd, min(_READ_CHUNK_BYTES, max_bytes + 1 - total))
+            if not chunk:
+                return True
+            total += len(chunk)
+            if total > max_bytes:
+                return False
+            sink(chunk)
+    except (OSError, ValueError):
+        return False
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _is_stdlib_md_callable(fn, name: str) -> bool:
+    return (
+        inspect.isfunction(fn)
+        and getattr(fn, "__module__", None) == "importlib.metadata"
+        and getattr(fn, "__name__", None) == name
+    )
+
+
+def _read_wheel_version() -> tuple[str | None, bool]:
+    """Return (version, wheel_present) without blocking or unbounded reads.
+
+    `wheel_present` is False only when no mlx-omarchy distribution is found
+    (`PackageNotFoundError`). When a distribution exists but its METADATA or
+    PKG-INFO is unreadable, non-regular, oversized, or invalid UTF-8, returns
+    `(None, True)` so an installed server fails closed instead of treating
+    corrupt metadata as an absent wheel.
+    """
+    import email.parser
+    import importlib.metadata as md
+
+    if not _is_stdlib_md_callable(md.version, "version"):
+        try:
+            return (md.version("mlx-omarchy"), True)
+        except md.PackageNotFoundError:
+            return (None, False)
+        except Exception:
+            return (None, True)
+    try:
+        dist = md.distribution("mlx-omarchy")
+    except md.PackageNotFoundError:
+        return (None, False)
+    except Exception:
+        return (None, True)
+    try:
+        dist_path = getattr(dist, "_path", None)
+        if isinstance(dist, md.PathDistribution) and isinstance(dist_path, os.PathLike):
+            root = Path(dist_path)
+            if stat.S_ISDIR(os.stat(root).st_mode):
+                target = None
+                for name in ("METADATA", "PKG-INFO"):
+                    candidate = root / name
+                    try:
+                        os.lstat(candidate)
+                    except FileNotFoundError:
+                        continue
+                    target = candidate
+                    break
+                if target is None:
+                    return (None, True)
+            else:
+                target = root
+            raw = bytearray()
+            if not _read_regular_bounded(target, METADATA_MAX_BYTES, raw.extend):
+                return (None, True)
+            msg = email.parser.Parser().parsestr(raw.decode("utf-8"))
+            return (msg.get("Version") or None, True)
+        return (dist.version, True)
+    except Exception:
+        return (None, True)
+
+
+def _read_record_hashes() -> dict[str, str] | None:
+    """Return {posix_path: sha256_b64} from the installed mlx-omarchy RECORD.
+
+    Reads RECORD through _read_regular_bounded for filesystem PathDistributions
+    so a FIFO or oversized RECORD cannot hang or exhaust memory. Preserves
+    importlib.metadata.files() when patched or backed by a non-filesystem finder.
+    Conflicting duplicate rows for the same normalized path fail closed.
+    """
+    import csv
+    import importlib.metadata as md
+    import io
+    from pathlib import PurePosixPath
+
+    pairs: list[tuple[str, str | None]] = []
+    try:
+        if _is_stdlib_md_callable(md.files, "files"):
+            dist = md.distribution("mlx-omarchy")
+            dist_path = getattr(dist, "_path", None)
+            if isinstance(dist, md.PathDistribution) and isinstance(dist_path, os.PathLike):
+                raw = bytearray()
+                if not _read_regular_bounded(
+                        Path(dist_path) / "RECORD", RECORD_MAX_BYTES, raw.extend):
+                    return None
+                text = raw.decode("utf-8")
+                for row in csv.reader(io.StringIO(text, newline="")):
+                    if not row or not row[0]:
+                        continue
+                    spec = row[1] if len(row) >= 2 and row[1] else None
+                    pairs.append((str(PurePosixPath(row[0])), spec))
+            else:
+                for entry in dist.files or []:
+                    spec = (f"{entry.hash.mode}={entry.hash.value}"
+                            if entry.hash else None)
+                    pairs.append((str(entry), spec))
+        else:
+            for entry in md.files("mlx-omarchy") or []:
+                spec = (f"{entry.hash.mode}={entry.hash.value}"
+                        if entry.hash else None)
+                pairs.append((str(entry), spec))
+    except Exception:
+        return None
+
+    seen_specs: dict[str, str | None] = {}
+    recorded: dict[str, str] = {}
+    for key, spec in pairs:
+        if key in seen_specs and seen_specs[key] != spec:
+            return None
+        seen_specs[key] = spec
+        if spec is None:
+            continue
+        mode, sep, value = spec.partition("=")
+        if sep and mode == "sha256":
+            recorded[key] = value
+    return recorded or None
+
+
+def _collect_py_copies(packages: Path) -> list[Path] | None:
+    """Return sorted *.py entries under packages, failing closed on any
+    traversal error, unreadable subdirectory, or directory symlink cycle."""
+    try:
+        root_st = os.stat(packages)
+        if not stat.S_ISDIR(root_st.st_mode):
+            return None
+        root_key = (root_st.st_dev, root_st.st_ino)
+        copies: list[Path] = []
+        visited_dirs = 0
+        stack: list[tuple[Path, frozenset[tuple[int, int]]]] = [
+            (packages, frozenset((root_key,)))
+        ]
+        while stack:
+            current, ancestors = stack.pop()
+            visited_dirs += 1
+            if visited_dirs > _MAX_WALK_DIRS:
+                return None
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    entry_path = Path(entry.path)
+                    if entry.name.endswith(".py"):
+                        copies.append(entry_path)
+                    if entry.is_dir(follow_symlinks=False):
+                        st = entry.stat(follow_symlinks=False)
+                        key = (st.st_dev, st.st_ino)
+                        if key in ancestors:
+                            return None
+                        stack.append((entry_path, ancestors | {key}))
+                    elif entry.is_symlink():
+                        try:
+                            st = entry.stat(follow_symlinks=True)
+                        except FileNotFoundError:
+                            continue
+                        if stat.S_ISDIR(st.st_mode):
+                            key = (st.st_dev, st.st_ino)
+                            if key in ancestors:
+                                return None
+                            stack.append((entry_path, ancestors | {key}))
+    except (OSError, ValueError):
+        return None
+    copies.sort()
+    return copies
+
+
+def _decode_record_sha256(encoded) -> bytes | None:
+    """Decode a canonical PEP 376 urlsafe-base64-nopad SHA-256 digest."""
+    import base64
+
+    if (not isinstance(encoded, str) or len(encoded) != 43
+            or not encoded.isascii() or "+" in encoded
+            or "/" in encoded or "=" in encoded):
+        return None
+    try:
+        want = base64.b64decode(encoded + "=", altchars=b"-_", validate=True)
+    except Exception:
+        return None
+    if len(want) != 32:
+        return None
+    if base64.urlsafe_b64encode(want).rstrip(b"=").decode("ascii") != encoded:
+        return None
+    return want
+
+
+def _is_installed_copy(module_path: Path | None = None) -> bool:
+    """True when this module lives under an installation site-packages root
+    (including when site-packages is a symlink whose target has another name)."""
+    raw_path = Path(module_path) if module_path is not None else Path(__file__)
+    if "site-packages" in raw_path.parts:
+        return True
+    try:
+        resolved = raw_path.resolve()
     except OSError:
+        return False
+    if "site-packages" in resolved.parts:
+        return True
+    roots: list[str] = []
+    try:
+        import site
+    except Exception:
+        site = None
+    if site is not None:
+        try:
+            roots.extend(site.getsitepackages())
+        except Exception:
+            pass
+        try:
+            user_site = site.getusersitepackages()
+            if user_site:
+                roots.append(user_site)
+        except Exception:
+            pass
+    try:
+        import sysconfig
+        for key in ("purelib", "platlib"):
+            val = sysconfig.get_path(key)
+            if val:
+                roots.append(val)
+    except Exception:
+        pass
+    for root in roots:
+        try:
+            if resolved.is_relative_to(Path(root).resolve()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def read_build_stamp(directory=None):
+    """Read the install.sh stamp next to this module; missing or unreadable
+    means the copies cannot prove a stamp."""
+    path = (Path(directory) if directory else Path(__file__).parent) / STAMP_FILE
+    raw = bytearray()
+    if not _read_regular_bounded(path, BUILD_STAMP_MAX_BYTES, raw.extend):
+        return None
+    try:
+        return raw.decode("utf-8").strip() or None
+    except UnicodeDecodeError:
         return None
 
 
@@ -137,46 +420,33 @@ def verify_serve_copies_against_record(directory=None):
     """Content-verify every serve copy against the installed wheel RECORD.
 
     True when every .py copy hashes to the value the installed
-    mlx-omarchy dist-info RECORD lists for the same package path. The
-    RECORD hash arrives as a FileHash with a mode string and an encoded
-    value; only sha256 values are compared, anything else fails closed.
-    A copy missing from the RECORD, a hash mismatch, an undecodable
-    value, an unreadable copy, or no RECORD hashes at all is False:
-    unverifiable content must not pass a missing-stamp check.
+    mlx-omarchy dist-info RECORD lists for the same package path. Only
+    canonical PEP 376 urlsafe-base64-nopad sha256 values are accepted;
+    anything else fails closed. A copy missing from the RECORD, a hash
+    mismatch, an undecodable or non-canonical value, an unreadable,
+    non-regular, or oversized copy or RECORD, an unreadable or cyclic
+    subdirectory, or no RECORD hashes at all is False: unverifiable
+    content must not pass a missing-stamp check.
     """
-    import base64
     import hashlib
-    import importlib.metadata as md
 
     packages = Path(directory) if directory else Path(__file__).parent
-    copies = sorted(packages.rglob("*.py"))
+    copies = _collect_py_copies(packages)
     if not copies:
         return False
-    recorded = {}
-    try:
-        for entry in md.files("mlx-omarchy") or []:
-            if entry.hash and entry.hash.mode == "sha256":
-                recorded[str(entry)] = entry.hash.value
-    except Exception:
-        return False
+    recorded = _read_record_hashes()
     if not recorded:
         return False
     prefix = packages.name
     for copy in copies:
         rel = copy.relative_to(packages)
-        try:
-            digest = hashlib.sha256(copy.read_bytes()).digest()
-        except OSError:
+        want = _decode_record_sha256(recorded.get(f"{prefix}/{rel.as_posix()}"))
+        if want is None:
             return False
-        encoded = recorded.get(f"{prefix}/{rel.as_posix()}")
-        if not encoded:
+        hasher = hashlib.sha256()
+        if not _read_regular_bounded(copy, SERVE_COPY_MAX_BYTES, hasher.update):
             return False
-        try:
-            want = base64.urlsafe_b64decode(
-                encoded + "=" * (-len(encoded) % 4))
-        except Exception:
-            return False
-        if want != digest:
+        if want != hasher.digest():
             return False
     return True
 
@@ -187,19 +457,19 @@ def check_build_stamp(wheel_version=None):
     Refusal applies only to copies living in site-packages; a checkout
     import of this module only warns, so dev runs are never blocked.
     """
-    try:
-        import importlib.metadata as _md
-        version = wheel_version if wheel_version is not None else _md.version("mlx-omarchy")
-    except Exception:
-        version = wheel_version if wheel_version is not None else None
-    installed = "site-packages" in str(Path(__file__).resolve())
+    if wheel_version is not None:
+        version, wheel_present = wheel_version, bool(wheel_version)
+    else:
+        version, wheel_present = _read_wheel_version()
+    installed = _is_installed_copy()
     stamp = read_build_stamp()
     record_verified = not stamp and verify_serve_copies_against_record()
     refusal, warning = resolve_stamp_mismatch(
         stamp, version,
         drift_allowed=os.environ.get(STAMP_ENV) == "1",
         installed=installed,
-        record_verified=record_verified)
+        record_verified=record_verified,
+        wheel_present=wheel_present)
     if warning:
         print(f"warning: {warning}", file=sys.stderr, flush=True)
     if refusal:
