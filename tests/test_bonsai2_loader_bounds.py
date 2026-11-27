@@ -7,6 +7,7 @@ sys.modules. Every test input is finite and bounded.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import hashlib
 import importlib.util
@@ -59,11 +60,14 @@ def _load_loader_module():
     module.__package__ = "mlx_omarchy_bonsai2"
     with mock.patch.dict(sys.modules, stubs):
         spec.loader.exec_module(module)
+    for _, dtype_name in module._SAFETENSORS_DTYPES.values():
+        setattr(mlx_core, dtype_name, dtype_name)
     return module, stubs
 
 
 loader, _STUB_MODULES = _load_loader_module()
 PackError = loader.PackError
+PackChangedError = loader.PackChangedError
 
 
 def _run_bounded(fn, timeout: float = 5.0):
@@ -147,6 +151,15 @@ def _pack_safetensors(header, payload_size: int | None = None) -> bytes:
     return struct.pack("<Q", len(raw)) + raw + (b"\x00" * payload_size)
 
 
+def _fake_weights(header: dict) -> dict:
+    return {
+        k: types.SimpleNamespace(
+            dtype=loader._SAFETENSORS_DTYPES[dtype][1], shape=shape, nbytes=nbytes
+        )
+        for k, (dtype, shape, nbytes) in header.items()
+    }
+
+
 class Bonsai2LoaderBoundsTests(unittest.TestCase):
     def setUp(self):
         self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
@@ -173,9 +186,14 @@ class Bonsai2LoaderBoundsTests(unittest.TestCase):
         return pack_dir
 
     def _assert_pack_error(
-        self, fn, *expected_substrings: str, bounded: bool = False, timeout: float = 5.0
+        self,
+        fn,
+        *expected_substrings: str,
+        bounded: bool = False,
+        timeout: float = 5.0,
+        exc_type=PackError,
     ) -> str:
-        with self.assertRaises(PackError) as ctx:
+        with self.assertRaises(exc_type) as ctx:
             _run_bounded(fn, timeout=timeout) if bounded else fn()
         msg = str(ctx.exception)
         for sub in expected_substrings:
@@ -252,7 +270,14 @@ class Bonsai2LoaderBoundsTests(unittest.TestCase):
         os.symlink(os.path.relpath(cfg_blob, snap_dir), snap_dir / "config.json")
         os.symlink(os.path.relpath(st_blob, snap_dir), snap_dir / "model.safetensors")
 
-        self.assertEqual(loader.pack_footprint(snap_dir), loader.pack_footprint(regular_dir))
+        snap_facts = loader.pack_footprint(snap_dir)
+        regular_facts = loader.pack_footprint(regular_dir)
+        self.assertEqual(
+            {k: v for k, v in snap_facts.items() if k != "pin"},
+            {k: v for k, v in regular_facts.items() if k != "pin"},
+        )
+        self.assertEqual(snap_facts["pin"].config_sha256, regular_facts["pin"].config_sha256)
+        self.assertNotEqual(snap_facts["pin"].weights, regular_facts["pin"].weights)
         self.assertEqual(loader.config_sha256(snap_dir), loader.config_sha256(regular_dir))
 
         enoent = os.strerror(errno.ENOENT)
@@ -643,6 +668,392 @@ class Bonsai2LoaderBoundsTests(unittest.TestCase):
                     lambda: loader.load_text_model(pack_dir),
                     str(cfg_path), "not a regular file", bounded=True, timeout=2.0,
                 )
+
+    @contextlib.contextmanager
+    def _stub_load_sentinel(self):
+        class _ReachedMxLoad(RuntimeError):
+            pass
+
+        class _UnexpectedFromDict:
+            @classmethod
+            def from_dict(cls, cfg):
+                raise AssertionError("TextModelArgs.from_dict ran before mx.load")
+
+        mlx_lm = types.ModuleType("mlx_lm")
+        mlx_lm_models = types.ModuleType("mlx_lm.models")
+        qwen = types.ModuleType("mlx_lm.models.qwen3_5")
+        qwen.TextModel = object
+        qwen.TextModelArgs = _UnexpectedFromDict
+        mlx_lm.models, mlx_lm_models.qwen3_5 = mlx_lm_models, qwen
+        stubs = {
+            "mlx_lm": mlx_lm,
+            "mlx_lm.models": mlx_lm_models,
+            "mlx_lm.models.qwen3_5": qwen,
+        }
+        with (
+            mock.patch.dict(sys.modules, stubs),
+            mock.patch.object(loader.mx, "load", side_effect=_ReachedMxLoad, create=True),
+        ):
+            yield _ReachedMxLoad
+
+    def test_pack_footprint_pin_identity(self):
+        cfg_bytes = json.dumps(_valid_config(), indent=2).encode("utf-8")
+        pack_dir = self._make_pack(config=cfg_bytes)
+        facts = loader.pack_footprint(pack_dir)
+        pin = facts["pin"]
+        self.assertIsInstance(pin, loader.PackPin)
+        self.assertEqual(pin.config_sha256, hashlib.sha256(cfg_bytes).hexdigest())
+        st = os.stat(pack_dir / "model.safetensors")
+        self.assertEqual(pin.weights, (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns))
+
+    def test_pack_footprint_and_load_open_each_file_once(self):
+        pack_dir = self._make_pack()
+        cfg_path = pack_dir / "config.json"
+        st_path = pack_dir / "model.safetensors"
+        real_open = os.open
+        counts = {cfg_path: 0, st_path: 0}
+
+        def _counting_open(path, flags, *args, **kwargs):
+            p = Path(os.fspath(path))
+            if p in counts:
+                counts[p] += 1
+            return real_open(path, flags, *args, **kwargs)
+
+        with mock.patch("os.open", side_effect=_counting_open):
+            loader.pack_footprint(pack_dir)
+        self.assertEqual(counts, {cfg_path: 1, st_path: 1})
+
+        counts[cfg_path] = 0
+        counts[st_path] = 0
+        with self._stub_load_sentinel() as sentinel, mock.patch("os.open", side_effect=_counting_open):
+            with self.assertRaises(sentinel):
+                loader.load_text_model(pack_dir)
+        self.assertEqual(counts, {cfg_path: 1, st_path: 1})
+
+    def test_load_text_model_admitted_pin_contract(self):
+        with self._stub_load_sentinel() as sentinel:
+            with self.subTest("unchanged-passes-to-sentinel"):
+                pack_dir = self._make_pack()
+                admitted = loader.pack_footprint(pack_dir)
+                with self.assertRaises(sentinel):
+                    loader.load_text_model(pack_dir, admitted=admitted)
+
+            with self.subTest("config-rewritten-valid-bytes"):
+                pack_dir = self._make_pack()
+                admitted = loader.pack_footprint(pack_dir)
+                cfg_path = pack_dir / "config.json"
+                cfg_path.write_bytes(json.dumps(_valid_config(), indent=2).encode("utf-8"))
+                self._assert_pack_error(
+                    lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                    str(cfg_path), "changed after memory admission",
+                    exc_type=PackChangedError,
+                )
+
+            with self.subTest("weights-replaced-identical-copy"):
+                pack_dir = self._make_pack()
+                admitted = loader.pack_footprint(pack_dir)
+                st_path = pack_dir / "model.safetensors"
+                copy_path = pack_dir / "model.safetensors.copy"
+                copy_path.write_bytes(st_path.read_bytes())
+                os.replace(copy_path, st_path)
+                self._assert_pack_error(
+                    lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                    str(st_path), "changed after memory admission",
+                    exc_type=PackChangedError,
+                )
+
+            with self.subTest("weights-in-place-extra-tensor"):
+                pack_dir = self._make_pack()
+                admitted = loader.pack_footprint(pack_dir)
+                st_path = pack_dir / "model.safetensors"
+                hdr = _valid_header()
+                hdr["vision_tower.extra"] = {
+                    "dtype": "F16", "shape": [2], "data_offsets": [40, 44],
+                }
+                with open(st_path, "wb") as f:
+                    f.write(_pack_safetensors(hdr))
+                self._assert_pack_error(
+                    lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                    str(st_path), "changed after memory admission",
+                    exc_type=PackChangedError,
+                )
+
+            with self.subTest("weights-mtime-only-change"):
+                pack_dir = self._make_pack()
+                admitted = loader.pack_footprint(pack_dir)
+                st_path = pack_dir / "model.safetensors"
+                st = os.stat(st_path)
+                os.utime(st_path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+                self._assert_pack_error(
+                    lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                    str(st_path), "changed after memory admission",
+                    exc_type=PackChangedError,
+                )
+
+            with self.subTest("hf-symlink-retargeted-to-new-blob"):
+                root = self._tmp()
+                blobs, snap_dir = root / "blobs", root / "snapshots" / "rev1"
+                blobs.mkdir(parents=True)
+                snap_dir.mkdir(parents=True)
+                cfg_blob = blobs / "cfg"
+                st_blob1 = blobs / "st1"
+                st_blob2 = blobs / "st2"
+                st_bytes = _pack_safetensors(_valid_header())
+                cfg_blob.write_bytes(json.dumps(_valid_config()).encode("utf-8"))
+                st_blob1.write_bytes(st_bytes)
+                st_blob2.write_bytes(st_bytes)
+                os.symlink(os.path.relpath(cfg_blob, snap_dir), snap_dir / "config.json")
+                st_link = snap_dir / "model.safetensors"
+                os.symlink(os.path.relpath(st_blob1, snap_dir), st_link)
+                admitted = loader.pack_footprint(snap_dir)
+                tmp_link = snap_dir / "model.safetensors.new"
+                os.symlink(os.path.relpath(st_blob2, snap_dir), tmp_link)
+                os.replace(tmp_link, st_link)
+                self._assert_pack_error(
+                    lambda p=snap_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                    str(st_link), "changed after memory admission",
+                    exc_type=PackChangedError,
+                )
+
+            with self.subTest("config-rewritten-empty-object"):
+                pack_dir = self._make_pack()
+                admitted = loader.pack_footprint(pack_dir)
+                (pack_dir / "config.json").write_bytes(b"{}")
+                self._assert_pack_error(
+                    lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                    "no longer matches memory admission", "model_type must be",
+                    exc_type=PackChangedError,
+                )
+
+            with self.subTest("weights-truncated-in-place"):
+                pack_dir = self._make_pack()
+                admitted = loader.pack_footprint(pack_dir)
+                with open(pack_dir / "model.safetensors", "r+b") as f:
+                    f.truncate(3)
+                self._assert_pack_error(
+                    lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                    "no longer matches memory admission", "too short",
+                    exc_type=PackChangedError,
+                )
+
+            with self.subTest("weights-replaced-no-lm-tensors"):
+                pack_dir = self._make_pack()
+                admitted = loader.pack_footprint(pack_dir)
+                no_lm_header = {
+                    "vision_tower.weight": {
+                        "dtype": "F16", "shape": [3, 4], "data_offsets": [0, 24],
+                    },
+                }
+                replacement = pack_dir / "model.safetensors.nolm"
+                replacement.write_bytes(_pack_safetensors(no_lm_header))
+                os.replace(replacement, pack_dir / "model.safetensors")
+                self._assert_pack_error(
+                    lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                    "no longer matches memory admission", "no language_model.* tensors",
+                    exc_type=PackChangedError,
+                )
+
+            with self.subTest("weights-removed"):
+                pack_dir = self._make_pack()
+                admitted = loader.pack_footprint(pack_dir)
+                (pack_dir / "model.safetensors").unlink()
+                self._assert_pack_error(
+                    lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                    "no longer matches memory admission", "cannot read",
+                    exc_type=PackChangedError,
+                )
+
+            with self.subTest("admitted-none-empty-config-not-pack-changed"):
+                pack_dir = self._make_pack(config=b"{}")
+                with self.assertRaises(PackError) as ctx:
+                    loader.load_text_model(pack_dir, admitted=None)
+                self.assertNotIsInstance(ctx.exception, PackChangedError)
+                self.assertIn("model_type must be", str(ctx.exception))
+
+            with self.subTest("admitted-none-allows-changed-pack"):
+                pack_dir = self._make_pack()
+                loader.pack_footprint(pack_dir)
+                (pack_dir / "config.json").write_bytes(
+                    json.dumps(_valid_config(), indent=2).encode("utf-8")
+                )
+                st_path = pack_dir / "model.safetensors"
+                copy_path = pack_dir / "model.safetensors.copy"
+                copy_path.write_bytes(st_path.read_bytes())
+                os.replace(copy_path, st_path)
+                with self.assertRaises(sentinel):
+                    loader.load_text_model(pack_dir, admitted=None)
+
+    def test_load_text_model_checks_what_mx_load_opened(self):
+        class _ReachedModules(RuntimeError):
+            pass
+
+        class _StubModel:
+            def parameters(self):
+                return {}
+
+            def __getattr__(self, name):
+                raise _ReachedModules(name)
+
+        mlx_lm = types.ModuleType("mlx_lm")
+        mlx_lm_models = types.ModuleType("mlx_lm.models")
+        qwen = types.ModuleType("mlx_lm.models.qwen3_5")
+        qwen.TextModel = lambda args: _StubModel()
+        qwen.TextModelArgs = types.SimpleNamespace(from_dict=lambda cfg: types.SimpleNamespace())
+        mlx_lm.models, mlx_lm_models.qwen3_5 = mlx_lm_models, qwen
+        stubs = {"mlx_lm": mlx_lm, "mlx_lm.models": mlx_lm_models, "mlx_lm.models.qwen3_5": qwen}
+
+        def _fake_load(swap_to=None):
+            def load(path):
+                if swap_to is not None:
+                    os.replace(swap_to, path)
+                header, _ = loader._safetensors_header(Path(path))
+                return _fake_weights(header)
+            return load
+
+        def _hf_pack() -> Path:
+            root = self._tmp()
+            blobs, snap = root / "blobs", root / "snapshots" / "rev1"
+            blobs.mkdir()
+            snap.mkdir(parents=True)
+            (blobs / "cfg").write_bytes(json.dumps(_valid_config()).encode("utf-8"))
+            (blobs / "st").write_bytes(_pack_safetensors(_valid_header()))
+            os.symlink("../../blobs/cfg", snap / "config.json")
+            os.symlink("../../blobs/st", snap / "model.safetensors")
+            return snap
+
+        with mock.patch.dict(sys.modules, stubs):
+            for label, make_pack, swap in (
+                ("unchanged", self._make_pack, False),
+                ("hf-symlinks-unchanged", _hf_pack, False),
+                ("swapped-while-loading", self._make_pack, True),
+            ):
+                with self.subTest(label):
+                    pack_dir = make_pack()
+                    st_path = pack_dir / "model.safetensors"
+                    swap_to = None
+                    if swap:
+                        swap_to = pack_dir / "swap.safetensors"
+                        swap_to.write_bytes(st_path.read_bytes())
+                    admitted = loader.pack_footprint(pack_dir)
+                    with mock.patch.object(loader.mx, "load", _fake_load(swap_to), create=True):
+                        if swap:
+                            self._assert_pack_error(
+                                lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                                str(st_path), "changed while loading",
+                                exc_type=PackChangedError,
+                            )
+                        else:
+                            with self.assertRaises(_ReachedModules):
+                                loader.load_text_model(pack_dir, admitted=admitted)
+
+            with self.subTest("mlx-load-raises-after-unlink"):
+                pack_dir = self._make_pack()
+                st_path = pack_dir / "model.safetensors"
+                admitted = loader.pack_footprint(pack_dir)
+
+                def _unlink_and_raise(path):
+                    Path(path).unlink()
+                    raise RuntimeError("mlx failed")
+
+                with mock.patch.object(loader.mx, "load", _unlink_and_raise, create=True):
+                    self._assert_pack_error(
+                        lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                        str(st_path), "changed while loading", os.strerror(errno.ENOENT),
+                        exc_type=PackChangedError,
+                    )
+
+            with self.subTest("mlx-load-raises-after-replace"):
+                pack_dir = self._make_pack()
+                st_path = pack_dir / "model.safetensors"
+                swap_to = pack_dir / "swap.safetensors"
+                swap_to.write_bytes(st_path.read_bytes())
+                admitted = loader.pack_footprint(pack_dir)
+
+                def _replace_and_raise(path):
+                    os.replace(swap_to, path)
+                    raise RuntimeError("mlx failed")
+
+                with mock.patch.object(loader.mx, "load", _replace_and_raise, create=True):
+                    self._assert_pack_error(
+                        lambda p=pack_dir, a=admitted: loader.load_text_model(p, admitted=a),
+                        str(st_path), "changed while loading",
+                        exc_type=PackChangedError,
+                    )
+
+            with self.subTest("mlx-load-raises-on-unchanged-file"):
+                pack_dir = self._make_pack()
+                admitted = loader.pack_footprint(pack_dir)
+                boom = RuntimeError("mlx failed")
+
+                def _raise_unchanged(path):
+                    raise boom
+
+                with mock.patch.object(loader.mx, "load", _raise_unchanged, create=True):
+                    with self.assertRaises(RuntimeError) as ctx:
+                        loader.load_text_model(pack_dir, admitted=admitted)
+                self.assertIs(ctx.exception, boom)
+
+    def test_check_loaded_direct_contract(self):
+        with self.subTest("exact-match"):
+            pack_dir = self._make_pack()
+            st_path = pack_dir / "model.safetensors"
+            header, identity = loader._safetensors_header(st_path)
+            self.assertIsNone(loader._check_loaded(st_path, identity, header, _fake_weights(header)))
+
+        def _set_vision(**fields):
+            def mutate(weights):
+                base = {"dtype": "float16", "shape": (3, 4), "nbytes": 24}
+                base.update(fields)
+                weights["vision_tower.weight"] = types.SimpleNamespace(**base)
+            return mutate
+
+        layout_cases = (
+            ("missing-key", lambda w: w.pop("vision_tower.weight")),
+            (
+                "extra-key",
+                lambda w: w.__setitem__(
+                    "extra.weight", types.SimpleNamespace(dtype="float16", shape=(2,), nbytes=4)
+                ),
+            ),
+            ("wrong-shape", _set_vision(shape=(4, 3))),
+            ("wrong-nbytes", _set_vision(nbytes=48)),
+            ("wrong-dtype", _set_vision(dtype="uint16")),
+        )
+        for label, mutate in layout_cases:
+            with self.subTest(label):
+                pack_dir = self._make_pack()
+                st_path = pack_dir / "model.safetensors"
+                header, identity = loader._safetensors_header(st_path)
+                weights = _fake_weights(header)
+                mutate(weights)
+                self._assert_pack_error(
+                    lambda p=st_path, i=identity, h=header, w=weights: loader._check_loaded(p, i, h, w),
+                    str(st_path), "changed while loading",
+                    exc_type=PackChangedError,
+                )
+
+        with self.subTest("path-removed"):
+            pack_dir = self._make_pack()
+            st_path = pack_dir / "model.safetensors"
+            header, identity = loader._safetensors_header(st_path)
+            st_path.unlink()
+            self._assert_pack_error(
+                lambda: loader._check_loaded(st_path, identity, header, _fake_weights(header)),
+                str(st_path), "changed while loading", os.strerror(errno.ENOENT),
+                exc_type=PackChangedError,
+            )
+
+        with self.subTest("dangling-symlink"):
+            pack_dir = self._make_pack()
+            st_path = pack_dir / "model.safetensors"
+            header, identity = loader._safetensors_header(st_path)
+            st_path.unlink()
+            os.symlink(pack_dir / "missing.safetensors", st_path)
+            self._assert_pack_error(
+                lambda: loader._check_loaded(st_path, identity, header, _fake_weights(header)),
+                str(st_path), "changed while loading", os.strerror(errno.ENOENT),
+                exc_type=PackChangedError,
+            )
 
 
 if __name__ == "__main__":

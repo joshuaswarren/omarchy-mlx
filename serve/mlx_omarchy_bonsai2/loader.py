@@ -12,6 +12,9 @@ Contract enforced here (everything else is refused, never approximated):
 - model.safetensors header: bounded regular-file read (16 MiB cap) with
   validated dtypes, shapes, byte spans, and in-file data_offsets before
   memory admission or weight loading.
+- admission-to-load pinning: each file is read once, admission pins the
+  config bytes (sha256) and the weights file identity, and load refuses a
+  pack that changed after admission or while loading.
 - tensor namespace "language_model." (mlx-vlm-qwen3_5); keys outside it
   (vision tower, MTP drafts) are excluded from residency and reported,
   never loaded.
@@ -34,6 +37,7 @@ import os
 import stat
 import struct
 from pathlib import Path
+from typing import NamedTuple
 
 import mlx.core as mx
 from mlx.utils import tree_flatten
@@ -52,23 +56,23 @@ _SAFETENSORS_HEADER_MAX_BYTES = 16 << 20
 # Real Bonsai-2 config.json is ~58 KiB; cap reads to bound corrupt or hostile files.
 _CONFIG_MAX_BYTES = 16 << 20
 _READ_CHUNK_BYTES = 1 << 20
-# Element sizes for the dtypes accepted by mlx's safetensors loader.
-_SAFETENSORS_DTYPE_BYTES = {
-    "BOOL": 1,
-    "U8": 1,
-    "I8": 1,
-    "F8_E4M3": 1,
-    "F8_E8M0": 1,
-    "U16": 2,
-    "I16": 2,
-    "F16": 2,
-    "BF16": 2,
-    "U32": 4,
-    "I32": 4,
-    "F32": 4,
-    "U64": 8,
-    "I64": 8,
-    "C64": 8,
+# Element size and the mlx dtype each safetensors dtype loads as (F8 loads as uint8).
+_SAFETENSORS_DTYPES = {
+    "BOOL": (1, "bool_"),
+    "U8": (1, "uint8"),
+    "I8": (1, "int8"),
+    "F8_E4M3": (1, "uint8"),
+    "F8_E8M0": (1, "uint8"),
+    "U16": (2, "uint16"),
+    "I16": (2, "int16"),
+    "F16": (2, "float16"),
+    "BF16": (2, "bfloat16"),
+    "U32": (4, "uint32"),
+    "I32": (4, "int32"),
+    "F32": (4, "float32"),
+    "U64": (8, "uint64"),
+    "I64": (8, "int64"),
+    "C64": (8, "complex64"),
 }
 
 
@@ -76,8 +80,23 @@ class PackError(ValueError):
     """The checkpoint does not satisfy the pack contract."""
 
 
+class PackChangedError(PackError):
+    """A pack file changed after memory admission or while loading."""
+
+
+class PackPin(NamedTuple):
+    """Exact pack files pinned at memory admission (config sha256 + weights stat identity)."""
+
+    config_sha256: str
+    weights: tuple
+
+
 def _fail(msg: str) -> None:
     raise PackError(msg)
+
+
+def _file_identity(st) -> tuple:
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
 
 
 def _is_nonneg_int(value) -> bool:
@@ -143,19 +162,17 @@ def _read_config_bytes(path: Path) -> bytes:
     return raw
 
 
-def _load_config(path: Path) -> dict:
-    return _parse_json_object(_read_config_bytes(path), "config.json")
-
-
 def config_sha256(pack_dir: Path) -> str:
     return hashlib.sha256(_read_config_bytes(Path(pack_dir) / "config.json")).hexdigest()
 
 
-def _safetensors_header(path: Path) -> dict:
-    """Parse and validate the safetensors header: name -> (dtype, shape, nbytes).
+def _safetensors_header(path: Path) -> tuple[dict, tuple]:
+    """Parse and validate the safetensors header, returning (header, identity).
 
-    Reads only the header bytes, never the tensor data; gives exact
-    per-tensor sizes for residency accounting without touching weights.
+    ``header`` maps name -> (dtype, shape, nbytes); ``identity`` is
+    ``_file_identity`` of the descriptor the header was read from. Reads only
+    the header bytes, never the tensor data; gives exact per-tensor sizes for
+    residency accounting without touching weights.
     """
     with _open_regular(path) as (fd, st):
         file_size = st.st_size
@@ -173,6 +190,7 @@ def _safetensors_header(path: Path) -> dict:
         raw = _read_exact(fd, header_len)
         if len(raw) != header_len:
             _fail(f"model.safetensors is truncated (header length {header_len})")
+        identity = _file_identity(st)
     header = _parse_json_object(raw, "model.safetensors header", strict_constants=True)
     metadata = header.pop("__metadata__", None)
     if metadata is not None and (
@@ -196,9 +214,10 @@ def _safetensors_header(path: Path) -> dict:
             or not all(_is_nonneg_int(o) for o in offsets)
         ):
             _fail(f"tensor {label!r} has malformed metadata")
-        itemsize = _SAFETENSORS_DTYPE_BYTES.get(dtype)
-        if itemsize is None:
+        dtype_info = _SAFETENSORS_DTYPES.get(dtype)
+        if dtype_info is None:
             _fail(f"tensor {label!r} has unsupported dtype {dtype[:80]!r}")
+        itemsize = dtype_info[0]
         begin, end = offsets
         if begin > end or 8 + header_len + end > file_size:
             _fail(f"tensor {label!r} has invalid data_offsets")
@@ -214,7 +233,7 @@ def _safetensors_header(path: Path) -> dict:
         if span != expected_bytes:
             _fail(f"tensor {label!r} byte span does not match dtype and shape")
         out[name] = (dtype, tuple(shape), span)
-    return out
+    return out, identity
 
 
 def _check_config(config: dict) -> None:
@@ -259,21 +278,16 @@ def _kv_bytes_per_token(text_config):
     return (layers // interval) * 2 * kv_heads * head_dim * 2
 
 
-def pack_footprint(pack_dir):
-    """Pre-load facts from config.json + the safetensors header only.
-
-    Reads zero tensor bytes; gives the exact text-only weights size and
-    KV rate so memory admission can happen BEFORE the model is loaded.
-    """
-    pack_dir = Path(pack_dir)
-    config = _load_config(pack_dir / "config.json")
+def _read_pack(pack_dir: Path) -> tuple[dict, dict, dict]:
+    raw = _read_config_bytes(pack_dir / "config.json")
+    config = _parse_json_object(raw, "config.json")
     _check_config(config)
-    header = _safetensors_header(pack_dir / "model.safetensors")
+    header, identity = _safetensors_header(pack_dir / "model.safetensors")
     lm_bytes = sum(n for k, (_, _, n) in header.items() if k.startswith(LM_PREFIX))
     total_header_bytes = sum(n for _, (_, _, n) in header.items())
     if not lm_bytes:
         _fail("no language_model.* tensors in checkpoint")
-    return {
+    facts = {
         # Conservative load-phase bound: mx.load is lazy/mmap-backed
         # (verified empirically 2026-09-20: RSS and MemAvailable stay flat
         # across mx.load of the 8.6 GB pack), but the conservative
@@ -283,22 +297,77 @@ def pack_footprint(pack_dir):
         "kv_bytes_per_token": _kv_bytes_per_token(config["text_config"]),
         "max_position_embeddings": config["text_config"].get("max_position_embeddings"),
         "packed_modules": len(config["modules"]),
+        "pin": PackPin(hashlib.sha256(raw).hexdigest(), identity),
     }
+    return config, header, facts
 
 
-def load_text_model(pack_dir):
+def _check_path(path: Path, identity: tuple) -> None:
+    try:
+        st = os.stat(path)
+    except OSError as exc:
+        raise PackChangedError(
+            f"{path} changed while loading ({exc.strerror or type(exc).__name__})"
+        ) from None
+    if _file_identity(st) != identity:
+        raise PackChangedError(f"{path} changed while loading")
+
+
+def _check_loaded(path: Path, identity: tuple, header: dict, weights: dict) -> None:
+    # mx.load reopens by path (kept so lazy loading and the
+    # MLX_OMARCHY_VRAM_WEIGHTS directory match keep working); confirm the
+    # path still names the validated file and mlx sees the validated tensor
+    # names, dtypes, shapes, and byte sizes.
+    _check_path(path, identity)
+    if set(weights) != set(header) or any(
+        weights[k].dtype != getattr(mx, _SAFETENSORS_DTYPES[header[k][0]][1])
+        or tuple(weights[k].shape) != header[k][1]
+        or weights[k].nbytes != header[k][2]
+        for k in header
+    ):
+        raise PackChangedError(f"{path} changed while loading")
+
+
+def pack_footprint(pack_dir):
+    """Pre-load facts from config.json + the safetensors header only.
+
+    Reads zero tensor bytes; gives the exact text-only weights size and
+    KV rate so memory admission can happen BEFORE the model is loaded.
+    ``facts["pin"]`` identifies the exact files measured, for
+    ``load_text_model(admitted=...)``.
+    """
+    return _read_pack(Path(pack_dir))[2]
+
+
+def load_text_model(pack_dir, *, admitted=None):
     """Load the text model from a pack directory. Returns (model, info)."""
     from mlx_lm.models.qwen3_5 import TextModel, TextModelArgs
 
     pack_dir = Path(pack_dir)
-    config = _load_config(pack_dir / "config.json")
-    _check_config(config)
     safetensors = pack_dir / "model.safetensors"
-    header = _safetensors_header(safetensors)
+    try:
+        config, header, facts = _read_pack(pack_dir)
+    except PackError as exc:
+        if admitted is not None:
+            raise PackChangedError(
+                f"{pack_dir} no longer matches memory admission ({exc})"
+            ) from None
+        raise
+    if admitted is not None:
+        if facts["pin"].config_sha256 != admitted["pin"].config_sha256:
+            raise PackChangedError(f"{pack_dir / 'config.json'} changed after memory admission")
+        if facts != admitted:
+            raise PackChangedError(f"{safetensors} changed after memory admission")
+    try:
+        weights = mx.load(str(safetensors))
+    except Exception:
+        # mlx reopens the path, so a failure on a changed file is a change
+        # during load; a failure on the unchanged file propagates as is.
+        _check_path(safetensors, facts["pin"].weights)
+        raise
+    _check_loaded(safetensors, facts["pin"].weights, header, weights)
 
     lm_keys = {k: v for k, v in header.items() if k.startswith(LM_PREFIX)}
-    if not lm_keys:
-        _fail("no language_model.* tensors in checkpoint")
     excluded = {}
     for name, (_, _, nbytes) in header.items():
         if not name.startswith(LM_PREFIX):
@@ -320,7 +389,6 @@ def load_text_model(pack_dir):
 
     expected = {name: value.shape for name, value in tree_flatten(model.parameters())}
 
-    weights = mx.load(str(safetensors))
     consumed = set()
     resident_bytes = 0
     packed_count = 0
@@ -407,7 +475,7 @@ def load_text_model(pack_dir):
         "resident_bytes": resident_bytes,
         "excluded_bytes": excluded,
         "license_files": license_files,
-        "config_sha256": config_sha256(pack_dir),
+        "config_sha256": facts["pin"].config_sha256,
         "source_revision": None,
         "attribution": "Created using Bonsai by Prism ML (Apache-2.0; built from Qwen3.8-27B, Apache-2.0).",
         "max_position_embeddings": args.max_position_embeddings,
