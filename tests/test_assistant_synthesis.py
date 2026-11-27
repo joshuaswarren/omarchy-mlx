@@ -8,7 +8,9 @@ faked here; the tests pin the honest-refusal behavior instead.
 
 import array
 import contextlib
+import gc
 import hashlib
+import http.server
 import importlib.util
 import io
 import json
@@ -22,6 +24,7 @@ import threading
 import time
 import tracemalloc
 import unittest
+import warnings
 import wave
 from pathlib import Path
 from unittest import mock
@@ -216,6 +219,470 @@ class PrepareDownloadTests(unittest.TestCase):
         status = s.status()
         self.assertFalse(status["assets"]["verified"])
         self.assertFalse(status["ready"])
+
+
+class _Loopback:
+    """A loopback HTTP server with fixed routes: path -> (status, headers,
+    chunks) where chunks() yields the finite body. sent[path] counts the
+    body bytes the server got out before the client finished or hung up."""
+
+    def __init__(self, case):
+        self.routes = {}
+        self.sent = {}
+        self.done = {}
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                path = self.path
+                sent = 0
+                try:
+                    if path not in outer.routes:
+                        self.send_error(404)
+                        return
+                    status, headers, chunks = outer.routes[path]
+                    self.send_response(status)
+                    for key, value in headers:
+                        self.send_header(key, value)
+                    self.end_headers()
+                    for chunk in chunks():
+                        self.wfile.write(chunk)
+                        sent += len(chunk)
+                except OSError:
+                    self.close_connection = True
+                finally:
+                    outer.sent[path] = outer.sent.get(path, 0) + sent
+                    outer.done.setdefault(path, threading.Event()).set()
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        case.addCleanup(thread.join, 10)
+        case.addCleanup(self.server.server_close)
+        case.addCleanup(self.server.shutdown)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def url(self, path: str) -> str:
+        return self.base + path
+
+    def serve(self, path, body: bytes, *, status=200, length=None,
+              headers=()):
+        """Serve body; length=None declares len(body), False declares none
+        (close-delimited)."""
+        head = list(headers)
+        if length is False:
+            head.append(("Connection", "close"))
+        else:
+            head.append(("Content-Length",
+                         str(len(body) if length is None else length)))
+            if length is not None and length != len(body):
+                head.append(("Connection", "close"))
+        self.routes[path] = (status, head, lambda: [body])
+
+    def wait(self, case, path, timeout=30):
+        case.assertTrue(
+            self.done.setdefault(path, threading.Event()).wait(timeout),
+            f"server never finished {path}")
+        return self.sent[path]
+
+
+class DownloadStagingTests(unittest.TestCase):
+    """_prepare_pack's staging file and _default_fetch's bounds, against a
+    loopback server and finite bodies only."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+        self.pack, self.content = make_fixture_pack()
+        self.enterContext(mock.patch.object(synthesis, "VOICE_PACK",
+                                            self.pack))
+        self.enterContext(mock.patch.object(synthesis, "VOICE_ENGINES",
+                                            (self.pack,)))
+        self.s = synthesis.Synthesis(self.home)
+        self.assets = self.s.assets_dir_for(self.pack["id"])
+        self.enterContext(mock.patch.dict(os.environ,
+                                          {"no_proxy": "*", "NO_PROXY": "*"}))
+        self.enterContext(mock.patch.object(synthesis, "_URL_TIMEOUT", 10))
+        self.http = _Loopback(self)
+        self.enterContext(mock.patch.object(
+            synthesis, "_URL_TEMPLATE", self.http.base + "/{name}"))
+
+    def _prepare(self):
+        """The default (network) route, through the public entry point."""
+        return self.s.prepare(approve_download=True)
+
+    def _serve_pack(self):
+        for name, data in self.content.items():
+            self.http.serve("/" + name, data)
+
+    def _entry(self, name):
+        return next(e for e in self.pack["files"] if e["name"] == name)
+
+    def _assert_pack_installed(self):
+        for name, data in self.content.items():
+            dest = self.assets / name
+            self.assertFalse(dest.is_symlink(), name)
+            self.assertEqual(dest.read_bytes(), data, name)
+
+    def _parts(self):
+        return sorted(p.name for p in self.assets.rglob("*")
+                      if p.name.endswith(".part"))
+
+    def _static_fetch(self, url, dest):
+        dest.write_bytes(self.content[url.removeprefix(self.http.base + "/")])
+
+    def test_default_download_installs_exact_size_files(self):
+        self._serve_pack()
+        result = self._prepare()
+        self.assertTrue(result["verified"])
+        self._assert_pack_installed()
+        self.assertEqual(self._parts(), [])
+        for name, data in self.content.items():
+            self.assertEqual(self.http.wait(self, "/" + name), len(data), name)
+        self.assertEqual(sorted(self.http.sent),
+                         sorted("/" + name for name in self.content))
+
+    def test_prepare_passes_no_fetch_to_the_capped_default(self):
+        self._serve_pack()
+        with mock.patch.object(synthesis, "_default_fetch",
+                               wraps=synthesis._default_fetch) as fetch:
+            result = self._prepare()
+        self.assertTrue(result["verified"])
+        caps = sorted(c.kwargs["max_bytes"] for c in fetch.call_args_list)
+        self.assertEqual(caps, sorted(e["bytes"] for e in self.pack["files"]))
+
+    def test_predictable_part_symlink_is_never_written_through(self):
+        self._serve_pack()
+        self.assets.mkdir(parents=True)
+        victim = self.home / "victim"
+        victim.write_bytes(b"keep me")
+        planted = self.assets / "tiny.json.part"
+        os.symlink(victim, planted)
+        self._prepare()
+        self.assertEqual(victim.read_bytes(), b"keep me")
+        self.assertFalse(planted.exists() or planted.is_symlink())
+        self._assert_pack_installed()
+
+    def test_injected_fetch_gets_clean_fixed_part_path(self):
+        self.assets.mkdir(parents=True)
+        stale = self.assets / "tiny.json.part"
+        stale.write_bytes(b"stale partial")
+        seen = []
+
+        def fetch(url, dest):
+            seen.append((dest, dest.exists() or dest.is_symlink()))
+            self._static_fetch(url, dest)
+
+        self.s._prepare_pack(self.pack, self.assets, fetch)
+        expected = {
+            (self.assets / name).with_name(Path(name).name + ".part")
+            for name in self.content
+        }
+        self.assertEqual({dest for dest, _ in seen}, expected)
+        for dest, existed in seen:
+            self.assertFalse(existed, dest)
+        self.assertEqual(self._parts(), [])
+        self._assert_pack_installed()
+
+    def test_killed_download_leftover_part_is_cleaned_by_next_prepare(self):
+        self._serve_pack()
+        self.assets.mkdir(parents=True)
+        leftover = self.assets / "tiny.json.part"
+        leftover.write_bytes(b"junk from killed download" * 64)
+        result = self._prepare()
+        self.assertTrue(result["verified"])
+        self.assertFalse(leftover.exists())
+        self._assert_pack_installed()
+        self.assertEqual(self._parts(), [])
+        entries = sorted(
+            str(p.relative_to(self.assets)) for p in self.assets.rglob("*"))
+        self.assertEqual(
+            entries,
+            sorted(["dir", "dir/weights.safetensors", "manifest.json",
+                    "tiny.json"]))
+
+    def test_concurrent_prepares_serialize_on_pack_lock(self):
+        started = threading.Event()
+        release = threading.Event()
+        fetched = []
+        fetch_lock = threading.Lock()
+        results = []
+        errors = []
+
+        def fetch_a(url, dest):
+            with fetch_lock:
+                fetched.append(("a", url))
+            if url.endswith("/tiny.json"):
+                started.set()
+                if not release.wait(10):
+                    raise TimeoutError("release event never set")
+            self._static_fetch(url, dest)
+
+        def fetch_b(url, dest):
+            with fetch_lock:
+                fetched.append(("b", url))
+            self._static_fetch(url, dest)
+
+        def run(fetch):
+            try:
+                res = synthesis.Synthesis(self.home)._prepare_pack(
+                    self.pack, self.assets, fetch)
+                results.append(res)
+            except BaseException as exc:  # reported below
+                errors.append(exc)
+
+        thread_a = threading.Thread(target=run, args=(fetch_a,))
+        thread_b = threading.Thread(target=run, args=(fetch_b,))
+        thread_a.start()
+        try:
+            self.assertTrue(started.wait(10),
+                            "first prepare never entered fetch")
+            thread_b.start()
+            thread_b.join(0.5)
+            self.assertTrue(thread_b.is_alive(),
+                            "second prepare did not block on the pack lock")
+        finally:
+            release.set()
+            thread_a.join(30)
+            if thread_b.ident is not None:
+                thread_b.join(30)
+        self.assertFalse(thread_a.is_alive())
+        self.assertFalse(thread_b.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(r["verified"] for r in results))
+        self.assertEqual([who for who, _ in fetched],
+                         ["a"] * len(self.pack["files"]))
+        self.assertEqual(len({url for _, url in fetched}),
+                         len(self.pack["files"]))
+        self._assert_pack_installed()
+        self.assertEqual(self._parts(), [])
+
+    def test_pack_lock_location_and_unopenable_lock_refusal(self):
+        lock_path = self.home / "voice" / f".{self.pack['id']}.lock"
+        self.assertEqual(lock_path.parent, self.assets.parent)
+        self.assertNotEqual(lock_path.parent, self.assets)
+
+        for kind in ("directory", "symlink"):
+            with self.subTest(kind):
+                home = self.home / f"lock-{kind}"
+                s = synthesis.Synthesis(home)
+                assets = s.assets_dir_for(self.pack["id"])
+                bad_lock = home / "voice" / f".{self.pack['id']}.lock"
+                bad_lock.parent.mkdir(parents=True, exist_ok=True)
+                if kind == "directory":
+                    bad_lock.mkdir()
+                else:
+                    victim = home / "victim"
+                    victim.write_bytes(b"keep me")
+                    os.symlink(victim, bad_lock)
+                calls = []
+
+                def fetch(url, dest):
+                    calls.append(url)
+                    self._static_fetch(url, dest)
+
+                with self.assertRaisesRegex(
+                        synthesis.VoiceError,
+                        r"voice pack download failed:"):
+                    s._prepare_pack(self.pack, assets, fetch)
+                self.assertEqual(calls, [])
+                self.assertIsNotNone(s._last_error)
+                self.assertIn("voice pack download failed:", s._last_error)
+                if kind == "symlink":
+                    self.assertEqual(
+                        (home / "victim").read_bytes(), b"keep me")
+
+        self._serve_pack()
+        result = self._prepare()
+        self.assertTrue(result["verified"])
+        self.assertTrue(lock_path.is_file())
+        self.assertFalse((self.assets / f".{self.pack['id']}.lock").exists())
+        self.assertEqual(
+            [p.name for p in self.assets.rglob("*.lock")], [])
+
+    def test_staging_file_is_removed_on_error_mismatch_and_interrupt(self):
+        def raising(exc):
+            def fetch(url, dest):
+                self._static_fetch(url, dest)
+                raise exc
+            return fetch
+
+        def tampered(url, dest):
+            self._static_fetch(url, dest)
+            with dest.open("ab") as fh:
+                fh.write(b"x")
+
+        cases = [("error", raising(OSError("network down")),
+                  synthesis.VoiceError),
+                 ("mismatch", tampered, synthesis.VoiceError),
+                 ("interrupt", raising(KeyboardInterrupt()), KeyboardInterrupt)]
+        for label, fetch, expected in cases:
+            with self.subTest(label):
+                with self.assertRaises(expected):
+                    self.s._prepare_pack(self.pack, self.assets, fetch)
+                self.assertEqual(self._parts(), [])
+                self.assertFalse((self.assets / "tiny.json").exists())
+
+    def test_failed_cleanup_keeps_the_original_error(self):
+        real_unlink = Path.unlink
+
+        def failing_unlink(path, *args, **kwargs):
+            if path.name.endswith(".part"):
+                raise PermissionError("read-only")
+            return real_unlink(path, *args, **kwargs)
+
+        def fetch(url, dest):
+            self._static_fetch(url, dest)
+            raise KeyboardInterrupt
+
+        with mock.patch.object(Path, "unlink", failing_unlink), \
+                self.assertRaises(KeyboardInterrupt):
+            self.s._prepare_pack(self.pack, self.assets, fetch)
+
+    def test_symlinked_or_fifo_dest_is_replaced_not_followed(self):
+        self._serve_pack()
+        self.assets.mkdir(parents=True)
+        victim = self.home / "victim"
+        victim.write_bytes(b"keep me")
+        os.symlink(victim, self.assets / "tiny.json")
+        (self.assets / "dir").mkdir()
+        os.mkfifo(self.assets / "dir" / "weights.safetensors")
+        self._prepare()
+        self.assertEqual(victim.read_bytes(), b"keep me")
+        self._assert_pack_installed()
+
+    def test_redirect_body_is_closed_unread(self):
+        body = self.content["tiny.json"]
+        self.http.serve("/real/tiny.json", body)
+        block = b"r" * (1 << 20)
+        self.http.routes["/tiny.json"] = (
+            302, [("Location", self.http.url("/real/tiny.json")),
+                  ("Content-Length", str(64 << 20))],
+            lambda: [block] * 64)
+        dest = self.home / "dest"
+        synthesis._default_fetch(self.http.url("/tiny.json"), dest)
+        self.assertEqual(dest.read_bytes(), body)
+        self.assertLess(self.http.wait(self, "/tiny.json"), 32 << 20)
+
+    def test_declared_length_over_cap_is_refused_before_writing(self):
+        entry = self._entry("tiny.json")
+        self.http.serve("/tiny.json", b"a" * (entry["bytes"] + 1))
+        self.http.serve("/dir/weights.safetensors",
+                        self.content["dir/weights.safetensors"])
+        with self.assertRaisesRegex(
+                synthesis.VoiceError,
+                rf"tiny\.json is {entry['bytes'] + 1} bytes, over the "
+                rf"{entry['bytes']}-byte limit"):
+            self._prepare()
+        self.assertEqual(self._parts(), [])
+        self.assertFalse((self.assets / "tiny.json").exists())
+
+        dest = self.home / "never"
+        with self.assertRaises(OSError):
+            synthesis._default_fetch(self.http.url("/tiny.json"), dest,
+                                     max_bytes=entry["bytes"])
+        self.assertFalse(dest.exists())
+
+    def test_undeclared_body_over_cap_stops_one_byte_past_it(self):
+        entry = self._entry("tiny.json")
+        self.http.serve("/tiny.json", b"t" * (64 * entry["bytes"]),
+                        length=False)
+        with self.assertRaisesRegex(synthesis.VoiceError,
+                                    rf"sent more than {entry['bytes']} bytes"):
+            self._prepare()
+        self.assertEqual(self._parts(), [])
+
+        cap = 1000
+        self.http.serve("/big", b"b" * (64 * cap), length=False)
+        dest = self.home / "big"
+        with self.assertRaisesRegex(OSError, rf"sent more than {cap} bytes"):
+            synthesis._default_fetch(self.http.url("/big"), dest,
+                                     max_bytes=cap)
+        self.assertEqual(dest.stat().st_size, cap + 1)
+
+    def test_body_cut_short_of_its_length_is_refused(self):
+        self.http.serve("/short", b"s" * 97, length=100)
+        with self.assertRaisesRegex(OSError, r"ended after 97 of 100 bytes"):
+            synthesis._default_fetch(self.http.url("/short"),
+                                     self.home / "short")
+        with self.assertRaisesRegex(OSError, r"ended after 97 of 100 bytes"):
+            synthesis._default_fetch(self.http.url("/short"),
+                                     self.home / "capped", max_bytes=100)
+
+    def test_exact_cap_without_length_is_accepted(self):
+        self.http.serve("/exact", b"e" * 100, length=False)
+        dest = self.home / "exact"
+        synthesis._default_fetch(self.http.url("/exact"), dest, max_bytes=100)
+        self.assertEqual(dest.read_bytes(), b"e" * 100)
+
+    def test_non_200_status_is_refused_and_closed(self):
+        self.http.serve("/partial", b"p" * 10, status=206)
+        dest = self.home / "partial"
+        with self.assertRaisesRegex(OSError, r"/partial returned HTTP 206"):
+            synthesis._default_fetch(self.http.url("/partial"), dest)
+        self.assertFalse(dest.exists())
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with self.assertRaisesRegex(OSError,
+                                        r"/missing returned HTTP 404") as ctx:
+                synthesis._default_fetch(self.http.url("/missing"), dest)
+            del ctx
+            gc.collect()
+        self.assertEqual([w for w in caught
+                          if issubclass(w.category, ResourceWarning)], [])
+
+        block = b"e" * (1 << 20)
+        self.http.routes["/missing-body"] = (
+            404, [("Content-Length", str(64 << 20))],
+            lambda: [block] * 64)
+        with self.assertRaisesRegex(
+                OSError, r"/missing-body returned HTTP 404") as ctx:
+            synthesis._default_fetch(self.http.url("/missing-body"), dest)
+        # Keep the raised OSError (and the HTTPError in its __context__)
+        # referenced: without exc.close() the socket stays open and the
+        # handler blocks until timeout (Python 3.11 emits no ResourceWarning).
+        self.assertLess(
+            self.http.wait(self, "/missing-body", timeout=5), 32 << 20)
+        self.assertIsNotNone(ctx.exception)
+        self.assertFalse(dest.exists())
+
+    def test_stale_staging_path_is_replaced_without_following(self):
+        """gpu_stt passes a fixed <name>.part: a leftover file or symlink
+        there is removed, never written through."""
+        self.http.serve("/model", b"m" * 50)
+        stale = self.home / "model.part"
+        stale.write_bytes(b"old leftover")
+        synthesis._default_fetch(self.http.url("/model"), stale)
+        self.assertEqual(stale.read_bytes(), b"m" * 50)
+
+        victim = self.home / "victim"
+        victim.write_bytes(b"keep me")
+        stale.unlink()
+        os.symlink(victim, stale)
+        synthesis._default_fetch(self.http.url("/model"), stale)
+        self.assertFalse(stale.is_symlink())
+        self.assertEqual(stale.read_bytes(), b"m" * 50)
+        self.assertEqual(victim.read_bytes(), b"keep me")
+
+        real_unlink = os.unlink
+
+        def unlink_then_plant(path, *args, **kwargs):
+            real_unlink(path, *args, **kwargs)
+            os.symlink(victim, path)
+
+        with mock.patch.object(synthesis.os, "unlink", unlink_then_plant), \
+                self.assertRaises(FileExistsError):
+            synthesis._default_fetch(self.http.url("/model"), stale)
+        self.assertEqual(victim.read_bytes(), b"keep me")
 
 
 class HonestStatusTests(unittest.TestCase):
