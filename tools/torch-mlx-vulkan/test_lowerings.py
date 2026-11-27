@@ -2084,6 +2084,64 @@ def test_mv_addmv():
     print("test_mv_addmv PASS")
 
 
+def test_softplus_mish():
+    # PT-AL-c: softplus (T5, GDN gate) + mish (EfficientNet).
+    # aten.softplus(x, beta=1, threshold=20) is log1p(exp(beta*x))/beta,
+    # reverting to the linear x only when beta*x > threshold — strictly
+    # greater, so the equality point stays on the log branch. The inputs
+    # straddle that edge at the defaults (x crosses 20) and at
+    # beta=2,threshold=10 (the edge moves to x=5). bf16 pins the aten
+    # opmath contract: fp32 math rounded to bf16, not bf16 intermediates.
+    x32 = torch.tensor([[-4.0, -1.0, 0.0], [0.001, 1.0, 5.0]])
+    e32 = torch.tensor([[19.5, 20.0], [20.5, 21.0]])      # default edge: beta*x == 20
+    e32b = torch.tensor([[4.5, 5.0], [5.5, 6.0]])         # beta=2 edge: beta*x == 10
+    m32 = torch.tensor([[-5.0, -1.0], [0.0, 3.0]])
+    xb, eb, mb = x32.bfloat16(), e32.bfloat16(), m32.bfloat16()
+    cases = [
+        (torch.ops.aten.softplus.default, (x32,), {},
+         torch.ops.aten.softplus.default(x32, 1, 20), "softplus"),
+        (torch.ops.aten.softplus.default, (e32,), {},
+         torch.ops.aten.softplus.default(e32, 1, 20), "softplus"),
+        (torch.ops.aten.softplus.default, (e32b,), {"beta": 2, "threshold": 10},
+         torch.ops.aten.softplus.default(e32b, 2, 10), "softplus"),
+        (torch.ops.aten.softplus.default, (xb,), {},
+         torch.ops.aten.softplus.default(xb, 1, 20), "softplus"),
+        (torch.ops.aten.softplus.default, (eb,), {},
+         torch.ops.aten.softplus.default(eb, 1, 20), "softplus"),
+        (torch.nn.functional.softplus, (x32,), {}, torch.nn.functional.softplus(x32), "softplus"),
+        (torch.nn.functional.softplus, (x32,), {"beta": 0.5, "threshold": 40},
+         torch.nn.functional.softplus(x32, beta=0.5, threshold=40), "softplus"),
+        (torch.ops.aten.mish.default, (m32,), {},
+         torch.ops.aten.mish.default(m32), "mish"),
+        (torch.ops.aten.mish.default, (mb,), {},
+         torch.ops.aten.mish.default(mb), "mish"),
+        (torch.nn.functional.mish, (m32,), {}, torch.nn.functional.mish(m32), "mish"),
+    ]
+    for target, ins, kw, ref, name in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kw)
+        assert any(name in s for s in stats["mlx"]), (stats, str(target))
+        got = out.float().numpy()
+        assert np.allclose(got, ref.float().numpy(), atol=2e-2), \
+            (str(target), kw, got, ref.float().numpy())
+        assert out.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
+            (str(target), kw, out.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            # Same dtype-fidelity contract as test_mul: _torch widens bf16
+            # to fp32 at the executor boundary (numpy has no bf16 buffer);
+            # the lowering itself must still produce bf16.
+            low = mlx_vulkan._FUNC_SPECS[name](mlx_vulkan._mx(ins[0]), **kw)
+            assert low.dtype == mx.bfloat16, low.dtype
+    print("test_softplus_mish PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2122,6 +2180,7 @@ if __name__ == "__main__":
     test_where_masked_fill()
     test_mv_addmv()
     test_xlogy_xlog1py()
+    test_softplus_mish()
     print("ALL PASS")
 
 

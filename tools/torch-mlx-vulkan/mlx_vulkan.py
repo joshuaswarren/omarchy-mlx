@@ -1803,6 +1803,33 @@ def _xlog1py(a, b):
     return _ar(mx.where(mx.equal(a, 0), mx.where(mx.isnan(b), nan, mx.zeros_like(r)), r))
 
 
+def _opmath_f32(a):
+    """aten elementwise ops on fp16/bf16 inputs compute in fp32 opmath and
+    round once at the end; the lowering does the same or the narrow-dtype
+    tail values drift. Returns (original, fp32-view)."""
+    a = _mx(a)
+    return a, (a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a)
+
+
+def _softplus(a, beta=1, threshold=20):
+    # aten.softplus(input, beta=1, threshold=20):
+    #   log1p(exp(beta*x)) / beta, and the linear x when beta*x > threshold
+    #   (strictly greater — the equality point keeps the log branch). The
+    #   linear tail also keeps exp(beta*x) finite for large inputs.
+    a, f = _opmath_f32(a)
+    bx = f * beta
+    return mx.where(bx > threshold, f,
+                    mx.log1p(mx.exp(bx)) / beta).astype(a.dtype)
+
+
+def _mish(a, inplace=False):
+    # aten.mish(input): x * tanh(softplus(x)) under softplus' defaults
+    # (beta=1, threshold=20).
+    a, f = _opmath_f32(a)
+    sp = mx.where(f > 20, f, mx.log1p(mx.exp(f)))
+    return (f * mx.tanh(sp)).astype(a.dtype)
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -1934,6 +1961,8 @@ _FUNC_SPECS = {
     "silu_backward": _silu_backward,
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
+    "softplus": _softplus,
+    "mish": _mish,
     "relu_": lambda a: mx.maximum(a, 0.0),
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
