@@ -1374,6 +1374,11 @@ enum class ComputeKernel : uint16_t {
   // 1024-thread (32 subgroups, 64 cols/WG) Q4 word subgroup decode GEMV for
   // large-vocabulary lm_head (Appended to keep profile kernel ids stable).
   QmmVecQ4WordSubgroupBF16R2S32W2,
+  // 128-thread (4 subgroups) Q4 word subgroup GEMV (8 cols/WG) and dedicated
+  // SwiGLU (4 cols/WG) for G14C occupancy headroom (Appended to keep profile
+  // kernel ids stable).
+  QmmVecQ4WordSubgroupBF16R2S4W2,
+  QmmVecQ4SwigluBF16R1S4W2,
   Count,
 };
 
