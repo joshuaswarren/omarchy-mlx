@@ -1,5 +1,5 @@
---- buffer.orig2	2026-11-26 06:54:19.965939910 -0600
-+++ buffer.h.mine	2026-11-26 06:54:03.132086242 -0600
+--- a/python/src/buffer.h
++++ b/python/src/buffer.h
 @@ -7,6 +7,9 @@
  #include "mlx/array.h"
  #include "mlx/utils.h"
