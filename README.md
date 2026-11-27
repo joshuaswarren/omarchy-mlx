@@ -210,8 +210,9 @@ One row per machine, model snapshot and context. Decode and prefill are
 tokens per second on the same MacBook Pro on both sides, same snapshot,
 same prompt, greedy output verified by SHA-256 on every run. Linux
 cells run the unified Mesa pin `53ad9af196f5` with
-`MLX_OMARCHY_DEFER_TOKENS=0`; macOS cells run stock `mlx 0.32.2` /
-`mlx-lm` on Metal. The share column is Linux decode as a share of
+`MLX_OMARCHY_DEFER_TOKENS=0`; macOS cells run stock `mlx` /
+`mlx-lm 0.31.3` on Metal (macOS 27.0 with `mlx 0.32.2` on the 13-inch
+and M2 Max; macOS 26.6.2 with `mlx 0.32.3`–`0.32.5` on the 16-inch). The share column is Linux decode as a share of
 macOS decode: 100% means parity, higher is faster on Linux.
 
 | Machine | Model (snapshot) | Context | Linux decode | Linux prefill | macOS decode | macOS prefill | Linux / macOS | Runs | Greedy SHA-256 (12 hex) | PR | Mesa pin |
@@ -221,9 +222,9 @@ macOS decode: 100% means parity, higher is faster on Linux.
 | 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | 24.27 tok/s | 231.65 tok/s | 23.17 tok/s | 170.02 tok/s | 104.7% (+4.7%) | 5 pairs / 25 runs | `a6fad159dfa9` | `#1104` | `53ad9af196f5` |
 | 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | 22.20 tok/s | 195.31 tok/s | 20.18 tok/s | 161.87 tok/s | 110.0% (+10.0%) | 5 pairs / 25 runs | `9115b5280c1d` | `#1104` | `53ad9af196f5` |
 | 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | **107.16 tok/s** | 894.77 tok/s | 104.53 tok/s | 660.26 tok/s | **102.5% (+2.5%)** | 5 pairs / 25 runs | `efb521ae04af` | `#1117` | `53ad9af196f5` |
-| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | **96.69 tok/s** | 786.10 tok/s | pending | 638.54 tok/s | pending | 5 pairs / 25 runs | `542524d1f692` | `#1117` | `53ad9af196f5` |
-| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | **63.47 tok/s** | 470.32 tok/s | 57.77 tok/s | 339.27 tok/s | **109.9% (+9.9%)** | 5 pairs / 25 runs | `697272134f42` | `#1117` | `53ad9af196f5` |
-| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | **62.96 tok/s** | 449.39 tok/s | 57.05 tok/s | pending | **110.4% (+10.4%)** | 5 pairs / 25 runs | `7dd7261b2fb8` | `#1117` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | **96.69 tok/s** | 786.10 tok/s | 87.20 tok/s | 638.54 tok/s | **110.9% (+10.9%)** | 5 pairs / 25 runs | `542524d1f692` | `#1117` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | **63.47 tok/s** | 470.32 tok/s | 57.77 tok/s | 388.31 tok/s | **109.9% (+9.9%)** | 5 pairs / 25 runs | `697272134f42` | `#1117` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | **62.96 tok/s** | 449.39 tok/s | 57.05 tok/s | 388.44 tok/s | **110.4% (+10.4%)** | 5 pairs / 25 runs | `7dd7261b2fb8` | `#1117` | `53ad9af196f5` |
 | 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 | **215.41 tok/s** | 2282.75 tok/s | 212.82 tok/s | 1766.07 tok/s | **101.2% (+1.2%)** | 5 pairs / 25 runs | `4784df039da0` | `#1101` | `53ad9af196f5` |
 | 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 | **211.38 tok/s** | 2347.61 tok/s | 209.28 tok/s | 1786.03 tok/s | **101.0% (+1.0%)** | 5 pairs / 25 runs | `c5fb4074d0b5` | `#1101` | `53ad9af196f5` |
 
