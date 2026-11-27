@@ -2501,17 +2501,8 @@ void main() {
           wvu[r] = input_w1.values[wp[r]];
           wp[r] += 32u;
         }
-        float sg[ROWS_PER_SLOT];
-        float bg[ROWS_PER_SLOT];
-        float su[ROWS_PER_SLOT];
-        float bu[ROWS_PER_SLOT];
-        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-          sg[r] = LOAD_VALUE(scales0.values[sp[r]]);
-          bg[r] = LOAD_VALUE(biases0.values[sp[r]]);
-          su[r] = LOAD_VALUE(scales1.values[sp[r]]);
-          bu[r] = LOAD_VALUE(biases1.values[sp[r]]);
-          sp[r] += 8u;
-        }
+        // Sink L1-hot scale/bias loads after Q4_QUAD_SWIGLU to drop 4*ROWS_PER_SLOT
+        // live GPRs across all four quad dots while keeping xa/xb hoisted.
         uvec4 xa = input_x.values[xp];
         uvec4 xb = input_x.values[xp + 1u];
         xp += 64u;
@@ -2520,10 +2511,16 @@ void main() {
         Q4_QUAD_SWIGLU(wvg[r].y, wvu[r].y, xb.x, xb.y)
         Q4_QUAD_SWIGLU(wvg[r].y >> 16u, wvu[r].y >> 16u, xb.z, xb.w)
         for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
-          precise float bg_term = input_sum * bg[r];
-          acc_g[r] += fma(sg[r], dot_g[r], bg_term);
-          precise float bu_term = input_sum * bu[r];
-          acc_u[r] += fma(su[r], dot_u[r], bu_term);
+          uint spr = sp[r];
+          sp[r] = spr + 8u;
+          float sgr = LOAD_VALUE(scales0.values[spr]);
+          float bgr = LOAD_VALUE(biases0.values[spr]);
+          precise float bg_term = input_sum * bgr;
+          acc_g[r] += fma(sgr, dot_g[r], bg_term);
+          float sur = LOAD_VALUE(scales1.values[spr]);
+          float bur = LOAD_VALUE(biases1.values[spr]);
+          precise float bu_term = input_sum * bur;
+          acc_u[r] += fma(sur, dot_u[r], bu_term);
         }
       }
 #else
