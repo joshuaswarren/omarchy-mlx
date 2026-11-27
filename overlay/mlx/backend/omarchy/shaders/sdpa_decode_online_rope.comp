@@ -231,6 +231,10 @@ void main() {
   // Prologue Phase A: Zero-barrier RMSNorm on Q (sg == 0) and K (sg == 1) in
   // parallel, reproducing fast_rope_norm.comp's stride-64..1 reduction order
   // and precise (weight * norm) * value rounding bit-for-bit.
+  // In parallel, sg 2..3 (t = 64..127) compute all 64 RoPE (cos, sin) pairs
+  // into s_o[512..639] with zero extra shared memory, isolating omarchy_trig
+  // register live ranges from Phase B's rotation block and hiding trig latency
+  // behind Phase A's Q/K RMSNorm.
   if (sg < 2u) {
     bool is_k = (sg == 1u);
     uint row_base = is_k ? (params.aux_size + kv_head * params.output_size)
@@ -260,19 +264,23 @@ void main() {
     s_o[s_base + lane + 32u] = r1;
     s_o[s_base + lane + 64u] = r2;
     s_o[s_base + lane + 96u] = r3;
+  } else if (sg < 4u) {
+    uint d = t - 64u;
+    float position =
+        uintBitsToFloat(params.shape[0]) * float(offset_data.values[params.dims]);
+    float inv = exp(-float(d) * params.beta);
+    float theta = position * inv;
+    s_o[512u + d] = rope_round(omarchy_trig_cos(theta));
+    s_o[576u + d] = rope_round(omarchy_trig_sin(theta));
   }
   barrier();
 
-  // Prologue Phase B: Single (cos, sin) per thread across t = 0..63 rotates
+  // Prologue Phase B: Read precomputed (cos, sin) across t = 0..63 and rotate
   // BOTH Q[t, t+64] (pre-scaled into s_o[256..383]) and K[t, t+64] (into
   // s_o[384..511]).
   if (t < HALF_D) {
-    float position =
-        uintBitsToFloat(params.shape[0]) * float(offset_data.values[params.dims]);
-    float inv = exp(-float(t) * params.beta);
-    float theta = position * inv;
-    float c = rope_round(omarchy_trig_cos(theta));
-    float s = rope_round(omarchy_trig_sin(theta));
+    float c = s_o[512u + t];
+    float s = s_o[576u + t];
 
     float qa = s_o[t];
     float qb = s_o[t + HALF_D];
