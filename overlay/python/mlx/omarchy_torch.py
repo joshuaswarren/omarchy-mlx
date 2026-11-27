@@ -262,7 +262,7 @@ def _col2im(cols, output_size, kernel_size, dilation=1, padding=0, stride=1, **k
             canvas = mx.slice_update(
                 canvas,
                 canvas[:, :, r0:r1, c0:c1] + patch[:, :, pr0:pr0 + r1 - r0, pc0:pc0 + c1 - c0],
-                (0, 0, r0, c0), (n, c, r1, c1))
+                (0, 0, r0, c0))
     return canvas
 
 

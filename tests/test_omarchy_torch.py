@@ -74,9 +74,6 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     (ns_shape, tag, float((got - r).abs().max())))
 
 
-if __name__ == "__main__":
-
-
     def test_im2col_col2im_parity(self):
         """PT-IM-a: the explicit im2col path — fp32 parity vs the aten CPU ops
         across stride/padding/dilation, then col2im round-trip."""
@@ -104,11 +101,13 @@ if __name__ == "__main__":
             back = _col2im(got, (case["h"], case["w"]), (case["kh"], case["kw"]),
                            dilation=case["dilation"], padding=case["padding"],
                            stride=case["stride"])
-            want_back = F.fold(mx.array(want.numpy()), (case["h"], case["w"]),
+            want_back = F.fold(want, (case["h"], case["w"]),
                                (case["kh"], case["kw"]), dilation=case["dilation"],
                                padding=case["padding"], stride=case["stride"])
             self.assertTrue(mx.allclose(back, mx.array(want_back.numpy()), atol=0, rtol=0),
                             (case, back.shape))
+
+
 
 
 if __name__ == "__main__":
