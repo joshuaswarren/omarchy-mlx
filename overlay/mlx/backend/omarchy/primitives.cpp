@@ -18031,7 +18031,21 @@ void RMSNorm::eval_gpu(
     if (out.dtype() == bfloat16 &&
         apple_norm_enabled(
             encoder.device(), row_length, x.size() / row_length)) {
-      kernel = omarchy::ComputeKernel::FastRmsNormAppleBF16;
+      // WG screen (M2D-1): MLX_OMARCHY_NORM_APPLE_WG=128 picks the
+      // local_size-128 build of the same kernel; default stays 256.
+      static const int apple_variant = [] {
+        const char* p = std::getenv("MLX_OMARCHY_NORM_APPLE_PACKED");
+        if (p != nullptr && std::string(p) == "0") {
+          return 0;  // scalar IO (pre-vectorization)
+        }
+        const char* e = std::getenv("MLX_OMARCHY_NORM_APPLE_WG");
+        return (e != nullptr && std::string(e) == "128") ? 128 : 256;
+      }();
+      kernel = apple_variant == 0
+          ? omarchy::ComputeKernel::FastRmsNormAppleScalarBF16
+          : (apple_variant == 128
+                 ? omarchy::ComputeKernel::FastRmsNormAppleWg128BF16
+                 : omarchy::ComputeKernel::FastRmsNormAppleBF16);
     }
   }
   encoder.dispatch_compute(

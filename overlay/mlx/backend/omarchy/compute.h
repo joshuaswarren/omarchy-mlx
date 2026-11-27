@@ -1465,6 +1465,13 @@ enum class ComputeKernel : uint16_t {
   // blocked path in SdpaDecodeOnlineRopeSg32BF16Hd128G13C). Appended to keep
   // profile kernel ids stable.
   SdpaDecodeOnlineRopeSg32BF16Hd128G13CB4,
+  // Same kernel at local_size 128 for the M2 workgroup-size screen
+  // (MLX_OMARCHY_NORM_APPLE_WG=128); identical reduction, narrower WG.
+  FastRmsNormAppleWg128BF16,
+  // The pre-vectorization scalar-IO build of FastRmsNormAppleBF16, kept
+  // env-reachable (MLX_OMARCHY_NORM_APPLE_PACKED=0) for the same-wheel
+  // before/after A/B and as a parity fallback.
+  FastRmsNormAppleScalarBF16,
   Count,
 };
 

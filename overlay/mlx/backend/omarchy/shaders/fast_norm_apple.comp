@@ -5,15 +5,24 @@
 // MLX_OMARCHY_NORM_APPLE=0 to restore the deployed reduction path. Mirrors
 // Apple `rms_single_row` in
 // `mlx/backend/metal/kernels/rms_norm.metal` (commit 9c3d35571).
-//   - one threadgroup per row (256 threads),
-//   - per-thread CONTIGUOUS loads in pass 1 (8 for width 2048, 10 for 2560), held in a register
-//     array, never reloaded in the output pass,
-//   - cross-lane reduction = hardware subgroupSum (32 lanes per subgroup, 8
-//     subgroups per WG) + 1 second-level shared stage of 8 partials +
+//   - one threadgroup per row (LOCAL_SIZE threads; 256 deployed, 128 compiled
+//     for the workgroup-size screen),
+//   - per-thread CONTIGUOUS loads in pass 1 (8 for width 2048, 10 for 2560),
+//     held in a register array, never reloaded in the output pass,
+//   - packed IO: buffers are u16vec4 views, so every pass issues 8-byte
+//     u16vec4 / 4-byte u16vec2 / 2-byte scalar transactions instead of one
+//     scalar uint16 access per element. Element ownership per thread is
+//     unchanged (thread * n_reads) and every loaded or stored element stays
+//     inside the owning thread's window, so the reduction order — and every
+//     result bit — is identical to the scalar form.
+//   - cross-lane reduction = hardware subgroupSum (32 lanes per subgroup,
+//     LOCAL_SIZE/32 subgroups per WG) + 1 second-level shared stage +
 //     subgroupSum again = 3 threadgroup barriers,
 //   - weight loaded once per output element (from registers if scalar),
-//   - width 4096 (G16S, omarchy::apple_norm_4096_allowed) keeps the same 256-thread tree with sixteen contiguous values per thread. That order is this
-//     kernel's own; it is not claimed to equal another backend's reduction order at that width.
+//   - width 4096 (G16S, omarchy::apple_norm_4096_allowed) keeps the same
+//     thread tree with sixteen contiguous values per thread. That order is
+//     this kernel's own; it is not claimed to equal another backend's
+//     reduction order at that width.
 //
 // The RMS formula matches the deployed path; reduction order differs. `precise`
 // prevents implicit FMA in sum-of-squares.
@@ -36,13 +45,20 @@ uint16_t bf16_store(float value) {
 }
 #define STORE_VALUE(f) bf16_store(f)
 
-layout(local_size_x = 256) in;
+#ifndef LOCAL_SIZE
+#define LOCAL_SIZE 256
+#endif
 
+layout(local_size_x = LOCAL_SIZE) in;
+
+// Packed views: one u16vec4 carries 4 bf16 elements (8 bytes), u16vec2 two,
+// and a scalar component one. Element offsets in the push constants stay in
+// uint16 units; every access below divides by 4 and picks components.
 layout(set = 0, binding = 0, std430) readonly buffer Input {
-  STORAGE_TYPE values[];
+  u16vec4 values[];
 } input_data;
 layout(set = 0, binding = 1, std430) readonly buffer Weight {
-  STORAGE_TYPE values[];
+  u16vec4 values[];
 } weight_data;
 #ifdef LAYER_NORM
 layout(set = 0, binding = 2, std430) readonly buffer Bias {
@@ -50,7 +66,7 @@ layout(set = 0, binding = 2, std430) readonly buffer Bias {
 } bias_data;
 #endif
 layout(set = 0, binding = 3, std430) writeonly buffer Output {
-  STORAGE_TYPE values[];
+  u16vec4 values[];
 } output_data;
 
 layout(push_constant) uniform Params {
@@ -74,13 +90,62 @@ layout(push_constant) uniform Params {
 } params;
 
 const uint SIMD = 32u;
-const uint MAX_READS = 16u;      // 256 * 8 = 2048, 256 * 10 = 2560 and 256 * 16 = 4096 take the register path
-shared float s_partial[8u];        // 8 subgroups -> 8 partial sums
+const uint NUM_SUB = LOCAL_SIZE / 32u;
+// 256 threads: 16 (2048 -> 8, 2560 -> 10, 4096 -> 16); 128 threads: 32.
+const uint MAX_READS = 4096u / LOCAL_SIZE;
+shared float s_partial[NUM_SUB];
+
+// Packed element accessors. SSBO arrays cannot be function parameters, so
+// these are macros over the buffer-block name; offsets are in elements.
+// One element at absolute offset e (any parity): a 2-byte load.
+#define ELEMAT(buf, e) \
+  LOAD_VALUE(buf.values[(e) / 4u][(e) % 4u])
+// Two elements at e .. e+1, requires e % 2 == 0: a 4-byte load.
+#define PAIRV(buf, e) \
+  (((e) % 4u == 0u) ? buf.values[(e) / 4u].xy : buf.values[(e) / 4u].zw)
+// Four elements at e .. e+3, requires e % 4 == 0: an 8-byte load.
+#define QUADV(buf, e) buf.values[(e) / 4u]
+
+// weight for element index i (scalar weight broadcast or per-element)
+float weight_at(uint i) {
+  return (params.lhs_size == 1u)
+             ? LOAD_VALUE(weight_data.values[params.rhs_offset / 4u]
+                                         [params.rhs_offset % 4u])
+             : LOAD_VALUE(weight_data.values[(params.rhs_offset + i) / 4u]
+                                         [(params.rhs_offset + i) % 4u]);
+}
+// n (2 or 4) weight elements at absolute offset we, cascading on the weight
+// offset's own alignment (independent of the output cascade's alignment).
+vec4 weight_elems(uint we, uint n) {
+  if (params.lhs_size == 1u) {
+    float w = weight_at(0u);
+    return vec4(w);
+  }
+  vec4 wv;
+  if (n == 4u && we % 4u == 0u) {
+    u16vec4 v = weight_data.values[we / 4u];
+    wv = vec4(LOAD_VALUE(v.x), LOAD_VALUE(v.y), LOAD_VALUE(v.z),
+                 LOAD_VALUE(v.w));
+    return wv;
+  }
+  for (uint i = 0u; i < n; ++i) {
+    uint e = we + i;
+    if (e % 2u == 0u && i + 2u <= n) {
+      u16vec2 v = PAIRV(weight_data, e);
+      wv[i] = LOAD_VALUE(v.x);
+      wv[i + 1u] = LOAD_VALUE(v.y);
+      i += 1u;
+    } else {
+      wv[i] = LOAD_VALUE(weight_data.values[e / 4u][e % 4u]);
+    }
+  }
+  return wv;
+}
 
 void main() {
   uint thread = gl_LocalInvocationID.x;
-  uint sub_id = thread / SIMD;     // 0..7
-  uint lane = thread % SIMD;       // 0..31
+  uint sub_id = thread / SIMD;
+  uint lane = thread % SIMD;
   uint row_length = params.reduce_size;
   float eps = params.alpha;
 
@@ -90,29 +155,45 @@ void main() {
 
     float reg_x[MAX_READS];
     precise float reg_sq = 0.0;
-    uint n_reads = row_length / 256u;
-    bool reg_path = (row_length == 2048u || row_length == 2560u || row_length == 4096u);
+    uint n_reads = row_length / LOCAL_SIZE;
+    bool reg_path =
+        (row_length == 2048u || row_length == 2560u || row_length == 4096u) &&
+        row_length % LOCAL_SIZE == 0u;
     if (reg_path) {
-      uint base = thread * n_reads;
-      for (uint i = 0u; i < 8u; ++i) {
-        reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
-        reg_sq += reg_x[i] * reg_x[i];
-      }
-      if (n_reads == 10u) {
-        for (uint i = 8u; i < 10u; ++i) {
-          reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
-          reg_sq += reg_x[i] * reg_x[i];
+      // Owned window [base, base + n_reads): vec4 chunks while the absolute
+      // offset is 4-aligned and 4 owned elements remain, then vec2, then
+      // scalar. n_reads is always even, so the scalar tail is empty.
+      uint j = 0u;
+      for (uint e = start + thread * n_reads; j < n_reads;) {
+        if (e % 4u == 0u && j + 4u <= n_reads) {
+          u16vec4 v = QUADV(input_data, e);
+          reg_x[j] = LOAD_VALUE(v.x);
+          reg_x[j + 1u] = LOAD_VALUE(v.y);
+          reg_x[j + 2u] = LOAD_VALUE(v.z);
+          reg_x[j + 3u] = LOAD_VALUE(v.w);
+          j += 4u;
+          e += 4u;
+        } else if (e % 2u == 0u && j + 2u <= n_reads) {
+          u16vec2 p = PAIRV(input_data, e);
+          reg_x[j] = LOAD_VALUE(p.x);
+          reg_x[j + 1u] = LOAD_VALUE(p.y);
+          j += 2u;
+          e += 2u;
+        } else {
+          reg_x[j] = ELEMAT(input_data, e);
+          j += 1u;
+          e += 1u;
         }
-      } else if (n_reads == 16u) {
-        for (uint i = 8u; i < 16u; ++i) {
-          reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
+      }
+      for (uint i = 0u; i < MAX_READS; ++i) {
+        if (i < n_reads) {
           reg_sq += reg_x[i] * reg_x[i];
         }
       }
     } else {
-      for (uint index = thread; index < row_length; index += 256u) {
-        reg_sq += LOAD_VALUE(input_data.values[start + index]) *
-                  LOAD_VALUE(input_data.values[start + index]);
+      for (uint index = thread; index < row_length; index += LOCAL_SIZE) {
+        float v = ELEMAT(input_data, start + index);
+        reg_sq += v * v;
       }
     }
 
@@ -123,7 +204,7 @@ void main() {
     barrier();
     float total;
     if (sub_id == 0u) {
-      float v = (lane < 8u) ? s_partial[lane] : 0.0;
+      float v = (lane < NUM_SUB) ? s_partial[lane] : 0.0;
       total = subgroupAdd(v);
       if (lane == 0u) {
         s_partial[0] = total;
@@ -133,57 +214,66 @@ void main() {
     float mean_square = s_partial[0] / float(row_length);
     float norm = inversesqrt(mean_square + eps);
 
+    uint out_start = params.output_offset + row * row_length;
     if (reg_path) {
-      uint base = thread * n_reads;
-      for (uint i = 0u; i < 8u; ++i) {
-        uint index = base + i;
-        float weight =
-            (params.lhs_size == 1u)
-                ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-        precise float norm_weight = norm * weight;
-        precise float result = reg_x[i] * norm_weight;
-        output_data.values[params.output_offset + row * row_length + index] =
-            STORE_VALUE(result);
-      }
-      if (n_reads == 10u) {
-        for (uint i = 8u; i < 10u; ++i) {
-          uint index = base + i;
-          float weight =
-              (params.lhs_size == 1u)
-                  ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                  : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-          precise float norm_weight = norm * weight;
-          precise float result = reg_x[i] * norm_weight;
-          output_data.values[params.output_offset + row * row_length + index] =
-              STORE_VALUE(result);
-        }
-      } else if (n_reads == 16u) {
-        for (uint i = 8u; i < 16u; ++i) {
-          uint index = base + i;
-          float weight =
-              (params.lhs_size == 1u)
-                  ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                  : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-          precise float norm_weight = norm * weight;
-          precise float result = reg_x[i] * norm_weight;
-          output_data.values[params.output_offset + row * row_length + index] =
-              STORE_VALUE(result);
+      // Same ownership window, same cascade: only fully-owned chunks are
+      // written, and the scalar tail is empty because n_reads is even and
+      // every owned window starts at an even offset (base = thread*n_reads,
+      // n_reads even; absolute parity can still be odd through out_start,
+      // which the cascade handles one leading scalar first).
+      uint j = 0u;
+      uint wbase = params.rhs_offset + thread * n_reads;
+      for (uint e = out_start + thread * n_reads; j < n_reads;) {
+        if (e % 4u == 0u && j + 4u <= n_reads) {
+          vec4 w4 = weight_elems(wbase + j, 4u);
+          precise float nw0 = norm * w4.x;
+          precise float nw1 = norm * w4.y;
+          precise float nw2 = norm * w4.z;
+          precise float nw3 = norm * w4.w;
+          output_data.values[e / 4u] =
+              u16vec4(STORE_VALUE(reg_x[j] * nw0),
+                      STORE_VALUE(reg_x[j + 1u] * nw1),
+                      STORE_VALUE(reg_x[j + 2u] * nw2),
+                      STORE_VALUE(reg_x[j + 3u] * nw3));
+          j += 4u;
+          e += 4u;
+        } else if (e % 2u == 0u && j + 2u <= n_reads) {
+          vec4 w = weight_elems(wbase + j, 2u);
+          precise float nw0 = norm * w.x;
+          precise float nw1 = norm * w.y;
+          u16vec2 pv = u16vec2(STORE_VALUE(reg_x[j] * nw0),
+                               STORE_VALUE(reg_x[j + 1u] * nw1));
+          if (e % 4u == 0u) {
+            output_data.values[e / 4u].xy = pv;
+          } else {
+            output_data.values[e / 4u].zw = pv;
+          }
+          j += 2u;
+          e += 2u;
+        } else {
+          float w = weight_at(j + thread * n_reads);
+          precise float nw = norm * w;
+          output_data.values[e / 4u][e % 4u] =
+              STORE_VALUE(reg_x[j] * nw);
+          j += 1u;
+          e += 1u;
         }
       }
     } else {
-      for (uint index = thread; index < row_length; index += 256u) {
-        float value = LOAD_VALUE(input_data.values[start + index]);
-        float weight =
-            (params.lhs_size == 1u)
-                ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
+      for (uint index = thread; index < row_length; index += LOCAL_SIZE) {
+        float value = ELEMAT(input_data, start + index);
+        float weight = weight_at(index);
         precise float norm_weight = norm * weight;
         precise float result = value * norm_weight;
-        output_data.values[params.output_offset + row * row_length + index] =
-            STORE_VALUE(result);
+        uint e = out_start + index;
+        output_data.values[e / 4u][e % 4u] = STORE_VALUE(result);
       }
     }
-    barrier();
+    // The barrier guards s_partial reuse only when this workgroup will run
+    // another row. Decode launches one workgroup per row, so output_size==1
+    // never reaches it.
+    if (gl_WorkGroupID.x + gl_NumWorkGroups.x < params.output_size) {
+      barrier();
+    }
   }
 }
