@@ -108,10 +108,47 @@ def _unbind(a, dim):
     return tuple(out)
 
 def _ln_native(a, normalized_shape, weight, bias, eps):
+    """native_layer_norm with real mean/rstd.
+
+    aot_autograd saves the returned mean and rstd and feeds them to
+    aten.native_layer_norm_backward; dummies (the old lowering) make that
+    backward divide by rstd = 0 and every gradient upstream of the norm
+    turns NaN at the first training step (PT-T1 bisect). The stats reduce
+    over the trailing len(normalized_shape) axes and keep them singleton,
+    matching aten's saved shapes for any normalized_shape.
+    """
     w = _mx(weight) if weight is not None else None
     b = _mx(bias) if bias is not None else None
-    dummy = mx.array(np.zeros(1, np.float32))
-    return (mx.fast.layer_norm(a, w, b, eps), dummy, dummy)
+    axes = tuple(range(a.ndim - len(tuple(normalized_shape)), a.ndim))
+    mu = mx.mean(a, axis=axes, keepdims=True)
+    xc = a - mu
+    rstd = 1.0 / mx.sqrt(mx.mean(xc * xc, axis=axes, keepdims=True) + eps)
+    out = xc * rstd
+    if w is not None:
+        out = out * w
+    if b is not None:
+        out = out + b
+    return (out, mu, rstd)
+
+
+def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mask):
+    gout, x = _mx(gout), _mx(x)
+    mean, rstd = _mx(mean), _mx(rstd)
+    w = _mx(weight) if weight is not None else None
+    ndim = len(tuple(normalized_shape))
+    axes = tuple(range(x.ndim - ndim, x.ndim))
+    xhat = (x - mean) * rstd
+    g = gout * w if w is not None else gout
+    dx = rstd * (g - mx.mean(g, axis=axes, keepdims=True)
+                 - xhat * mx.mean(g * xhat, axis=axes, keepdims=True))
+    sum_axes = tuple(range(x.ndim - ndim))
+    dw = (mx.sum(gout * xhat, axis=sum_axes) if sum_axes else gout * xhat)
+    db = (mx.sum(gout, axis=sum_axes) if sum_axes else gout)
+    mask = tuple(output_mask) if output_mask is not None else (True, True, True)
+    z = mx.zeros((1,), mx.float32)
+    return (dx if mask[0] else z,
+            dw if (weight is not None and mask[1]) else z,
+            db if (bias is not None and mask[2]) else z)
 
 def _expand(a, *s, **k):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
@@ -278,6 +315,7 @@ _FUNC_SPECS = {
     "alias": lambda a: a, "lift_fresh": lambda a: a, "lift_fresh_copy": lambda a: a, "to": lambda a, *a_, **k_: a,
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
+    "native_layer_norm_backward": _ln_backward,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     "conv2d": _conv2d,
     "group_norm": _group_norm,
@@ -698,7 +736,7 @@ def _dqall(v):
 def _node_name(n):
     if n.op == "call_method":
         return str(n.target)
-    return getattr(n.target, "__name__", None) or _opname(n)
+    return (getattr(n.target, "__name__", None) or _opname(n)).split(".")[0]
 
 
 def _quantizable_phs(phs):
@@ -732,7 +770,7 @@ def _fuse_rmsnorm(nodes):
     consumers = {}
     nm = {}
     for n in nodes:
-        nm[n] = getattr(n.target, "__name__", None) or _opname(n)
+        nm[n] = (getattr(n.target, "__name__", None) or _opname(n)).split(".")[0]
         for a in n.args:
             if isinstance(a, torch.fx.Node):
                 consumers.setdefault(a, []).append(n)
@@ -813,7 +851,8 @@ def make_compiled_executor(gm):
         for n in nodes:
             if n.op == "placeholder" or n in skip:
                 continue
-            name = getattr(n.target, "__name__", None) or _opname(n)
+            name = (getattr(n.target, "__name__", None)
+                    or _opname(n)).split(".")[0]
             if n.op == "output":
                 out = res(n.args[0])
                 holder["n_out"] = len(out) if isinstance(out, (tuple, list)) else 0
