@@ -9703,6 +9703,20 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           (params.shape[1] % 2u == 0u))) {
         vec_kernel = geometry.word;
         qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+        if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u) &&
+            params.matrix_n >= 2048u) {
+          const auto& w_caps = encoder.device().capabilities();
+          const char* wr2s4_env = omarchy::env_str("MLX_OMARCHY_WORD_R2S4");
+          const bool wr2s4_want =
+              (wr2s4_env != nullptr && wr2s4_env[0] != '\0')
+                  ? (std::strcmp(wr2s4_env, "0") != 0)
+                  : omarchy::qmm_word_r2s4_default(w_caps.device_name);
+          if (wr2s4_want && w_caps.max_compute_work_group_invocations >= 128u &&
+              w_caps.max_compute_work_group_size[0] >= 128u) {
+            vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2;
+            qmm_groups = (params.matrix_n + 7u) / 8u;
+          }
+        }
       }
     }
     encoder.dispatch_compute(
@@ -11130,8 +11144,19 @@ bool dispatch_quantized_gemv_group(
         ? (std::strcmp(sw_r1_env, "0") != 0)
         : omarchy::qmm_swiglu_r1_default(qmm_dev_name);
     if (sw_r1_on) {
-      swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
-      swiglu_cols = 8u;
+      const char* sw_s4_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_R1S4");
+      const bool sw_s4_on = (sw_s4_env != nullptr && sw_s4_env[0] != '\0')
+          ? (std::strcmp(sw_s4_env, "0") != 0)
+          : omarchy::qmm_swiglu_r1s4_default(qmm_dev_name);
+      if (sw_s4_on &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 128u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 128u) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S4W2;
+        swiglu_cols = 4u;
+      } else {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
+        swiglu_cols = 8u;
+      }
     }
   }
   ComputeKernel resnorm_kernel = geom.resnorm;
