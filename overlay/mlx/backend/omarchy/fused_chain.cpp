@@ -1824,13 +1824,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           all_bf16 = all_bf16 && m.node.dtype() == bfloat16;
         }
         const Device* d = stream_device(*nodes[start]);
-        const char* fg_env = omarchy::env_str("MLX_OMARCHY_FUSED_GEMV");
-        const bool explicit_gemv_off =
-            fg_env != nullptr && fg_env[0] != '\0' &&
-            !env_flag("MLX_OMARCHY_FUSED_GEMV");
-        if (d != nullptr && !explicit_gemv_off && epilogue_free &&
-            all_bf16 && gemv_epilogue_only_route_enabled(*d) &&
-            gemv_balanced_qkv_part(d->capabilities().device_name)) {
+        if (d != nullptr && epilogue_free && all_bf16 &&
+            gemv_balanced_qkv_route_enabled(d->capabilities().device_name)) {
           std::vector<int64_t> widths;
           widths.reserve(group.members.size());
           for (const auto& m : group.members) {
@@ -3703,28 +3698,48 @@ bool fused_gemv_enabled(const Device& device) {
       "MLX_OMARCHY_FUSED_GEMV", device.capabilities().device_name);
 }
 
-// MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue off
-// (explicit MLX_OMARCHY_FUSED_GEMV=0 and MLX_OMARCHY_FUSED_CHAIN=0 also
-// cover it); on by default whenever fused_gemv_enabled is on OR on parts
-// whose balanced 2-member MLP pairs run on the epilogue-only route (G14C).
-bool fused_gemv_swiglu_route_enabled(const std::string& device_name) {
+// Balanced multi-member GEMV groups (3-member QKV + balanced 2-member pairs)
+// on the epilogue-only route. MLX_OMARCHY_GEMV_BALANCED_QKV=1 enables on any
+// part (including alongside MLX_OMARCHY_FUSED_GEMV=0 +
+// MLX_OMARCHY_QMM_EPILOGUE_GEMV=1); =0 disables everywhere; unset follows
+// gemv_balanced_qkv_part (G14C) and respects explicit MLX_OMARCHY_FUSED_GEMV=0.
+bool gemv_balanced_qkv_route_enabled(const std::string& device_name) {
   if (!fused_chain_enabled()) {
+    return false;
+  }
+  const char* bq_env = omarchy::env_str("MLX_OMARCHY_GEMV_BALANCED_QKV");
+  const bool bq_set = bq_env != nullptr && bq_env[0] != '\0';
+  if (bq_set && std::strcmp(bq_env, "0") == 0) {
     return false;
   }
   const char* fg_env = omarchy::env_str("MLX_OMARCHY_FUSED_GEMV");
   const bool explicit_gemv_off =
       fg_env != nullptr && fg_env[0] != '\0' &&
       !env_flag("MLX_OMARCHY_FUSED_GEMV");
-  if (explicit_gemv_off) {
+  if (explicit_gemv_off && !bq_set) {
     return false;
   }
   const char* ep_env = omarchy::env_str("MLX_OMARCHY_QMM_EPILOGUE_GEMV");
   const bool epilogue_route = (ep_env != nullptr && ep_env[0] != '\0')
       ? (std::strcmp(ep_env, "0") != 0)
       : gemv_epilogue_only_part(device_name);
+  if (!epilogue_route) {
+    return false;
+  }
+  return bq_set ? true : gemv_balanced_qkv_part(device_name);
+}
+
+// MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue off
+// (explicit MLX_OMARCHY_FUSED_GEMV=0 without MLX_OMARCHY_GEMV_BALANCED_QKV=1
+// and MLX_OMARCHY_FUSED_CHAIN=0 also cover it); on by default whenever
+// fused_gemv_enabled is on OR gemv_balanced_qkv_route_enabled is on.
+bool fused_gemv_swiglu_route_enabled(const std::string& device_name) {
+  if (!fused_chain_enabled()) {
+    return false;
+  }
   const bool route_active =
       fused_route_enabled("MLX_OMARCHY_FUSED_GEMV", device_name) ||
-      (epilogue_route && gemv_balanced_qkv_part(device_name));
+      gemv_balanced_qkv_route_enabled(device_name);
   if (!route_active) {
     return false;
   }

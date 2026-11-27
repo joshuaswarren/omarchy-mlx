@@ -2152,6 +2152,7 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
   omarchy::env_note_eval();
   CHECK(omarchy::qmm_residual_norm_enabled(caps, 2560, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(g13g_caps, 2560, false));
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 2048, true));
 
   setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
@@ -2242,6 +2243,7 @@ TEST_CASE("fused gemv swiglu default: G14C balanced pairs and overrides") {
       "MLX_OMARCHY_FUSED_CHAIN",
       "MLX_OMARCHY_FUSED_GEMV",
       "MLX_OMARCHY_QMM_EPILOGUE_GEMV",
+      "MLX_OMARCHY_GEMV_BALANCED_QKV",
       "MLX_OMARCHY_FUSED_GEMV_SWIGLU"};
   std::vector<std::optional<std::string>> saved;
   for (const char* var : names) {
@@ -2252,11 +2254,51 @@ TEST_CASE("fused gemv swiglu default: G14C balanced pairs and overrides") {
   const std::string g14c = "Apple M2 Max (G14C B1)";
   const std::string g16g = "Apple M4 (G16G B1)";
   const std::string g13c = "Apple M1 Max (G13C C0)";
+  const std::string g13g = "Apple M1 (G13G B1)";
 
   omarchy::env_note_eval();
+  CHECK(omarchy::gemv_balanced_qkv_route_enabled(g14c));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_route_enabled(g13c));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_route_enabled(g13g));
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_route_enabled(g16g));
   CHECK(omarchy::fused_gemv_swiglu_route_enabled(g14c));
   CHECK(omarchy::fused_gemv_swiglu_route_enabled(g13c));
+  CHECK(omarchy::fused_gemv_swiglu_route_enabled(g13g));
   CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g16g));
+
+  // Explicit MLX_OMARCHY_GEMV_BALANCED_QKV=0 turns balanced QKV and G14C SwiGLU off.
+  setenv("MLX_OMARCHY_GEMV_BALANCED_QKV", "0", 1);
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_route_enabled(g14c));
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g14c));
+  CHECK(omarchy::fused_gemv_swiglu_route_enabled(g13g));
+  unsetenv("MLX_OMARCHY_GEMV_BALANCED_QKV");
+
+  // G13G/G13C can opt into the G14C epilogue-only + balanced-QKV + split-pair + SwiGLU
+  // regime via FUSED_GEMV=0 + QMM_EPILOGUE_GEMV=1 + GEMV_BALANCED_QKV=1.
+  setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  setenv("MLX_OMARCHY_QMM_EPILOGUE_GEMV", "1", 1);
+  setenv("MLX_OMARCHY_GEMV_BALANCED_QKV", "1", 1);
+  omarchy::env_note_eval();
+  CHECK(omarchy::gemv_balanced_qkv_route_enabled(g13g));
+  CHECK(omarchy::gemv_balanced_qkv_route_enabled(g13c));
+  CHECK(omarchy::fused_gemv_swiglu_route_enabled(g13g));
+  CHECK(omarchy::fused_gemv_swiglu_route_enabled(g13c));
+  CHECK_FALSE(omarchy::fused_route_enabled("MLX_OMARCHY_FUSED_GEMV", g13g));
+  // SwiGLU kill switch still wins on the balanced-QKV route.
+  setenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU", "0", 1);
+  omarchy::env_note_eval();
+  CHECK(omarchy::gemv_balanced_qkv_route_enabled(g13g));
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g13g));
+  unsetenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU");
+  // Epilogue-only kill switch disables balanced-QKV on G13G even when GEMV_BALANCED_QKV=1.
+  setenv("MLX_OMARCHY_QMM_EPILOGUE_GEMV", "0", 1);
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_route_enabled(g13g));
+  CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g13g));
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  unsetenv("MLX_OMARCHY_QMM_EPILOGUE_GEMV");
+  unsetenv("MLX_OMARCHY_GEMV_BALANCED_QKV");
 
   setenv("MLX_OMARCHY_FUSED_GEMV_SWIGLU", "0", 1);
   omarchy::env_note_eval();
@@ -2266,18 +2308,21 @@ TEST_CASE("fused gemv swiglu default: G14C balanced pairs and overrides") {
 
   setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
   omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_route_enabled(g14c));
   CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g14c));
   CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g13c));
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
 
   setenv("MLX_OMARCHY_QMM_EPILOGUE_GEMV", "0", 1);
   omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_route_enabled(g14c));
   CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g14c));
   CHECK(omarchy::fused_gemv_swiglu_route_enabled(g13c));
   unsetenv("MLX_OMARCHY_QMM_EPILOGUE_GEMV");
 
   setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
   omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::gemv_balanced_qkv_route_enabled(g14c));
   CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g14c));
   CHECK_FALSE(omarchy::fused_gemv_swiglu_route_enabled(g13c));
 
