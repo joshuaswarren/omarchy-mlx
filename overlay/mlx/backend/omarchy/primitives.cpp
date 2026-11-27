@@ -202,6 +202,29 @@ inline bool q4_hoist_loads_want(const char* family) {
   return v != nullptr &&
       (std::strcmp(v, "1") == 0 || std::strcmp(v, family) == 0);
 }
+inline bool g14c_fast_only_want() {
+  const char* v = omarchy::env_str("MLX_OMARCHY_G14C_FAST_ONLY");
+  return v != nullptr && v[0] != '\0' && std::strcmp(v, "0") != 0;
+}
+inline bool g14c_fast_only_swar() {
+  const char* v = omarchy::env_str("MLX_OMARCHY_G14C_FAST_ONLY");
+  return v != nullptr && std::strcmp(v, "swar") == 0;
+}
+inline bool q4_w4_want(const char* family) {
+  const char* v = omarchy::env_str("MLX_OMARCHY_Q4_W4");
+  return v != nullptr &&
+      (std::strcmp(v, "1") == 0 || std::strcmp(v, family) == 0);
+}
+inline bool q4_r4_want(const char* family) {
+  const char* v = omarchy::env_str("MLX_OMARCHY_Q4_R4");
+  return v != nullptr &&
+      (std::strcmp(v, "1") == 0 || std::strcmp(v, "hoist") == 0 ||
+       std::strcmp(v, family) == 0);
+}
+inline bool q4_r4_hoist_only() {
+  const char* v = omarchy::env_str("MLX_OMARCHY_Q4_R4");
+  return v != nullptr && std::strcmp(v, "hoist") == 0;
+}
 const QmmGeometry& qmm_geometry() {
   static const QmmGeometry geometry = [] {
     using K = omarchy::ComputeKernel;
@@ -9739,13 +9762,45 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                   : omarchy::qmm_word_r2s4_default(w_caps.device_name);
           if (wr2s4_want && w_caps.max_compute_work_group_invocations >= 128u &&
               w_caps.max_compute_work_group_size[0] >= 128u) {
-            vec_kernel = swar_word
-                ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2SwarF16
-                : (hoist_word
-                       ? omarchy::ComputeKernel::
-                             QmmVecQ4WordSubgroupBF16R2S4W2Hoist
-                       : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2);
-            qmm_groups = (params.matrix_n + 7u) / 8u;
+            const bool fo_word = g14c_fast_only_want() &&
+                (params.matrix_k % 512u == 0u) && (params.matrix_n % 8u == 0u);
+            const bool w4_word = w_caps.shader_float16 && q4_w4_want("word") &&
+                (params.matrix_k % 1024u == 0u) && (params.matrix_n % 8u == 0u) &&
+                (params.rhs_offset % 4u == 0u) && (params.shape[1] % 4u == 0u);
+            const bool r4_word = q4_r4_want("word") &&
+                (params.matrix_k % 512u == 0u) && (params.matrix_n % 8u == 0u);
+            if (w4_word) {
+              vec_kernel = omarchy::ComputeKernel::
+                  QmmVecQ4WordSubgroupBF16R2S4W4SwarF16Fo;
+              qmm_groups = (params.matrix_n + 7u) / 8u;
+            } else if (r4_word) {
+              const bool r4_swar = w_caps.shader_float16 && !q4_r4_hoist_only();
+              vec_kernel = r4_swar
+                  ? omarchy::ComputeKernel::
+                        QmmVecQ4WordSubgroupBF16R4S4W2SwarF16Fo
+                  : omarchy::ComputeKernel::
+                        QmmVecQ4WordSubgroupBF16R4S4W2HoistFo;
+              qmm_groups = (params.matrix_n + 15u) / 16u;
+            } else if (fo_word) {
+              const bool fo_swar = w_caps.shader_float16 &&
+                  (swar_word || g14c_fast_only_swar());
+              vec_kernel = fo_swar
+                  ? omarchy::ComputeKernel::
+                        QmmVecQ4WordSubgroupBF16R2S4W2SwarF16Fo
+                  : omarchy::ComputeKernel::
+                        QmmVecQ4WordSubgroupBF16R2S4W2HoistFo;
+              qmm_groups = (params.matrix_n + 7u) / 8u;
+            } else {
+              vec_kernel = swar_word
+                  ? omarchy::ComputeKernel::
+                        QmmVecQ4WordSubgroupBF16R2S4W2SwarF16
+                  : (hoist_word
+                         ? omarchy::ComputeKernel::
+                               QmmVecQ4WordSubgroupBF16R2S4W2Hoist
+                         : omarchy::ComputeKernel::
+                               QmmVecQ4WordSubgroupBF16R2S4W2);
+              qmm_groups = (params.matrix_n + 7u) / 8u;
+            }
           }
         }
       }
@@ -11170,6 +11225,9 @@ bool dispatch_quantized_gemv_group(
   ComputeKernel swiglu_kernel = geom.swiglu;
   uint32_t swiglu_cols = geom.swiglu_columns;
   if (dedicated_swiglu_active) {
+    const uint32_t sw_k = static_cast<uint32_t>(x.shape(-1));
+    const uint32_t sw_n = static_cast<uint32_t>(members[0].node.shape(-1));
+    const bool sw_fo_ok = (sw_k % 512u == 0u) && (sw_n % 8u == 0u);
     const char* sw_r2_swar_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_SWAR_R2");
     bool sw_r2_swar_picked = false;
     if (sw_r2_swar_env != nullptr && sw_r2_swar_env[0] != '\0' &&
@@ -11177,7 +11235,9 @@ bool dispatch_quantized_gemv_group(
       if (std::strcmp(sw_r2_swar_env, "4") == 0 &&
           encoder.device().capabilities().max_compute_work_group_invocations >= 128u &&
           encoder.device().capabilities().max_compute_work_group_size[0] >= 128u) {
-        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R2S4W2SwarF16;
+        swiglu_kernel = (g14c_fast_only_want() && sw_fo_ok)
+            ? ComputeKernel::QmmVecQ4SwigluBF16R2S4W2SwarF16Fo
+            : ComputeKernel::QmmVecQ4SwigluBF16R2S4W2SwarF16;
         swiglu_cols = 8u;
         sw_r2_swar_picked = true;
       } else if (std::strcmp(sw_r2_swar_env, "2") == 0 &&
@@ -11207,15 +11267,27 @@ bool dispatch_quantized_gemv_group(
       if (sw_s4_on &&
           encoder.device().capabilities().max_compute_work_group_invocations >= 128u &&
           encoder.device().capabilities().max_compute_work_group_size[0] >= 128u) {
+        const bool sw_w4 = encoder.device().capabilities().shader_float16 &&
+            q4_w4_want("swiglu") && (sw_k % 1024u == 0u) && (sw_n % 8u == 0u);
         const bool swar_swiglu =
             encoder.device().capabilities().shader_float16 &&
             q4_swar_f16_want("swiglu");
         const bool hoist_swiglu =
             !swar_swiglu && q4_hoist_loads_want("swiglu");
-        swiglu_kernel = swar_swiglu
-            ? ComputeKernel::QmmVecQ4SwigluBF16R1S4W2SwarF16
-            : (hoist_swiglu ? ComputeKernel::QmmVecQ4SwigluBF16R1S4W2Hoist
-                            : ComputeKernel::QmmVecQ4SwigluBF16R1S4W2);
+        if (sw_w4) {
+          swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S4W4SwarF16Fo;
+        } else if (g14c_fast_only_want() && sw_fo_ok) {
+          const bool fo_swar = encoder.device().capabilities().shader_float16 &&
+              (swar_swiglu || g14c_fast_only_swar());
+          swiglu_kernel = fo_swar
+              ? ComputeKernel::QmmVecQ4SwigluBF16R1S4W2SwarF16Fo
+              : ComputeKernel::QmmVecQ4SwigluBF16R1S4W2HoistFo;
+        } else {
+          swiglu_kernel = swar_swiglu
+              ? ComputeKernel::QmmVecQ4SwigluBF16R1S4W2SwarF16
+              : (hoist_swiglu ? ComputeKernel::QmmVecQ4SwigluBF16R1S4W2Hoist
+                              : ComputeKernel::QmmVecQ4SwigluBF16R1S4W2);
+        }
         swiglu_cols = 4u;
       } else {
         swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
@@ -11242,6 +11314,13 @@ bool dispatch_quantized_gemv_group(
       if (rn_s32_want &&
           encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
           encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
+        const uint32_t rn_k = static_cast<uint32_t>(x.shape(-1));
+        const uint32_t rn_n = static_cast<uint32_t>(members[0].node.shape(-1));
+        const bool rn_vec4_dim = (rn_n == 2048u || rn_n == 4096u);
+        const bool rn_fo_ok = rn_vec4_dim && (rn_k % 512u == 0u);
+        const bool rn_w4 = encoder.device().capabilities().shader_float16 &&
+            q4_w4_want("resnorm") && rn_vec4_dim && (rn_k % 1024u == 0u);
+        const bool rn_r4 = q4_r4_want("resnorm") && rn_fo_ok;
         const char* rn_epifast_env =
             omarchy::env_str("MLX_OMARCHY_RESNORM_EPI_FAST");
         const bool rn_epifast_on =
@@ -11252,10 +11331,24 @@ bool dispatch_quantized_gemv_group(
             (q4_swar_f16_want("resnorm") ||
              (rn_epifast_on && std::strcmp(rn_epifast_env, "swar") == 0));
         const bool hoist_rn = !swar_rn && q4_hoist_loads_want("resnorm");
-        if (rn_epifast_on) {
+        if (rn_w4) {
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W4SwarF16Fo;
+        } else if (rn_r4) {
+          const bool r4_swar = encoder.device().capabilities().shader_float16 &&
+              !q4_r4_hoist_only();
+          resnorm_kernel = r4_swar
+              ? ComputeKernel::QmmVecQ4ResNormVec4BF16R4S16W2SwarF16Fo
+              : ComputeKernel::QmmVecQ4ResNormVec4BF16R4S16W2HoistFo;
+        } else if (rn_epifast_on) {
           resnorm_kernel = swar_rn
               ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2SwarF16EpiFast
               : ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2EpiFast;
+        } else if (g14c_fast_only_want() && rn_fo_ok) {
+          const bool fo_swar = encoder.device().capabilities().shader_float16 &&
+              (swar_rn || g14c_fast_only_swar());
+          resnorm_kernel = fo_swar
+              ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2SwarF16Fo
+              : ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2HoistFo;
         } else {
           resnorm_kernel = swar_rn
               ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2SwarF16
@@ -11997,13 +12090,33 @@ bool dispatch_quantized_gemv_group(
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
             (qmm_geometry().multi ==
              ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2)
-                ? ((encoder.device().capabilities().shader_float16 &&
-                    q4_swar_f16_want("multi"))
-                       ? ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2SwarF16
-                       : (q4_hoist_loads_want("multi")
-                              ? ComputeKernel::
-                                    QmmVecQ4MultiSubgroupBF16R2S8W2Hoist
-                              : qmm_geometry().multi))
+                ? ([&]() {
+                    bool multi_fo_ok = (params.matrix_k % 512u == 0u);
+                    for (uint32_t mi = 0; mi < members.size(); ++mi) {
+                      if ((params.shape[mi] % 8u) != 0u) {
+                        multi_fo_ok = false;
+                      }
+                    }
+                    const bool swar_m =
+                        encoder.device().capabilities().shader_float16 &&
+                        q4_swar_f16_want("multi");
+                    if (g14c_fast_only_want() && multi_fo_ok) {
+                      const bool fo_swar =
+                          encoder.device().capabilities().shader_float16 &&
+                          (swar_m || g14c_fast_only_swar());
+                      return fo_swar
+                          ? ComputeKernel::
+                                QmmVecQ4MultiSubgroupBF16R2S8W2SwarF16Fo
+                          : ComputeKernel::
+                                QmmVecQ4MultiSubgroupBF16R2S8W2HoistFo;
+                    }
+                    return swar_m
+                        ? ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2SwarF16
+                        : (q4_hoist_loads_want("multi")
+                               ? ComputeKernel::
+                                     QmmVecQ4MultiSubgroupBF16R2S8W2Hoist
+                               : qmm_geometry().multi);
+                  }())
                 : qmm_geometry().multi)
       : select_float_kernel(
             dtype,
@@ -17678,16 +17791,46 @@ void GreedyQuantizedArgmax::eval_gpu(
         if (lm_r2s32_want && n >= 65536u && (params.rhs_offset % 2u == 0u) &&
             caps.max_compute_work_group_invocations >= 1024u &&
             caps.max_compute_work_group_size[0] >= 1024u) {
+          const bool lm_fo_ok =
+              (params.matrix_k % 512u == 0u) && (n % 8u == 0u);
+          const bool lm_w4 = caps.shader_float16 &&
+              (q4_w4_want("word") || q4_w4_want("lm_head")) &&
+              (params.matrix_k % 1024u == 0u) && (n % 8u == 0u) &&
+              (params.rhs_offset % 4u == 0u);
+          const bool lm_r4 =
+              (q4_r4_want("word") || q4_r4_want("lm_head")) && lm_fo_ok;
           const bool swar_lm = caps.shader_float16 &&
               (q4_swar_f16_want("word") || q4_swar_f16_want("lm_head"));
           const bool hoist_lm = !swar_lm &&
               (q4_hoist_loads_want("word") || q4_hoist_loads_want("lm_head"));
-          gemv_kernel = swar_lm
-              ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2SwarF16
-              : (hoist_lm
-                     ? omarchy::ComputeKernel::
-                           QmmVecQ4WordSubgroupBF16R2S32W2Hoist
-                     : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2);
+          if (lm_w4) {
+            gemv_kernel = omarchy::ComputeKernel::
+                QmmVecQ4WordSubgroupBF16R2S32W4SwarF16Fo;
+          } else if (lm_r4) {
+            const bool r4_swar = caps.shader_float16 && !q4_r4_hoist_only();
+            gemv_kernel = r4_swar
+                ? omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R4S16W2SwarF16Fo
+                : omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R4S16W2HoistFo;
+          } else if (g14c_fast_only_want() && lm_fo_ok) {
+            const bool fo_swar = caps.shader_float16 &&
+                (swar_lm || g14c_fast_only_swar());
+            gemv_kernel = fo_swar
+                ? omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R2S32W2SwarF16Fo
+                : omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R2S32W2HoistFo;
+          } else {
+            gemv_kernel = swar_lm
+                ? omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R2S32W2SwarF16
+                : (hoist_lm
+                       ? omarchy::ComputeKernel::
+                             QmmVecQ4WordSubgroupBF16R2S32W2Hoist
+                       : omarchy::ComputeKernel::
+                             QmmVecQ4WordSubgroupBF16R2S32W2);
+          }
           gemv_groups = (n + 63u) / 64u;
         }
       } else {

@@ -1435,6 +1435,36 @@ enum class ComputeKernel : uint16_t {
   // (env-gated via MLX_OMARCHY_RESNORM_EPI_FAST).
   QmmVecQ4ResNormVec4BF16R2S32W2EpiFast,
   QmmVecQ4ResNormVec4BF16R2S32W2SwarF16EpiFast,
+  // QMM_FAST_ONLY G14C hoist/SWAR_F16 variants (env-gated via
+  // MLX_OMARCHY_G14C_FAST_ONLY). Appended to keep profile ids stable.
+  QmmVecQ4WordSubgroupBF16R2S4W2HoistFo,
+  QmmVecQ4WordSubgroupBF16R2S4W2SwarF16Fo,
+  QmmVecQ4WordSubgroupBF16R2S32W2HoistFo,
+  QmmVecQ4WordSubgroupBF16R2S32W2SwarF16Fo,
+  QmmVecQ4MultiSubgroupBF16R2S8W2HoistFo,
+  QmmVecQ4MultiSubgroupBF16R2S8W2SwarF16Fo,
+  QmmVecQ4SwigluBF16R1S4W2HoistFo,
+  QmmVecQ4SwigluBF16R1S4W2SwarF16Fo,
+  QmmVecQ4SwigluBF16R2S4W2SwarF16Fo,
+  QmmVecQ4ResNormVec4BF16R2S32W2HoistFo,
+  QmmVecQ4ResNormVec4BF16R2S32W2SwarF16Fo,
+  // 128-bit uvec4 weight load (W4) + SWAR_F16 + FAST_ONLY (env-gated via
+  // MLX_OMARCHY_Q4_W4).
+  QmmVecQ4WordSubgroupBF16R2S4W4SwarF16Fo,
+  QmmVecQ4WordSubgroupBF16R2S32W4SwarF16Fo,
+  QmmVecQ4SwigluBF16R1S4W4SwarF16Fo,
+  QmmVecQ4ResNormVec4BF16R2S32W4SwarF16Fo,
+  // 4-row-per-SG (R4) + hoist/SWAR_F16 + FAST_ONLY (0-ULP bit-exact, env-gated
+  // via MLX_OMARCHY_Q4_R4).
+  QmmVecQ4WordSubgroupBF16R4S4W2HoistFo,
+  QmmVecQ4WordSubgroupBF16R4S4W2SwarF16Fo,
+  QmmVecQ4WordSubgroupBF16R4S16W2HoistFo,
+  QmmVecQ4WordSubgroupBF16R4S16W2SwarF16Fo,
+  QmmVecQ4ResNormVec4BF16R4S16W2HoistFo,
+  QmmVecQ4ResNormVec4BF16R4S16W2SwarF16Fo,
+  // Fused GatherDequantBF16 + FastRmsNormAppleBF16 prologue (env-gated via
+  // MLX_OMARCHY_PROLOGUE_NORM).
+  GatherDequantNormBF16,
   Count,
 };
 
