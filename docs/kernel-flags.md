@@ -180,3 +180,17 @@ Cross-host digest equality is not a gate (see README performance section
 and `ane-linux-experiments` receipts 2026-09-22-qwen38-integration /
 2026-09-22-qwen38-correctness): per-host determinism plus logit-level
 equivalence (≤ 2 bf16 quanta) is.
+
+- `MLX_OMARCHY_QMM_ORDER=stride` (DEC-44 probe, default off). Setting it to
+  `stride` raises flags bit 17 (`131072`) on the `qmm_vec.comp` plain
+  dispatch and remaps the workgroup → row-block walk to a 64-wide transpose,
+  guarded `groups_total >= 64 && groups_total % 64 == 0` with
+  `groups_total` keyed on the dispatched grid (groups0 under the flag-16
+  paired epilogue, the full sum otherwise). Bit 17 is shared with the
+  out-gate prologue marker on the same params field
+  (`primitives.cpp:12048`, the `QmmVecQ4MultiOutgateBF16` variant) — the
+  two routes select different kernel variants so the bit never collides
+  live. Measured negative: 40 ABBA legs (5 pairs, ctx512 + ctx2048) on
+  G13C and G14C, all greedy-identical, medians within ±0.64%; the knob
+  ships default-off
+  (`receipts/2026-11-26-dec44-qkv-dispatch-order.md`).
