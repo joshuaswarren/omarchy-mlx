@@ -114,5 +114,41 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     (name, dtype, float((got - ref.float()).abs().max())))
 
 
+    def test_searchsorted_bucketize_parity(self):
+        """PT-IDX-a: the wheel backend lowers aten.searchsorted (right,
+        out_int32) and aten.bucketize — int64/fp32 parity vs torch CPU."""
+        import numpy as np
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        ss = ATEN_TABLE["searchsorted"]
+        bz = ATEN_TABLE["bucketize"]
+        cases = [
+            (torch.tensor([1, 3, 3, 5, 7, 9]),
+             torch.tensor([0, 3, 4, 9, 10])),
+            (torch.tensor([1.0, 3.0, 3.0, 5.0, 7.0, 9.0]),
+             torch.tensor([0.0, 3.0, 3.5, 9.0, 10.0])),
+        ]
+        for seq, vals in cases:
+            mseq = mx.array(seq.numpy())
+            mvals = mx.array(vals.numpy())
+            for right in (False, True):
+                ref = torch.searchsorted(seq, vals, right=right)
+                got = torch.from_numpy(np.array(ss(mseq, mvals, right=right)))
+                self.assertEqual(got.dtype, torch.int64)
+                self.assertTrue(torch.equal(got, ref), (seq, vals, right, got, ref))
+            ref_b = torch.bucketize(vals, seq)
+            got_b = torch.from_numpy(np.array(bz(mvals, mseq)))
+            self.assertEqual(got_b.dtype, torch.int64)
+            self.assertTrue(torch.equal(got_b, ref_b), (seq, vals, got_b, ref_b))
+            ref32 = torch.searchsorted(seq, vals, out_int32=True)
+            got32 = torch.from_numpy(np.array(ss(mseq, mvals, out_int32=True)))
+            self.assertEqual(got32.dtype, torch.int32)
+            self.assertTrue(torch.equal(got32, ref32), (seq, vals, got32, ref32))
+
+
+
 if __name__ == "__main__":
     unittest.main()
