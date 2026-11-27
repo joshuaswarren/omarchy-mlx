@@ -102,8 +102,10 @@ uint16_t bf16_store(float value) {
      defined(QMM_VEC_SWIGLU) || \
      defined(QMM_VEC_BATCH) || defined(QMM_VEC_ROWS) || \
      defined(QMM_VEC_GREEDY) || \
-     ROWS_PER_SLOT != 2 || SLOTS_PER_GROUP < 8)
-#error "QMM_VEC_RESNORM builds on bf16 subgroup Q4 word 2-row >=8-slot single weight"
+     ROWS_PER_SLOT != 2 || \
+     (defined(QMM_RESNORM_VEC4) && SLOTS_PER_GROUP < 2) || \
+     (!defined(QMM_RESNORM_VEC4) && SLOTS_PER_GROUP < 8))
+#error "QMM_VEC_RESNORM builds on bf16 subgroup Q4 word 2-row single weight"
 #endif
 #if defined(QMM_VEC_SWIGLU) && \
     (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
@@ -2188,6 +2190,127 @@ void main() {
   if ((row_length == 2048u || row_length == 4096u) &&
       params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
     uint nw_base = params.rhs_offset >> 3u;
+#if SLOTS_PER_GROUP < 8
+    // Small-WG (SLOTS_PER_GROUP == 4 or 2: 128 or 64 threads) bit-exact twin
+    // of the 256-thread uvec4 RMSNorm epilogue: loops over virtual 32-lane
+    // subgroup tiles so s_resnorm_partial[0..7] matches the 256-thread order
+    // bit-for-bit.
+    const uint kChunks = 8u / uint(SLOTS_PER_GROUP);
+    const uint kWgThreads = uint(SLOTS_PER_GROUP) * 32u;
+    if (row_length == 2048u) {
+      for (uint ck = 0u; ck < kChunks; ++ck) {
+        uint vlane = lane + ck * kWgThreads;
+        uvec4 sv0 = sum0_v4.values[vlane];
+        precise float c_sq = 0.0;
+        float a0 = uintBitsToFloat((sv0.x & 0xFFFFu) << 16u);
+        float a1 = uintBitsToFloat(sv0.x & 0xFFFF0000u);
+        float a2 = uintBitsToFloat((sv0.y & 0xFFFFu) << 16u);
+        float a3 = uintBitsToFloat(sv0.y & 0xFFFF0000u);
+        float a4 = uintBitsToFloat((sv0.z & 0xFFFFu) << 16u);
+        float a5 = uintBitsToFloat(sv0.z & 0xFFFF0000u);
+        float a6 = uintBitsToFloat((sv0.w & 0xFFFFu) << 16u);
+        float a7 = uintBitsToFloat(sv0.w & 0xFFFF0000u);
+        c_sq += a0 * a0; c_sq += a1 * a1; c_sq += a2 * a2; c_sq += a3 * a3;
+        c_sq += a4 * a4; c_sq += a5 * a5; c_sq += a6 * a6; c_sq += a7 * a7;
+        float sub_partial = subgroupAdd(c_sq);
+        if (sub_lane == 0u) {
+          s_resnorm_partial[sub_id + ck * uint(SLOTS_PER_GROUP)] = sub_partial;
+        }
+      }
+      barrier();
+      float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+      float total_sq = subgroupAdd(v);
+      float mean_square = total_sq / float(row_length);
+      float norm = inversesqrt(mean_square + eps);
+      #define RN_SM_PACK_PAIR(sv_w, wv_w, out_u) { \
+        precise float _nw0 = norm * uintBitsToFloat(((wv_w) & 0xFFFFu) << 16u); \
+        precise float _nw1 = norm * uintBitsToFloat((wv_w) & 0xFFFF0000u); \
+        precise float _r0 = uintBitsToFloat(((sv_w) & 0xFFFFu) << 16u) * _nw0; \
+        precise float _r1 = uintBitsToFloat((sv_w) & 0xFFFF0000u) * _nw1; \
+        (out_u) = uint(STORE_VALUE(_r0)) | (uint(STORE_VALUE(_r1)) << 16u); \
+      }
+      for (uint ck = 0u; ck < kChunks; ++ck) {
+        uint vlane = lane + ck * kWgThreads;
+        uvec4 sv0 = sum0_v4.values[vlane];
+        uvec4 wv0 = norm_weight_v4.values[nw_base + vlane];
+        uvec4 o0;
+        RN_SM_PACK_PAIR(sv0.x, wv0.x, o0.x)
+        RN_SM_PACK_PAIR(sv0.y, wv0.y, o0.y)
+        RN_SM_PACK_PAIR(sv0.z, wv0.z, o0.z)
+        RN_SM_PACK_PAIR(sv0.w, wv0.w, o0.w)
+        norm_output_v4.values[vlane] = o0;
+      }
+      #undef RN_SM_PACK_PAIR
+      return;
+    } else {
+      for (uint ck = 0u; ck < kChunks; ++ck) {
+        uint vidx = (lane + ck * kWgThreads) * 2u;
+        uvec4 sv0 = sum0_v4.values[vidx];
+        uvec4 sv1 = sum0_v4.values[vidx + 1u];
+        precise float c_sq = 0.0;
+        {
+          float a0 = uintBitsToFloat((sv0.x & 0xFFFFu) << 16u);
+          float a1 = uintBitsToFloat(sv0.x & 0xFFFF0000u);
+          float a2 = uintBitsToFloat((sv0.y & 0xFFFFu) << 16u);
+          float a3 = uintBitsToFloat(sv0.y & 0xFFFF0000u);
+          float a4 = uintBitsToFloat((sv0.z & 0xFFFFu) << 16u);
+          float a5 = uintBitsToFloat(sv0.z & 0xFFFF0000u);
+          float a6 = uintBitsToFloat((sv0.w & 0xFFFFu) << 16u);
+          float a7 = uintBitsToFloat(sv0.w & 0xFFFF0000u);
+          c_sq += a0 * a0; c_sq += a1 * a1; c_sq += a2 * a2; c_sq += a3 * a3;
+          c_sq += a4 * a4; c_sq += a5 * a5; c_sq += a6 * a6; c_sq += a7 * a7;
+        }
+        {
+          float a0 = uintBitsToFloat((sv1.x & 0xFFFFu) << 16u);
+          float a1 = uintBitsToFloat(sv1.x & 0xFFFF0000u);
+          float a2 = uintBitsToFloat((sv1.y & 0xFFFFu) << 16u);
+          float a3 = uintBitsToFloat(sv1.y & 0xFFFF0000u);
+          float a4 = uintBitsToFloat((sv1.z & 0xFFFFu) << 16u);
+          float a5 = uintBitsToFloat(sv1.z & 0xFFFF0000u);
+          float a6 = uintBitsToFloat((sv1.w & 0xFFFFu) << 16u);
+          float a7 = uintBitsToFloat(sv1.w & 0xFFFF0000u);
+          c_sq += a0 * a0; c_sq += a1 * a1; c_sq += a2 * a2; c_sq += a3 * a3;
+          c_sq += a4 * a4; c_sq += a5 * a5; c_sq += a6 * a6; c_sq += a7 * a7;
+        }
+        float sub_partial = subgroupAdd(c_sq);
+        if (sub_lane == 0u) {
+          s_resnorm_partial[sub_id + ck * uint(SLOTS_PER_GROUP)] = sub_partial;
+        }
+      }
+      barrier();
+      float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+      float total_sq = subgroupAdd(v);
+      float mean_square = total_sq / float(row_length);
+      float norm = inversesqrt(mean_square + eps);
+      #define RN4_SM_PACK_PAIR(sv_w, wv_w, out_u) { \
+        precise float _nw0 = norm * uintBitsToFloat(((wv_w) & 0xFFFFu) << 16u); \
+        precise float _nw1 = norm * uintBitsToFloat((wv_w) & 0xFFFF0000u); \
+        precise float _r0 = uintBitsToFloat(((sv_w) & 0xFFFFu) << 16u) * _nw0; \
+        precise float _r1 = uintBitsToFloat((sv_w) & 0xFFFF0000u) * _nw1; \
+        (out_u) = uint(STORE_VALUE(_r0)) | (uint(STORE_VALUE(_r1)) << 16u); \
+      }
+      for (uint ck = 0u; ck < kChunks; ++ck) {
+        uint vidx = (lane + ck * kWgThreads) * 2u;
+        uvec4 sv0 = sum0_v4.values[vidx];
+        uvec4 sv1 = sum0_v4.values[vidx + 1u];
+        uvec4 wv0 = norm_weight_v4.values[nw_base + vidx];
+        uvec4 wv1 = norm_weight_v4.values[nw_base + vidx + 1u];
+        uvec4 o0, o1;
+        RN4_SM_PACK_PAIR(sv0.x, wv0.x, o0.x)
+        RN4_SM_PACK_PAIR(sv0.y, wv0.y, o0.y)
+        RN4_SM_PACK_PAIR(sv0.z, wv0.z, o0.z)
+        RN4_SM_PACK_PAIR(sv0.w, wv0.w, o0.w)
+        RN4_SM_PACK_PAIR(sv1.x, wv1.x, o1.x)
+        RN4_SM_PACK_PAIR(sv1.y, wv1.y, o1.y)
+        RN4_SM_PACK_PAIR(sv1.z, wv1.z, o1.z)
+        RN4_SM_PACK_PAIR(sv1.w, wv1.w, o1.w)
+        norm_output_v4.values[vidx] = o0;
+        norm_output_v4.values[vidx + 1u] = o1;
+      }
+      #undef RN4_SM_PACK_PAIR
+      return;
+    }
+#else
     if (row_length == 2048u) {
       uvec4 sv0 = uvec4(0u);
       if (lane < 256u) {
@@ -2296,6 +2419,7 @@ void main() {
       }
       return;
     }
+#endif
   }
 #endif
 #if defined(QMM_RESNORM_VEC)
@@ -2501,6 +2625,31 @@ void main() {
           wvu[r] = input_w1.values[wp[r]];
           wp[r] += 32u;
         }
+#ifdef QMM_SWIGLU_LOWREG
+        {
+          uvec4 xa = input_x.values[xp];
+          Q4_QUAD_SWIGLU(wvg[r].x, wvu[r].x, xa.x, xa.y)
+          Q4_QUAD_SWIGLU(wvg[r].x >> 16u, wvu[r].x >> 16u, xa.z, xa.w)
+        }
+        {
+          uvec4 xb = input_x.values[xp + 1u];
+          xp += 64u;
+          Q4_QUAD_SWIGLU(wvg[r].y, wvu[r].y, xb.x, xb.y)
+          Q4_QUAD_SWIGLU(wvg[r].y >> 16u, wvu[r].y >> 16u, xb.z, xb.w)
+        }
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+          uint spr = sp[r];
+          sp[r] = spr + 8u;
+          float sgr = LOAD_VALUE(scales0.values[spr]);
+          float bgr = LOAD_VALUE(biases0.values[spr]);
+          precise float bg_term = input_sum * bgr;
+          acc_g[r] += fma(sgr, dot_g[r], bg_term);
+          float sur = LOAD_VALUE(scales1.values[spr]);
+          float bur = LOAD_VALUE(biases1.values[spr]);
+          precise float bu_term = input_sum * bur;
+          acc_u[r] += fma(sur, dot_u[r], bu_term);
+        }
+#else
         float sg[ROWS_PER_SLOT];
         float bg[ROWS_PER_SLOT];
         float su[ROWS_PER_SLOT];
@@ -2525,6 +2674,7 @@ void main() {
           precise float bu_term = input_sum * bu[r];
           acc_u[r] += fma(su[r], dot_u[r], bu_term);
         }
+#endif
       }
 #else
       for (uint w = lane_in_slot * 2u; w < words_per_row; w += LANES * 2u) {

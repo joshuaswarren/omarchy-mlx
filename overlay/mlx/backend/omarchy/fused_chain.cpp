@@ -1831,7 +1831,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           for (const auto& m : group.members) {
             widths.push_back(m.node.inputs()[1].shape(0));
           }
-          balanced_qkv = group.members.size() == 3 &&
+          const char* qkv_unfuse_env = omarchy::env_str("MLX_OMARCHY_QKV_UNFUSE");
+          const bool qkv_unfuse = qkv_unfuse_env != nullptr &&
+              std::strcmp(qkv_unfuse_env, "1") == 0;
+          balanced_qkv = !qkv_unfuse && group.members.size() == 3 &&
               gemv_balanced_qkv_widths_ok(widths);
           if (!balanced_qkv) {
             // Split-pair admission: each consecutive member pair whose

@@ -780,7 +780,13 @@
 #include "matmul_direct_f16_c16_tt.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s32w2.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s4w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s2w2.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s4w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s4w2_lr.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s2w2_lr.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s8w2.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s4w2.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s2w2.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
@@ -2592,6 +2598,30 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_swiglu_bf16_r1s4w2,
           qmm_vec_q4_swiglu_bf16_r1s4w2_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S8W2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s8w2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s8w2_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S4W2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s4w2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s4w2_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S2W2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s2w2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s2w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S4W2LowReg:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s4w2_lr,
+          qmm_vec_q4_swiglu_bf16_r1s4w2_lr_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S2W2LowReg:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s2w2_lr,
+          qmm_vec_q4_swiglu_bf16_r1s2w2_lr_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S2W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s2w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s2w2_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

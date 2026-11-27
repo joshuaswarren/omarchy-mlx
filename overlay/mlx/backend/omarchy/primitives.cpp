@@ -9703,18 +9703,29 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           (params.shape[1] % 2u == 0u))) {
         vec_kernel = geometry.word;
         qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
-        if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u) &&
-            params.matrix_n >= 2048u) {
+        if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u)) {
           const auto& w_caps = encoder.device().capabilities();
-          const char* wr2s4_env = omarchy::env_str("MLX_OMARCHY_WORD_R2S4");
-          const bool wr2s4_want =
-              (wr2s4_env != nullptr && wr2s4_env[0] != '\0')
-                  ? (std::strcmp(wr2s4_env, "0") != 0)
-                  : omarchy::qmm_word_r2s4_default(w_caps.device_name);
-          if (wr2s4_want && w_caps.max_compute_work_group_invocations >= 128u &&
-              w_caps.max_compute_work_group_size[0] >= 128u) {
-            vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2;
-            qmm_groups = (params.matrix_n + 7u) / 8u;
+          const char* wr2s2_env = omarchy::env_str("MLX_OMARCHY_WORD_R2S2");
+          const bool wr2s2_all = wr2s2_env != nullptr && std::strcmp(wr2s2_env, "1") == 0;
+          const bool wr2s2_small = wr2s2_env != nullptr && std::strcmp(wr2s2_env, "small") == 0;
+          const bool wr2s2_large = wr2s2_env != nullptr && std::strcmp(wr2s2_env, "large") == 0;
+          if ((wr2s2_all || (wr2s2_small && params.matrix_n < 2048u) ||
+               (wr2s2_large && params.matrix_n >= 2048u)) &&
+              w_caps.max_compute_work_group_invocations >= 64u &&
+              w_caps.max_compute_work_group_size[0] >= 64u) {
+            vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S2W2;
+            qmm_groups = (params.matrix_n + 3u) / 4u;
+          } else if (params.matrix_n >= 2048u) {
+            const char* wr2s4_env = omarchy::env_str("MLX_OMARCHY_WORD_R2S4");
+            const bool wr2s4_want =
+                (wr2s4_env != nullptr && wr2s4_env[0] != '\0')
+                    ? (std::strcmp(wr2s4_env, "0") != 0)
+                    : omarchy::qmm_word_r2s4_default(w_caps.device_name);
+            if (wr2s4_want && w_caps.max_compute_work_group_invocations >= 128u &&
+                w_caps.max_compute_work_group_size[0] >= 128u) {
+              vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2;
+              qmm_groups = (params.matrix_n + 7u) / 8u;
+            }
           }
         }
       }
@@ -11158,6 +11169,20 @@ bool dispatch_quantized_gemv_group(
         swiglu_cols = 8u;
       }
     }
+    const char* sw_opt_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_OPT");
+    if (sw_opt_env != nullptr && sw_opt_env[0] != '\0') {
+      if (std::strcmp(sw_opt_env, "r1s4lr") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 128u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 128u) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S4W2LowReg;
+        swiglu_cols = 4u;
+      } else if (std::strcmp(sw_opt_env, "r1s2lr") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 64u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 64u) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S2W2LowReg;
+        swiglu_cols = 2u;
+      }
+    }
   }
   ComputeKernel resnorm_kernel = geom.resnorm;
   uint32_t resnorm_cols = geom.resnorm_columns;
@@ -11183,6 +11208,22 @@ bool dispatch_quantized_gemv_group(
       } else {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
         resnorm_cols = 32u;
+      }
+      const char* rn_wg_env = omarchy::env_str("MLX_OMARCHY_RESNORM_WG");
+      if (rn_wg_env != nullptr && rn_wg_env[0] != '\0') {
+        const int rn_n = members[0].node.inputs()[1].shape(0);
+        if (std::strcmp(rn_wg_env, "r2s8") == 0) {
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S8W2;
+          resnorm_cols = 16u;
+        } else if (std::strcmp(rn_wg_env, "r2s4") == 0 &&
+            (rn_n == 2048 || rn_n == 4096)) {
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S4W2;
+          resnorm_cols = 8u;
+        } else if (std::strcmp(rn_wg_env, "r2s2") == 0 &&
+            (rn_n == 2048 || rn_n == 4096)) {
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S2W2;
+          resnorm_cols = 4u;
+        }
       }
       resnorm_vec4_active = true;
     }

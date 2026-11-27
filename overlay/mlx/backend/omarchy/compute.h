@@ -1390,6 +1390,14 @@ enum class ComputeKernel : uint16_t {
   // bit-identical to QmmVecQ4ResNormBF16R2S8W2). Appended to keep profile ids
   // stable.
   QmmVecQ4ResNormBF16R2S8W2Vec,
+  // Wave 4A small-WG ResNormVec4 (R2S8/R2S4/R2S2), low-reg SwiGLU (R1S4/R1S2),
+  // and 64-thread Word R2S2 (appended to keep profile kernel ids stable).
+  QmmVecQ4ResNormVec4BF16R2S8W2,
+  QmmVecQ4ResNormVec4BF16R2S4W2,
+  QmmVecQ4ResNormVec4BF16R2S2W2,
+  QmmVecQ4SwigluBF16R1S4W2LowReg,
+  QmmVecQ4SwigluBF16R1S2W2LowReg,
+  QmmVecQ4WordSubgroupBF16R2S2W2,
   Count,
 };
 
