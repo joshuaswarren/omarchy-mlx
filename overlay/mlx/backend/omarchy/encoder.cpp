@@ -857,7 +857,7 @@ void CommandEncoder::dispatch_compute_pipeline(
   // store per dispatch, unconditional so a hang report needs no env.
   trace::counters().last_dispatched_kernel.store(
       static_cast<int64_t>(profile_kernel), std::memory_order_relaxed);
-  if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
+  if (trace_dispatch_enabled()) {
     fprintf(stderr,
             "[rtmod] DISPATCH kernel=%d count=%u gx=%u gy=%u gz=%u\n",
             static_cast<int>(profile_kernel), params.count, group_count_x,
@@ -913,7 +913,7 @@ void CommandEncoder::dispatch_compute_pipeline(
     }
   }
   if (any_device_local) {
-    const auto access = compute.binding_access(pipeline);
+    const auto access = compute.binding_access(profile_kernel, pipeline);
     struct AccessAgg {
       VulkanBuffer* vb{nullptr};
       bool read{false};
@@ -1068,7 +1068,7 @@ void CommandEncoder::dispatch_compute_pipeline(
     node.group_count_y = group_count_y;
     node.group_count_z = group_count_z;
     node.descriptor_set = descriptor_set;
-    const auto access = compute.binding_access(pipeline);
+    const auto access = compute.binding_access(profile_kernel, pipeline);
     for (size_t i = 0; i < bindings.size(); ++i) {
       TrackedRange range{bindings[i].buffer,
                          bindings[i].offset,
@@ -1123,7 +1123,7 @@ void CommandEncoder::dispatch_compute_pipeline(
     // writes, so read-read pairs (two consumers of one activation) skip the
     // barrier. Unknown bindings stay read+write. MLX_OMARCHY_DEP_RW=0
     // restores the all-read+write tracking.
-    const auto access = compute.binding_access(pipeline);
+    const auto access = compute.binding_access(profile_kernel, pipeline);
     std::array<TrackedRange, kComputeBindingBudget> rd{};
     std::array<TrackedRange, kComputeBindingBudget> wr{};
     size_t nr = 0;
@@ -1565,7 +1565,7 @@ void CommandEncoder::commit() {
   if (!recording_ && pending_.empty() && wait_semaphores_.empty() &&
       signal_semaphores_.empty() && completed_handlers_.empty()) {
     trace::counters().commit_calls_noop++;
-    if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
+    if (trace_dispatch_enabled()) {
       fprintf(stderr, "[rtmod] COMMIT-NOOP\n");
     }
     return;
@@ -1630,7 +1630,7 @@ void CommandEncoder::submit() {
   // add_semaphore_wait/add_semaphore_signal.
   std::lock_guard<std::mutex> pending_lk(pending_sem_mutex_);
   auto& dt = vk::device_table();
-  if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
+  if (trace_dispatch_enabled()) {
     fprintf(stderr, "[rtmod] SUBMIT-ENTER tid=%lu\n", (unsigned long)syscall(SYS_gettid));
   }
   // Wave scheduling: record the buffered nodes into the command buffer
@@ -1681,7 +1681,9 @@ void CommandEncoder::submit() {
   // read an eager one-element f32 as recycled page garbage, 20/20).
   // Waiting on an already-signaled timeline value is a driver
   // pass-through, so the shallow-queue case pays nothing.
-  if (last_completion_ != 0) {
+  if (last_completion_ != 0 &&
+      (!host_sync_fast_enabled() ||
+       last_completion_ > device_.completions().drained_value_fast())) {
     wait_sems.push_back(device_.completions().semaphore());
     wait_values.push_back(last_completion_);
   }

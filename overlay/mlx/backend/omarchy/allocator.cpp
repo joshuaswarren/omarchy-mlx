@@ -808,6 +808,7 @@ Buffer VulkanAllocator::malloc(size_t size) {
   peak_memory_ = std::max(active_memory_ + weight_memory_, peak_memory_);
   if (!buf->device_local && !buf->coherent) {
     noncoherent_.push_back(buf);
+    has_noncoherent_.store(true, std::memory_order_release);
   }
   lk.unlock();
   return Buffer{buf};
@@ -842,7 +843,9 @@ void VulkanAllocator::destroy_buffer(VulkanBuffer* buf) {
   // Cache clear/release funnels through here while callers already hold
   // mutex_, so the non-coherent registry drops the buffer before its
   // memory dies; later flush/invalidate must never see it.
-  std::erase(noncoherent_, buf);
+  if (std::erase(noncoherent_, buf) > 0) {
+    has_noncoherent_.store(!noncoherent_.empty(), std::memory_order_release);
+  }
   auto& dt = vk::device_table();
   live_by_handle_.erase(buf->buffer);
   if (buf->host_shadow) {
@@ -931,12 +934,19 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
   if (quarantine_.empty()) {
     return;
   }
+  const bool in_place = host_sync_fast_enabled();
   std::vector<VulkanBuffer*> still_quarantined;
-  for (auto* buf : quarantine_) {
+  size_t keep = 0;
+  for (size_t i = 0; i < quarantine_.size(); ++i) {
+    auto* buf = quarantine_[i];
     if (buf->transfer_in_flight ||
         buf->completion > cleanup_done_through ||
         buf->completion == kPendingCompletion) {
-      still_quarantined.push_back(buf);
+      if (in_place) {
+        quarantine_[keep++] = buf;
+      } else {
+        still_quarantined.push_back(buf);
+      }
       continue;
     }
     buf->completion = 0;
@@ -963,7 +973,11 @@ void VulkanAllocator::release_quarantine(uint64_t cleanup_done_through) {
       destroy_buffer(buf);
     }
   }
-  quarantine_ = std::move(still_quarantined);
+  if (in_place) {
+    quarantine_.resize(keep);
+  } else {
+    quarantine_ = std::move(still_quarantined);
+  }
 }
 
 bool VulkanAllocator::has_quarantined() const {
@@ -1062,6 +1076,10 @@ void VulkanAllocator::clear_cache() {
 }
 
 void VulkanAllocator::flush_noncoherent(VkDevice device) {
+  if (host_sync_fast_enabled() &&
+      !has_noncoherent_.load(std::memory_order_acquire)) {
+    return;
+  }
   std::vector<VkMappedMemoryRange> ranges;
   {
     std::lock_guard lk(mutex_);
@@ -1085,6 +1103,10 @@ void VulkanAllocator::flush_noncoherent(VkDevice device) {
 }
 
 void VulkanAllocator::invalidate_noncoherent(VkDevice device) {
+  if (host_sync_fast_enabled() &&
+      !has_noncoherent_.load(std::memory_order_acquire)) {
+    return;
+  }
   std::vector<VkMappedMemoryRange> ranges;
   {
     std::lock_guard lk(mutex_);

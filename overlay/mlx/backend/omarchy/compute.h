@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.h>
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -1507,6 +1508,7 @@ class ComputeRuntime {
     uint32_t write_mask{~0u};
   };
   BindingAccess binding_access(VkPipeline pipeline);
+  BindingAccess binding_access(ComputeKernel kernel, VkPipeline pipeline);
 
   // Drop ownership of Vulkan pipeline/layout handles without calling
   // vkDestroy* so teardown can free the host object while keeping handles
@@ -1538,7 +1540,10 @@ class ComputeRuntime {
   VkDevice device_;
   VkDescriptorSetLayout descriptor_layout_{VK_NULL_HANDLE};
   VkPipelineLayout pipeline_layout_{VK_NULL_HANDLE};
-  std::array<VkPipeline, static_cast<size_t>(ComputeKernel::Count)> pipelines_{};
+  std::array<std::atomic<VkPipeline>, static_cast<size_t>(ComputeKernel::Count)>
+      pipelines_{};
+  std::array<BindingAccess, static_cast<size_t>(ComputeKernel::Count)>
+      kernel_access_{};
   std::unordered_map<std::string, VkPipeline> dynamic_pipelines_;
   std::unordered_map<VkPipeline, BindingAccess> access_;
   std::mutex mutex_;

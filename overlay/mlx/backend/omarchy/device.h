@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.h>
 
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
@@ -376,6 +377,9 @@ class CompletionDispatcher {
       VkEvent started = VK_NULL_HANDLE);
   void wait(uint64_t value);
   uint64_t drained_value();
+  uint64_t drained_value_fast() const {
+    return drained_value_atomic_.load(std::memory_order_acquire);
+  }
   void reset_progress_event(VkEvent event);
   bool has_active_submission(uint64_t through_value);
   void shutdown(bool destroy_vulkan_handles = true);
@@ -410,7 +414,7 @@ class CompletionDispatcher {
 
  private:
   void run();
-  void drain_through(uint64_t max_value);
+  void drain_through(uint64_t max_value, bool inline_caller = false);
 
   VkDevice device_;
   Device* owner_{nullptr};
@@ -426,6 +430,8 @@ class CompletionDispatcher {
   std::vector<std::shared_ptr<void>> retired_temporaries_;
   uint64_t next_value_{0};
   uint64_t drained_value_{0};
+  std::atomic<uint64_t> drained_value_atomic_{0};
+  uint32_t cv_waiters_{0};
   // When drained_value_ last advanced. The idle tick releases the newest
   // drained generation only after this has settled for one poll interval:
   // while submissions are draining steadily (decode) the tick stays
@@ -653,6 +659,44 @@ uint64_t env_epoch();
 // next call. Runs once per eval_impl from EagerFusionScope's ctor. Calls
 // on threads that have never passed a boundary always read fresh.
 void env_note_eval();
+
+// Env-gated host-overhead fast-path switches (default OFF; MLX_OMARCHY_HOST_FAST=1
+// arms all four unless an individual knob is explicitly set to 0):
+//   MLX_OMARCHY_HOST_ENV_FAST=1    transparent string_view EnvCache + epoch-cached trace bools
+//   MLX_OMARCHY_HOST_PIPE_FAST=1   lock-free ComputeRuntime::pipeline() + kernel-indexed binding_access()
+//   MLX_OMARCHY_HOST_FUSION_FAST=1 EagerFusionScope TapeIndex role tables + unified flat dispatch lookup
+//   MLX_OMARCHY_HOST_SYNC_FAST=1   skip drained waitSemaphore, inline-drain bg wake, atomic noncoherent, in-place quarantine
+inline bool host_fast_knob_enabled(const char* specific_env) {
+  if (const char* v = std::getenv(specific_env); v != nullptr && v[0] != '\0') {
+    return std::strcmp(v, "0") != 0;
+  }
+  if (const char* all = std::getenv("MLX_OMARCHY_HOST_FAST");
+      all != nullptr && all[0] != '\0') {
+    return std::strcmp(all, "0") != 0;
+  }
+  return false;
+}
+inline bool host_env_fast_enabled() {
+  static const bool on = host_fast_knob_enabled("MLX_OMARCHY_HOST_ENV_FAST");
+  return on;
+}
+inline bool host_pipe_fast_enabled() {
+  static const bool on = host_fast_knob_enabled("MLX_OMARCHY_HOST_PIPE_FAST");
+  return on;
+}
+inline bool host_fusion_fast_enabled() {
+  static const bool on = host_fast_knob_enabled("MLX_OMARCHY_HOST_FUSION_FAST");
+  return on;
+}
+inline bool host_sync_fast_enabled() {
+  static const bool on = host_fast_knob_enabled("MLX_OMARCHY_HOST_SYNC_FAST");
+  return on;
+}
+
+// Hot-path trace flag queries: memoized per eval epoch when
+// host_env_fast_enabled() is on, plain env_set() otherwise.
+bool trace_dispatch_enabled();
+bool trio_trace_enabled();
 
 // Scoped diagnostic switches for the compiled-tape defect hunt
 // (docs/install-omarchy.md, "Compiled-tape debug switches"). Between

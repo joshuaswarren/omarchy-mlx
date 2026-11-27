@@ -1201,6 +1201,25 @@ bool runtime_alive() {
 // in the anonymous namespace above: the encoder and allocator call these
 // through the header declarations.
 namespace {
+struct StringViewHash {
+  using is_transparent = void;
+  size_t operator()(std::string_view sv) const noexcept {
+    return std::hash<std::string_view>{}(sv);
+  }
+  size_t operator()(const std::string& s) const noexcept {
+    return std::hash<std::string_view>{}(s);
+  }
+  size_t operator()(const char* s) const noexcept {
+    return std::hash<std::string_view>{}(s);
+  }
+};
+struct StringViewEq {
+  using is_transparent = void;
+  bool operator()(std::string_view a, std::string_view b) const noexcept {
+    return a == b;
+  }
+};
+
 struct EnvCache {
   // 0 = no eval boundary seen on this thread yet: every lookup reads
   // fresh, so pre-eval env mutation keeps full std::getenv semantics.
@@ -1208,12 +1227,51 @@ struct EnvCache {
   // name -> (epoch read, getenv result copy; nullopt = unset).
   std::unordered_map<std::string, std::pair<uint64_t, std::optional<std::string>>>
       values;
+  std::unordered_map<
+      std::string,
+      std::pair<uint64_t, std::optional<std::string>>,
+      StringViewHash,
+      StringViewEq>
+      fast_values;
+  uint64_t trace_dispatch_epoch = 0;
+  bool trace_dispatch_val = false;
+  uint64_t trio_trace_epoch = 0;
+  bool trio_trace_val = false;
 };
 thread_local EnvCache env_cache_;
 
 const char* env_lookup(const char* name) {
   if (env_cache_.epoch == 0) {
     return std::getenv(name);
+  }
+  if (host_env_fast_enabled()) {
+    const std::string_view key(name);
+    auto it = env_cache_.fast_values.find(key);
+    if (it != env_cache_.fast_values.end()) {
+      if (it->second.first != env_cache_.epoch) {
+        it->second.first = env_cache_.epoch;
+        const char* v = std::getenv(name);
+        if (v == nullptr) {
+          it->second.second.reset();
+        } else {
+          if (it->second.second) {
+            it->second.second->assign(v);
+          } else {
+            it->second.second.emplace(v);
+          }
+        }
+      }
+      const auto& stored = it->second.second;
+      return stored ? stored->c_str() : nullptr;
+    }
+    const char* v = std::getenv(name);
+    auto [pos, _] = env_cache_.fast_values.emplace(
+        std::string(key),
+        std::pair{
+            env_cache_.epoch,
+            v == nullptr ? std::nullopt : std::optional<std::string>(v)});
+    const auto& stored = pos->second.second;
+    return stored ? stored->c_str() : nullptr;
   }
   auto it = env_cache_.values.find(name);
   if (it == env_cache_.values.end() || it->second.first != env_cache_.epoch) {
@@ -1229,6 +1287,36 @@ const char* env_lookup(const char* name) {
   return stored ? stored->c_str() : nullptr;
 }
 } // namespace
+
+bool trace_dispatch_enabled() {
+  if (!host_env_fast_enabled()) {
+    return env_set("MLX_OMARCHY_TRACE_DISPATCH");
+  }
+  if (env_cache_.epoch == 0) {
+    return std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr;
+  }
+  if (env_cache_.trace_dispatch_epoch != env_cache_.epoch) {
+    env_cache_.trace_dispatch_epoch = env_cache_.epoch;
+    env_cache_.trace_dispatch_val =
+        std::getenv("MLX_OMARCHY_TRACE_DISPATCH") != nullptr;
+  }
+  return env_cache_.trace_dispatch_val;
+}
+
+bool trio_trace_enabled() {
+  if (!host_env_fast_enabled()) {
+    return env_set("MLX_OMARCHY_TRIO_TRACE");
+  }
+  if (env_cache_.epoch == 0) {
+    return std::getenv("MLX_OMARCHY_TRIO_TRACE") != nullptr;
+  }
+  if (env_cache_.trio_trace_epoch != env_cache_.epoch) {
+    env_cache_.trio_trace_epoch = env_cache_.epoch;
+    env_cache_.trio_trace_val =
+        std::getenv("MLX_OMARCHY_TRIO_TRACE") != nullptr;
+  }
+  return env_cache_.trio_trace_val;
+}
 
 void env_note_eval() {
   ++env_cache_.epoch;
@@ -2534,7 +2622,7 @@ void CompletionDispatcher::wait(uint64_t value) {
   // across separate completion values. With this serialization in place,
   // drained_value_ already covers |value| when drain_through returns and
   // the cv_.wait_until below acts as a defensive join only.
-  drain_through(value);
+  drain_through(value, /*inline_caller=*/true);
   // Defensive join: the timeline counter reached |value| but a handler
   // from a prior completion could still be running on the dispatcher
   // thread. The watchdog already validated counter motion; this join
@@ -2551,9 +2639,11 @@ void CompletionDispatcher::wait(uint64_t value) {
   if (stop_ || drained_value_ >= value) {
     tl_cv.cancel();
   } else {
+    ++cv_waiters_;
     cv_.wait_until(
         lk, join_deadline,
         [this, value] { return stop_ || drained_value_ >= value; });
+    --cv_waiters_;
   }
   if (drained_value_ < value) {
     throw std::runtime_error(
@@ -2703,7 +2793,9 @@ CompletionDispatcher::take_resubmit_batches(uint64_t through_value) {
   return out;
 }
 
-void CompletionDispatcher::drain_through(uint64_t max_value) {
+void CompletionDispatcher::drain_through(
+    uint64_t max_value,
+    bool inline_caller) {
   timeline::ScopedEvent tl_drain(
       timeline::Kind::Wait, timeline::SubKind::DrainThrough, 0, max_value);
   std::lock_guard<std::mutex> drain_lk(drain_mutex_);
@@ -2767,8 +2859,12 @@ void CompletionDispatcher::drain_through(uint64_t max_value) {
   retired_temporaries_ = std::move(retired);
   std::lock_guard<std::mutex> lk(mutex_);
   drained_value_ = std::max(drained_value_, ready_value);
+  drained_value_atomic_.store(drained_value_, std::memory_order_release);
   last_drain_at_ = std::chrono::steady_clock::now();
-  cv_.notify_all();
+  if (!host_sync_fast_enabled() || !inline_caller || cv_waiters_ > 0 ||
+      !pending_.empty()) {
+    cv_.notify_all();
+  }
   // |release| frees when this function returns: by then drained_value_
   // names a later generation, so the previous one is provably finished.
 }

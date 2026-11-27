@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/step_timeline.h"
 #include "mlx/backend/omarchy/vulkan.h"
 
@@ -2601,6 +2602,9 @@ ComputeRuntime::ComputeRuntime(
       subgroup_size_16_admitted_(subgroup_size_16_admitted),
       subgroup_size_32_admitted_(subgroup_size_32_admitted),
       subgroup_size_64_admitted_(subgroup_size_64_admitted) {
+  for (auto& slot : pipelines_) {
+    slot.store(VK_NULL_HANDLE, std::memory_order_relaxed);
+  }
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -2675,7 +2679,8 @@ ComputeRuntime::ComputeRuntime(
 
 ComputeRuntime::~ComputeRuntime() {
   auto& dt = vk::device_table();
-  for (VkPipeline pipeline : pipelines_) {
+  for (auto& slot : pipelines_) {
+    VkPipeline pipeline = slot.load(std::memory_order_relaxed);
     if (pipeline != VK_NULL_HANDLE) {
       dt.DestroyPipeline(device_, pipeline, nullptr);
     }
@@ -2693,7 +2698,10 @@ ComputeRuntime::~ComputeRuntime() {
 
 void ComputeRuntime::abandon_vulkan_handles() {
   std::lock_guard<std::mutex> lock(mutex_);
-  pipelines_.fill(VK_NULL_HANDLE);
+  for (auto& slot : pipelines_) {
+    slot.store(VK_NULL_HANDLE, std::memory_order_release);
+  }
+  kernel_access_.fill(BindingAccess{});
   dynamic_pipelines_.clear();
   access_.clear();
   pipeline_layout_ = VK_NULL_HANDLE;
@@ -2705,17 +2713,27 @@ VkPipeline ComputeRuntime::pipeline(ComputeKernel kernel) {
   if (index >= pipelines_.size()) {
     throw std::invalid_argument("[omarchy] invalid compute kernel.");
   }
+  if (host_pipe_fast_enabled()) {
+    VkPipeline cached = pipelines_[index].load(std::memory_order_acquire);
+    if (cached != VK_NULL_HANDLE) {
+      return cached;
+    }
+  }
   timeline::ScopedEvent tl(
       timeline::Kind::PipelineLookup,
       timeline::SubKind::PipelineHit,
       0,
       static_cast<uint64_t>(index));
   std::lock_guard<std::mutex> lock(mutex_);
-  if (pipelines_[index] == VK_NULL_HANDLE) {
+  VkPipeline p = pipelines_[index].load(std::memory_order_relaxed);
+  if (p == VK_NULL_HANDLE) {
     tl.set_subkind(timeline::SubKind::PipelineMiss);
-    pipelines_[index] = create_pipeline(kernel);
+    p = create_pipeline(kernel);
+    auto it = access_.find(p);
+    kernel_access_[index] = it == access_.end() ? BindingAccess{} : it->second;
+    pipelines_[index].store(p, std::memory_order_release);
   }
-  return pipelines_[index];
+  return p;
 }
 
 VkPipeline ComputeRuntime::pipeline(
@@ -2912,6 +2930,19 @@ ComputeRuntime::BindingAccess ComputeRuntime::binding_access(VkPipeline pipeline
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = access_.find(pipeline);
   return it == access_.end() ? BindingAccess{} : it->second;
+}
+
+ComputeRuntime::BindingAccess ComputeRuntime::binding_access(
+    ComputeKernel kernel,
+    VkPipeline pipeline) {
+  if (host_pipe_fast_enabled() && kernel != ComputeKernel::Custom) {
+    const size_t index = static_cast<size_t>(kernel);
+    if (index < pipelines_.size() &&
+        pipelines_[index].load(std::memory_order_acquire) == pipeline) {
+      return kernel_access_[index];
+    }
+  }
+  return binding_access(pipeline);
 }
 
 VkPipeline ComputeRuntime::create_pipeline(

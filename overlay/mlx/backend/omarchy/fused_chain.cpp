@@ -711,11 +711,148 @@ void FusedChain::evaluate_tail(const Stream& stream) {
 
 namespace {
 
-enum class EagerStep : uint8_t { skip, sigmoid, gate_mul, output_mul };
+enum class EagerStep : uint8_t { skip, sigmoid, gate_mul, output_mul, erased };
 
 struct EagerRole {
-  std::uintptr_t group;
-  EagerStep step;
+  std::uintptr_t group{0};
+  EagerStep step{EagerStep::erased};
+};
+
+// Unified flat dispatch tag for try_eval_eager_fusion when
+// host_fusion_fast_enabled() is on. Enum order matches exact priority in
+// try_eval_eager_fusion (lower value wins on multi-role nodes).
+enum class DispatchTag : uint8_t {
+  None = 0,
+  ResNormSkip = 1,
+  SdpaTransposeSkip = 2,
+  SdpaOutgateSkip = 3,
+  PrologueSkip = 4,
+  PrologueFold = 5,
+  RopeNormSkip = 6,
+  SdpaOnlineRopeSkip = 7,
+  SdpaOnlineRopeSu = 8,
+  RopePair = 9,
+  RopeNorm = 10,
+  AddNorm = 11,
+  SliceUpdate = 12,
+  ReshapeRedirect = 13,
+  DenseGemv = 14,
+  Gemv = 15,
+  EagerChainRole = 16,
+};
+
+struct DispatchEntry {
+  DispatchTag tag{DispatchTag::None};
+  uint32_t index{0};
+};
+
+// Role map backed by TapeIndex<V> when host_fusion_fast_enabled() is on, and
+// std::unordered_map when off (default) for clean A/B comparison.
+template <typename V>
+struct DualIndexMap {
+  TapeIndex<V> flat;
+  std::unordered_map<std::uintptr_t, V> map;
+  bool use_flat{false};
+
+  void prepare(size_t expected, bool fast) {
+    use_flat = fast;
+    if (use_flat) {
+      flat.prepare(expected);
+    } else {
+      map.clear();
+    }
+  }
+  void clear() {
+    if (!use_flat) {
+      map.clear();
+    }
+  }
+  V* find_ptr(std::uintptr_t key) {
+    if (use_flat) {
+      return flat.find(key);
+    }
+    auto it = map.find(key);
+    return it == map.end() ? nullptr : &it->second;
+  }
+  const V* find_ptr(std::uintptr_t key) const {
+    if (use_flat) {
+      return flat.find(key);
+    }
+    auto it = map.find(key);
+    return it == map.end() ? nullptr : &it->second;
+  }
+  size_t count(std::uintptr_t key) const {
+    return use_flat ? flat.count(key) : map.count(key);
+  }
+  void emplace(std::uintptr_t key, V v) {
+    if (use_flat) {
+      flat.put_if_absent(key, v);
+    } else {
+      map.emplace(key, v);
+    }
+  }
+  size_t size() const {
+    return use_flat ? flat.size() : map.size();
+  }
+};
+
+struct DualEagerRoleMap {
+  TapeIndex<EagerRole> flat;
+  std::unordered_map<std::uintptr_t, EagerRole> map;
+  bool use_flat{false};
+  size_t live_flat{0};
+
+  void prepare(size_t expected, bool fast) {
+    use_flat = fast;
+    live_flat = 0;
+    if (use_flat) {
+      flat.prepare(expected);
+    } else {
+      map.clear();
+    }
+  }
+  void clear() {
+    live_flat = 0;
+    if (!use_flat) {
+      map.clear();
+    }
+  }
+  const EagerRole* find_ptr(std::uintptr_t key) const {
+    if (use_flat) {
+      const EagerRole* p = flat.find(key);
+      return (p != nullptr && p->step != EagerStep::erased) ? p : nullptr;
+    }
+    auto it = map.find(key);
+    return it == map.end() ? nullptr : &it->second;
+  }
+  void emplace(std::uintptr_t key, EagerRole r) {
+    if (use_flat) {
+      EagerRole* existing = flat.find(key);
+      if (existing == nullptr) {
+        flat.put_if_absent(key, r);
+        ++live_flat;
+      } else if (existing->step == EagerStep::erased) {
+        *existing = r;
+        ++live_flat;
+      }
+    } else {
+      map.emplace(key, r);
+    }
+  }
+  void erase(std::uintptr_t key) {
+    if (use_flat) {
+      if (EagerRole* p = flat.find(key);
+          p != nullptr && p->step != EagerStep::erased) {
+        p->step = EagerStep::erased;
+        --live_flat;
+      }
+    } else {
+      map.erase(key);
+    }
+  }
+  size_t size() const {
+    return use_flat ? live_flat : map.size();
+  }
 };
 
 // A planned decode RoPE pair (query, key): pending until the first
@@ -903,22 +1040,24 @@ struct SdpaOnlineRopePlan {
 };
 
 struct EagerFusionState {
-  std::unordered_map<std::uintptr_t, EagerRole> roles;
+  bool fusion_fast{false};
+  TapeIndex<DispatchEntry> dispatch_index;
+  DualEagerRoleMap roles;
   std::unordered_map<std::uintptr_t, FusedChain> chains;
   TapeIndex<size_t> gemv_roles;
   std::vector<GemvGroup> gemv_groups;
   TapeIndex<size_t> res_norm_skip_roles;
   std::vector<SdpaTransposeFold> sdpa_transpose_folds;
   // attention out array id -> fold index; reshape/view ids -> fold index
-  std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_plans;
-  std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_skip_roles;
+  DualIndexMap<size_t> sdpa_transpose_plans;
+  DualIndexMap<size_t> sdpa_transpose_skip_roles;
   std::vector<SdpaOutgateFold> sdpa_outgate_folds;
-  std::unordered_map<std::uintptr_t, size_t> sdpa_outgate_plans;
-  std::unordered_map<std::uintptr_t, size_t> sdpa_outgate_skip_roles;
+  DualIndexMap<size_t> sdpa_outgate_plans;
+  DualIndexMap<size_t> sdpa_outgate_skip_roles;
   std::vector<SdpaOnlineRopePlan> sdpa_online_rope_plans;
-  std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_skip_roles;
-  std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_su_roles;
-  std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_roles;
+  DualIndexMap<size_t> sdpa_online_rope_skip_roles;
+  DualIndexMap<size_t> sdpa_online_rope_su_roles;
+  DualIndexMap<size_t> sdpa_online_rope_roles;
   TapeIndex<size_t> dense_gemv_roles;
   std::vector<DenseGemvGroup> dense_gemv_groups;
   TapeIndex<size_t> slice_update_roles;
@@ -936,7 +1075,40 @@ struct EagerFusionState {
   TapeIndex<size_t> prologue_fold_roles;
   std::vector<PrologueFold> prologue_folds;
 
-  void prepare(std::size_t tape_size) {
+  void register_dispatch(std::uintptr_t id, DispatchTag tag, size_t idx = 0) {
+    if (!fusion_fast) {
+      return;
+    }
+    DispatchEntry& slot = dispatch_index[id];
+    if (slot.tag == DispatchTag::None ||
+        static_cast<uint8_t>(tag) < static_cast<uint8_t>(slot.tag)) {
+      slot.tag = tag;
+      slot.index = static_cast<uint32_t>(idx);
+    }
+  }
+
+  void overwrite_dispatch(std::uintptr_t id, DispatchTag tag, size_t idx = 0) {
+    if (!fusion_fast) {
+      return;
+    }
+    DispatchEntry& slot = dispatch_index[id];
+    slot.tag = tag;
+    slot.index = static_cast<uint32_t>(idx);
+  }
+
+  void prepare(std::size_t tape_size, bool fast) {
+    fusion_fast = fast;
+    if (fusion_fast) {
+      dispatch_index.prepare(tape_size);
+    }
+    roles.prepare(tape_size, fusion_fast);
+    sdpa_transpose_plans.prepare(tape_size / 8 + 16, fusion_fast);
+    sdpa_transpose_skip_roles.prepare(tape_size / 4 + 16, fusion_fast);
+    sdpa_outgate_plans.prepare(tape_size / 8 + 16, fusion_fast);
+    sdpa_outgate_skip_roles.prepare(tape_size / 4 + 16, fusion_fast);
+    sdpa_online_rope_skip_roles.prepare(tape_size / 4 + 16, fusion_fast);
+    sdpa_online_rope_su_roles.prepare(tape_size / 4 + 16, fusion_fast);
+    sdpa_online_rope_roles.prepare(tape_size / 8 + 16, fusion_fast);
     gemv_roles.prepare(tape_size);
     res_norm_skip_roles.prepare(tape_size);
     dense_gemv_roles.prepare(tape_size);
@@ -1494,24 +1666,33 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     state = pool.back().release();
     pool.pop_back();
   }
+  const bool fusion_fast = host_fusion_fast_enabled();
   eager_state = state;
-  state->prepare(tape.size());
+  state->prepare(tape.size(), fusion_fast);
   // Tape-index scratch is thread-local and reused across passes. The maps
   // are only live for this planning section, so reuse is safe under nested
   // scopes: a nested scope's eval runs after this constructor returns,
   // never while it still holds the tables.
   static thread_local TapeIndex<const array*> nodes;
   static thread_local TapeIndex<size_t> uses;
+  static thread_local TapeIndex<size_t> tape_pos_flat;
   // consumer_of[input] = last tape node reading input; paired with the
   // uses count it is the single-consumer map without a second tape pass.
   static thread_local TapeIndex<const array*> consumer_of;
   static thread_local TapeIndex<char> claimed;
   nodes.prepare(tape.size());
   uses.prepare(tape.size() * 2);
+  if (fusion_fast) {
+    tape_pos_flat.prepare(tape.size());
+  }
   consumer_of.prepare(tape.size() * 2);
   claimed.prepare(tape.size());
-  for (const auto& node : tape) {
+  for (size_t ti = 0; ti < tape.size(); ++ti) {
+    const auto& node = tape[ti];
     nodes.put_if_absent(node.id(), &node);
+    if (fusion_fast) {
+      tape_pos_flat.put_if_absent(node.id(), ti);
+    }
     for (const auto& input : node.inputs()) {
       ++uses[input.id()];
       consumer_of[input.id()] = &node;
@@ -1606,6 +1787,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         inner->id(), EagerRole{group, EagerStep::gate_mul});
     state->roles.emplace(
         tail.id(), EagerRole{group, EagerStep::output_mul});
+    state->register_dispatch(sigmoid->id(), DispatchTag::EagerChainRole);
+    state->register_dispatch(inner->id(), DispatchTag::EagerChainRole);
+    state->register_dispatch(tail.id(), DispatchTag::EagerChainRole);
     claimed.put_if_absent(sigmoid->id(), 1);
     claimed.put_if_absent(inner->id(), 1);
     claimed.put_if_absent(tail.id(), 1);
@@ -1679,6 +1863,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     size_t index = state->slice_update_pairs.size();
     state->slice_update_roles.put_if_absent(first.id(), index);
     state->slice_update_roles.put_if_absent(second.id(), index);
+    state->register_dispatch(first.id(), DispatchTag::SliceUpdate, index);
+    state->register_dispatch(second.id(), DispatchTag::SliceUpdate, index);
     state->slice_update_pairs.emplace_back(first, second);
     claimed.put_if_absent(first.id(), 1);
     claimed.put_if_absent(second.id(), 1);
@@ -1866,6 +2052,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           const size_t pair_index = state->gemv_groups.size();
           for (const auto& member : pair.members) {
             state->gemv_roles.put_if_absent(member.node.id(), pair_index);
+            state->register_dispatch(
+                member.node.id(), DispatchTag::Gemv, pair_index);
             claimed.put_if_absent(member.node.id(), 1);
           }
           state->gemv_groups.push_back(std::move(pair));
@@ -1881,9 +2069,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       size_t index = state->gemv_groups.size();
       for (const auto& member : group.members) {
         state->gemv_roles.put_if_absent(member.node.id(), index);
+        state->register_dispatch(member.node.id(), DispatchTag::Gemv, index);
         claimed.put_if_absent(member.node.id(), 1);
         if (member.epilogue) {
           state->gemv_roles.put_if_absent(member.epilogue->id(), index);
+          state->register_dispatch(
+              member.epilogue->id(), DispatchTag::Gemv, index);
           claimed.put_if_absent(member.epilogue->id(), 1);
         }
       }
@@ -1943,6 +2134,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     state->roles.emplace(
         plan.sigmoid_id, EagerRole{gi, EagerStep::skip});
     state->roles.emplace(plan.x.id(), EagerRole{gi, EagerStep::skip});
+    state->register_dispatch(plan.sigmoid_id, DispatchTag::EagerChainRole);
+    state->register_dispatch(plan.x.id(), DispatchTag::EagerChainRole);
   }
   // SwiGLU store epilogue fold. When a planned group is exactly the
   // gate and up projections of a planned swiglu chain — two members,
@@ -2048,6 +2241,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
              {plan.sigmoid_id, plan.inner_id, plan.out.id()}) {
           state->roles.erase(id);
           state->gemv_roles.put_if_absent(id, gi);
+          state->overwrite_dispatch(id, DispatchTag::Gemv, gi);
         }
         break;
       }
@@ -2091,6 +2285,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       const size_t index = state->dense_gemv_groups.size();
       for (const auto& node : group.nodes) {
         state->dense_gemv_roles.put_if_absent(node.id(), index);
+        state->register_dispatch(node.id(), DispatchTag::DenseGemv, index);
         claimed.put_if_absent(node.id(), 1);
       }
       state->dense_gemv_groups.push_back(std::move(group));
@@ -2207,6 +2402,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           pair.nodes[rope_side].inputs()[1].id(), index);
       for (const auto& view : sum_plan.view_chain) {
         state->reshape_redirect_roles.put_if_absent(view.id(), index);
+        state->register_dispatch(view.id(), DispatchTag::ReshapeRedirect, index);
       }
       pair.direct = true;
     }
@@ -2217,16 +2413,17 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // an inter-dispatch barrier. Keeps Sum0 materialized so other consumers of
   // the residual sum (e.g., skip connections) read the identical bits.
   if (!state->gemv_groups.empty()) {
-    std::unordered_map<std::uintptr_t, const array*> res_norms_by_in;
+    static thread_local DualIndexMap<const array*> res_norms_by_in;
+    res_norms_by_in.prepare(tape.size() / 4 + 16, fusion_fast);
     for (const auto& node : tape) {
       if (!is_op(&node, typeid(fast::RMSNorm)) || node.inputs().size() != 2 ||
           claimed.count(node.id()) || node.dtype() != bfloat16 ||
           lookup(node.inputs()[1]) != nullptr) {
         continue;
       }
-      res_norms_by_in.try_emplace(node.inputs()[0].id(), &node);
+      res_norms_by_in.emplace(node.inputs()[0].id(), &node);
     }
-    if (!res_norms_by_in.empty()) {
+    if (res_norms_by_in.size() > 0) {
       for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
         auto& group = state->gemv_groups[gi];
         if (group.members.size() != 1 || group.swiglu_out ||
@@ -2243,11 +2440,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
             qmm.inputs()[0].shape(-2) > 4) {
           continue;
         }
-        auto it = res_norms_by_in.find(add.id());
-        if (it == res_norms_by_in.end()) {
+        auto* norm_ptr = res_norms_by_in.find_ptr(add.id());
+        if (norm_ptr == nullptr) {
           continue;
         }
-        const array& norm = *it->second;
+        const array& norm = **norm_ptr;
         const array& nw = norm.inputs()[1];
         const Device* d = stream_device(qmm);
         if (claimed.count(norm.id()) ||
@@ -2265,6 +2462,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
             static_cast<const fast::RMSNorm&>(norm.primitive()).state().second;
         group.res_norm = ResNormPlan{norm, nw, eps};
         state->res_norm_skip_roles.put_if_absent(norm.id(), gi);
+        state->register_dispatch(norm.id(), DispatchTag::ResNormSkip, gi);
         claimed.put_if_absent(norm.id(), 1);
       }
     }
@@ -2533,9 +2731,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       for (const auto* side : {qc, kc}) {
         state->roles.emplace(
             side->node->id(), EagerRole{gi, EagerStep::skip});
+        state->register_dispatch(side->node->id(), DispatchTag::EagerChainRole);
         claimed.put_if_absent(side->node->id(), 1);
         for (const auto& view : side->chain) {
           state->roles.emplace(view.id(), EagerRole{gi, EagerStep::skip});
+          state->register_dispatch(view.id(), DispatchTag::EagerChainRole);
           claimed.put_if_absent(view.id(), 1);
         }
       }
@@ -2561,11 +2761,24 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       return strides;
     };
     // Note: eval_impl pops from the back of tape (higher index runs earlier).
-    std::unordered_map<std::uintptr_t, size_t> tape_pos;
-    tape_pos.reserve(tape.size());
-    for (size_t ti = 0; ti < tape.size(); ++ti) {
-      tape_pos.emplace(tape[ti].id(), ti);
+    std::unordered_map<std::uintptr_t, size_t> tape_pos_map;
+    if (!fusion_fast) {
+      tape_pos_map.reserve(tape.size());
+      for (size_t ti = 0; ti < tape.size(); ++ti) {
+        tape_pos_map.emplace(tape[ti].id(), ti);
+      }
     }
+    auto find_tape_pos = [&](std::uintptr_t id) -> const size_t* {
+      if (fusion_fast) {
+        return tape_pos_flat.find(id);
+      }
+      auto it = tape_pos_map.find(id);
+      return it == tape_pos_map.end() ? nullptr : &it->second;
+    };
+    auto get_tape_pos = [&](std::uintptr_t id) -> size_t {
+      const size_t* p = find_tape_pos(id);
+      return p != nullptr ? *p : size_t{0};
+    };
     for (const auto& tail : tape) {
       if (!is_op(&tail, typeid(Multiply)) || tail.inputs().size() != 2 ||
           tail.dtype() != bfloat16 || claimed.count(tail.id()) ||
@@ -2673,9 +2886,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         continue;
       }
       // Higher tape_pos runs earlier: sdpa must run before sigmoid and tail.
-      const size_t sdpa_pos = tape_pos[sdpa.id()];
-      if (tape_pos[sigmoid->id()] >= sdpa_pos ||
-          tape_pos[tail.id()] >= sdpa_pos) {
+      const size_t sdpa_pos = get_tape_pos(sdpa.id());
+      if (get_tape_pos(sigmoid->id()) >= sdpa_pos ||
+          get_tape_pos(tail.id()) >= sdpa_pos) {
         continue;
       }
       const array* gate_flat_node = lookup(gate_flat);
@@ -2687,19 +2900,19 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           !claimed.count(gate_flat_node->id()) &&
           gate_flat_node->inputs().size() == 1 &&
           gate_flat_node->primitive().stream() == tail.primitive().stream() &&
-          tape_pos[gate_flat_node->id()] < sdpa_pos) {
+          get_tape_pos(gate_flat_node->id()) < sdpa_pos) {
         const array& gsrc = gate_flat_node->inputs()[0];
-        auto gsrc_pos = tape_pos.find(gsrc.id());
+        const size_t* gsrc_pos = find_tape_pos(gsrc.id());
         if (gsrc.dtype() == bfloat16 && gsrc.ndim() == 4 &&
             gsrc.shape() == Shape{1, 1, heads, head_dim} &&
-            (gsrc_pos == tape_pos.end() || gsrc_pos->second > sdpa_pos)) {
+            (gsrc_pos == nullptr || *gsrc_pos > sdpa_pos)) {
           gate_src = gsrc;
           skip_gate_reshape = gate_flat_node;
         }
       }
       if (!gate_src.has_value()) {
-        auto gf_pos = tape_pos.find(gate_flat.id());
-        if (gf_pos == tape_pos.end() || gf_pos->second > sdpa_pos) {
+        const size_t* gf_pos = find_tape_pos(gate_flat.id());
+        if (gf_pos == nullptr || *gf_pos > sdpa_pos) {
           gate_src = gate_flat;
         } else {
           continue;
@@ -2712,17 +2925,25 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       claimed.put_if_absent(sdpa.id(), 1);
       for (const array* view : out_chain) {
         state->sdpa_outgate_skip_roles.emplace(view->id(), index);
+        state->register_dispatch(view->id(), DispatchTag::SdpaOutgateSkip, index);
         claimed.put_if_absent(view->id(), 1);
       }
       state->sdpa_outgate_skip_roles.emplace(out_view->id(), index);
+      state->register_dispatch(
+          out_view->id(), DispatchTag::SdpaOutgateSkip, index);
       claimed.put_if_absent(out_view->id(), 1);
       if (skip_gate_reshape != nullptr) {
         state->sdpa_outgate_skip_roles.emplace(skip_gate_reshape->id(), index);
+        state->register_dispatch(
+            skip_gate_reshape->id(), DispatchTag::SdpaOutgateSkip, index);
         claimed.put_if_absent(skip_gate_reshape->id(), 1);
       }
       state->sdpa_outgate_skip_roles.emplace(sigmoid->id(), index);
+      state->register_dispatch(
+          sigmoid->id(), DispatchTag::SdpaOutgateSkip, index);
       claimed.put_if_absent(sigmoid->id(), 1);
       state->sdpa_outgate_skip_roles.emplace(tail.id(), index);
+      state->register_dispatch(tail.id(), DispatchTag::SdpaOutgateSkip, index);
       claimed.put_if_absent(tail.id(), 1);
     }
   }
@@ -2833,10 +3054,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       for (const array* view : chain) {
         fold.chain.push_back(*view);
         state->sdpa_transpose_skip_roles.emplace(view->id(), index);
+        state->register_dispatch(
+            view->id(), DispatchTag::SdpaTransposeSkip, index);
         claimed.put_if_absent(view->id(), 1);
       }
       state->sdpa_transpose_plans.emplace(sdpa.id(), index);
       state->sdpa_transpose_skip_roles.emplace(node.id(), index);
+      state->register_dispatch(
+          node.id(), DispatchTag::SdpaTransposeSkip, index);
       claimed.put_if_absent(node.id(), 1);
     }
   }
@@ -2853,7 +3078,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // bit-exactness test and bisection).
   if (omarchy::env_str("MLX_OMARCHY_ADD_NORM_FUSE") == nullptr ||
       omarchy::env_flag("MLX_OMARCHY_ADD_NORM_FUSE")) {
-    std::unordered_map<std::uintptr_t, const array*> norm_by_in;
+    static thread_local DualIndexMap<const array*> norm_by_in;
+    norm_by_in.prepare(tape.size() / 4 + 16, fusion_fast);
     for (const auto& node : tape) {
       if (!is_op(&node, typeid(fast::RMSNorm)) || node.dtype() != bfloat16 ||
           node.inputs().size() != 2 || claimed.count(node.id())) {
@@ -2872,11 +3098,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       norm_by_in.emplace(in.id(), &node);
     }
     for (const auto& node : tape) {
-      auto it = norm_by_in.find(node.id());
-      if (it == norm_by_in.end() || claimed.count(node.id())) {
+      auto* norm_ptr = norm_by_in.find_ptr(node.id());
+      if (norm_ptr == nullptr || claimed.count(node.id())) {
         continue;
       }
-      const array* norm = it->second;
+      const array* norm = *norm_ptr;
       if (norm->ndim() == 0) {
         continue;
       }
@@ -2900,6 +3126,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       const size_t index = state->add_norm_pairs.size();
       state->add_norm_roles.put_if_absent(node.id(), index);
       state->add_norm_roles.put_if_absent(norm->id(), index);
+      state->register_dispatch(node.id(), DispatchTag::AddNorm, index);
+      state->register_dispatch(norm->id(), DispatchTag::AddNorm, index);
       state->add_norm_pairs.push_back(AddNormPair{{node, *norm}});
       claimed.put_if_absent(norm->id(), 1);
     }
@@ -3005,6 +3233,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       state->rope_norm_skip_roles.put_if_absent(n.id(), index);
       state->rope_norm_skip_roles.put_if_absent(in.id(), index);
       state->rope_norm_roles.put_if_absent(node.id(), index);
+      state->register_dispatch(n.id(), DispatchTag::RopeNormSkip, index);
+      state->register_dispatch(in.id(), DispatchTag::RopeNormSkip, index);
+      state->register_dispatch(node.id(), DispatchTag::RopeNorm, index);
       state->rope_norms.push_back(RopeNormFold{
           n,
           node,
@@ -3227,6 +3458,14 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       state->sdpa_online_rope_su_roles.emplace(pair.nodes[0].id(), plan_idx);
       state->sdpa_online_rope_su_roles.emplace(pair.nodes[1].id(), plan_idx);
       state->sdpa_online_rope_roles.emplace(sdpa.id(), plan_idx);
+      state->register_dispatch(
+          q_rope->id(), DispatchTag::SdpaOnlineRopeSkip, plan_idx);
+      state->register_dispatch(
+          k_rope->id(), DispatchTag::SdpaOnlineRopeSkip, plan_idx);
+      state->register_dispatch(
+          pair.nodes[0].id(), DispatchTag::SdpaOnlineRopeSu, plan_idx);
+      state->register_dispatch(
+          pair.nodes[1].id(), DispatchTag::SdpaOnlineRopeSu, plan_idx);
       claimed.put_if_absent(q_rope->id(), 1);
       claimed.put_if_absent(k_rope->id(), 1);
       claimed.put_if_absent(sdpa.id(), 1);
@@ -3404,6 +3643,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       const size_t index = state->rope_pairs.size();
       state->rope_pair_roles.put_if_absent(first.id(), index);
       state->rope_pair_roles.put_if_absent(second.id(), index);
+      state->register_dispatch(first.id(), DispatchTag::RopePair, index);
+      state->register_dispatch(second.id(), DispatchTag::RopePair, index);
       RopePair new_pair{{first, second}};
       new_pair.norm_folds = {fold_first, fold_second};
       state->rope_pairs.push_back(std::move(new_pair));
@@ -3550,8 +3791,11 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     }
     const size_t index = state->prologue_folds.size();
     state->prologue_fold_roles.put_if_absent(node.id(), index);
+    state->register_dispatch(node.id(), DispatchTag::PrologueFold, index);
     for (const auto& step : replay) {
       state->prologue_skip_roles.put_if_absent(step.node.id(), index);
+      state->register_dispatch(
+          step.node.id(), DispatchTag::PrologueSkip, index);
       claimed.put_if_absent(step.node.id(), 1);
     }
     claimed.put_if_absent(node.id(), 1);
@@ -3910,11 +4154,11 @@ const SdpaOnlineRopeCtx* find_sdpa_online_rope(
   if (!eager_state) {
     return nullptr;
   }
-  auto it = eager_state->sdpa_online_rope_roles.find(out.id());
-  if (it == eager_state->sdpa_online_rope_roles.end()) {
+  auto* it = eager_state->sdpa_online_rope_roles.find_ptr(out.id());
+  if (it == nullptr) {
     return nullptr;
   }
-  auto& plan = eager_state->sdpa_online_rope_plans[it->second];
+  auto& plan = eager_state->sdpa_online_rope_plans[*it];
   if (plan.state != SdpaOnlineRopePlan::State::k_bound) {
     return nullptr;
   }
@@ -3971,11 +4215,11 @@ void commit_sdpa_online_rope(const array& out) {
   if (!eager_state) {
     return;
   }
-  auto it = eager_state->sdpa_online_rope_roles.find(out.id());
-  if (it == eager_state->sdpa_online_rope_roles.end()) {
+  auto* it = eager_state->sdpa_online_rope_roles.find_ptr(out.id());
+  if (it == nullptr) {
     return;
   }
-  auto& plan = eager_state->sdpa_online_rope_plans[it->second];
+  auto& plan = eager_state->sdpa_online_rope_plans[*it];
   plan.state = SdpaOnlineRopePlan::State::done;
   if (plan.q_norm_fold >= 0) {
     eager_state->rope_norms[plan.q_norm_fold].state = RopeNormFold::State::done;
@@ -3996,11 +4240,11 @@ void abort_sdpa_online_rope(const array& out, const Stream& stream) {
   if (!eager_state) {
     return;
   }
-  auto it = eager_state->sdpa_online_rope_roles.find(out.id());
-  if (it == eager_state->sdpa_online_rope_roles.end()) {
+  auto* it = eager_state->sdpa_online_rope_roles.find_ptr(out.id());
+  if (it == nullptr) {
     return;
   }
-  auto& plan = eager_state->sdpa_online_rope_plans[it->second];
+  auto& plan = eager_state->sdpa_online_rope_plans[*it];
   if (plan.state == SdpaOnlineRopePlan::State::done ||
       plan.state == SdpaOnlineRopePlan::State::failed) {
     return;
@@ -4090,11 +4334,11 @@ const array* find_sdpa_transpose_out(const array& out) {
   if (!eager_state) {
     return nullptr;
   }
-  auto it = eager_state->sdpa_transpose_plans.find(out.id());
-  if (it == eager_state->sdpa_transpose_plans.end()) {
+  auto* it = eager_state->sdpa_transpose_plans.find_ptr(out.id());
+  if (it == nullptr) {
     return nullptr;
   }
-  auto& fold = eager_state->sdpa_transpose_folds[it->second];
+  auto& fold = eager_state->sdpa_transpose_folds[*it];
   return fold.fired ? nullptr : &fold.reshape;
 }
 
@@ -4102,9 +4346,9 @@ void commit_sdpa_transpose_out(const array& out) {
   if (!eager_state) {
     return;
   }
-  auto it = eager_state->sdpa_transpose_plans.find(out.id());
-  if (it != eager_state->sdpa_transpose_plans.end()) {
-    eager_state->sdpa_transpose_folds[it->second].fired = true;
+  auto* it = eager_state->sdpa_transpose_plans.find_ptr(out.id());
+  if (it != nullptr) {
+    eager_state->sdpa_transpose_folds[*it].fired = true;
   }
 }
 
@@ -4120,11 +4364,11 @@ const SdpaOutgatePlan* find_sdpa_outgate(const array& out) {
   if (!eager_state) {
     return nullptr;
   }
-  auto it = eager_state->sdpa_outgate_plans.find(out.id());
-  if (it == eager_state->sdpa_outgate_plans.end()) {
+  auto* it = eager_state->sdpa_outgate_plans.find_ptr(out.id());
+  if (it == nullptr) {
     return nullptr;
   }
-  auto& fold = eager_state->sdpa_outgate_folds[it->second];
+  auto& fold = eager_state->sdpa_outgate_folds[*it];
   return fold.fired ? nullptr : &fold.plan;
 }
 
@@ -4132,9 +4376,9 @@ void commit_sdpa_outgate(const array& out) {
   if (!eager_state) {
     return;
   }
-  auto it = eager_state->sdpa_outgate_plans.find(out.id());
-  if (it != eager_state->sdpa_outgate_plans.end()) {
-    eager_state->sdpa_outgate_folds[it->second].fired = true;
+  auto* it = eager_state->sdpa_outgate_plans.find_ptr(out.id());
+  if (it != nullptr) {
+    eager_state->sdpa_outgate_folds[*it].fired = true;
   }
 }
 
@@ -4400,19 +4644,38 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (!eager_state) {
     return false;
   }
-  if (auto skip = eager_state->res_norm_skip_roles.find(node.id());
+  const bool fast_mode = eager_state->fusion_fast;
+  DispatchTag fast_tag = DispatchTag::None;
+  size_t fast_idx = 0;
+  if (fast_mode) {
+    const DispatchEntry* entry = eager_state->dispatch_index.find(node.id());
+    if (entry == nullptr) {
+      return false;
+    }
+    fast_tag = entry->tag;
+    fast_idx = entry->index;
+  }
+  if (auto* skip = fast_mode
+          ? (fast_tag == DispatchTag::ResNormSkip ? &fast_idx : nullptr)
+          : eager_state->res_norm_skip_roles.find(node.id());
       skip != nullptr) {
     return eager_state->gemv_groups[*skip].res_norm_done;
   }
-  if (auto skip = eager_state->sdpa_transpose_skip_roles.find(node.id());
-      skip != eager_state->sdpa_transpose_skip_roles.end()) {
-    return eager_state->sdpa_transpose_folds[skip->second].fired;
+  if (auto* skip = fast_mode
+          ? (fast_tag == DispatchTag::SdpaTransposeSkip ? &fast_idx : nullptr)
+          : eager_state->sdpa_transpose_skip_roles.find_ptr(node.id());
+      skip != nullptr) {
+    return eager_state->sdpa_transpose_folds[*skip].fired;
   }
-  if (auto skip = eager_state->sdpa_outgate_skip_roles.find(node.id());
-      skip != eager_state->sdpa_outgate_skip_roles.end()) {
-    return eager_state->sdpa_outgate_folds[skip->second].fired;
+  if (auto* skip = fast_mode
+          ? (fast_tag == DispatchTag::SdpaOutgateSkip ? &fast_idx : nullptr)
+          : eager_state->sdpa_outgate_skip_roles.find_ptr(node.id());
+      skip != nullptr) {
+    return eager_state->sdpa_outgate_folds[*skip].fired;
   }
-  if (auto skip = eager_state->prologue_skip_roles.find(node.id());
+  if (auto* skip = fast_mode
+          ? (fast_tag == DispatchTag::PrologueSkip ? &fast_idx : nullptr)
+          : eager_state->prologue_skip_roles.find(node.id());
       skip != nullptr) {
     // The fold's dispatch owns this node while pending or done; on a
     // failed fold the fire arm replays every skipped node before the
@@ -4420,7 +4683,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return eager_state->prologue_folds[*skip].state !=
         PrologueFold::State::failed;
   }
-  if (auto fit = eager_state->prologue_fold_roles.find(node.id());
+  if (auto* fit = fast_mode
+          ? (fast_tag == DispatchTag::PrologueFold ? &fast_idx : nullptr)
+          : eager_state->prologue_fold_roles.find(node.id());
       fit != nullptr) {
     auto& fold = eager_state->prologue_folds[*fit];
     if (fold.state == PrologueFold::State::done) {
@@ -4454,7 +4719,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     }
     return true;
   }
-  if (auto skip = eager_state->rope_norm_skip_roles.find(node.id());
+  if (auto* skip = fast_mode
+          ? (fast_tag == DispatchTag::RopeNormSkip ? &fast_idx : nullptr)
+          : eager_state->rope_norm_skip_roles.find(node.id());
       skip != nullptr) {
     // The rope-side fold owns this norm's dispatch; a failed fold runs
     // it in place from the rope arm below, so skip only while the fold
@@ -4462,9 +4729,11 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     return eager_state->rope_norms[*skip].state !=
         RopeNormFold::State::failed;
   }
-  if (auto sr_skip = eager_state->sdpa_online_rope_skip_roles.find(node.id());
-      sr_skip != eager_state->sdpa_online_rope_skip_roles.end()) {
-    auto& plan = eager_state->sdpa_online_rope_plans[sr_skip->second];
+  if (auto* sr_skip = fast_mode
+          ? (fast_tag == DispatchTag::SdpaOnlineRopeSkip ? &fast_idx : nullptr)
+          : eager_state->sdpa_online_rope_skip_roles.find_ptr(node.id());
+      sr_skip != nullptr) {
+    auto& plan = eager_state->sdpa_online_rope_plans[*sr_skip];
     if (plan.state != SdpaOnlineRopePlan::State::failed ||
         node.data_shared_ptr() != nullptr) {
       if (node.id() == plan.q_rope.id()) {
@@ -4474,10 +4743,21 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
       }
       return true;
     }
+    if (fast_mode) {
+      if (auto* rn = eager_state->rope_norm_roles.find(node.id());
+          rn != nullptr) {
+        fast_tag = DispatchTag::RopeNorm;
+        fast_idx = *rn;
+      } else {
+        return false;
+      }
+    }
   }
-  if (auto sr_su = eager_state->sdpa_online_rope_su_roles.find(node.id());
-      sr_su != eager_state->sdpa_online_rope_su_roles.end()) {
-    auto& plan = eager_state->sdpa_online_rope_plans[sr_su->second];
+  if (auto* sr_su = fast_mode
+          ? (fast_tag == DispatchTag::SdpaOnlineRopeSu ? &fast_idx : nullptr)
+          : eager_state->sdpa_online_rope_su_roles.find_ptr(node.id());
+      sr_su != nullptr) {
+    auto& plan = eager_state->sdpa_online_rope_plans[*sr_su];
     if (plan.state == SdpaOnlineRopePlan::State::k_bound ||
         plan.state == SdpaOnlineRopePlan::State::done) {
       return true;
@@ -4514,8 +4794,19 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
             plan.k_rope, plan.k_rope_prim, plan.k_rope_inputs, plan.k_norm_fold, stream);
       }
     }
+    if (fast_mode) {
+      if (auto* su = eager_state->slice_update_roles.find(node.id());
+          su != nullptr) {
+        fast_tag = DispatchTag::SliceUpdate;
+        fast_idx = *su;
+      } else {
+        return false;
+      }
+    }
   }
-  if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
+  if (auto* rope_pair = fast_mode
+          ? (fast_tag == DispatchTag::RopePair ? &fast_idx : nullptr)
+          : eager_state->rope_pair_roles.find(node.id());
       rope_pair != nullptr) {
     auto& pair = eager_state->rope_pairs[*rope_pair];
     if (pair.state == RopePair::State::done) {
@@ -4571,11 +4862,17 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     // fold-claimed rope still has its fold below: it replays the
     // claimed norm and view so the ordinary rope eval reads settled
     // inputs. A plain rope has no second coverage, so refuse it.
-    if (eager_state->rope_norm_roles.find(node.id()) == nullptr) {
+    if (auto* rn = eager_state->rope_norm_roles.find(node.id());
+        rn == nullptr) {
       return false;
+    } else if (fast_mode) {
+      fast_tag = DispatchTag::RopeNorm;
+      fast_idx = *rn;
     }
   }
-  if (auto fold_it = eager_state->rope_norm_roles.find(node.id());
+  if (auto* fold_it = fast_mode
+          ? (fast_tag == DispatchTag::RopeNorm ? &fast_idx : nullptr)
+          : eager_state->rope_norm_roles.find(node.id());
       fold_it != nullptr) {
     auto& fold = eager_state->rope_norms[*fold_it];
     if (fold.state == RopeNormFold::State::done) {
@@ -4608,7 +4905,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     }
     return true;
   }
-  if (auto add_norm = eager_state->add_norm_roles.find(node.id());
+  if (auto* add_norm = fast_mode
+          ? (fast_tag == DispatchTag::AddNorm ? &fast_idx : nullptr)
+          : eager_state->add_norm_roles.find(node.id());
       add_norm != nullptr) {
     auto& pair = eager_state->add_norm_pairs[*add_norm];
     if (pair.state == AddNormPair::State::done) {
@@ -4628,7 +4927,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     pair.state = fired ? AddNormPair::State::done : AddNormPair::State::failed;
     return pair.state == AddNormPair::State::done;
   }
-  if (auto rope_pair = eager_state->rope_pair_roles.find(node.id());
+  if (auto* rope_pair = fast_mode
+          ? nullptr
+          : eager_state->rope_pair_roles.find(node.id());
       rope_pair != nullptr) {
     auto& pair = eager_state->rope_pairs[*rope_pair];
     if (pair.state == RopePair::State::done) {
@@ -4657,7 +4958,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     }
     return pair.state == RopePair::State::done;
   }
-  if (auto update = eager_state->slice_update_roles.find(node.id());
+  if (auto* update = fast_mode
+          ? (fast_tag == DispatchTag::SliceUpdate ? &fast_idx : nullptr)
+          : eager_state->slice_update_roles.find(node.id());
       update != nullptr) {
     auto& pair = eager_state->slice_update_pairs[*update];
     if (pair.direct) {
@@ -4692,7 +4995,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     pair.state = SliceUpdatePair::State::failed;
     return false;
   }
-  if (auto reshape = eager_state->reshape_redirect_roles.find(node.id());
+  if (auto* reshape = fast_mode
+          ? (fast_tag == DispatchTag::ReshapeRedirect ? &fast_idx : nullptr)
+          : eager_state->reshape_redirect_roles.find(node.id());
       reshape != nullptr) {
     auto& pair = eager_state->slice_update_pairs[*reshape];
     if (!pair.values_committed) {
@@ -4708,7 +5013,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
         window.base, view_strides, flags, node.data_size(), window.offset);
     return true;
   }
-  if (auto dense = eager_state->dense_gemv_roles.find(node.id());
+  if (auto* dense = fast_mode
+          ? (fast_tag == DispatchTag::DenseGemv ? &fast_idx : nullptr)
+          : eager_state->dense_gemv_roles.find(node.id());
       dense != nullptr) {
     auto& group = eager_state->dense_gemv_groups[*dense];
     if (group.state == DenseGemvGroup::State::pending) {
@@ -4750,7 +5057,9 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     }
     return group.state == DenseGemvGroup::State::done;
   }
-  if (auto gemv = eager_state->gemv_roles.find(node.id());
+  if (auto* gemv = fast_mode
+          ? (fast_tag == DispatchTag::Gemv ? &fast_idx : nullptr)
+          : eager_state->gemv_roles.find(node.id());
       gemv != nullptr) {
     auto& group = eager_state->gemv_groups[*gemv];
     if (group.state == GemvGroup::State::pending) {
@@ -4777,11 +5086,14 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     }
     return group.state == GemvGroup::State::done;
   }
-  auto role_it = eager_state->roles.find(node.id());
-  if (role_it == eager_state->roles.end()) {
+  const EagerRole* role_ptr =
+      (fast_mode && fast_tag != DispatchTag::EagerChainRole)
+          ? nullptr
+          : eager_state->roles.find_ptr(node.id());
+  if (role_ptr == nullptr) {
     return false;
   }
-  const auto role = role_it->second;
+  const auto role = *role_ptr;
   if (role.step == EagerStep::skip) {
     // A node deleted by an adopted out-gate plan: true while its group
     // is pending or done (the group's dispatch owns the work and

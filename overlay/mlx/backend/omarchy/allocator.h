@@ -5,6 +5,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -294,6 +295,7 @@ class VulkanAllocator : public allocator::Allocator {
   // Live blocks by VkBuffer handle (encoder-level transfer stamping).
   std::unordered_map<VkBuffer, VulkanBuffer*> live_by_handle_;
   std::vector<VulkanBuffer*> noncoherent_;
+  std::atomic<bool> has_noncoherent_{false};
   // Freed buffers whose recorded GPU work may still reference them (see
   // release_quarantine). Held outside the reuse cache until released.
   std::vector<VulkanBuffer*> quarantine_;
