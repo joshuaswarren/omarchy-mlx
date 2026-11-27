@@ -710,7 +710,7 @@ done
 # its catalog entries route to it via serve.backend == "module".
 LAYA_PKG="$PREFIX/mlx_omarchy_laya"
 mkdir -p "$LAYA_PKG"
-for laya_file in __init__.py model.py sequence.py api.py server.py convert.py qualify.py; do
+for laya_file in __init__.py jsonfile.py model.py sequence.py api.py server.py convert.py qualify.py; do
   if in_tag_tree "serve/mlx_omarchy_laya/$laya_file"; then
     curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_laya/$laya_file" \
       -o "$LAYA_PKG/$laya_file"

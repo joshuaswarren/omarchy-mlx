@@ -41,6 +41,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from .jsonfile import read_json_object
+
 MAX_BODY_BYTES = 8 * 1024 * 1024
 
 # Shared atomic budget API (serve-cli feat/serve-cli-catalog): capability is
@@ -103,10 +105,14 @@ def _parse_args(argv):
 
 def _read_manifest(model_dir: Path) -> dict:
     path = model_dir / "manifest.json"
-    if path.exists():
-        with open(path) as f:
-            return json.load(f)
-    return {}
+    try:
+        return read_json_object(path)
+    except FileNotFoundError:
+        try:
+            os.lstat(path)  # a dangling symlink still has an entry
+        except FileNotFoundError:
+            return {}
+        raise
 
 
 # --------------------------------------------------------------------------- admission math

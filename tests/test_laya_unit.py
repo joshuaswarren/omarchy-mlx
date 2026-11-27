@@ -8,13 +8,16 @@ numerical comparison against pinned upstream torch lives in
 tests/test_laya_reference.py (env-gated).
 """
 
+import contextlib
 import http.client
 import importlib.util
 import json
 import os
+import signal
 import struct
 import subprocess
 import sys
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -42,6 +45,32 @@ from mlx_omarchy_laya.sequence import (  # noqa: E402
 CONVERTED = os.environ.get("LAYA_MLX_CKPT")  # converted checkpoint dir, if available
 # The server and engine import mlx; hosts without it skip those tests.
 HAS_MLX = importlib.util.find_spec("mlx") is not None
+
+# The stubbed server tests patch signal.signal; keep the real one for deadlines.
+_SIGNAL = signal.signal
+
+
+class _Blocked(BaseException):
+    """A read outlived its deadline. BaseException, so admission's error
+    handling cannot turn a hang into a passing refusal."""
+
+
+@contextlib.contextmanager
+def _deadline(seconds=5):
+    def fire(signum, frame):
+        raise _Blocked("read blocked for %ss" % seconds)
+
+    old = _SIGNAL(signal.SIGALRM, fire)
+    started = time.monotonic()
+    prev_delay, prev_interval = signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        _SIGNAL(signal.SIGALRM, old)
+        if prev_delay:
+            remaining = max(1e-3, prev_delay - (time.monotonic() - started))
+            signal.setitimer(signal.ITIMER_REAL, remaining, prev_interval)
 
 
 class CalibrationSemanticsTests(unittest.TestCase):
@@ -802,11 +831,13 @@ class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
 
     def _run_case(self, *, manifest=None, manifest_present=True, home_setup=None,
                   managed=True, expect=SystemExit, engine_ok=False, engine_exc=None,
-                  err=None, no_home=False):
+                  err=None, no_home=False, make_manifest=None):
         case_tmp = Path(self.enterContext(self.tempfile.TemporaryDirectory()))
         ckpt = case_tmp / "ckpt"
         (ckpt / "encoder").mkdir(parents=True)
-        if manifest_present:
+        if make_manifest is not None:
+            make_manifest(ckpt / "manifest.json")
+        elif manifest_present:
             raw = self.manifest if manifest is None else manifest
             data = raw if isinstance(raw, bytes) else json.dumps(raw).encode()
             (ckpt / "manifest.json").write_bytes(data)
@@ -860,7 +891,19 @@ class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
             ("non-utf8", dict(manifest=b"\xff\xfe"),
              ("managed admission failed", "UnicodeDecodeError")),
             ("non-object manifest", dict(manifest=[1]),
-             ("managed admission failed", "AttributeError")),
+             ("managed admission failed", "ValueError", "not a JSON object")),
+            ("empty list manifest", dict(manifest=[]),
+             ("managed admission failed", "ValueError", "not a JSON object")),
+            ("zero manifest", dict(manifest=0),
+             ("managed admission failed", "ValueError", "not a JSON object")),
+            ("manifest is a directory", dict(make_manifest=lambda p: p.mkdir()),
+             ("managed admission failed", "IsADirectoryError")),
+            ("dangling manifest symlink", dict(make_manifest=lambda p: p.symlink_to("missing-blob")),
+             ("managed admission failed", "FileNotFoundError")),
+            ("manifest is a FIFO", dict(make_manifest=os.mkfifo),
+             ("managed admission failed", "ValueError", "not a regular file")),
+            ("manifest over the cap", dict(manifest=b" " * ((1 << 20) + 1)),
+             ("managed admission failed", "ValueError", "exceeds 1048576 bytes")),
             ("weights_header not object", dict(manifest=dict(self.manifest, weights_header=[1])),
              ("managed admission failed", "laya-test", "AttributeError")),
             ("param_elements Infinity",
@@ -874,7 +917,7 @@ class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
              ("managed admission failed", "laya-test", "TypeError")),
         )
         for label, kwargs, expected in manifest_cases:
-            with self.subTest(case=label):
+            with self.subTest(case=label), _deadline():
                 self._assert_preload_refused(self._run_case(**kwargs), *expected)
 
         # stack-independent: raised, not produced by nesting depth
@@ -1036,6 +1079,15 @@ class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
         self.engine.assert_not_called()
         self.assertEqual(self.budget.load_reservations(home) if home.is_dir() else {}, {})
 
+    def test_standalone_fifo_manifest_raises_before_admission(self):
+        with _deadline():
+            exc, err, home = self._run_case(
+                make_manifest=os.mkfifo, managed=False, expect=ValueError)
+        self.assertIn("not a regular file", str(exc))
+        self.assertEqual(err, "")
+        self.engine.assert_not_called()
+        self.assertEqual(self.budget.load_reservations(home) if home.is_dir() else {}, {})
+
     def test_unresolvable_home_premise(self):
         # control: the harness premise, true on base and head
         with self._unresolvable_home():
@@ -1175,6 +1227,292 @@ class ManagedAdmissionFailClosedTests(_StubbedServerTestCase):
         self.assertIn("positive integer bytes", str(exc))
         self.assertEqual(err, "")
         self.engine.assert_not_called()
+
+
+class BoundedJsonReadTests(unittest.TestCase):
+    """Laya's manifest, encoder config, rl_agent_config, and tokenizer_config
+    reads stop on a FIFO, a device or an oversized file instead of hanging or
+    exhausting memory, refuse JSON that is not an object, and still follow
+    Hugging Face snapshot blob symlinks."""
+
+    CAP = 1 << 20
+    MANIFEST = {"catalog_id": "laya-test", "context_max_tokens": 16,
+                "weights_header": {"param_elements": 1000}}
+    CONFIG = {"hidden_size": 8, "num_attention_heads": 2, "num_hidden_layers": 1,
+              "intermediate_size": 16, "layer_types": ["full_attention"]}
+
+    def setUp(self):
+        import tempfile
+        import types
+        import unittest.mock as mock
+
+        import mlx_omarchy_laya
+        from mlx_omarchy_laya import server as srv
+
+        self.srv = srv
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        # model.py imports mlx.core at the top; load_encoder_config does not use it
+        core = types.ModuleType("mlx.core")
+        pkg = types.ModuleType("mlx")
+        pkg.core = core
+        self.enterContext(mock.patch.dict(sys.modules, {"mlx": pkg, "mlx.core": core}))
+        sys.modules.pop("mlx_omarchy_laya.model", None)
+        had = hasattr(mlx_omarchy_laya, "model")
+        old = getattr(mlx_omarchy_laya, "model", None)
+
+        def restore():
+            if had:
+                mlx_omarchy_laya.model = old
+            elif hasattr(mlx_omarchy_laya, "model"):
+                del mlx_omarchy_laya.model
+        self.addCleanup(restore)
+        self.model = importlib.import_module("mlx_omarchy_laya.model")
+
+    def _dir(self, name):
+        d = self.tmp / name
+        d.mkdir()
+        return d
+
+    def _manifest(self, d):
+        with _deadline():
+            return self.srv._read_manifest(d)
+
+    def _config(self, d):
+        with _deadline():
+            return self.model.load_encoder_config(d)
+
+    def _both(self, build):
+        """Yield (label, reader, path) for manifest.json and encoder config.json
+        each built by build(path)."""
+        for label, name, reader in (("manifest", "manifest.json", self._manifest),
+                                    ("config", "config.json", self._config)):
+            d = self._dir("%s-%d" % (label, len(list(self.tmp.iterdir()))))
+            build(d / name)
+            yield label, reader, d
+
+    def test_regular_and_hf_blob_symlink_load_the_same(self):
+        for label, name, reader, obj in (
+                ("manifest", "manifest.json", self._manifest, self.MANIFEST),
+                ("config", "config.json", self._config, self.CONFIG)):
+            plain, linked = self._dir(label + "-plain"), self._dir(label + "-hf")
+            (plain / name).write_text(json.dumps(obj))
+            (linked / "blobs").mkdir()
+            (linked / "blobs" / "0123abcd").write_text(json.dumps(obj))
+            (linked / name).symlink_to("blobs/0123abcd")
+            with self.subTest(file=label):
+                self.assertEqual(reader(linked), reader(plain))
+        self.assertEqual(self._manifest(self.tmp / "manifest-plain"), self.MANIFEST)
+        self.assertEqual(self._config(self.tmp / "config-plain").layer_types,
+                         ["full_attention"])
+
+    def test_fifo_is_refused_without_blocking(self):
+        for label, reader, d in self._both(os.mkfifo):
+            with self.subTest(file=label, writer=False), \
+                    self.assertRaisesRegex(ValueError, "is not a regular file"):
+                reader(d)
+            # a writer that never closes: reading to EOF would block forever
+            fifo = next(p for p in d.iterdir())
+            fd = os.open(fifo, os.O_RDWR)
+            try:
+                os.write(fd, json.dumps(self.MANIFEST).encode())
+                with self.subTest(file=label, writer=True), \
+                        self.assertRaisesRegex(ValueError, "is not a regular file"):
+                    reader(d)
+            finally:
+                os.close(fd)
+
+    def test_device_and_directory_are_refused(self):
+        for label, reader, d in self._both(lambda p: p.symlink_to(os.devnull)):
+            with self.subTest(file=label, kind="devnull"), \
+                    self.assertRaisesRegex(ValueError, "is not a regular file"):
+                reader(d)
+        for label, reader, d in self._both(lambda p: p.mkdir()):
+            with self.subTest(file=label, kind="directory"), \
+                    self.assertRaises(IsADirectoryError):
+                reader(d)
+
+    def test_size_cap_boundary(self):
+        for size, ok in ((self.CAP, True), (self.CAP + 1, False)):
+            def build(p, size=size):
+                obj = self.MANIFEST if p.name == "manifest.json" else self.CONFIG
+                body = json.dumps(obj).encode()
+                p.write_bytes(body + b" " * (size - len(body)))
+            for label, reader, d in self._both(build):
+                with self.subTest(file=label, size=size):
+                    if ok:
+                        self.assertTrue(reader(d))
+                    else:
+                        with self.assertRaisesRegex(ValueError, "exceeds 1048576 bytes"):
+                            reader(d)
+
+    def test_non_object_json_is_refused(self):
+        for text in ("[]", "[1]", "0", "123", '"x"', "null", "true"):
+            for label, reader, d in self._both(lambda p, t=text: p.write_text(t)):
+                with self.subTest(file=label, json=text), \
+                        self.assertRaisesRegex(ValueError, "is not a JSON object"):
+                    reader(d)
+
+    def test_missing_manifest_is_empty_while_dangling_symlink_and_missing_config_raise(self):
+        d = self._dir("empty")
+        self.assertEqual(self._manifest(d), {})
+        with self.assertRaises(FileNotFoundError):
+            self._config(d)
+        (d / "manifest.json").symlink_to("blobs/missing")
+        with self.assertRaises(FileNotFoundError):
+            self._manifest(d)
+
+    def test_manifest_lstat_error_is_not_treated_as_missing(self):
+        import unittest.mock
+
+        d = self._dir("lstat-err")
+        (d / "manifest.json").symlink_to("blobs/missing")
+        with unittest.mock.patch.object(
+                self.srv.os, "lstat", side_effect=PermissionError(13, "Permission denied")), \
+                self.assertRaises(PermissionError):
+            self._manifest(d)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "RLIMIT_AS child is Linux-only")
+    def test_reads_are_bounded_in_a_memory_capped_child(self):
+        # an unbounded read of these exhausts memory; run it where that is safe
+        sparse = self._dir("sparse")
+        with open(sparse / "manifest.json", "wb") as f:
+            f.truncate(4 << 30)
+        zero = self._dir("zero")
+        (zero / "manifest.json").symlink_to("/dev/zero")
+        child = (
+            "import resource, sys\n"
+            "resource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30))\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from pathlib import Path\n"
+            "from mlx_omarchy_laya import server\n"
+            "for d in sys.argv[2:]:\n"
+            "    try:\n"
+            "        print('OK', server._read_manifest(Path(d)))\n"
+            "    except BaseException as e:\n"
+            "        print(type(e).__name__, e)\n"
+        )
+        out = subprocess.run(
+            [sys.executable, "-I", "-c", child, str(REPO / "serve"), str(sparse), str(zero)],
+            capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+        self.assertEqual(out.stdout.splitlines(), [
+            "ValueError %s exceeds 1048576 bytes" % (sparse / "manifest.json"),
+            "ValueError %s is not a regular file" % (zero / "manifest.json"),
+        ], out.stderr)
+
+    def _import_engine_and_tokenizer(self):
+        import types
+        import unittest.mock as mock
+
+        import mlx_omarchy_laya
+
+        tok_stub = types.ModuleType("tokenizers")
+
+        class _FakeTokenizer:
+            @classmethod
+            def from_file(cls, _path):
+                return types.SimpleNamespace(token_to_id=lambda tok: {"[CLS]": 1, "[SEP]": 2, "[MASK]": 3, "[PAD]": 0}[tok])
+
+        tok_stub.Tokenizer = _FakeTokenizer
+        self.enterContext(mock.patch.dict(sys.modules, {"tokenizers": tok_stub}))
+        for attr in ("sequence", "api"):
+            mod_name = f"mlx_omarchy_laya.{attr}"
+            sys.modules.pop(mod_name, None)
+            had = hasattr(mlx_omarchy_laya, attr)
+            old = getattr(mlx_omarchy_laya, attr, None)
+
+            def restore(attr=attr, had=had, old=old):
+                if had:
+                    setattr(mlx_omarchy_laya, attr, old)
+                elif hasattr(mlx_omarchy_laya, attr):
+                    delattr(mlx_omarchy_laya, attr)
+
+            self.addCleanup(restore)
+        seq = importlib.import_module("mlx_omarchy_laya.sequence")
+        api = importlib.import_module("mlx_omarchy_laya.api")
+        return api, seq
+
+    def test_rl_agent_and_tokenizer_config_reads_are_bounded_and_follow_blob_symlinks(self):
+        import unittest.mock as mock
+
+        api, seq = self._import_engine_and_tokenizer()
+        rl_cfg = {"max_len": 16, "head_max_len": 8, "head_layers": 1}
+        tok_cfg = {"cls_token": "[CLS]", "sep_token": "[SEP]",
+                   "mask_token": "[MASK]", "pad_token": "[PAD]"}
+
+        def call_engine(d):
+            class _StopAfterCfg(Exception):
+                pass
+
+            with _deadline(), \
+                    mock.patch.object(api, "LayaTokenizer", side_effect=_StopAfterCfg):
+                try:
+                    api.LayaEngine(d, require_gpu=False)
+                except _StopAfterCfg:
+                    return True
+            raise AssertionError("expected LayaEngine to reach LayaTokenizer after reading rl_agent_config.json")
+
+        def call_tokenizer(d):
+            with _deadline():
+                return seq.LayaTokenizer(d)
+
+        cases = (
+            ("rl_agent_config", "rl_agent_config.json", call_engine, rl_cfg),
+            ("tokenizer_config", "tokenizer_config.json", call_tokenizer, tok_cfg),
+        )
+        for label, filename, reader, obj in cases:
+            # HF blob symlink parity
+            linked = self._dir(f"{label}-hf")
+            (linked / "blobs").mkdir()
+            (linked / "blobs" / "abcd").write_text(json.dumps(obj))
+            (linked / filename).symlink_to("blobs/abcd")
+            with self.subTest(file=label, kind="hf-symlink"):
+                self.assertTrue(reader(linked))
+
+            # FIFO without writer and with an open writer
+            fifo_dir = self._dir(f"{label}-fifo")
+            fifo = fifo_dir / filename
+            os.mkfifo(fifo)
+            with self.subTest(file=label, kind="fifo-no-writer"), \
+                    self.assertRaisesRegex(ValueError, "is not a regular file"):
+                reader(fifo_dir)
+            fd = os.open(fifo, os.O_RDWR)
+            try:
+                os.write(fd, json.dumps(obj).encode())
+                with self.subTest(file=label, kind="fifo-with-writer"), \
+                        self.assertRaisesRegex(ValueError, "is not a regular file"):
+                    reader(fifo_dir)
+            finally:
+                os.close(fd)
+
+            # device symlink
+            dev_dir = self._dir(f"{label}-dev")
+            (dev_dir / filename).symlink_to(os.devnull)
+            with self.subTest(file=label, kind="devnull"), \
+                    self.assertRaisesRegex(ValueError, "is not a regular file"):
+                reader(dev_dir)
+
+            # directory
+            dir_dir = self._dir(f"{label}-dir")
+            (dir_dir / filename).mkdir()
+            with self.subTest(file=label, kind="directory"), \
+                    self.assertRaises(IsADirectoryError):
+                reader(dir_dir)
+
+            # over 1 MiB cap
+            big_dir = self._dir(f"{label}-big")
+            body = json.dumps(obj).encode()
+            (big_dir / filename).write_bytes(body + b" " * (self.CAP + 1 - len(body)))
+            with self.subTest(file=label, kind="over-cap"), \
+                    self.assertRaisesRegex(ValueError, "exceeds 1048576 bytes"):
+                reader(big_dir)
+
+            # non-object JSON
+            for bad in ("[]", "0", '"x"'):
+                bad_dir = self._dir(f"{label}-bad-{len(list(self.tmp.iterdir()))}")
+                (bad_dir / filename).write_text(bad)
+                with self.subTest(file=label, kind=f"non-object:{bad}"), \
+                        self.assertRaisesRegex(ValueError, "is not a JSON object"):
+                    reader(bad_dir)
 
 
 class _RecordFile(str):

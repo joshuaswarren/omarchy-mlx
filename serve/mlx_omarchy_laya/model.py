@@ -13,11 +13,12 @@ model-name branching inside the math: the caller selects the device.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import mlx.core as mx
+
+from .jsonfile import read_json_object
 
 
 # --------------------------------------------------------------------------- config
@@ -47,8 +48,7 @@ class EncoderConfig:
 
 
 def load_encoder_config(encoder_dir: str | Path) -> EncoderConfig:
-    with open(Path(encoder_dir) / "config.json") as f:
-        c = json.load(f)
+    c = read_json_object(Path(encoder_dir) / "config.json")
     rope = c.get("rope_parameters") or {}
     global_theta = rope.get("full_attention", {}).get("rope_theta", c.get("global_rope_theta", 160000.0))
     local_theta = rope.get("sliding_attention", {}).get("rope_theta", c.get("local_rope_theta", 10000.0))
