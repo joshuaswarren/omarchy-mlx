@@ -17696,35 +17696,52 @@ void GreedyQuantizedArgmax::eval_gpu(
       return a;
     };
     // Env-gated fused lm_head + GreedyWord P1 (MLX_OMARCHY_LM_GREEDY_FUSED):
-    //   "1"  / "1s": 2-dispatch (fused lm_head+P1 -> op=3 merge; skips logits DRAM + op=1)
-    //   "2"  / "2s": 1-dispatch (fused lm_head+P1 + inline last-WG merge via ticket)
-    // Suffix "s" (or MLX_OMARCHY_Q4_SWAR_F16=1|word|lm_head) selects SWAR_F16.
+    //   "1"  / "1s": 2-dispatch R2S32W2 (skips logits DRAM + op=1)
+    //   "2"  / "2s": 1-dispatch R2S32W2 inline ticket merge
+    //   "r4" / "r4s": 2-dispatch R4S16W2 HoistFo / SwarF16Fo (0-ULP bit-exact)
+    //   "r4_1d": 1-dispatch R4S16W2 HoistFo inline ticket merge (0-ULP)
+    //   "w4" / "r4w4": 2-dispatch 128-bit uvec4 R2S32W4 / R4S16W4 HoistFo
     const char* fused_lm_env =
         omarchy::env_str("MLX_OMARCHY_LM_GREEDY_FUSED");
     if (fused_lm_env != nullptr && fused_lm_env[0] != '\0' &&
         std::strcmp(fused_lm_env, "0") != 0 && subgroup_ready) {
       const uint32_t w_off =
           checked_item_offset(w_d, w_d.size(), tag, token);
+      const uint32_t gp_k = static_cast<uint32_t>(x.shape(-1));
       const auto& caps = encoder.device().capabilities();
       constexpr VkSubgroupFeatureFlags kGp1SgOps =
           VK_SUBGROUP_FEATURE_BASIC_BIT |
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
           VK_SUBGROUP_FEATURE_VOTE_BIT |
           VK_SUBGROUP_FEATURE_BALLOT_BIT;
+      const bool mode_r4 = std::strcmp(fused_lm_env, "r4") == 0;
+      const bool mode_r4s = std::strcmp(fused_lm_env, "r4s") == 0;
+      const bool mode_r4_1d = std::strcmp(fused_lm_env, "r4_1d") == 0;
+      const bool mode_r4w4 = std::strcmp(fused_lm_env, "r4w4") == 0;
+      const bool mode_w4 = std::strcmp(fused_lm_env, "w4") == 0;
+      const bool fo_ok = (gp_k % 512u == 0u) && (n % 8u == 0u);
+      const bool w4_ok =
+          (gp_k % 1024u == 0u) && (n % 8u == 0u) && (w_off % 4u == 0u);
       const bool inline_merge =
           (std::strcmp(fused_lm_env, "2") == 0 ||
-           std::strcmp(fused_lm_env, "2s") == 0);
+           std::strcmp(fused_lm_env, "2s") == 0 ||
+           (mode_r4_1d && fo_ok));
       const bool two_disp =
           (std::strcmp(fused_lm_env, "1") == 0 ||
-           std::strcmp(fused_lm_env, "1s") == 0);
+           std::strcmp(fused_lm_env, "1s") == 0 ||
+           ((mode_r4 || mode_r4s) && fo_ok) ||
+           ((mode_w4 || mode_r4w4) && w4_ok));
+      const uint32_t req_wg =
+          (mode_r4 || mode_r4s || mode_r4_1d || mode_r4w4) ? 512u : 1024u;
       if ((w_off % 2u == 0u) && (inline_merge || two_disp) &&
           (caps.subgroup_operations & kGp1SgOps) == kGp1SgOps &&
-          caps.max_compute_work_group_invocations >= 1024u &&
-          caps.max_compute_work_group_size[0] >= 1024u &&
+          caps.max_compute_work_group_invocations >= req_wg &&
+          caps.max_compute_work_group_size[0] >= req_wg &&
           encoder.device().compute().binding_limit() >= 11u) {
         const bool use_swar = caps.shader_float16 &&
             (std::strcmp(fused_lm_env, "1s") == 0 ||
              std::strcmp(fused_lm_env, "2s") == 0 ||
+             mode_r4s ||
              q4_swar_f16_want("word") || q4_swar_f16_want("lm_head"));
         uint32_t num_wgs = (n + 63u) / 64u;
         uint32_t cand_cap = n;
@@ -17735,7 +17752,7 @@ void GreedyQuantizedArgmax::eval_gpu(
         encoder.fill_buffer(binding(gstate).buffer, 0u, gstate.nbytes(), 0);
         omarchy::ComputeParams gp_params;
         gp_params.matrix_n = n;
-        gp_params.matrix_k = static_cast<uint32_t>(x.shape(-1));
+        gp_params.matrix_k = gp_k;
         gp_params.output_size = cand_cap;
         gp_params.lhs_offset = checked_item_offset(x_d, x_d.size(), tag, token);
         gp_params.rhs_offset = checked_item_offset(w_d, w_d.size(), tag, token);
@@ -17756,11 +17773,14 @@ void GreedyQuantizedArgmax::eval_gpu(
               binding(token),
               binding(stats),
               encoder.resnorm_ticket_binding()};
-          auto fk = use_swar
+          auto fk = mode_r4_1d
               ? omarchy::ComputeKernel::
-                    QmmVecQ4WordSubgroupBF16R2S32W2GreedyFusedSwarF16
-              : omarchy::ComputeKernel::
-                    QmmVecQ4WordSubgroupBF16R2S32W2GreedyFusedHoist;
+                    QmmVecQ4WordSubgroupBF16R4S16W2GreedyFusedHoistFo
+              : (use_swar
+                     ? omarchy::ComputeKernel::
+                           QmmVecQ4WordSubgroupBF16R2S32W2GreedyFusedSwarF16
+                     : omarchy::ComputeKernel::
+                           QmmVecQ4WordSubgroupBF16R2S32W2GreedyFusedHoist);
           encoder.dispatch_compute(fk, fused_bindings, gp_params, num_wgs, 1u, 1u);
           return;
         } else {
@@ -17773,11 +17793,26 @@ void GreedyQuantizedArgmax::eval_gpu(
               binding(wg_partial_ext),
               binding(candidates),
               binding(gstate)};
-          auto p1k = use_swar
-              ? omarchy::ComputeKernel::
-                    QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1SwarF16
-              : omarchy::ComputeKernel::
-                    QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1Hoist;
+          omarchy::ComputeKernel p1k;
+          if (mode_r4w4) {
+            p1k = omarchy::ComputeKernel::
+                QmmVecQ4WordSubgroupBF16R4S16W4GreedyP1HoistFo;
+          } else if (mode_w4) {
+            p1k = omarchy::ComputeKernel::
+                QmmVecQ4WordSubgroupBF16R2S32W4GreedyP1HoistFo;
+          } else if (mode_r4 || mode_r4s) {
+            p1k = (mode_r4s && caps.shader_float16)
+                ? omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R4S16W2GreedyP1SwarF16Fo
+                : omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R4S16W2GreedyP1HoistFo;
+          } else {
+            p1k = use_swar
+                ? omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1SwarF16
+                : omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1Hoist;
+          }
           encoder.dispatch_compute(p1k, p1_bindings, gp_params, num_wgs, 1u, 1u);
           std::array<omarchy::ComputeBinding, 11> p2_bindings{
               binding(x_d),
@@ -17864,18 +17899,32 @@ void GreedyQuantizedArgmax::eval_gpu(
             caps.max_compute_work_group_size[0] >= 1024u) {
           const bool lm_fo_ok =
               (params.matrix_k % 512u == 0u) && (n % 8u == 0u);
+          const char* r4w4_env = omarchy::env_str("MLX_OMARCHY_Q4_R4W4");
+          const bool lm_r4w4_s8 =
+              r4w4_env != nullptr && std::strcmp(r4w4_env, "s8") == 0;
+          const bool lm_r4w4 = r4w4_env != nullptr &&
+              (std::strcmp(r4w4_env, "1") == 0 || lm_r4w4_s8) &&
+              (params.matrix_k % 1024u == 0u) && (n % 8u == 0u) &&
+              (params.rhs_offset % 4u == 0u);
           const bool lm_w4_hoist = q4_w4_hoist_only();
-          const bool lm_w4 = (lm_w4_hoist || caps.shader_float16) &&
+          const bool lm_w4 = !lm_r4w4 && (lm_w4_hoist || caps.shader_float16) &&
               (q4_w4_want("word") || q4_w4_want("lm_head")) &&
               (params.matrix_k % 1024u == 0u) && (n % 8u == 0u) &&
               (params.rhs_offset % 4u == 0u);
-          const bool lm_r4 =
+          const bool lm_r4 = !lm_r4w4 &&
               (q4_r4_want("word") || q4_r4_want("lm_head")) && lm_fo_ok;
           const bool swar_lm = caps.shader_float16 &&
               (q4_swar_f16_want("word") || q4_swar_f16_want("lm_head"));
           const bool hoist_lm = !swar_lm &&
               (q4_hoist_loads_want("word") || q4_hoist_loads_want("lm_head"));
-          if (lm_w4) {
+          uint32_t lm_cols = 64u;
+          if (lm_r4w4) {
+            gemv_kernel = lm_r4w4_s8
+                ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R4S8W4HoistFo
+                : omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R4S16W4HoistFo;
+            lm_cols = lm_r4w4_s8 ? 32u : 64u;
+          } else if (lm_w4) {
             gemv_kernel = lm_w4_hoist
                 ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W4HoistFo
                 : omarchy::ComputeKernel::
@@ -17905,7 +17954,7 @@ void GreedyQuantizedArgmax::eval_gpu(
                        : omarchy::ComputeKernel::
                              QmmVecQ4WordSubgroupBF16R2S32W2);
           }
-          gemv_groups = (n + 63u) / 64u;
+          gemv_groups = (n + lm_cols - 1u) / lm_cols;
         }
       } else {
         gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16;

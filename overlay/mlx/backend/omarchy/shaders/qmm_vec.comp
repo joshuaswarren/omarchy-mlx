@@ -4313,15 +4313,16 @@ void main() {
     uint x_row = params.lhs_offset;
     Q4_ROWS(input_w, scales, biases)
   }
-  float total0 = subgroupAdd(acc[0]);
-  float total1 = subgroupAdd(acc[1]);
+  float total[ROWS_PER_SLOT];
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+    total[r] = subgroupAdd(acc[r]);
+  }
   if (lane_in_slot == 0u) {
-    uint c0 = column;
-    uint c1 = column + 1u;
-    s_gp1_val[column_slot * 2u] =
-        (c0 < n) ? LOAD_VALUE(STORE_VALUE(total0)) : GP1_NEG_INF;
-    s_gp1_val[column_slot * 2u + 1u] =
-        (c1 < n) ? LOAD_VALUE(STORE_VALUE(total1)) : GP1_NEG_INF;
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      uint cr = column + r;
+      s_gp1_val[column_slot * uint(ROWS_PER_SLOT) + r] =
+          (cr < n) ? LOAD_VALUE(STORE_VALUE(total[r])) : GP1_NEG_INF;
+    }
   }
   barrier();
   if (lane < 32u) {

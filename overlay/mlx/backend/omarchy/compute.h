@@ -1475,6 +1475,16 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4SwigluBF16R2S2W2HoistFo,
   QmmVecQ4SwigluBF16R1S8W2HoistFo,
   QmmVecQ4MultiSubgroupBF16R4S4W2HoistFo,
+  // Fused R4S16W2/R4S16W4/R2S32W4 lm_head + GreedyWord P1/inline and standalone
+  // R4W4 lm_head variants (env-gated via MLX_OMARCHY_LM_GREEDY_FUSED /
+  // MLX_OMARCHY_Q4_R4W4).
+  QmmVecQ4WordSubgroupBF16R4S16W2GreedyP1HoistFo,
+  QmmVecQ4WordSubgroupBF16R4S16W2GreedyP1SwarF16Fo,
+  QmmVecQ4WordSubgroupBF16R4S16W2GreedyFusedHoistFo,
+  QmmVecQ4WordSubgroupBF16R4S16W4GreedyP1HoistFo,
+  QmmVecQ4WordSubgroupBF16R2S32W4GreedyP1HoistFo,
+  QmmVecQ4WordSubgroupBF16R4S16W4HoistFo,
+  QmmVecQ4WordSubgroupBF16R4S8W4HoistFo,
   Count,
 };
 
