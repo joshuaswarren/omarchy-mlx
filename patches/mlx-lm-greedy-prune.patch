@@ -18,6 +18,18 @@
 +    no_prune = os.environ.get("MLX_OMARCHY_NO_GREEDY_PRUNE")
 +    if no_prune == "1" or not hasattr(mx.fast, "greedy_quantized_argmax"):
 +        return None
++    # M1D-2 (13-inch M1, G13G): the greedy head is a net loss on 2B and 4B
++    # decode (5-pair ABBA on jwm1, bit-identical ids: +6.26% 2B / +4.99% 4B
++    # for the plain path), so the part defaults off.
++    # MLX_OMARCHY_NO_GREEDY_PRUNE=0 forces the head back on.
++    if no_prune != "0":
++        try:
++            dev_info = getattr(mx, "device_info", None)
++            dev_name = str((dev_info() or {}).get("device_name", "")) if callable(dev_info) else ""
++        except Exception:
++            dev_name = ""
++        if "G13G" in dev_name:
++            return None
 +    text = getattr(model, "language_model", model)
 +    if not isinstance(text, qwen3_5.TextModel) or not text.args.tie_word_embeddings:
 +        return None
