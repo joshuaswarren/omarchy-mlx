@@ -1148,6 +1148,72 @@ def test_hyperbolic():
     print("test_hyperbolic PASS")
 
 
+def test_piecewise_activations():
+    # PT-AL-b: the piecewise activation family (MobileNetV3 et al.) —
+    # hardswish, hardsigmoid, hardshrink, softshrink, tanhshrink, softsign.
+    # Prove the eager executor lowers each op (stats["mlx"], no CPU leg)
+    # and matches torch at fp32 and bf16; the bf16 reference is computed
+    # in fp32 and compared with a bf16-scale tolerance.
+    x = torch.tensor([[-4.0, -2.9, -0.49, 0.0, 0.51, 3.1, 7.0],
+                      [-3.2, -0.5, 0.5, 1.0, -1.0, 2.9, -7.0]])
+    cases = [
+        (torch.ops.aten.hardswish.default, (x,), torch.nn.functional.hardswish(x), "hardswish"),
+        (torch.ops.aten.hardsigmoid.default, (x,), torch.nn.functional.hardsigmoid(x), "hardsigmoid"),
+        (torch.ops.aten.hardshrink.default, (x, 0.5), torch.nn.functional.hardshrink(x, 0.5), "hardshrink"),
+        (torch.ops.aten.softshrink.default, (x, 0.5), torch.nn.functional.softshrink(x, 0.5), "softshrink"),
+    ]
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        for target, ins, ref, name in cases:
+            ins = tuple(t.to(dtype) if torch.is_tensor(t) else t for t in ins)
+            ref = ref.to(torch.float32) if dtype == torch.bfloat16 else ref
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), {})
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, name)
+            assert any(name in s for s in stats["mlx"]), (stats, name)
+            assert np.allclose(out.float().numpy(), ref.float().numpy(),
+                               atol=tol), (name, dtype, out.float().numpy())
+    # boundary pins: hardshrink/softshrink kill |x| == lambd exactly;
+    # hardsigmoid saturates at x <= -3 and x >= 3.
+    edge = torch.tensor([-0.5, 0.5, -3.0, 3.0])
+    for target, ins, ref, name in (
+            (torch.ops.aten.hardshrink.default, (edge, 0.5),
+             torch.tensor([0.0, 0.0, -3.0, 3.0]), "hardshrink-edge"),
+            (torch.ops.aten.hardsigmoid.default, (edge,),
+             torch.tensor([2.5 / 6, 3.5 / 6, 0.0, 1.0]), "hardsigmoid-edge")):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, name)
+        assert np.allclose(out.float().numpy(), ref.numpy(), atol=1e-5), \
+            (name, out.float().numpy(), ref.numpy())
+    # torch 2.15 registers no aten.tanhshrink / aten.softsign dispatcher op —
+    # F.* decomposes to primitives at trace time. Keep the table entries for
+    # torch versions that do dispatch them, and prove parity at the table.
+    F = torch.nn.functional
+    for name, ref in (("tanhshrink", F.tanhshrink(x)),
+                      ("softsign", F.softsign(x)),
+                      ("hardswish_", F.hardswish(x)),
+                      ("hardsigmoid_", F.hardsigmoid(x))):
+        lowering = mlx_vulkan.ATEN_TABLE[name]
+        for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+            m = mx.array(x.numpy())
+            if dtype == torch.bfloat16:
+                m = m.astype(mx.bfloat16)
+            got = torch.from_numpy(np.array(lowering(m).astype(mx.float32)))
+            assert torch.allclose(got, ref.float(), atol=tol, rtol=tol), \
+                (name, dtype, (got - ref.float()).abs().max())
+    print("test_piecewise_activations PASS")
+
+
 def test_bitwise_and_():
     # PT-X: aten.bitwise_and_.Tensor (PAR-41 census rank 45) — the last
     # unclaimed in-place _ op, built on PT-W's mul_ propagation (#861).
