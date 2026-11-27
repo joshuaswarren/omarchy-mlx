@@ -9916,6 +9916,80 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         return;
       }
     }
+    // 16x16x16 bf16 coopmat qmm prefill (RADV/RDNA WMMA shape): serves
+    // the same q4-g64-transposed bf16 call whenever the device advertises
+    // the shape and can run a 64-lane subgroup — natively (wave64) or by
+    // legally pinning requiredSubgroupSize = 64 (wave32 + size control).
+    // The workgroup is one 64-lane subgroup owning a 16-row tile, so
+    // matrix_m must be a multiple of 16 (a partial tail tile would read
+    // past the activation buffer); matrix_k must fill whole 64-wide
+    // chunks. Anything else keeps the FMA path below.
+    if (rb_enabled && out.dtype() == bfloat16 &&
+        !coopmat_disabled && q4_g64_transpose &&
+        x.ndim() >= 2 && x.shape(-2) > 1 &&
+        (params.matrix_k % 64u) == 0u &&
+        (params.matrix_m % 16u) == 0u &&
+        std::getenv("MLX_OMARCHY_NO_COOPMAT16") == nullptr) {
+      const auto& rcaps = encoder.device().capabilities();
+      const uint64_t out_align = std::max<uint64_t>(
+          16ull, rcaps.min_storage_buffer_offset_alignment);
+      const uint64_t out_byte_start =
+          bindings.empty()
+              ? 0u
+              : bindings.back().offset +
+                    uint64_t(params.output_offset) * out.itemsize();
+      const uint32_t rows_per = omarchy::qmm_out_row_split(
+          params.matrix_m,
+          uint64_t(params.matrix_n) * out.itemsize(),
+          out_byte_start,
+          rcaps.max_storage_buffer_range,
+          out_align);
+      const bool wave64_capable =
+          rcaps.subgroup_size == 64u || rcaps.subgroup_size_64_admitted;
+      const bool coopmat16_shape = omarchy::cooperative_matrix_advertises(
+          rcaps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat16_bf16_shape());
+      const bool coopmat16_reachable =
+          wave64_capable && coopmat16_shape &&
+          (params.shape[0] > 1u || rows_per == 0u ||
+           (rows_per % 16u) == 0u) &&
+          // w_s 16x32 bf16 dequant tile + one 16x16 f32 drain block.
+          (16u * 32u * 2u + 16u * 16u * 4u) <=
+              rcaps.max_compute_shared_memory_size &&
+          (params.lhs_offset & 7u) == 0u &&
+          (params.output_offset & 1u) == 0u;
+      if (coopmat16_reachable) {
+        const auto& hw = encoder.device().hardware_capabilities();
+        omarchy::capsim::require_backed(
+            encoder.device(),
+            rcaps,
+            coopmat16_reachable,
+            "QmmPrefillCoopmatBF16x16",
+            "cooperative_matrix_bf16_16x16x16_wave64",
+            omarchy::cooperative_matrix_advertises(
+                hw.cooperative_matrix_shapes,
+                omarchy::qmm_prefill_coopmat16_bf16_shape()) &&
+                (hw.subgroup_size == 64u || hw.subgroup_size_64_admitted));
+        dispatch_qmm_out_rows(
+            encoder,
+            out,
+            bindings,
+            params,
+            [&](std::span<const omarchy::ComputeBinding> cb,
+                const omarchy::ComputeParams& cp) {
+              encoder.dispatch_compute(
+                  omarchy::ComputeKernel::QmmPrefillCoopmatBF16x16,
+                  cb,
+                  cp,
+                  std::min((cp.matrix_n + 31u) / 32u,
+                           omarchy::kMaxComputeGroupCountX),
+                  std::min((cp.matrix_m + 15u) / 16u,
+                           omarchy::kMaxComputeGroupCountX),
+                  1u);
+            });
+        return;
+      }
+    }
 #endif
     // 16x16x16 fp16-operand coopmat prefill (shaders/qmm_coopmat.comp
     // -DCMAT16): the staged-x build on devices whose coopmat list lacks

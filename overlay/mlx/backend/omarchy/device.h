@@ -255,6 +255,10 @@ struct CapabilityReport {
   // 64-lane subgroup (ANV, RADV) run the same route NVIDIA runs
   // natively. Derived from the hardware report only.
   bool subgroup_size_32_admitted{false};
+  // True: this hardware can pin requiredSubgroupSize = 64 for a 64-lane
+  // compute workgroup (the one-subgroup 16x16x16 coopmat builds). Same
+  // derivation rule as subgroup_size_16_admitted.
+  bool subgroup_size_64_admitted{false};
   // Capability simulation (MLX_OMARCHY_CAPS_SIM): set on a report that
   // is a named simulated profile, never on hardware discovery. The
   // profile name and the driver_variant axis it stands in for ride

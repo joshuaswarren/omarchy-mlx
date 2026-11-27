@@ -1359,6 +1359,12 @@ enum class ComputeKernel : uint16_t {
   // Appended to keep profile kernel ids stable.
   QmmVecQ4SwigluBF16R1S8W2,
   QmmVecQ4ResNormVec4BF16R2S16W2,
+  // bf16-operand 16x16x16 build for parts whose driver advertises only
+  // the WMMA-shaped bf16 x bf16 -> f32 subgroup shape (RADV RDNA3+;
+  // shaders/qmm_coopmat16_bf16.comp). Distinct from QmmPrefillCoopmat16BF16,
+  // the fp16-operand CMAT16 build. Appended to keep profile kernel ids
+  // stable.
+  QmmPrefillCoopmatBF16x16,
   Count,
 };
 
@@ -1434,9 +1440,11 @@ class ComputeRuntime {
   ComputeRuntime(
       VkDevice device,
       uint32_t binding_limit,
+      uint32_t subgroup_size,
       uint32_t required_subgroup_size,
       bool subgroup_size_16_admitted,
-      bool subgroup_size_32_admitted);
+      bool subgroup_size_32_admitted,
+      bool subgroup_size_64_admitted);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -1505,9 +1513,11 @@ class ComputeRuntime {
       uint32_t required_subgroup_size);
 
   uint32_t binding_limit_{0};
+  uint32_t subgroup_size_{0};
   uint32_t required_subgroup_size_{0};
   bool subgroup_size_16_admitted_{false};
   bool subgroup_size_32_admitted_{false};
+  bool subgroup_size_64_admitted_{false};
   bool push_descriptors_{false};
 
   VkDevice device_;

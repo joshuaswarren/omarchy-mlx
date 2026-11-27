@@ -112,4 +112,12 @@ CoopmatShape matmul_xe16_bf16_shape();
 // matmul_xe16_bf16_shape; kept as a named route shape for gating.
 CoopmatShape qmm_prefill_coopmat16_xe_shape();
 
+// The 16x16x16 subgroup shape the RDNA/RADV qmm prefill variant
+// (shaders/qmm_coopmat16_bf16.comp) emits: bf16 A and B operands with an
+// fp32 accumulator and result, non-saturating. RADV advertises this
+// shape family (bf16 and fp16 A/B -> f32) on RDNA3+ parts where the
+// 8x8x8 fp32 shape does not exist; the match stays exact, so a device
+// listing only the fp32 shape keeps the fp32 route.
+CoopmatShape qmm_prefill_coopmat16_bf16_shape();
+
 } // namespace mlx::core::omarchy
