@@ -416,7 +416,16 @@
 #include "sdpa_vjp_reduce_f16.h"
 #include "sdpa_vjp_reduce_bf16.h"
 #include "gated_delta_decode_bf16.h"
+#include "gated_delta_decode_bf16_sg32.h"
 #include "gated_delta_decode_conv_norm_bf16_sg32.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s4w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s2w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s8w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s4w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r2s4w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s2w2.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s8w2.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s4w2.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
 #include "gated_delta_decode_composed_bf16.h"
@@ -2538,6 +2547,42 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_decode_conv_norm_bf16_sg32,
           gated_delta_decode_conv_norm_bf16_sg32_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S2W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s2w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s2w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S8W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s8w2,
+          qmm_vec_q4_swiglu_bf16_r1s8w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S4W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s4w2,
+          qmm_vec_q4_swiglu_bf16_r1s4w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R2S4W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r2s4w2,
+          qmm_vec_q4_swiglu_bf16_r2s4w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S2W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s2w2,
+          qmm_vec_q4_swiglu_bf16_r1s2w2_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S8W2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s8w2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s8w2_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S4W2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s4w2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s4w2_size};
+    case ComputeKernel::GatedDeltaDecodeBF16Sg32:
+      return {
+          gated_delta_decode_bf16_sg32,
+          gated_delta_decode_bf16_sg32_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

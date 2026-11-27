@@ -9702,7 +9702,21 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u &&
           (params.shape[1] % 2u == 0u))) {
         vec_kernel = geometry.word;
-        qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+        uint32_t cols = geometry.columns;
+        const char* wgeom = omarchy::env_str("MLX_OMARCHY_WORD_GEOM");
+        if (wgeom != nullptr && wgeom[0] != '\0' && geometry.word_w2) {
+          if (std::strcmp(wgeom, "r2s4w2") == 0 ||
+              (std::strcmp(wgeom, "r2s4w2_small") == 0 && params.matrix_n <= 8192u)) {
+            vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2;
+            cols = 8u;
+          } else if (
+              std::strcmp(wgeom, "r2s2w2") == 0 ||
+              (std::strcmp(wgeom, "r2s2w2_small") == 0 && params.matrix_n <= 8192u)) {
+            vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S2W2;
+            cols = 4u;
+          }
+        }
+        qmm_groups = (params.matrix_n + cols - 1u) / cols;
       }
     }
     encoder.dispatch_compute(
@@ -11046,6 +11060,48 @@ bool dispatch_quantized_gemv_group(
   const bool dedicated_swiglu_active = swiglu_out && !token_route &&
       outgate == nullptr && dtype == bfloat16 && subgroup_ready &&
       geom.dedicated_swiglu && members.size() == 2;
+  ComputeKernel swiglu_kernel = geom.swiglu;
+  uint32_t swiglu_cols = geom.swiglu_columns;
+  if (dedicated_swiglu_active) {
+    const char* sgeom = omarchy::env_str("MLX_OMARCHY_SWIGLU_GEOM");
+    if (sgeom != nullptr && sgeom[0] != '\0') {
+      if (std::strcmp(sgeom, "r1s8w2") == 0) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
+        swiglu_cols = 8u;
+      } else if (std::strcmp(sgeom, "r1s4w2") == 0) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S4W2;
+        swiglu_cols = 4u;
+      } else if (std::strcmp(sgeom, "r2s4w2") == 0) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R2S4W2;
+        swiglu_cols = 8u;
+      } else if (std::strcmp(sgeom, "r1s2w2") == 0) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S2W2;
+        swiglu_cols = 2u;
+      }
+    }
+  }
+  ComputeKernel resnorm_kernel = geom.resnorm;
+  uint32_t resnorm_cols = geom.resnorm_columns;
+  bool resnorm_vec4_active = false;
+  if (res_norm_active && !token_route && outgate == nullptr &&
+      encoder.device().compute().binding_limit() >= 13u) {
+    const char* rn_vec4 = omarchy::env_str("MLX_OMARCHY_RESNORM_VEC4");
+    if (rn_vec4 != nullptr && rn_vec4[0] != '\0') {
+      if (std::strcmp(rn_vec4, "r2s8w2") == 0 || std::strcmp(rn_vec4, "1") == 0) {
+        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S8W2;
+        resnorm_cols = 16u;
+        resnorm_vec4_active = true;
+      } else if (
+          std::strcmp(rn_vec4, "r2s4w2") == 0 &&
+          members[0].node.size() == 2048u &&
+          res_norm->weight.size() == 2048u &&
+          (res_norm->weight.offset() % (8u * res_norm->weight.itemsize())) == 0u) {
+        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S4W2;
+        resnorm_cols = 8u;
+        resnorm_vec4_active = true;
+      }
+    }
+  }
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
   // resnorm epilogue kernels.
@@ -11053,9 +11109,9 @@ bool dispatch_quantized_gemv_group(
       ? (token_route
              ? 8u
              : (outgate != nullptr ? geom.outgate_resnorm_columns
-                                   : geom.resnorm_columns))
+                                   : resnorm_cols))
       : dedicated_swiglu_active
-      ? geom.swiglu_columns
+      ? swiglu_cols
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
              ? geom.columns
@@ -11618,6 +11674,28 @@ bool dispatch_quantized_gemv_group(
           total_groups,
           1u,
           1u);
+    } else if (resnorm_vec4_active) {
+      std::array<ComputeBinding, 13> rn_bindings{
+          binding(x),
+          binding(members[0].node.inputs()[1]),
+          binding(members[0].node.inputs()[2]),
+          binding(members[0].node.inputs()[3]),
+          binding(members[0].node),
+          binding(*members[0].addend),
+          binding(*members[0].epilogue),
+          binding(res_norm->weight),
+          binding(res_norm->out),
+          encoder.resnorm_ticket_binding(),
+          binding(*members[0].epilogue),
+          binding(res_norm->weight),
+          binding(res_norm->out)};
+      encoder.dispatch_compute(
+          resnorm_kernel,
+          rn_bindings,
+          params,
+          total_groups,
+          1u,
+          1u);
     } else {
       std::array<ComputeBinding, 10> rn_bindings{
           binding(x),
@@ -11654,7 +11732,7 @@ bool dispatch_quantized_gemv_group(
         binding(members[1].node.inputs()[3]),
         binding(*swiglu_out)};
     encoder.dispatch_compute(
-        geom.swiglu,
+        swiglu_kernel,
         sw_bindings,
         params,
         total_groups,
@@ -15920,12 +15998,29 @@ void GatedDeltaUpdate::eval_gpu(
           break;
       }
     }
+    uint32_t gdn_grid_y = decode_tile ? static_cast<uint32_t>(Dv / 32) : 1u;
+    const char* gdn_dec_coal = omarchy::env_str("MLX_OMARCHY_GDN_DECODE_COALESCED");
+    if (gdn_dec_coal != nullptr && gdn_dec_coal[0] != '\0' &&
+        std::strcmp(gdn_dec_coal, "0") != 0 && h0.dtype() == float32 &&
+        Dk == 128 && Dv == 128 && (params.shape[1] % 4u) == 0u &&
+        (params.shape[2] % 4u) == 0u) {
+      const auto& gdn_caps = encoder.device().capabilities();
+      constexpr VkSubgroupFeatureFlags kGdnSgFeatures =
+          VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+      if (gdn_caps.subgroup_size == 32u &&
+          (gdn_caps.subgroup_operations & kGdnSgFeatures) == kGdnSgFeatures &&
+          gdn_caps.max_compute_work_group_invocations >= 1024u &&
+          gdn_caps.max_compute_work_group_size[0] >= 1024u) {
+        kernel = omarchy::ComputeKernel::GatedDeltaDecodeBF16Sg32;
+        gdn_grid_y = 1u;
+      }
+    }
     encoder.dispatch_compute(
         kernel,
         bindings,
         params,
         static_cast<uint32_t>(B * Hv),
-        decode_tile ? static_cast<uint32_t>(Dv / 32) : 1u,
+        gdn_grid_y,
         1);
     return;
   }

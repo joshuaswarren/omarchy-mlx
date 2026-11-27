@@ -1,0 +1,179 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Coalesced-state GDN decode kernel for fast::gated_delta_update /
+// fast::gated_delta_update_raw (Dk == Dv == 128, bf16 q/k/v/out, f32 state,
+// T == 1; 1024 threads, 32 subgroups x 32 lanes = 4 Dv rows per subgroup).
+// Supports both bf16 and f32 A_log (flag bit 9), raw or precomputed gates
+// (flag bit 8), and native GQA key-head mapping (in_strides[3] = Hk).
+
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer QBuf     { uint16_t v[]; } q_buf;
+layout(set = 0, binding = 1, std430) readonly buffer KBuf     { uint16_t v[]; } k_buf;
+layout(set = 0, binding = 2, std430) readonly buffer VBuf     { uint16_t v[]; } v_buf;
+layout(set = 0, binding = 3, std430) readonly buffer GBuf     { uint16_t v[]; } g_buf;
+layout(set = 0, binding = 4, std430) readonly buffer BBuf     { uint16_t v[]; } b_buf;
+layout(set = 0, binding = 5, std430) readonly buffer SIn      { vec4     v[]; } s_in;
+layout(set = 0, binding = 6, std430) writeonly buffer YBuf    { uint16_t v[]; } y_buf;
+layout(set = 0, binding = 7, std430) buffer         SOut      { vec4     v[]; } s_out;
+layout(set = 0, binding = 8, std430) readonly buffer ALogBuf  { uint16_t v[]; } alog_buf;
+layout(set = 0, binding = 9, std430) readonly buffer DtBuf    { uint16_t v[]; } dt_buf;
+
+layout(push_constant) uniform Params {
+  uint count;          // Dv (128)
+  uint operation;
+  uint lhs_size;
+  uint rhs_size;
+  uint reduce_size;
+  uint output_size;
+  uint lhs_offset;     // q offset
+  uint rhs_offset;     // k offset
+  uint output_offset;  // out offset
+  uint aux_size;       // v offset
+  uint aux_offset;     // b / beta offset
+  uint matrix_m;       // Dk (128)
+  uint matrix_n;       // Dv (128)
+  uint matrix_k;       // B * Hv
+  uint flags;          // bit 8: raw gates, bit 9: f32 A_log
+  float alpha;
+  float beta_f;
+  uint dims;
+  uint shape[4];       // [g / a offset, h0 offset, hf offset, unused]
+  uint in_strides[4];  // [A_log offset, dt_bias offset, Hv, Hk (0 => equal)]
+  uint out_strides[4];
+} params;
+
+shared float sq[128];
+shared float sk[128];
+shared float skg[128];
+shared float sv[128];
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if ((bits & 0x7fff0000u) == 0x7f800000u) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+float gdn_dk_term(float delta, float k_i) {
+  precise float p = delta * k_i;
+  return p;
+}
+
+vec2 gdn_compute_gates(uint head) {
+  float g;
+  float beta;
+  if ((params.flags & 8u) != 0u) {
+    float b_in = bf16_load(b_buf.v[params.aux_offset + head]);
+    float beta_f = 1.0f / (1.0f + exp(-b_in));
+    beta = bf16_load(bf16_store(beta_f));
+    float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
+    uint ph = head % params.in_strides[2];
+    float a_log;
+    if ((params.flags & 512u) != 0u) {
+      uint base = params.in_strides[0] + 2u * ph;
+      a_log = uintBitsToFloat(
+          uint(alog_buf.v[base]) | (uint(alog_buf.v[base + 1u]) << 16u));
+    } else {
+      a_log = bf16_load(alog_buf.v[params.in_strides[0] + ph]);
+    }
+    float dt = bf16_load(dt_buf.v[params.in_strides[1] + ph]);
+    float x = bf16_load(bf16_store(a_in + dt));
+    float u = 1.0f + exp(-abs(x));
+    float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+    float sp_raw = max(x, 0.0f) + l1p;
+    float sp = ((params.flags & 512u) != 0u) ? sp_raw
+                                             : bf16_load(bf16_store(sp_raw));
+    g = exp(-(exp(a_log) * sp));
+  } else {
+    g = bf16_load(g_buf.v[params.shape[0] + head]);
+    beta = bf16_load(b_buf.v[params.aux_offset + head]);
+  }
+  return vec2(g, beta);
+}
+
+void main() {
+  uint head = gl_WorkGroupID.x;
+  uint hv = params.matrix_k;
+  if (head >= hv) {
+    return;
+  }
+
+  uint tid = gl_LocalInvocationID.x;
+  uint sg = tid >> 5u;
+  uint lane = tid & 31u;
+
+  uint khead = head;
+  if (params.in_strides[3] != 0u) {
+    uint hv_b = params.in_strides[2];
+    uint hk_b = params.in_strides[3];
+    khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
+  }
+
+  vec2 gates = gdn_compute_gates(head);
+  float g = gates.x;
+  float beta = gates.y;
+
+  if (tid < 128u) {
+    float q_val = bf16_load(q_buf.v[params.lhs_offset + khead * 128u + tid]);
+    float k_val = bf16_load(k_buf.v[params.rhs_offset + khead * 128u + tid]);
+    float v_val = bf16_load(v_buf.v[params.aux_size + head * 128u + tid]);
+    sq[tid] = q_val;
+    sk[tid] = k_val;
+    skg[tid] = k_val * g;
+    sv[tid] = v_val;
+  }
+  barrier();
+
+  uint head_base = head * 128u * 128u;
+  uint s_in_base_q = (params.shape[1] + head_base) >> 2u;
+  uint s_out_base_q = (params.shape[2] + head_base) >> 2u;
+
+  uint c0 = lane * 4u;
+  float skg0 = skg[c0 + 0u];
+  float skg1 = skg[c0 + 1u];
+  float skg2 = skg[c0 + 2u];
+  float skg3 = skg[c0 + 3u];
+  float sk0 = sk[c0 + 0u];
+  float sk1 = sk[c0 + 1u];
+  float sk2 = sk[c0 + 2u];
+  float sk3 = sk[c0 + 3u];
+  float sq0 = sq[c0 + 0u];
+  float sq1 = sq[c0 + 1u];
+  float sq2 = sq[c0 + 2u];
+  float sq3 = sq[c0 + 3u];
+
+  for (uint r = sg; r < 128u; r += 32u) {
+    vec4 w = s_in.v[s_in_base_q + r * 32u + lane];
+    float kv_part = fma(w.x, skg0,
+                    fma(w.y, skg1,
+                    fma(w.z, skg2, w.w * skg3)));
+    float kv_acc = subgroupAdd(kv_part);
+    float delta = (sv[r] - kv_acc) * beta;
+    float n0 = fma(w.x, g, gdn_dk_term(delta, sk0));
+    float n1 = fma(w.y, g, gdn_dk_term(delta, sk1));
+    float n2 = fma(w.z, g, gdn_dk_term(delta, sk2));
+    float n3 = fma(w.w, g, gdn_dk_term(delta, sk3));
+    s_out.v[s_out_base_q + r * 32u + lane] = vec4(n0, n1, n2, n3);
+    float o_part = fma(n0, sq0,
+                   fma(n1, sq1,
+                   fma(n2, sq2, n3 * sq3)));
+    float o_acc = subgroupAdd(o_part);
+    if (lane == 0u) {
+      y_buf.v[params.output_offset + head * 128u + r] = bf16_store(o_acc);
+    }
+  }
+}

@@ -1351,6 +1351,17 @@ enum class ComputeKernel : uint16_t {
   // (Dk == Dv == 128, f32 state, bf16 qkv/gates/out; 1024 threads, 32 SGs).
   // Appended to keep profile kernel ids stable.
   GatedDeltaDecodeConvNormBF16Sg32,
+  // Wave 3I screening kernels: low-register SwiGLU, wave-balanced Word/ResNorm,
+  // full-uvec4 coalesced ResNorm epilogue, and coalesced GatedDeltaDecode (9B).
+  QmmVecQ4WordSubgroupBF16R2S4W2,
+  QmmVecQ4WordSubgroupBF16R2S2W2,
+  QmmVecQ4SwigluBF16R1S8W2,
+  QmmVecQ4SwigluBF16R1S4W2,
+  QmmVecQ4SwigluBF16R2S4W2,
+  QmmVecQ4SwigluBF16R1S2W2,
+  QmmVecQ4ResNormVec4BF16R2S8W2,
+  QmmVecQ4ResNormVec4BF16R2S4W2,
+  GatedDeltaDecodeBF16Sg32,
   Count,
 };
 
