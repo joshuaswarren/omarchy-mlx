@@ -11912,7 +11912,20 @@ bool dispatch_quantized_gemv_group(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
-            qmm_geometry().multi)
+            [&]() {
+              auto mk = qmm_geometry().multi;
+              if (mk == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2) {
+                const char* up_env = omarchy::env_str("MLX_OMARCHY_Q4_UPFRONT");
+                const bool up_want =
+                    (up_env != nullptr && up_env[0] != '\0')
+                        ? (std::strcmp(up_env, "0") != 0)
+                        : omarchy::qmm_multi_upfront_default(qmm_dev_name);
+                if (up_want) {
+                  return ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Upfront;
+                }
+              }
+              return mk;
+            }())
       : select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiF32,
