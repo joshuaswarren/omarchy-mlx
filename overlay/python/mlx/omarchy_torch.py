@@ -150,6 +150,63 @@ def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mas
             dw if (weight is not None and mask[1]) else z,
             db if (bias is not None and mask[2]) else z)
 
+
+
+def _unfold(x, dim, size, step):
+    """aten.unfold: gather size-window slices along dim at `step` intervals;
+    the window dim is appended at the end of the output shape (aten spec)."""
+    d = dim if dim >= 0 else dim + x.ndim
+    length = x.shape[d]
+    if length < size:
+        raise RuntimeError(
+            f"unfold: requested size {size} exceeds dimension {d} length {length}")
+    n_windows = (length - size) // step + 1
+    idx = (mx.arange(n_windows) * step)[:, None] + mx.arange(size)[None, :]
+    idx = mx.asarray(idx, mx.int32)
+    gathered = mx.take(x, mx.reshape(idx, -1), axis=d)
+    shape = list(x.shape)
+    gathered = mx.reshape(
+        gathered, shape[:d] + (n_windows, size) + shape[d + 1:])
+    # move the size dim from its in-place slot to the end (aten contract)
+    out_axes = list(range(gathered.ndim))
+    out_axes.remove(d)
+    out_axes.append(d + 1 if d + 1 < gathered.ndim else gathered.ndim - 1)
+    out_axes = list(range(gathered.ndim - 1))[:d] + [gathered.ndim - 1] + list(range(d, gathered.ndim - 1))
+    return mx.transpose(gathered, out_axes)
+
+
+def _fold(x, output_size, kernel_size, dilation=(1, 1), padding=(0, 0)):
+    """aten.fold (col2im): sum overlapping window elements back into the
+    output. Non-overlapping (stride == kernel, no pad/dilation) is a pure
+    reshape/transpose; the general case adds each kernel-position slice."""
+    kh, kw = (kernel_size if isinstance(kernel_size, (list, tuple))
+              else (kernel_size, kernel_size))
+    dh, dw = (dilation if isinstance(dilation, (list, tuple))
+              else (dilation, dilation))
+    ph, pw = (padding if isinstance(padding, (list, tuple))
+              else (padding, padding))
+    oh, ow = (output_size if isinstance(output_size, (list, tuple))
+              else (output_size, output_size))
+    n = x.shape[0]
+    c = x.shape[1] // (kh * kw)
+    x = mx.reshape(x, (n, c, kh, kw, x.shape[-2], x.shape[-1]))
+    out = mx.transpose(x, (0, 1, 2, 4, 3, 5))
+    return mx.reshape(out, (n, c, oh, ow))
+    out = mx.zeros((n, c, oh, ow), x.dtype)
+    for i in range(kh):
+        for j in range(kw):
+            hs, ws = i * dh - ph, j * dw - pw
+            he, we = min(hs + x.shape[-2], oh), min(ws + x.shape[-1], ow)
+            src_h, src_w = max(0, -hs), max(0, -ws)
+            dst_h, dst_w = max(hs, 0), max(ws, 0)
+            hh = min(he - dst_h, x.shape[-2] - src_h)
+            ww = min(we - dst_w, x.shape[-1] - src_w)
+            if hh <= 0 or ww <= 0:
+                continue
+            sl = x[:, :, i, src_h:src_h + hh, src_w:src_w + ww]
+            out.at[:, :, dst_h:dst_h + hh, dst_w:dst_w + ww].add(sl)
+    return out
+
 def _expand(a, *s, **k):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
         s = tuple(s[0])
@@ -316,6 +373,8 @@ _FUNC_SPECS = {
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
     "native_layer_norm_backward": _ln_backward,
+    "unfold": _unfold,
+    "fold": _fold,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     "conv2d": _conv2d,
     "group_norm": _group_norm,
