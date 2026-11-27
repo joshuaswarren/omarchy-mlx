@@ -907,10 +907,8 @@ stage_silero_vad() {
           rm -f -- "$f"
         fi
       }
-      # Install INT/TERM before EXIT: bash 5.2.x applies its deferred
-      # async-subshell SIGINT ignore on the first trap call, so registering
-      # EXIT first causes a subsequent INT trap to be silently ignored.
-      trap 'cleanup_vad_tmp; exit 130' INT
+      # Non-interactive async subshells ignore SIGINT per POSIX; the parent
+      # cancel_silero_vad trap converts both INT and TERM into SIGTERM here.
       trap 'cleanup_vad_tmp; exit 143' TERM
       trap 'cleanup_vad_tmp' EXIT
       mkdir -p -- "$vad_dir" || exit 1
