@@ -154,7 +154,8 @@ def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mas
 
 def _unfold(x, dim, size, step):
     """aten.unfold: gather size-window slices along dim at `step` intervals;
-    the window dim is appended at the end of the output shape (aten spec)."""
+    the aten view shape is (N, C, n_windows, size, *rest_dims), which is
+    exactly take()'s in-place (n_windows, size) slot order — no transpose."""
     d = dim if dim >= 0 else dim + x.ndim
     length = x.shape[d]
     if length < size:
@@ -165,47 +166,48 @@ def _unfold(x, dim, size, step):
     idx = mx.asarray(idx, mx.int32)
     gathered = mx.take(x, mx.reshape(idx, -1), axis=d)
     shape = list(x.shape)
-    gathered = mx.reshape(
+    return mx.reshape(
         gathered, shape[:d] + (n_windows, size) + shape[d + 1:])
-    # move the size dim from its in-place slot to the end (aten contract)
-    out_axes = list(range(gathered.ndim))
-    out_axes.remove(d)
-    out_axes.append(d + 1 if d + 1 < gathered.ndim else gathered.ndim - 1)
-    out_axes = list(range(gathered.ndim - 1))[:d] + [gathered.ndim - 1] + list(range(d, gathered.ndim - 1))
-    return mx.transpose(gathered, out_axes)
 
 
-def _fold(x, output_size, kernel_size, dilation=(1, 1), padding=(0, 0)):
+def _fold(x, output_size, kernel_size, dilation=(1, 1), padding=(0, 0), stride=(1, 1)):
     """aten.fold (col2im): sum overlapping window elements back into the
-    output. Non-overlapping (stride == kernel, no pad/dilation) is a pure
-    reshape/transpose; the general case adds each kernel-position slice."""
+    output. Zero-stuff each kernel-position slice to the strided layout
+    (dense ops only) and add the clipped shifted window per kernel
+    position with a dense read-modify-write — exact for any
+    stride/dilation/padding, overlaps sum."""
     kh, kw = (kernel_size if isinstance(kernel_size, (list, tuple))
               else (kernel_size, kernel_size))
     dh, dw = (dilation if isinstance(dilation, (list, tuple))
               else (dilation, dilation))
     ph, pw = (padding if isinstance(padding, (list, tuple))
               else (padding, padding))
+    sh, sw = (stride if isinstance(stride, (list, tuple))
+              else (stride, stride))
     oh, ow = (output_size if isinstance(output_size, (list, tuple))
               else (output_size, output_size))
     n = x.shape[0]
     c = x.shape[1] // (kh * kw)
-    x = mx.reshape(x, (n, c, kh, kw, x.shape[-2], x.shape[-1]))
-    out = mx.transpose(x, (0, 1, 2, 4, 3, 5))
-    return mx.reshape(out, (n, c, oh, ow))
-    out = mx.zeros((n, c, oh, ow), x.dtype)
+    irows = (oh + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+    icols = (ow + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+    x = mx.reshape(x, (n, c, kh, kw, irows, icols))
+    canvas = mx.zeros((n, c, oh, ow), x.dtype)
     for i in range(kh):
         for j in range(kw):
-            hs, ws = i * dh - ph, j * dw - pw
-            he, we = min(hs + x.shape[-2], oh), min(ws + x.shape[-1], ow)
-            src_h, src_w = max(0, -hs), max(0, -ws)
-            dst_h, dst_w = max(hs, 0), max(ws, 0)
-            hh = min(he - dst_h, x.shape[-2] - src_h)
-            ww = min(we - dst_w, x.shape[-1] - src_w)
-            if hh <= 0 or ww <= 0:
+            grid = x[:, :, i, j]
+            r = i * dh - ph
+            cl = j * dw - pw
+            r0, c0 = max(r, 0), max(cl, 0)
+            r1, c1 = min(r + irows, oh), min(cl + icols, ow)
+            if r1 <= r0 or c1 <= c0:
                 continue
-            sl = x[:, :, i, src_h:src_h + hh, src_w:src_w + ww]
-            out.at[:, :, dst_h:dst_h + hh, dst_w:dst_w + ww].add(sl)
-    return out
+            cur = canvas[:, :, r0:r1, c0:c1]
+            vals = grid[:, :, r0 - r:r1 - r, c0 - cl:c1 - cl]
+            canvas = mx.slice_update(canvas, cur + vals,
+                                     mx.array((0, 0, r0, c0)),
+                                     mx.array((0, 1, 2, 3)))
+    return canvas
+
 
 def _expand(a, *s, **k):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
