@@ -626,6 +626,20 @@ def test_slice():
         exp = torch.ops.aten.slice.Tensor(tx, dim, start, end, step).numpy()
         got = mlx_vulkan._slice(a, dim, start, end, step)
         assert np.array_equal(_np(got), exp), (dim, start, end, step)
+    # PT-U6: aten.slice.Tensor defaults every arg after self — the OpInfo
+    # census hand-samples `slice(x, 0)` (dim only) and all-kwarg calls,
+    # which TypeError'd against the old required-arg signature
+    opt_cases = [
+        ((0,), {}),                                   # dim only
+        ((), {"dim": 1, "start": 1, "end": -2}),      # all kwargs
+        ((), {"dim": 1, "start": 1, "end": -2, "step": 3}),
+        ((), {"dim": 0, "start": -10, "end": -2, "step": 2}),
+        ((), {}),                                     # every default
+    ]
+    for pos, kw in opt_cases:
+        exp = torch.ops.aten.slice.Tensor(tx, *pos, **kw).numpy()
+        got = mlx_vulkan._slice(a, *pos, **kw)
+        assert np.array_equal(_np(got), exp), (pos, kw)
     # through the eager executor: the aten.slice node must lower
     t = torch.randn(4, 12)
     for dim, start, end, step in ((0, 1, 3, 1), (1, None, 7, 2)):
@@ -639,6 +653,20 @@ def test_slice():
         out = run(mx.array(t.numpy()))
         exp = torch.ops.aten.slice.Tensor(t, dim, start, end, step).numpy()
         assert np.array_equal(_np(out), exp), (dim, start, end, step)
+        assert "slice" in stats["mlx"], stats
+        assert "slice" not in stats["cpu"], stats
+    # PT-U6: dim-only and kwargs node forms through the executor (the
+    # OpInfo census's exact dispatch-miss shapes)
+    for pos, kw in (((0,), {}), ((), {"dim": 1, "start": 1, "end": -2})):
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(torch.ops.aten.slice.Tensor, (ph, *pos), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(mx.array(t.numpy()))
+        exp = torch.ops.aten.slice.Tensor(t, *pos, **kw).numpy()
+        assert np.array_equal(_np(out), exp), (pos, kw)
         assert "slice" in stats["mlx"], stats
         assert "slice" not in stats["cpu"], stats
     print("test_slice PASS")

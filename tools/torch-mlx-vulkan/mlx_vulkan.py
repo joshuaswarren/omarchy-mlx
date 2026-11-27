@@ -338,7 +338,7 @@ def _refused_nodes(nodes, strided):
                 stack.append(a)
     return refused
 
-def _slice(a, dim, start, end, step=1):
+def _slice(a, dim=0, start=None, end=None, step=1):
     dim = dim % a.ndim
     n = a.shape[dim]
     # aten clamps out-of-range bounds; mlx requires int32. None = open bound.
