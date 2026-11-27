@@ -398,7 +398,9 @@
 #include "sdpa_decode_split_p2_hd256_bk64.h"
 #include "sdpa_decode_online_sg32_bf16_hd128.h"
 #include "sdpa_decode_online_rope_sg32_bf16_hd128.h"
+#include "sdpa_decode_online_rope_sg32_bf16_hd128_g13c.h"
 #include "sdpa_decode_online_rope_outgate_sg32_bf16_hd128.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd128_g13c.h"
 #include "sdpa_decode_online_rope_sg32_bf16_hd256.h"
 #include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256.h"
 #include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split.h"
@@ -1482,6 +1484,9 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128:
       return {sdpa_decode_online_rope_sg32_bf16_hd128,
               sdpa_decode_online_rope_sg32_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128G13C:
+      return {sdpa_decode_online_rope_sg32_bf16_hd128_g13c,
+              sdpa_decode_online_rope_sg32_bf16_hd128_g13c_size};
     case ComputeKernel::SdpaDecodeOnlineSg32BF16Hd256:
       return {sdpa_decode_online_sg32_bf16_hd256,
               sdpa_decode_online_sg32_bf16_hd256_size};
@@ -2570,6 +2575,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           sdpa_decode_online_rope_outgate_sg32_bf16_hd128,
           sdpa_decode_online_rope_outgate_sg32_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd128_g13c,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd128_g13c_size};
     case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256:
       return {
           sdpa_decode_online_rope_sg32_bf16_hd256,

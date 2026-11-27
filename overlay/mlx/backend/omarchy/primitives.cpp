@@ -19398,10 +19398,17 @@ void ScaledDotProductAttention::eval_gpu(
                 rp,
                 rp.matrix_m * split_k);
           } else {
+            const bool sdpa_g13c =
+                !is_hd256 &&
+                omarchy::sdpa_g13c_fast_default_part(
+                    encoder.device().capabilities().device_name);
             const auto og_kernel = is_hd256
                 ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256
-                : omarchy::ComputeKernel::
-                      SdpaDecodeOnlineRopeOutgateSg32BF16Hd128;
+                : (sdpa_g13c
+                       ? omarchy::ComputeKernel::
+                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C
+                       : omarchy::ComputeKernel::
+                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd128);
             encoder.dispatch_compute(og_kernel, rb_og, rp, rp.matrix_m);
           }
           omarchy::commit_sdpa_online_rope(out);
@@ -19420,9 +19427,17 @@ void ScaledDotProductAttention::eval_gpu(
               binding(qw),
               binding(kw),
               binding(off)};
+          const bool sdpa_g13c =
+              !is_hd256 &&
+              omarchy::sdpa_g13c_fast_default_part(
+                  encoder.device().capabilities().device_name);
           const auto kernel = is_hd256
               ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256
-              : omarchy::ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128;
+              : (sdpa_g13c
+                     ? omarchy::ComputeKernel::
+                           SdpaDecodeOnlineRopeSg32BF16Hd128G13C
+                     : omarchy::ComputeKernel::
+                           SdpaDecodeOnlineRopeSg32BF16Hd128);
           encoder.dispatch_compute(kernel, rb, rp, rp.matrix_m);
           omarchy::commit_sdpa_online_rope(out);
           dispatched = true;

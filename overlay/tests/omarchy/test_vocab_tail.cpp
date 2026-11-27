@@ -951,3 +951,16 @@ TEST_CASE("fused greedy word head: LM_R2S32=1 matches LM_R2S32=0 and composed ar
   CHECK_EQ(r0.token, r1.token);
   CHECK_EQ(r1.token, composed_argmax(in, stream));
 }
+
+TEST_CASE("sdpa g13c fast default: the part rule and env override") {
+  unsetenv("MLX_OMARCHY_SDPA_G13C_FAST");
+  CHECK(omarchy::sdpa_g13c_fast_default_part("Apple M1 Max (G13C C0)"));
+  CHECK_FALSE(omarchy::sdpa_g13c_fast_default_part("Apple M1 (G13G B1)"));
+  CHECK_FALSE(omarchy::sdpa_g13c_fast_default_part("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::sdpa_g13c_fast_default_part("Apple M4 (G16G B0)"));
+  setenv("MLX_OMARCHY_SDPA_G13C_FAST", "0", 1);
+  CHECK_FALSE(omarchy::sdpa_g13c_fast_default_part("Apple M1 Max (G13C C0)"));
+  setenv("MLX_OMARCHY_SDPA_G13C_FAST", "1", 1);
+  CHECK(omarchy::sdpa_g13c_fast_default_part("Apple M2 Max (G14C B1)"));
+  unsetenv("MLX_OMARCHY_SDPA_G13C_FAST");
+}

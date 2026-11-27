@@ -949,6 +949,20 @@ inline bool qmm_fast_only_default_part(const std::string& device_name) {
   return device_name.find("G13C") != std::string::npos;
 }
 
+// G13C-gated HD=128 SdpaOnlineRope fast path (parallel Phase-A sg 2..3 RoPE
+// trig + 2-barrier subgroupShuffleDown K pack via disjoint s_q[128] + preloaded
+// epilogue with single 1/denom). Bit-identical (0 ULP) to the default HD=128
+// kernel. Default on strictly for G13C (Apple M1 Max, Qwen3-4B 4-bit decode,
+// DEFER_TOKENS=0: #1055 +1.27% / -0.132 ms/tok + #1059 +0.39% / -0.039 ms/tok
+// 5/5 pairs at ctx=512 and +0.36% / -0.040 ms/tok 3/3 pairs at ctx=2048);
+// MLX_OMARCHY_SDPA_G13C_FAST=1/0 overrides on any part. Pure.
+inline bool sdpa_g13c_fast_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_G13C_FAST")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G13C") != std::string::npos;
+}
+
 inline bool vocab_tail_chunked_default(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_VOCAB_TAIL_CHUNKED")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;

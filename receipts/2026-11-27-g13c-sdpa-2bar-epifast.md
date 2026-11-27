@@ -7,8 +7,9 @@ Runner contract: verbatim `p45_cell.py`, `MLX_OMARCHY_DEFER_TOKENS=0`, `MLX_DISA
 
 ## Change
 
-Single-file edit in `overlay/mlx/backend/omarchy/shaders/sdpa_decode_online_rope.comp` (HD=128 path, `+49/-35` lines; zero new kernel enums or flags):
+G13C-gated HD=128 `SdpaOnlineRope` fast path (`ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128G13C` and `Outgate` twin, compiled with `-DSDPA_G13C_FAST=1`, defaulted ON strictly for Apple M1 Max `G13C` via `omarchy::sdpa_g13c_fast_default_part` / `MLX_OMARCHY_SDPA_G13C_FAST`; default HD=128 shader restored to pre-#1055 behavior on `G13G`, `G14C`, and all other parts):
 
+- **Parallel Phase-A RoPE trig (#1055, now G13C-gated):** Subgroups `2..3` compute the 64 `(cos, sin)` pairs into `s_o[512..639]` concurrently with Q/K RMSNorm.
 - **2-barrier prologue (-36 full 1024-thread workgroup barriers per decode token):** In Prologue Phase B (`t = 0..63`), rotated pre-scaled Q is written into a disjoint `shared float s_q[128]` (512 B, total shared memory `17,536 B`, still 1024t max occupancy on G13C) while rotated K is packed directly into `s_k_words[64]` via `subgroupShuffleDown(..., 1u)` within subgroups 0 and 1. Because neither `s_q` nor `s_k_words` is written after `barrier()` #2, `barrier()` #3 is eliminated with zero WAR hazard against `s_o`.
 - **Preloaded epilogue:** Preloads all four `s_o[rbase + 0..3] * w` values before the four `subgroupAdd` reductions and replaces four `acc / denom` divisions in `lane == 0` with one `inv_d = 1.0 / denom` and four multiplies (preserving `SDPA_OUTGATE`).
 
