@@ -1372,8 +1372,8 @@ inline uint32_t sdpa_split_pv_max_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_PV_MAX_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
-  // G14C 17-block (136 workgroups at 8 KV heads) ceiling: 5-pair ABBA Qwen3-4B decode wins at ctx 2048 (+3.77%, 5/5, k_len 2057..2120) and drops at ctx 2176 (-5.89%, 0/5, 18 blocks); 17 * 128 = 2176 keys, bit-identical tokens.
-  if (device_name.find("G14C") != std::string::npos) return 2176;
+  // G14C: 19 blocks (152 workgroups at 8 KV heads) is the exact 4.00-wave bound on 38 cores; the earlier 17-block ceiling (136 workgroups, 3.58 waves: wins at ctx 2048 +3.77% 5/5, k_len 2057..2120, drops at 2176 -5.89% 0/5) left a partial fourth wave. Retuned post-#936/#939/#952; DEC-47 screen on the M2 Max confirms before this comment's numbers move. 19 * 128 = 2432 keys.
+  if (device_name.find("G14C") != std::string::npos) return 2432;
   // G13C: 5-pair ABBA Qwen3-4B decode (value-phase variant vs default) wins at ctx 512
   // (+5.37%, 5/5) and ctx 1024 (+4.80%, 5/5, k_len ~1032..1096) and loses at ctx 2048
   // (-8.71%, 0/3 screen); 9 * 128 = 1152 keys, bit-identical tokens.
@@ -1410,8 +1410,8 @@ inline uint32_t sdpa_split_bk64_max_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_BK64_MAX_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
-  // G14C 17-block (136 workgroups at 8 KV heads) ceiling: 5-pair ABBA Qwen3-4B decode wins at ctx 512 (+2.20%), 768 (+1.53%), and 1024 (+0.75%, 5/5) and drops at ctx 1088 (-4.67%, 0/5, 18 blocks); 17 * 64 = 1088 keys, bit-identical tokens.
-  if (device_name.find("G14C") != std::string::npos) return 1088;
+  // G14C: 19 blocks (152 workgroups at 8 KV heads) is the exact 4.00-wave bound on 38 cores; the earlier 17-block ceiling (136 workgroups, 3.58 waves: wins at ctx 512 +2.20%, 768 +1.53%, 1024 +0.75% 5/5, drops at 1088 -4.67% 0/5) left a partial fourth wave. Retuned post-#936/#939/#952; DEC-47 screen on the M2 Max confirms before this comment's numbers move. 19 * 64 = 1216 keys.
+  if (device_name.find("G14C") != std::string::npos) return 1216;
   // G13C: 5-pair ABBA Qwen3-4B decode (64-key blocks vs default) wins at ctx 512
   // (+3.25%, 5/5, k_len ~520..584) and loses at ctx 1024 (-4.52%, 0/3 screen);
   // 10 * 64 = 640 keys, bit-identical tokens.

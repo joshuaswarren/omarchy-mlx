@@ -429,14 +429,14 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
 }
 
 TEST_CASE("split-K decode SDPA: the value-phase variant default is on up to a key limit on G14C, G13C and G16S and off on G13G") {
-  CHECK(omarchy::sdpa_split_pv_max_keys("Apple M2 Max (G14C B1)") == 2176);
+  CHECK(omarchy::sdpa_split_pv_max_keys("Apple M2 Max (G14C B1)") == 2432);
   CHECK(omarchy::sdpa_split_pv_max_keys("Apple M1 Max (G13C C0)") == 1152);
   CHECK(omarchy::sdpa_split_pv_max_keys("Apple M1 (G13G B1)") == 0);
   CHECK(omarchy::sdpa_split_pv_max_keys("") == 2048);
   CHECK(omarchy::sdpa_split_pv_max_keys("Apple M2 Pro (G14S B1)") == 2048);
   CHECK(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 128));
-  CHECK(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 2176));
-  CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 2177));
+  CHECK(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 2432));
+  CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 2433));
   CHECK(omarchy::sdpa_split_pv_default("Apple M1 Max (G13C C0)", 1152));
   CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M1 Max (G13C C0)", 1153));
   CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M1 (G13G B1)", 128));
@@ -452,13 +452,13 @@ TEST_CASE("split-K decode SDPA: the value-phase variant default is on up to a ke
 }
 
 TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to per-part key limits; unlisted parts take the 512-key newest-class ceiling") {
-  CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M2 Max (G14C B1)") == 1088);
+  CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M2 Max (G14C B1)") == 1216);
   CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M1 Max (G13C C0)") == 640);
   CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M1 (G13G B1)") == 512);
   CHECK(omarchy::sdpa_split_bk64_max_keys("") == 512);
   CHECK(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 128));
-  CHECK(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 1088));
-  CHECK_FALSE(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 1089));
+  CHECK(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 1216));
+  CHECK_FALSE(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 1217));
   CHECK(omarchy::sdpa_split_bk64_default("Apple M1 Max (G13C C0)", 512));
   CHECK(omarchy::sdpa_split_bk64_default("Apple M1 Max (G13C C0)", 640));
   CHECK_FALSE(omarchy::sdpa_split_bk64_default("Apple M1 Max (G13C C0)", 641));
