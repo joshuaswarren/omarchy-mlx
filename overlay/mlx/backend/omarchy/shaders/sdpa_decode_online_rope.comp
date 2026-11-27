@@ -129,12 +129,15 @@ const uint D_PER_SG = TILE_D / uint(SUBGROUPS);
 const uint HALF_D = uint(HD) >> 1u;
 const float LOG2E = 1.4426950408889634;
 
-// 17,024 B (HD=128) or 17,280 B (HD=256, SG=32) total shared memory.
+// 17,536 B (HD=128) or 17,280 B (HD=256, SG=32) total shared memory.
 // Odd stride 129 eliminates 32-bank conflicts in the parallel subgroupAdd epilogue.
 shared float s_max[SUBGROUPS];
 shared float s_sum[SUBGROUPS];
 shared float s_o[SUBGROUPS * S_O_STRIDE];
 shared uint s_k_words[HALF_D];
+#if HD == 128
+shared float s_q[TILE_D];
+#endif
 
 float load_q_raw(uint abs_index) {
   uint word = q_raw_data.values[abs_index >> 1u];
@@ -278,47 +281,47 @@ void main() {
   }
   barrier();
 
-  // Prologue Phase B: Read precomputed (cos, sin) across t = 0..63 and rotate
-  // BOTH Q[t, t+64] (pre-scaled into s_o[256..383]) and K[t, t+64] (into
-  // s_o[384..511]).
+  // Prologue Phase B: Read precomputed (cos, sin) across t = 0..63, write
+  // rotated pre-scaled Q into disjoint s_q[128], and pack rotated K directly
+  // into s_k_words[64] via subgroupShuffleDown — deleting barrier #3 with zero
+  // WAR hazard against s_o and zero extra hot-loop ALU.
   if (t < HALF_D) {
     float c = s_o[512u + t];
     float s = s_o[576u + t];
 
     float qa = s_o[t];
     float qb = s_o[t + HALF_D];
-    s_o[256u + t] = rope_round(rope_round(qa * c) - rope_round(qb * s)) * s_scale;
-    s_o[256u + t + HALF_D] =
+    s_q[t] = rope_round(rope_round(qa * c) - rope_round(qb * s)) * s_scale;
+    s_q[t + HALF_D] =
         rope_round(rope_round(qa * s) + rope_round(qb * c)) * s_scale;
 
     float ka = s_o[D + t];
     float kb = s_o[D + t + HALF_D];
-    s_o[384u + t] = rope_round(rope_round(ka * c) - rope_round(kb * s));
-    s_o[384u + t + HALF_D] = rope_round(rope_round(ka * s) + rope_round(kb * c));
-  }
-  barrier();
-
-  // All 32 subgroups load rotated Q into registers; sg == 0 packs rotated K
-  // into s_k_words[64] and (for leader WG) writes k_cache via coalesced uvec2.
-  float q0 = s_o[256u + lane * 4u + 0u];
-  float q1 = s_o[256u + lane * 4u + 1u];
-  float q2 = s_o[256u + lane * 4u + 2u];
-  float q3 = s_o[256u + lane * 4u + 3u];
-
-  if (sg == 0u) {
-    uint w0 = bf16_bits(s_o[384u + lane * 4u + 0u]) |
-        (bf16_bits(s_o[384u + lane * 4u + 1u]) << 16u);
-    uint w1 = bf16_bits(s_o[384u + lane * 4u + 2u]) |
-        (bf16_bits(s_o[384u + lane * 4u + 3u]) << 16u);
-    s_k_words[lane * 2u] = w0;
-    s_k_words[lane * 2u + 1u] = w1;
-    if (write_k && head == kv_head * repeats) {
-      uint k_write_idx =
-          params.count + kv_head * (params.shape[3] >> 2u) + lane;
-      key_data.values[k_write_idx] = uvec2(w0, w1);
+    uint b0 = bf16_bits(rope_round(rope_round(ka * c) - rope_round(kb * s)));
+    uint b1 = bf16_bits(rope_round(rope_round(ka * s) + rope_round(kb * c)));
+    uint n0 = subgroupShuffleDown(b0, 1u);
+    uint n1 = subgroupShuffleDown(b1, 1u);
+    if ((t & 1u) == 0u) {
+      uint h = t >> 1u;
+      s_k_words[h] = b0 | (n0 << 16u);
+      s_k_words[32u + h] = b1 | (n1 << 16u);
     }
   }
   barrier();
+
+  // All 32 subgroups load rotated pre-scaled Q into registers; sg == 0 writes
+  // k_cache from s_k_words via coalesced uvec2 store.
+  float q0 = s_q[lane * 4u + 0u];
+  float q1 = s_q[lane * 4u + 1u];
+  float q2 = s_q[lane * 4u + 2u];
+  float q3 = s_q[lane * 4u + 3u];
+
+  if (sg == 0u && write_k && head == kv_head * repeats) {
+    uint k_write_idx =
+        params.count + kv_head * (params.shape[3] >> 2u) + lane;
+    key_data.values[k_write_idx] =
+        uvec2(s_k_words[lane * 2u], s_k_words[lane * 2u + 1u]);
+  }
 
   uint last_key = k_len - 1u;
 
@@ -439,16 +442,27 @@ void main() {
 #ifdef SDPA_OUTGATE
     uint gate_base = params.out_strides[1] + head * params.out_strides[2] + d0;
 #endif
-    for (uint k = 0u; k < D_PER_SG; ++k) {
-      float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
-      if (lane == 0u) {
+    float x0 = lane_active ? (s_o[rbase + 0u] * w) : 0.0;
+    float x1 = lane_active ? (s_o[rbase + 1u] * w) : 0.0;
+    float x2 = lane_active ? (s_o[rbase + 2u] * w) : 0.0;
+    float x3 = lane_active ? (s_o[rbase + 3u] * w) : 0.0;
+    float a0 = subgroupAdd(x0);
+    float a1 = subgroupAdd(x1);
+    float a2 = subgroupAdd(x2);
+    float a3 = subgroupAdd(x3);
+    if (lane == 0u) {
+      float inv_d = 1.0 / denom;
 #ifdef SDPA_OUTGATE
-        output_data.values[out_base + k] =
-            apply_outgate(acc / denom, gate_base + k);
+      output_data.values[out_base + 0u] = apply_outgate(a0 * inv_d, gate_base + 0u);
+      output_data.values[out_base + 1u] = apply_outgate(a1 * inv_d, gate_base + 1u);
+      output_data.values[out_base + 2u] = apply_outgate(a2 * inv_d, gate_base + 2u);
+      output_data.values[out_base + 3u] = apply_outgate(a3 * inv_d, gate_base + 3u);
 #else
-        output_data.values[out_base + k] = bf16_store(acc / denom);
+      output_data.values[out_base + 0u] = bf16_store(a0 * inv_d);
+      output_data.values[out_base + 1u] = bf16_store(a1 * inv_d);
+      output_data.values[out_base + 2u] = bf16_store(a2 * inv_d);
+      output_data.values[out_base + 3u] = bf16_store(a3 * inv_d);
 #endif
-      }
     }
   }
 #else
