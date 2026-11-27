@@ -433,10 +433,14 @@ omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s4w2 shaders/qmm_vec.comp -DUSE_
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_VEC_NO_SWIGLU=1)
 omarchy_shader(qmm_vec_q4_swiglu_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_swiglu_bf16_r1s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_swiglu_bf16_r1s8w2u16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_U16_NIB=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s8w2u16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_U16_NIB=1)
 omarchy_shader(qmm_vec_q4_multi_outgate_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_OUTGATE=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_RESNORM=1 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_resnorm_vec4_bf16_r2s16w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_resnorm_vec4_bf16_r2s32w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_resnorm_vec4_bf16_r2s32w2u16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1 -DQMM_U16_NIB=1)
 omarchy_shader(qmm_vec_q4_outgate_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_OUTGATE=1 -DQMM_VEC_RESNORM=1)
 omarchy_shader(qmm_vec_q4_outgate_resnorm_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_OUTGATE=1 -DQMM_VEC_RESNORM=1 -DQMM_W2=1)
 # Multi-token (verify / small-batch) variants: the multi column with the
@@ -591,6 +595,8 @@ omarchy_shader(gated_delta_decode_perrow_pf_conv_gqa_bf16 shaders/gated_delta_de
 omarchy_shader(gated_delta_decode_perrow_pf_conv_norm_gqa_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1 -DGDN_NATIVE_GQA_INDEX=1)
 # Coalesced-state fused GDN decode conv + gated-delta + gated-RMSNorm (1024 threads, 32 SGs, 4 rows/SG).
 omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32 shaders/gated_delta_decode_conv_coalesced.comp)
+omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32_split2 shaders/gated_delta_decode_conv_coalesced.comp -DGDN_SPLIT_DV=2)
+omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32_split4 shaders/gated_delta_decode_conv_coalesced.comp -DGDN_SPLIT_DV=4)
 # Coalesced-state standalone GDN decode (Dk == Dv == 128, f32 state, bf16/f32 A_log, native GQA; 1024 threads, 32 SGs).
 omarchy_shader(gated_delta_decode_bf16_sg32 shaders/gated_delta_decode_coalesced.comp)
 omarchy_shader(gated_delta_decode_composed_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_COMPOSED_ORDER=1)

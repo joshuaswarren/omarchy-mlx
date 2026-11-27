@@ -9702,6 +9702,10 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u &&
           (params.shape[1] % 2u == 0u))) {
         vec_kernel = geometry.word;
+        if (vec_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2 &&
+            omarchy::env_flag("MLX_OMARCHY_QMM_U16_NIB")) {
+          vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2U16;
+        }
         qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
       }
     }
@@ -11130,7 +11134,9 @@ bool dispatch_quantized_gemv_group(
         ? (std::strcmp(sw_r1_env, "0") != 0)
         : omarchy::qmm_swiglu_r1_default(qmm_dev_name);
     if (sw_r1_on) {
-      swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
+      swiglu_kernel = omarchy::env_flag("MLX_OMARCHY_QMM_U16_NIB")
+          ? ComputeKernel::QmmVecQ4SwigluBF16R1S8W2U16
+          : ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
       swiglu_cols = 8u;
     }
   }
@@ -11146,11 +11152,30 @@ bool dispatch_quantized_gemv_group(
         ? (std::strcmp(rn_vec4_env, "0") != 0)
         : omarchy::qmm_resnorm_vec4_default(qmm_dev_name);
     if (rn_vec4_on) {
-      resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
-      resnorm_cols = 32u;
+      const bool rn_s32 = omarchy::env_flag("MLX_OMARCHY_RESNORM_R2S32") &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u;
+      if (rn_s32) {
+        resnorm_kernel = omarchy::env_flag("MLX_OMARCHY_QMM_U16_NIB")
+            ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2U16
+            : ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2;
+        resnorm_cols = 64u;
+      } else {
+        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
+        resnorm_cols = 32u;
+      }
       resnorm_vec4_active = true;
     }
   }
+  const bool multi_r2s16 = !token_route && outgate == nullptr &&
+      dtype == bfloat16 && subgroup_ready &&
+      omarchy::env_flag("MLX_OMARCHY_MULTI_R2S16") &&
+      encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
+      encoder.device().capabilities().max_compute_work_group_size[0] >= 512u;
+  const ComputeKernel multi_bf16_kernel = multi_r2s16
+      ? ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2
+      : geom.multi;
+  const uint32_t multi_cols = multi_r2s16 ? 32u : geom.columns;
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
   // resnorm epilogue kernels.
@@ -11163,7 +11188,7 @@ bool dispatch_quantized_gemv_group(
       ? swiglu_cols
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
-             ? geom.columns
+             ? multi_cols
              : 8u);
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
@@ -11724,6 +11749,9 @@ bool dispatch_quantized_gemv_group(
           1u,
           1u);
     } else if (resnorm_vec4_active) {
+      if (omarchy::env_flag("MLX_OMARCHY_RESNORM_FAST_STORE")) {
+        params.flags |= 2u;
+      }
       std::array<ComputeBinding, 13> rn_bindings{
           binding(x),
           binding(members[0].node.inputs()[1]),
@@ -11846,7 +11874,7 @@ bool dispatch_quantized_gemv_group(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
-            qmm_geometry().multi)
+            multi_bf16_kernel)
       : select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiF32,
@@ -17397,6 +17425,10 @@ void GreedyQuantizedArgmax::eval_gpu(
       // even rhs_offset (params.shape[1] is 0 for 2D w).
       if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u)) {
         gemv_kernel = geometry.word;
+        if (gemv_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2 &&
+            omarchy::env_flag("MLX_OMARCHY_QMM_U16_NIB")) {
+          gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2U16;
+        }
         gemv_groups = (n + geometry.columns - 1u) / geometry.columns;
       } else {
         gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16;
@@ -18138,17 +18170,44 @@ void GdnConvDeltaUpdate::eval_gpu(
                  : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Pf)
       : (pf_wide ? omarchy::ComputeKernel::GatedDeltaDecodeConvBF16PfWide
                  : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16Pf);
+  uint32_t gdn_split = 1u;
   if (gdn_coal_sg32_ok &&
       (params.shape[1] % 4u) == 0u && (params.shape[2] % 4u) == 0u) {
     kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
+    const char* split_env = omarchy::env_str("MLX_OMARCHY_GDN_SPLIT");
+    if (split_env != nullptr && (B * Hv) <= 64 &&
+        encoder.device().compute().binding_limit() >= 14u) {
+      if (std::strcmp(split_env, "2") == 0) {
+        kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Split2;
+        gdn_split = 2u;
+      } else if (std::strcmp(split_env, "4") == 0) {
+        kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Split4;
+        gdn_split = 4u;
+      }
+    }
   }
-  encoder.dispatch_compute(
-      kernel,
-      std::span<const omarchy::ComputeBinding>(bindings.data(), with_norm ? 13u : 11u),
-      params,
-      static_cast<uint32_t>(B * Hv),
-      1,
-      1);
+  if (gdn_split > 1u) {
+    std::array<omarchy::ComputeBinding, 14> split_bindings{
+        bindings[0], bindings[1], bindings[2], bindings[3], bindings[4],
+        bindings[5], bindings[6], bindings[7], bindings[8], bindings[9],
+        bindings[10], bindings[11], bindings[12],
+        encoder.resnorm_ticket_binding()};
+    encoder.dispatch_compute(
+        kernel,
+        split_bindings,
+        params,
+        static_cast<uint32_t>(B * Hv) * gdn_split,
+        1,
+        1);
+  } else {
+    encoder.dispatch_compute(
+        kernel,
+        std::span<const omarchy::ComputeBinding>(bindings.data(), with_norm ? 13u : 11u),
+        params,
+        static_cast<uint32_t>(B * Hv),
+        1,
+        1);
+  }
 }
 
 bool LayerNorm::use_fallback(Stream s) {

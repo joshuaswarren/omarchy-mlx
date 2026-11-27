@@ -407,7 +407,7 @@ layout(set = 0, binding = 9, std430) coherent buffer Ticket {
 // 128-bit uvec4 aliases (8 bf16 elements/lane) for coalesced RMSNorm epilogue
 // on row_length == 2048 or 4096. Host binds the exact same backing buffers as
 // bindings 6, 7, 8 (sum0, norm_weight, norm_output).
-layout(set = 0, binding = 10, std430) readonly coherent buffer Sum0V4 {
+layout(set = 0, binding = 10, std430) coherent buffer Sum0V4 {
   uvec4 values[];
 } sum0_v4;
 layout(set = 0, binding = 11, std430) readonly buffer NormWeightV4 {
@@ -416,6 +416,7 @@ layout(set = 0, binding = 11, std430) readonly buffer NormWeightV4 {
 layout(set = 0, binding = 12, std430) writeonly buffer NormOutputV4 {
   uvec4 values[];
 } norm_output_v4;
+shared uint16_t s_resnorm_sum[COLUMNS_PER_GROUP];
 #endif
 #if defined(QMM_VEC_OUTGATE)
 layout(set = 0, binding = 10, std430) readonly buffer OutgateOut {
@@ -775,12 +776,24 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 // so every x value equals the scalar LOAD_VALUE, the sum chain keeps the
 // float order, and one uvec4 load replaces eight 2-byte scalar loads per
 // weight word.
+#ifdef QMM_U16_NIB
+#define Q4_QUAD_LOAD(lo, hi) \
+  float x0 = uintBitsToFloat(((lo) & 0xFFFFu) << 16u); \
+  float x1 = uintBitsToFloat((lo) & 0xFFFF0000u); \
+  float x2 = uintBitsToFloat(((hi) & 0xFFFFu) << 16u); \
+  float x3 = uintBitsToFloat((hi) & 0xFFFF0000u); \
+  input_sum += ((x0 + x1) + x2) + x3; \
+  float xs1 = x1 * 0.0625; \
+  float xs2 = x2 * 0.00390625; \
+  float xs3 = x3 * 0.000244140625;
+#else
 #define Q4_QUAD_LOAD(lo, hi) \
   float x0 = uintBitsToFloat(((lo) & 0xFFFFu) << 16u); \
   float x1 = uintBitsToFloat((lo) & 0xFFFF0000u); \
   float x2 = uintBitsToFloat(((hi) & 0xFFFFu) << 16u); \
   float x3 = uintBitsToFloat((hi) & 0xFFFF0000u); \
   input_sum += ((x0 + x1) + x2) + x3;
+#endif
 #else
 // f32 x has nothing to round; the f32 quad sum is uncaptured,
 // so f32 keeps the float chain.
@@ -803,13 +816,23 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #define Q4_NIB(p, shift) \
   (uintBitsToFloat(((p) & (0xfu << (shift))) + ((150u - (shift)) << 23u)) - \
    FIELD_UNIT(shift))
+#ifdef QMM_U16_NIB
+#define Q4_DOT4(p) \
+  fma(xs3, float(uint16_t((p) & 0xf000u)), \
+      fma(xs2, float(uint16_t((p) & 0x0f00u)), \
+          fma(xs1, float(uint16_t((p) & 0x00f0u)), \
+              x0 * float(uint16_t((p) & 0x000fu)))))
+#else
+#define Q4_DOT4(p) \
+  fma(x3, Q4_NIB((p), 12u), \
+      fma(x2, Q4_NIB((p), 8u), \
+          fma(x1, Q4_NIB((p), 4u), \
+              x0 * Q4_NIB((p), 0u))))
+#endif
 #define Q4_QUAD(packed, a, b) { \
   Q4_QUAD_LOAD(a, b) \
   uint p = (packed); \
-  dot += fma(x3, Q4_NIB(p, 12u), \
-      fma(x2, Q4_NIB(p, 8u), \
-          fma(x1, Q4_NIB(p, 4u), \
-              x0 * Q4_NIB(p, 0u)))); \
+  dot += Q4_DOT4(p); \
 }
 // One packed weight word and its eight x values.
 #if defined(USE_FP16) || defined(USE_BF16)
@@ -886,10 +909,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   Q4_QUAD_LOAD(a, b) \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
     uint p = (P_EXPR); \
-    dot[r] += fma(x3, Q4_NIB(p, 12u), \
-        fma(x2, Q4_NIB(p, 8u), \
-            fma(x1, Q4_NIB(p, 4u), \
-                x0 * Q4_NIB(p, 0u)))); \
+    dot[r] += Q4_DOT4(p); \
   } \
 }
 #if QGROUP == 32
@@ -2129,6 +2149,29 @@ void main() {
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
     total[r] = subgroupAdd(acc[r]);
   }
+#if defined(QMM_RESNORM_VEC4) && !defined(QMM_VEC_OUTGATE)
+  if ((params.flags & 2u) != 0u &&
+      (gl_WorkGroupID.x * COLUMNS_PER_GROUP + COLUMNS_PER_GROUP) <= n) {
+    if (lane_in_slot == 0u) {
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+        uint col = column + r;
+        float rounded = ROUND_STORAGE(total[r]);
+        s_resnorm_sum[column_slot * uint(ROWS_PER_SLOT) + r] =
+            STORE_VALUE(rounded + LOAD_VALUE(addend0.values[col]));
+      }
+    }
+    barrier();
+    if (lane < (COLUMNS_PER_GROUP >> 3u)) {
+      uint base = lane * 8u;
+      uvec4 packed = uvec4(
+          uint(s_resnorm_sum[base + 0u]) | (uint(s_resnorm_sum[base + 1u]) << 16u),
+          uint(s_resnorm_sum[base + 2u]) | (uint(s_resnorm_sum[base + 3u]) << 16u),
+          uint(s_resnorm_sum[base + 4u]) | (uint(s_resnorm_sum[base + 5u]) << 16u),
+          uint(s_resnorm_sum[base + 6u]) | (uint(s_resnorm_sum[base + 7u]) << 16u));
+      sum0_v4.values[gl_WorkGroupID.x * (COLUMNS_PER_GROUP >> 3u) + lane] = packed;
+    }
+  } else
+#endif
   if (lane_in_slot == 0u) {
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
       uint col = column + r;
@@ -2374,15 +2417,9 @@ void main() {
   Q4_QUAD_LOAD(lo, hi) \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
     uint pg = (PG_EXPR); \
-    dot_g[r] += fma(x3, Q4_NIB(pg, 12u), \
-        fma(x2, Q4_NIB(pg, 8u), \
-            fma(x1, Q4_NIB(pg, 4u), \
-                x0 * Q4_NIB(pg, 0u)))); \
+    dot_g[r] += Q4_DOT4(pg); \
     uint pu = (PU_EXPR); \
-    dot_u[r] += fma(x3, Q4_NIB(pu, 12u), \
-        fma(x2, Q4_NIB(pu, 8u), \
-            fma(x1, Q4_NIB(pu, 4u), \
-                x0 * Q4_NIB(pu, 0u)))); \
+    dot_u[r] += Q4_DOT4(pu); \
   } \
 }
 void main() {
