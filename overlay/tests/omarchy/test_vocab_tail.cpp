@@ -967,7 +967,6 @@ TEST_CASE("sdpa g13c fast default: the part rule and env override") {
 }
 TEST_CASE("vocab tail: chunked ArgMax keeps the normalized BF16 greedy token") {
 
-@@@SPAN@@@
   constexpr int cols = 151936; // Qwen3-4B vocabulary.
   std::vector<float> row(cols, -1.0f);
   row[4095] = -0x1p-8f;
