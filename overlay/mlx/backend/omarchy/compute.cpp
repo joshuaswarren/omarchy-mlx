@@ -429,6 +429,7 @@
 #include "gated_delta_decode_bf16.h"
 #include "gated_delta_decode_bf16_sg32.h"
 #include "gated_delta_decode_conv_norm_bf16_sg32.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_fast.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
 #include "gated_delta_decode_composed_bf16.h"
@@ -2591,6 +2592,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_decode_conv_norm_bf16_sg32,
           gated_delta_decode_conv_norm_bf16_sg32_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_fast,
+          gated_delta_decode_conv_norm_bf16_sg32_fast_size};
     case ComputeKernel::GatedDeltaDecodeBF16Sg32:
       return {
           gated_delta_decode_bf16_sg32,

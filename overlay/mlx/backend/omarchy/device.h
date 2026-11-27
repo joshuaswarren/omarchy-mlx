@@ -831,6 +831,18 @@ inline bool gdn_conv_coalesced_f32a_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// Fast Sg32 coalesced GDN conv + delta + gated-RMSNorm variant
+// (GatedDeltaDecodeConvNormBF16Sg32Fast: hardware subgroupAdd in tree_reduce32,
+// 4x vec4 s_in state burst hoisted across Q/K norm after barrier 1, and
+// deferred lane-0 shared writes after all 4 s_out stores).
+// Measured on Apple M2 Max (G14C B1, DEFER_TOKENS=0, identical greedy token IDs):
+// Qwen3.8-2B ctx=512 +0.85% (190.79 -> 192.17 tok/s, -37.5 us/tok, 4/5 pairs),
+// Qwen3.5-9B ctx=512 +0.08% (62.31 -> 62.47 tok/s, -42 us/tok, 2/3 pairs).
+// Default on G14C only; MLX_OMARCHY_GDN_SG32_FAST=0/1 overrides. Pure.
+inline bool gdn_conv_sg32_fast_default(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
 // Coalesced-state standalone GDN decode kernel (GatedDeltaDecodeBF16Sg32:
 // 1024 threads, 32 subgroups x 32 lanes, 4 Dv rows/SG via coalesced 512-byte
 // vec4 state loads/stores, native GQA key-head indexing, f32 A_log).
