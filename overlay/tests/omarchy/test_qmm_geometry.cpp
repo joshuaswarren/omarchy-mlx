@@ -685,6 +685,58 @@ int main(int argc, char** argv) {
         std::cout << "ok: multi_r2s16_up_fast_3m identical\n";
       }
     }
+    // G14C compile-time ResNormVec4 D2048/D4096 specializations and batch==1
+    // Word R2S4W2FastB1 must be 0-ULP bit-identical to the non-specialized
+    // fast variants.
+    for (const char* name : {"resnorm2048", "resnorm4096"}) {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_VEC4", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_R2S32", "1", 1);
+      setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_SPEC", "0", 1);
+      int rc1 = run_child(name, base.c_str());
+      setenv("MLX_OMARCHY_RESNORM_SPEC", "1", 1);
+      int rc2 = run_child(name, other.c_str());
+      unsetenv("MLX_OMARCHY_RESNORM_SPEC");
+      unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_RESNORM_R2S32");
+      unsetenv("MLX_OMARCHY_RESNORM_VEC4");
+      unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: " << name
+                  << "_spec differed from non-spec fast (rc " << rc1 << "/"
+                  << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: " << name << "_spec identical\n";
+      }
+    }
+    {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_WORD_R2S4", "1", 1);
+      setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
+      setenv("MLX_OMARCHY_WORD_B1", "0", 1);
+      int rc1 = run_child("single", base.c_str());
+      setenv("MLX_OMARCHY_WORD_B1", "1", 1);
+      int rc2 = run_child("single", other.c_str());
+      unsetenv("MLX_OMARCHY_WORD_B1");
+      unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_WORD_R2S4");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: word_r2s4_fast_b1 differed from non-b1 fast (rc "
+                  << rc1 << "/" << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: word_r2s4_fast_b1 identical\n";
+      }
+    }
   }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")
             << " failures " << failures << "\n";
