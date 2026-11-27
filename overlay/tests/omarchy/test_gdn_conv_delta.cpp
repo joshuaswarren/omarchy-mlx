@@ -20,6 +20,7 @@
 #include <vector>
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/device.h"
+#include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/fast.h"
 #include "mlx/ops.h"
@@ -577,4 +578,120 @@ TEST_CASE("coalesced GDN Sg32Fast default policy, accuracy, and off-switch") {
     CHECK(max_diff(fast.out[1], base.out[1]) <= 2e-5f);
     CHECK(max_diff(fast.out[0], base.out[0]) <= 1e-2f);
   }
+}
+
+TEST_CASE("GDN Sg32 in_proj_a/b fold policy, bit-exactness, dispatch drop, and replay fallback") {
+  // Policy: opt-in only, word-parsed via env_flag, and gated by MLX_OMARCHY_FUSED_CHAIN.
+  // env_note_eval() refreshes the per-eval env cache between direct setenv() calls.
+  unsetenv("MLX_OMARCHY_FUSED_CHAIN");
+  unsetenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD");
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::gdn_inproj_ba_fold_enabled());
+  setenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD", "1", 1);
+  omarchy::env_note_eval();
+  CHECK(omarchy::gdn_inproj_ba_fold_enabled());
+  setenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD", "0", 1);
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::gdn_inproj_ba_fold_enabled());
+  setenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD", "off", 1);
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::gdn_inproj_ba_fold_enabled());
+  setenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD", "1", 1);
+  setenv("MLX_OMARCHY_FUSED_CHAIN", "0", 1);
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::gdn_inproj_ba_fold_enabled());
+  unsetenv("MLX_OMARCHY_FUSED_CHAIN");
+  unsetenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD");
+  omarchy::env_note_eval();
+
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+
+  auto check_case = [&](int hk, int hv, int k, bool a_log_f32, uint32_t seed) {
+    Inputs base = make_inputs(seed, 0.05f, s, hk, hv);
+    if (a_log_f32) {
+      base.a_log = pattern({hv}, seed + 6u, 0.5f, 1.0f);
+      eval({base.a_log});
+    }
+    array x = bf16({1, 1, k}, seed + 100u, 0.5f, s);
+    array wa_f = bf16({hv, k}, seed + 101u, 0.25f, s);
+    array wb_f = bf16({hv, k}, seed + 102u, 0.25f, s);
+    auto qa = quantize(wa_f, 64, 4, "affine", std::nullopt, s);
+    auto qb = quantize(wb_f, 64, 4, "affine", std::nullopt, s);
+    eval(std::vector<array>{x, qa[0], qa[1], qa[2], qb[0], qb[1], qb[2]});
+
+    auto run_chain = [&](const array& xin) -> Run {
+      const uint64_t before = compute_dispatches();
+      array a = quantized_matmul(xin, qa[0], qa[1], qa[2], true, 64, 4, "affine", s);
+      array b = quantized_matmul(xin, qb[0], qb[1], qb[2], true, 64, 4, "affine", s);
+      auto out = fast::gdn_conv_delta_update(
+          base.conv_state, base.qkv, base.weight, a, b, base.a_log, base.dt_bias,
+          base.delta_state, hk * D, INV * INV, INV, EPS, base.gate, base.norm_w,
+          EPS, s);
+      eval(out);
+      return Run{out, compute_dispatches() - before};
+    };
+
+    setenv("MLX_OMARCHY_GDN_COALESCED", "1", 1);
+    setenv("MLX_OMARCHY_GDN_SG32_FAST", "0", 1);
+    unsetenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD");
+    run_chain(x);  // warm
+    Run ref = run_chain(x);
+
+    setenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD", "1", 1);
+    run_chain(x);  // warm
+    Run got = run_chain(x);
+    for (int i = 0; i < 3; ++i) {
+      CHECK_MESSAGE(
+          array_equal(got.out[i], ref.out[i], s).item<bool>(),
+          "BA fold mismatch on output ", i, " (hk=", hk, ", hv=", hv, ", k=", k,
+          ", f32_alog=", a_log_f32, ")");
+    }
+    if (got.dispatches != ref.dispatches) {
+      CHECK_EQ(got.dispatches, 1u);
+      CHECK(ref.dispatches >= 2u);
+    } else if (std::getenv("GDN_CONV_DELTA_REQUIRE_ENGAGED") != nullptr) {
+      FAIL("Sg32 BA fold did not engage (got=", got.dispatches, ", ref=", ref.dispatches, ")");
+    }
+
+    // Aligned nonzero x offset (8 bf16 = 16 bytes): folds and matches bit-exact.
+    auto make_offset_x = [&](int pad) {
+      auto flat = reshape(x, {k}, s);
+      auto padded = concatenate({full({pad}, array(-7.0f), bfloat16, s), flat}, 0, s);
+      auto view = reshape(slice(padded, {pad}, {k + pad}, s), {1, 1, k}, s);
+      view.eval();
+      REQUIRE(view.offset() == static_cast<size_t>(pad) * view.itemsize());
+      REQUIRE(view.flags().row_contiguous);
+      return view;
+    };
+    array x_aligned = make_offset_x(8);
+    Run got_aligned = run_chain(x_aligned);
+    for (int i = 0; i < 3; ++i) {
+      CHECK(array_equal(got_aligned.out[i], ref.out[i], s).item<bool>());
+    }
+    if (got.dispatches == 1u) {
+      CHECK_EQ(got_aligned.dispatches, 1u);
+    }
+
+    // Unaligned x offset (2 bf16 = 4 bytes): triggers replay_gdn_inproj_ba_fold
+    // transparently and still matches bit-exact (FUSED_GEMV=0 keeps the
+    // baseline on solo QuantizedMatmul::eval_gpu, which densifies unaligned x).
+    array x_unaligned = make_offset_x(2);
+    setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+    Run got_replay = run_chain(x_unaligned);
+    unsetenv("MLX_OMARCHY_FUSED_GEMV");
+    for (int i = 0; i < 3; ++i) {
+      CHECK(array_equal(got_replay.out[i], ref.out[i], s).item<bool>());
+    }
+    CHECK(got_replay.dispatches >= 2u);
+
+    unsetenv("MLX_OMARCHY_GDN_INPROJ_BA_FOLD");
+    unsetenv("MLX_OMARCHY_GDN_SG32_FAST");
+    unsetenv("MLX_OMARCHY_GDN_COALESCED");
+  };
+
+  // Qwen3.8-2B equal-head bf16 A_log (Hk=16, Hv=16, K=2048)
+  check_case(16, 16, 2048, false, 303u);
+  // Qwen3.5-9B GQA f32 A_log (Hk=16, Hv=32, K=4096)
+  check_case(16, 32, 4096, true, 404u);
 }
