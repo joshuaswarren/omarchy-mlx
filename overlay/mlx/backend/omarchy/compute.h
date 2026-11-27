@@ -1354,6 +1354,11 @@ enum class ComputeKernel : uint16_t {
   // Coalesced-state standalone GDN decode (Dk == Dv == 128, f32 state, bf16
   // q/k/v/out, bf16 or f32 A_log, native GQA; 1024 threads, 32 SGs).
   GatedDeltaDecodeBF16Sg32,
+  // Low-register dedicated SwiGLU (ROWS_PER_SLOT=1, SLOTS=8, W2; 2 live rows/SG
+  // across gate+up) and 512-thread coalesced uvec4 ResNorm (ROWS=2, SLOTS=16, W2).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4SwigluBF16R1S8W2,
+  QmmVecQ4ResNormVec4BF16R2S16W2,
   Count,
 };
 
