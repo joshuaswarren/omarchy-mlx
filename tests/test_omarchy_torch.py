@@ -379,6 +379,41 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                      float((got - ref.float()).abs().max())))
 
 
+    def test_logsumexp_parity(self):
+        """PT-AL-g: aten.logsumexp lowers in the wheel backend — parity
+        vs torch.logsumexp across single/multi dim, keepdim, negative
+        dim, bf16, and large-logit stability."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x2 = torch.randn(3, 4)
+        x3 = torch.randn(2, 3, 4)
+        cases = [
+            ((x2,), {"dim": [0]}, 1e-5),
+            ((x2,), {"dim": [0, 1]}, 1e-5),
+            ((x3,), {"dim": [2]}, 1e-5),
+            ((x3,), {"dim": [0, 2], "keepdim": True}, 1e-5),
+            ((x2,), {"dim": [-1]}, 1e-5),
+            ((x2.bfloat16(),), {"dim": [1]}, 1e-2),
+            ((x2 + 1e4,), {"dim": [1]}, 1e-5),
+        ]
+        for ins, kw, tol in cases:
+            ref = torch.logsumexp(*ins, **kw)
+            mins = tuple(
+                (mx.array(t.float().numpy()).astype(mx.bfloat16)
+                 if t.dtype == torch.bfloat16 else mx.array(t.numpy()))
+                for t in ins)
+            got = torch.from_numpy(
+                np.array(ATEN_TABLE["logsumexp"](*mins, **kw)
+                         .astype(mx.float32)))
+            self.assertTrue(
+                torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                (kw, float((got - ref.float()).abs().max())))
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2731,6 +2731,44 @@ def test_linalg_norm():
     print("test_linalg_norm PASS")
 
 
+def test_logsumexp():
+    # PT-AL-g: aten.logsumexp(self, int[1] dim, keepdim) — used in
+    # contrastive learning. mx.logsumexp is the same stable reduction;
+    # the dim list becomes the axis tuple.
+    x2 = torch.randn(3, 4)
+    x3 = torch.randn(2, 3, 4)
+    cases = [
+        (torch.ops.aten.logsumexp.default, (x2,), {"dim": [0]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x2,), {"dim": [0, 1]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x3,), {"dim": [2]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x3,),
+         {"dim": [0, 2], "keepdim": True}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x2,), {"dim": [-1]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x2.bfloat16(),), {"dim": [1]},
+         "logsumexp"),
+        # numerically hostile: large logits would overflow a naive
+        # log(sum(exp)) — the stable path must match torch.
+        (torch.ops.aten.logsumexp.default, (x2 + 1e4,), {"dim": [1]},
+         "logsumexp"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert fam in stats["mlx"], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs, got, ref)
+    print("test_logsumexp PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2775,6 +2813,7 @@ if __name__ == "__main__":
     test_xlogy_xlog1py()
     test_softplus_mish()
     test_elu_selu_celu()
+    test_logsumexp()
     test_glu()
     test_reciprocal_frac()
     test_linalg_norm()
