@@ -102,8 +102,8 @@ uint16_t bf16_store(float value) {
      defined(QMM_VEC_SWIGLU) || \
      defined(QMM_VEC_BATCH) || defined(QMM_VEC_ROWS) || \
      defined(QMM_VEC_GREEDY) || \
-     ROWS_PER_SLOT != 2 || SLOTS_PER_GROUP < 8)
-#error "QMM_VEC_RESNORM builds on bf16 subgroup Q4 word 2-row >=8-slot single weight"
+     (ROWS_PER_SLOT != 2 && ROWS_PER_SLOT != 4) || SLOTS_PER_GROUP < 8)
+#error "QMM_VEC_RESNORM builds on bf16 subgroup Q4 word 2/4-row >=8-slot single weight"
 #endif
 #if defined(QMM_VEC_SWIGLU) && \
     (!defined(USE_BF16) || !defined(USE_SUBGROUP) || \
@@ -2179,6 +2179,57 @@ void main() {
       params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
     uint nw_base = params.rhs_offset >> 3u;
     if (row_length == 2048u) {
+#ifdef QMM_RESNORM_1SG
+      // Single-subgroup (zero-barrier) epilogue for N=2048: 32 lanes x 8 uvec4.
+      if (sub_id == 0u) {
+        uvec4 sv0 = sum0_v4.values[sub_lane + 0u];
+        uvec4 sv1 = sum0_v4.values[sub_lane + 32u];
+        uvec4 sv2 = sum0_v4.values[sub_lane + 64u];
+        uvec4 sv3 = sum0_v4.values[sub_lane + 96u];
+        uvec4 sv4 = sum0_v4.values[sub_lane + 128u];
+        uvec4 sv5 = sum0_v4.values[sub_lane + 160u];
+        uvec4 sv6 = sum0_v4.values[sub_lane + 192u];
+        uvec4 sv7 = sum0_v4.values[sub_lane + 224u];
+        #define RN1_SQ(sv) { \
+          float _a0 = uintBitsToFloat(((sv).x & 0xFFFFu) << 16u); \
+          float _a1 = uintBitsToFloat((sv).x & 0xFFFF0000u); \
+          float _a2 = uintBitsToFloat(((sv).y & 0xFFFFu) << 16u); \
+          float _a3 = uintBitsToFloat((sv).y & 0xFFFF0000u); \
+          float _a4 = uintBitsToFloat(((sv).z & 0xFFFFu) << 16u); \
+          float _a5 = uintBitsToFloat((sv).z & 0xFFFF0000u); \
+          float _a6 = uintBitsToFloat(((sv).w & 0xFFFFu) << 16u); \
+          float _a7 = uintBitsToFloat((sv).w & 0xFFFF0000u); \
+          reg_sq += _a0*_a0 + _a1*_a1 + _a2*_a2 + _a3*_a3 + _a4*_a4 + _a5*_a5 + _a6*_a6 + _a7*_a7; \
+        }
+        RN1_SQ(sv0) RN1_SQ(sv1) RN1_SQ(sv2) RN1_SQ(sv3)
+        RN1_SQ(sv4) RN1_SQ(sv5) RN1_SQ(sv6) RN1_SQ(sv7)
+        #undef RN1_SQ
+        float total_sq = subgroupAdd(reg_sq);
+        float norm = inversesqrt(total_sq / 2048.0 + eps);
+        #define RN1_PACK(sv_w, wv_w, out_u) { \
+          precise float _nw0 = norm * uintBitsToFloat(((wv_w) & 0xFFFFu) << 16u); \
+          precise float _nw1 = norm * uintBitsToFloat((wv_w) & 0xFFFF0000u); \
+          precise float _r0 = uintBitsToFloat(((sv_w) & 0xFFFFu) << 16u) * _nw0; \
+          precise float _r1 = uintBitsToFloat((sv_w) & 0xFFFF0000u) * _nw1; \
+          (out_u) = uint(STORE_VALUE(_r0)) | (uint(STORE_VALUE(_r1)) << 16u); \
+        }
+        #define RN1_OUT(sv, off) { \
+          uint _ix = sub_lane + (off); \
+          uvec4 _wv = norm_weight_v4.values[nw_base + _ix]; \
+          uvec4 _o; \
+          RN1_PACK((sv).x, _wv.x, _o.x) \
+          RN1_PACK((sv).y, _wv.y, _o.y) \
+          RN1_PACK((sv).z, _wv.z, _o.z) \
+          RN1_PACK((sv).w, _wv.w, _o.w) \
+          norm_output_v4.values[_ix] = _o; \
+        }
+        RN1_OUT(sv0, 0u) RN1_OUT(sv1, 32u) RN1_OUT(sv2, 64u) RN1_OUT(sv3, 96u)
+        RN1_OUT(sv4, 128u) RN1_OUT(sv5, 160u) RN1_OUT(sv6, 192u) RN1_OUT(sv7, 224u)
+        #undef RN1_OUT
+        #undef RN1_PACK
+      }
+      return;
+#else
       uvec4 sv0 = uvec4(0u);
       if (lane < 256u) {
         sv0 = sum0_v4.values[lane];
@@ -2198,6 +2249,12 @@ void main() {
         }
       }
       barrier();
+#ifdef QMM_RESNORM_1BAR
+      if (lane < 256u) {
+        float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+        float total_sq = subgroupAdd(v);
+        float mean_square = total_sq / float(row_length);
+#else
       if (sub_id == 0u) {
         float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
         float total_sq = subgroupAdd(v);
@@ -2208,6 +2265,7 @@ void main() {
       barrier();
       if (lane < 256u) {
         float mean_square = s_resnorm_partial[0] / float(row_length);
+#endif
         float norm = inversesqrt(mean_square + eps);
         uvec4 wv0 = norm_weight_v4.values[nw_base + lane];
         #define RN_PACK_PAIR(sv_w, wv_w, out_u) { \
@@ -2226,6 +2284,7 @@ void main() {
         norm_output_v4.values[lane] = o0;
       }
       return;
+#endif
     } else {
       uvec4 sv0 = uvec4(0u);
       uvec4 sv1 = uvec4(0u);
@@ -2263,6 +2322,12 @@ void main() {
         }
       }
       barrier();
+#ifdef QMM_RESNORM_1BAR
+      if (lane < 256u) {
+        float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+        float total_sq = subgroupAdd(v);
+        float mean_square = total_sq / float(row_length);
+#else
       if (sub_id == 0u) {
         float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
         float total_sq = subgroupAdd(v);
@@ -2273,6 +2338,7 @@ void main() {
       barrier();
       if (lane < 256u) {
         float mean_square = s_resnorm_partial[0] / float(row_length);
+#endif
         float norm = inversesqrt(mean_square + eps);
         uvec4 wv0 = norm_weight_v4.values[nw_base + vidx];
         uvec4 wv1 = norm_weight_v4.values[nw_base + vidx + 1u];
@@ -2420,6 +2486,57 @@ void main() {
       uint xp = (x_row >> 3u) + (lane_in_slot << 1u);
       uint iters = pairs_per_row >> 5u;
       for (uint wi_ = 0u; wi_ < iters; ++wi_) {
+#ifdef QMM_SWIGLU_SEQ
+        // Sequential-row low-register SwiGLU: load x once, unpack once per quad,
+        // stream one row's gate+up weights at a time (half peak weight/scale regs).
+        uvec4 xa = input_x.values[xp];
+        uvec4 xb = input_x.values[xp + 1u];
+        xp += 64u;
+        float x0 = uintBitsToFloat((xa.x & 0xFFFFu) << 16u);
+        float x1 = uintBitsToFloat(xa.x & 0xFFFF0000u);
+        float x2 = uintBitsToFloat((xa.y & 0xFFFFu) << 16u);
+        float x3 = uintBitsToFloat(xa.y & 0xFFFF0000u);
+        float x4 = uintBitsToFloat((xa.z & 0xFFFFu) << 16u);
+        float x5 = uintBitsToFloat(xa.z & 0xFFFF0000u);
+        float x6 = uintBitsToFloat((xa.w & 0xFFFFu) << 16u);
+        float x7 = uintBitsToFloat(xa.w & 0xFFFF0000u);
+        float x8 = uintBitsToFloat((xb.x & 0xFFFFu) << 16u);
+        float x9 = uintBitsToFloat(xb.x & 0xFFFF0000u);
+        float x10 = uintBitsToFloat((xb.y & 0xFFFFu) << 16u);
+        float x11 = uintBitsToFloat(xb.y & 0xFFFF0000u);
+        float x12 = uintBitsToFloat((xb.z & 0xFFFFu) << 16u);
+        float x13 = uintBitsToFloat(xb.z & 0xFFFF0000u);
+        float x14 = uintBitsToFloat((xb.w & 0xFFFFu) << 16u);
+        float x15 = uintBitsToFloat(xb.w & 0xFFFF0000u);
+        precise float input_sum = 0.0;
+        input_sum += ((x0 + x1) + x2) + x3;
+        input_sum += ((x4 + x5) + x6) + x7;
+        input_sum += ((x8 + x9) + x10) + x11;
+        input_sum += ((x12 + x13) + x14) + x15;
+        #define SEQ_DOT_ONE(wv, acc_out, Sbuf, Bbuf) { \
+          uvec2 _w = (wv); \
+          precise float _d = 0.0; \
+          uint _p0 = _w.x; \
+          _d += fma(x3, Q4_NIB(_p0, 12u), fma(x2, Q4_NIB(_p0, 8u), fma(x1, Q4_NIB(_p0, 4u), x0 * Q4_NIB(_p0, 0u)))); \
+          uint _p1 = _w.x >> 16u; \
+          _d += fma(x7, Q4_NIB(_p1, 12u), fma(x6, Q4_NIB(_p1, 8u), fma(x5, Q4_NIB(_p1, 4u), x4 * Q4_NIB(_p1, 0u)))); \
+          uint _p2 = _w.y; \
+          _d += fma(x11, Q4_NIB(_p2, 12u), fma(x10, Q4_NIB(_p2, 8u), fma(x9, Q4_NIB(_p2, 4u), x8 * Q4_NIB(_p2, 0u)))); \
+          uint _p3 = _w.y >> 16u; \
+          _d += fma(x15, Q4_NIB(_p3, 12u), fma(x14, Q4_NIB(_p3, 8u), fma(x13, Q4_NIB(_p3, 4u), x12 * Q4_NIB(_p3, 0u)))); \
+          float _sc = LOAD_VALUE(Sbuf.values[sp[r]]); \
+          float _bi = LOAD_VALUE(Bbuf.values[sp[r]]); \
+          precise float _bt = input_sum * _bi; \
+          (acc_out) += fma(_sc, _d, _bt); \
+        }
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+          SEQ_DOT_ONE(input_w0.values[wp[r]], acc_g[r], scales0, biases0)
+          SEQ_DOT_ONE(input_w1.values[wp[r]], acc_u[r], scales1, biases1)
+          wp[r] += 32u;
+          sp[r] += 8u;
+        }
+        #undef SEQ_DOT_ONE
+#else
         precise float dot_g[ROWS_PER_SLOT];
         precise float dot_u[ROWS_PER_SLOT];
         precise float input_sum = 0.0;
@@ -2456,6 +2573,7 @@ void main() {
           precise float bu_term = input_sum * bu[r];
           acc_u[r] += fma(su[r], dot_u[r], bu_term);
         }
+#endif
       }
 #else
       for (uint w = lane_in_slot * 2u; w < words_per_row; w += LANES * 2u) {

@@ -20,7 +20,10 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 
-layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+#ifndef GDN_CONV_WG
+#define GDN_CONV_WG 1024
+#endif
+layout(local_size_x = GDN_CONV_WG, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer ConvState { uint16_t v[]; } conv_state;
 layout(set = 0, binding = 1, std430) readonly buffer ConvX     { uint16_t v[]; } conv_x;
@@ -66,6 +69,10 @@ shared float skg[128];
 shared float sv[128];
 shared float so[128];
 shared float s_norm_buf[256];
+#ifdef GDN_CONV_FAST
+shared float s_g_val;
+shared float s_beta_val;
+#endif
 
 float bf16_load(uint16_t bits) {
   return uintBitsToFloat(uint(bits) << 16u);
@@ -192,6 +199,131 @@ void main() {
     khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
   }
 
+#ifdef GDN_CONV_FAST
+  if (tid == 0u) {
+    vec2 gates = gdn_compute_gates(head);
+    s_g_val = gates.x;
+    s_beta_val = gates.y;
+  }
+
+  // Phase 1 (fast): Parallel Q (0..127), K (128..255), V (256..383) conv + state_out.
+  uint16_t act_val = uint16_t(0u);
+  if (tid < 384u) {
+    const uint key_dim = params.rhs_size;
+    const uint c = tid & 127u;
+    bool lead = true;
+    if (params.in_strides[3] != 0u) {
+      lead = (head % params.in_strides[2]) %
+              (params.in_strides[2] / params.in_strides[3]) ==
+          0u;
+    }
+    if (tid < 128u) {
+      const uint ch = khead * 128u + c;
+      act_val = gdn_conv_channel(ch);
+      float qv = bf16_load(act_val);
+      s_norm_buf[c] = qv * qv;
+      if (lead) {
+        gdn_conv_state_out(ch);
+      }
+    } else if (tid < 256u) {
+      const uint ch = key_dim + khead * 128u + c;
+      act_val = gdn_conv_channel(ch);
+      float kv = bf16_load(act_val);
+      s_norm_buf[128u + c] = kv * kv;
+      if (lead) {
+        gdn_conv_state_out(ch);
+      }
+    } else {
+      const uint ch = 2u * key_dim + head * 128u + c;
+      act_val = gdn_conv_channel(ch);
+      sv[c] = bf16_load(act_val);
+      gdn_conv_state_out(ch);
+    }
+  }
+  barrier();
+
+  float g = s_g_val;
+  float beta = s_beta_val;
+  if (tid < 128u) {
+    float acc = (s_norm_buf[lane] + s_norm_buf[lane + 64u]) +
+        (s_norm_buf[lane + 32u] + s_norm_buf[lane + 96u]);
+    float q_sum = tree_reduce32(acc);
+    sq[tid] = bf16_load(
+        gdn_conv_qk_norm(act_val, q_sum, params.out_strides[2]));
+  } else if (tid < 256u) {
+    float acc = (s_norm_buf[128u + lane] + s_norm_buf[128u + lane + 64u]) +
+        (s_norm_buf[128u + lane + 32u] + s_norm_buf[128u + lane + 96u]);
+    float k_sum = tree_reduce32(acc);
+    float k_norm = bf16_load(
+        gdn_conv_qk_norm(act_val, k_sum, params.out_strides[3]));
+    sk[tid - 128u] = k_norm;
+    skg[tid - 128u] = k_norm * g;
+  }
+  barrier();
+
+  // Phase 2: Coalesced-state gated-delta update.
+  uint head_base = head * 128u * 128u;
+  uint s_in_base_q = (params.shape[1] + head_base) >> 2u;
+  uint s_out_base_q = (params.shape[2] + head_base) >> 2u;
+
+  uint c0 = lane * 4u;
+  float skg0 = skg[c0 + 0u];
+  float skg1 = skg[c0 + 1u];
+  float skg2 = skg[c0 + 2u];
+  float skg3 = skg[c0 + 3u];
+  float sk0 = sk[c0 + 0u];
+  float sk1 = sk[c0 + 1u];
+  float sk2 = sk[c0 + 2u];
+  float sk3 = sk[c0 + 3u];
+  float sq0 = sq[c0 + 0u];
+  float sq1 = sq[c0 + 1u];
+  float sq2 = sq[c0 + 2u];
+  float sq3 = sq[c0 + 3u];
+
+  const uint sg_count = uint(GDN_CONV_WG) >> 5u;
+  for (uint r = sg; r < 128u; r += sg_count) {
+    vec4 w = s_in.v[s_in_base_q + r * 32u + lane];
+    float kv_part = fma(w.x, skg0,
+                    fma(w.y, skg1,
+                    fma(w.z, skg2, w.w * skg3)));
+    float kv_acc = subgroupAdd(kv_part);
+    float delta = (sv[r] - kv_acc) * beta;
+    float n0 = fma(w.x, g, gdn_dk_term(delta, sk0));
+    float n1 = fma(w.y, g, gdn_dk_term(delta, sk1));
+    float n2 = fma(w.z, g, gdn_dk_term(delta, sk2));
+    float n3 = fma(w.w, g, gdn_dk_term(delta, sk3));
+    s_out.v[s_out_base_q + r * 32u + lane] = vec4(n0, n1, n2, n3);
+    float o_part = fma(n0, sq0,
+                   fma(n1, sq1,
+                   fma(n2, sq2, n3 * sq3)));
+    float o_acc = subgroupAdd(o_part);
+    if (lane == 0u) {
+      float ov = bf16_load(bf16_store(o_acc));
+      so[r] = ov;
+      s_norm_buf[r] = ov * ov;
+    }
+  }
+  barrier();
+
+  // Phase 3 (zero extra barriers): SGs 0..3 each compute bit-exact tree_reduce32.
+  if (tid < 128u) {
+    float acc = (s_norm_buf[lane] + s_norm_buf[lane + 64u]) +
+        (s_norm_buf[lane + 32u] + s_norm_buf[lane + 96u]);
+    float sum = tree_reduce32(acc);
+    float mean_square = sum / 128.0f;
+    float norm = inversesqrt(mean_square + params.alpha);
+    float weight = bf16_load(norm_w.v[params.output_size + tid]);
+    precise float norm_weight = norm * weight;
+    precise float result = so[tid] * norm_weight;
+    float normed = bf16_load(gdn_conv_bf16_store(result));
+    float gate = bf16_load(norm_gate.v[params.shape[3] + head * 128u + tid]);
+    float sigmoid_value = 1.0f / (1.0f + exp(-gate));
+    precise float silu = gate * sigmoid_value;
+    precise float prod = silu * normed;
+    y_buf.v[params.output_offset + head * 128u + tid] =
+        gdn_conv_bf16_store(prod);
+  }
+#else
   vec2 gates = gdn_compute_gates(head);
   float g = gates.x;
   float beta = gates.y;
@@ -330,4 +462,5 @@ void main() {
     y_buf.v[params.output_offset + head * 128u + tid] =
         gdn_conv_bf16_store(prod);
   }
+#endif
 }

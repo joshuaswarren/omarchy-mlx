@@ -11133,6 +11133,23 @@ bool dispatch_quantized_gemv_group(
       swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
       swiglu_cols = 8u;
     }
+    if (const char* sw_var = omarchy::env_str("MLX_OMARCHY_SWIGLU_VAR");
+        sw_var != nullptr && sw_var[0] != '\0') {
+      if (std::strcmp(sw_var, "r1s16w2") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 512u) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S16W2;
+        swiglu_cols = 16u;
+      } else if (std::strcmp(sw_var, "r1s32w2") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S32W2;
+        swiglu_cols = 32u;
+      } else if (std::strcmp(sw_var, "seqr2s8w2") == 0) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16SeqR2S8W2;
+        swiglu_cols = 16u;
+      }
+    }
   }
   ComputeKernel resnorm_kernel = geom.resnorm;
   uint32_t resnorm_cols = geom.resnorm_columns;
@@ -11158,6 +11175,21 @@ bool dispatch_quantized_gemv_group(
       } else {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
         resnorm_cols = 32u;
+      }
+      if (const char* rn_var = omarchy::env_str("MLX_OMARCHY_RESNORM_VAR");
+          rn_var != nullptr && rn_var[0] != '\0') {
+        if (std::strcmp(rn_var, "r2s32b1") == 0 &&
+            encoder.device().capabilities().max_compute_work_group_invocations >= 1024u) {
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2B1;
+          resnorm_cols = 64u;
+        } else if (std::strcmp(rn_var, "r2s32sg1") == 0 &&
+            encoder.device().capabilities().max_compute_work_group_invocations >= 1024u) {
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Sg1;
+          resnorm_cols = 64u;
+        } else if (std::strcmp(rn_var, "r4s16w2") == 0) {
+          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R4S16W2;
+          resnorm_cols = 64u;
+        }
       }
       resnorm_vec4_active = true;
     }
@@ -18152,6 +18184,14 @@ void GdnConvDeltaUpdate::eval_gpu(
   if (gdn_coal_sg32_ok &&
       (params.shape[1] % 4u) == 0u && (params.shape[2] % 4u) == 0u) {
     kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
+    if (const char* gfast = omarchy::env_str("MLX_OMARCHY_GDN_CONV_FAST");
+        gfast != nullptr && gfast[0] != '\0') {
+      if (std::strcmp(gfast, "1") == 0) {
+        kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast;
+      } else if (std::strcmp(gfast, "2") == 0) {
+        kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast512;
+      }
+    }
   }
   encoder.dispatch_compute(
       kernel,

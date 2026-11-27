@@ -1371,6 +1371,15 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split,
   // 1024-thread (32 subgroups, 64 cols/WG) coalesced uvec4 ResNormVec4.
   QmmVecQ4ResNormVec4BF16R2S32W2,
+  // Wave 3Q screening variants.
+  GatedDeltaDecodeConvNormBF16Sg32Fast,
+  GatedDeltaDecodeConvNormBF16Sg32Fast512,
+  QmmVecQ4SwigluBF16R1S16W2,
+  QmmVecQ4SwigluBF16R1S32W2,
+  QmmVecQ4SwigluBF16SeqR2S8W2,
+  QmmVecQ4ResNormVec4BF16R2S32W2B1,
+  QmmVecQ4ResNormVec4BF16R2S32W2Sg1,
+  QmmVecQ4ResNormVec4BF16R4S16W2,
   Count,
 };
 
