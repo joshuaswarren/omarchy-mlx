@@ -1795,7 +1795,16 @@ def test_where_masked_fill():
         fam = "where" if "where" in str(target) else "masked_fill"
         assert any(fam in s for s in stats["mlx"]), (stats, str(target))
         got = torch.as_tensor(out)
-        assert got.dtype == ref.dtype, (str(target), got.dtype, ref.dtype)
+        # the executor's _torch output widens bf16 -> fp32 (numpy has no
+        # bf16 buffer); dtype fidelity lives at the lowering, so the bf16
+        # case also checks the spec result dtype directly
+        assert got.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and got.dtype == torch.float32), \
+            (str(target), got.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            low = mlx_vulkan._FUNC_SPECS[fam](*(
+                mlx_vulkan._mx(a) if torch.is_tensor(a) else a for a in ins))
+            assert low.dtype == mx.bfloat16, low.dtype
         assert torch.equal(got.float(), ref.float()), (str(target), got, ref)
 
     # d-review: the in-place case used to share one tensor between the torch
