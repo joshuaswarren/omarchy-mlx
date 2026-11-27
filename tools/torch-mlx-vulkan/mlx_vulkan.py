@@ -1426,6 +1426,74 @@ def _arange(*a, **k):
     return mx.arange(*args, dtype=dtype)
 
 
+
+def _histc(a, bins=100, min=None, max=None, **kw):
+    """torch.histc parity: equal-width bins over [min, max], out-of-range dropped,
+    the right edge inclusive. min==0 and max==0 (or both None) = the input min/max."""
+    x = mx.flatten(_mx(a).astype(mx.float32))
+    nb = int(bins)
+    if nb <= 0:
+        raise ValueError("histc needs bins >= 1")
+    auto = (min is None or min == 0) and (max is None or max == 0)
+    lo = float(mx.min(x).item()) if auto else float(min)
+    hi = float(mx.max(x).item()) if auto else float(max)
+    if hi < lo:
+        raise ValueError("histc needs max >= min")
+    if hi == lo:
+        # torch widens a collapsed range to [v-0.5, v+0.5]; without this the
+        # width is 0 and (x - lo) / width puts the whole mass in bin 0
+        lo, hi = lo - 0.5, hi + 0.5
+    width = (hi - lo) / nb
+    idx = mx.clip(mx.floor((x - lo) / width).astype(mx.int32), 0, nb - 1)
+    keep = ((x >= lo) & (x <= hi)).astype(mx.float32)
+    return (mx.eye(nb, nb)[idx].astype(mx.float32) * keep[:, None]).sum(axis=0)
+
+
+def _histogram(a, bins=10, range=None, weight=None, density=False, **kw):
+    """torch.histogram parity: returns (hist, bin_edges). An int bin count builds
+    equal-width edges over the (lo, hi) range (default = the input min/max); a list
+    of edges is used as-is. Per-sample weights replace counts; density=True
+    normalizes so mass * width integrates to 1. Out-of-range samples drop."""
+    x = mx.flatten(_mx(a).astype(mx.float32))
+    if isinstance(bins, (list, tuple)):
+        edges = mx.array([float(e) for e in bins])
+        nb = len(bins) - 1
+    else:
+        nb = int(bins)
+        if range is not None:
+            lo, hi = float(range[0]), float(range[1])
+        else:
+            lo = float(mx.min(x).item())
+            hi = float(mx.max(x).item())
+        edges = lo + (hi - lo) * (mx.arange(nb + 1, dtype=mx.float32) / nb)
+    if nb <= 0:
+        raise ValueError("histogram needs bins >= 1")
+    lo = float(edges[0].item())
+    hi = float(edges[-1].item())
+    if hi < lo:
+        raise ValueError("histogram needs a rising edge sequence")
+    width = (hi - lo) / nb
+    keep = ((x >= lo) & (x <= hi)).astype(mx.float32)
+    interior = edges[1:-1]
+    if interior.shape[0] > 0:
+        idx = (x[:, None] >= interior[None, :]).astype(mx.int32).sum(axis=1)
+    else:
+        idx = mx.zeros_like(x).astype(mx.int32)
+    onehot = mx.eye(nb, nb)[idx].astype(mx.float32) * keep[:, None]
+    if weight is not None:
+        w = _mx(weight).astype(mx.float32) * keep
+        hist = (onehot * w[:, None]).sum(axis=0)
+    else:
+        hist = onehot.sum(axis=0)
+    if density:
+        # torch normalizes by the PER-BIN widths, not one uniform width —
+        # a non-uniform (list) edge sequence has unequal bin widths
+        widths = edges[1:] - edges[:-1]
+        hist = hist / (hist.sum() * widths)
+    return hist.astype(_mx(a).dtype), edges
+
+
+
 def _multinomial(probs, num_samples, replacement=False, **kw):
     """torch.multinomial parity: draws from probability rows along the last dim.
     replacement=False is top-k of Gumbel-perturbed log-probs (exact);
@@ -2088,6 +2156,8 @@ _FUNC_SPECS = {
     "topk": _topk,
     "multinomial": _multinomial,
     "glu": lambda a, dim=-1: (_glu_halves(_mx(a), dim)[0] * mx.sigmoid(_glu_halves(_mx(a), dim)[1])).astype(_mx(a).dtype),
+    "histc": _histc,
+    "histogram": _histogram,
     "mode": _mode,
     "kthvalue": _kthvalue,
     "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),

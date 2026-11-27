@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import stat
 import threading
 import time
 import uuid
@@ -227,6 +228,7 @@ def _typed_request(model_path, text, questions):
     instructions, state) or material overflow refuses the whole request
     before dispatch. Nothing is ever truncated.
     """
+    from mlx_omarchy_laya.jsonfile import read_json_object
     from mlx_omarchy_laya.sequence import LayaTokenizer, build_sequence, render_options, serialize_state, to_internal
 
     if not isinstance(text, str) or not text.strip():
@@ -236,7 +238,12 @@ def _typed_request(model_path, text, questions):
     if not isinstance(questions, dict) or not questions or len(questions) > MAX_QUESTIONS:
         raise DecisionInputError("Batch at most %d typed questions" % MAX_QUESTIONS)
     path = Path(model_path)
-    config = json.loads((path / "rl_agent_config.json").read_text())
+    # The same bounded reader the decision worker loads this file with: a
+    # FIFO or an oversized file is refused, and a snapshot symlink is followed.
+    try:
+        config = read_json_object(path / "rl_agent_config.json")
+    except RecursionError:
+        raise ValueError("rl_agent_config.json is nested too deeply") from None
     tok = LayaTokenizer(path / "tokenizer")
     for qid, question in questions.items():
         if not isinstance(qid, str) or not qid.strip() or len(qid) > 64:
@@ -824,8 +831,16 @@ class Coordinator:
             logs = self.home / "assistant" / "logs"
             logs.mkdir(parents=True, exist_ok=True)
             record = {"turn": turn, "conversation": cid, "mode": mode, "phases": phases}
-            with open(logs / "ttft-phases.jsonl", "a", encoding="utf-8") as stream:
-                stream.write(json.dumps(record, allow_nan=False) + "\n")
+            line = json.dumps(record, allow_nan=False) + "\n"
+            # O_NOFOLLOW: a symlink here never redirects the append.
+            # O_NONBLOCK: a FIFO without a reader fails the open; one with a
+            # reader is skipped by the type check, so neither blocks a turn.
+            fd = os.open(logs / "ttft-phases.jsonl",
+                         os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW
+                         | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
+            with open(fd, "w", encoding="utf-8") as stream:
+                if stat.S_ISREG(os.fstat(fd).st_mode):
+                    stream.write(line)
         except (OSError, ValueError):
             pass
 
