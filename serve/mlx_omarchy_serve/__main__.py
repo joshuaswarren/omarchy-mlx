@@ -28,6 +28,9 @@ import importlib.util
 import json
 import math
 import os
+# PAR-32: prevent OpenBLAS worker threads from spinning CPU (~9.5% on Apple
+# Silicon) during token decode; callers may still override explicitly.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import re
 import stat
 import subprocess
