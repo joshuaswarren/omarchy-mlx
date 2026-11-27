@@ -2429,6 +2429,12 @@ void main() {
   uint n_reads = row_length / 256u;
   bool reg_path =
       (row_length == 2048u || row_length == 2560u || row_length == 4096u);
+#if defined(QMM_RESNORM_D2048) && defined(QMM_RESNORM_D4096)
+#error "QMM_RESNORM_D2048 and QMM_RESNORM_D4096 are mutually exclusive"
+#endif
+#if (defined(QMM_RESNORM_D2048) || defined(QMM_RESNORM_D4096)) && !defined(QMM_RESNORM_VEC4)
+#error "QMM_RESNORM_D2048/D4096 require QMM_RESNORM_VEC4"
+#endif
 #if defined(QMM_RESNORM_VEC4) && !defined(QMM_VEC_OUTGATE)
   // Coalesced 128-bit uvec4 RMSNorm epilogue for row_length == 2048 or 4096:
   // each of threads 0..255 loads 1 or 2 uvec4 words (8 or 16 bf16 elements)
@@ -2436,10 +2442,24 @@ void main() {
   // the reduction barriers (eliminating the second coherent read), loads
   // norm_weight_v4 once, and writes norm_output_v4 as 128-bit uvec4 stores.
   // Bit-identical to fast_norm_apple.comp; barriers are workgroup-uniform.
+#if defined(QMM_RESNORM_D2048)
+  if (row_length == 2048u &&
+      params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
+#elif defined(QMM_RESNORM_D4096)
+  if (row_length == 4096u &&
+      params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
+#else
   if ((row_length == 2048u || row_length == 4096u) &&
       params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
+#endif
     uint nw_base = params.rhs_offset >> 3u;
+#if defined(QMM_RESNORM_D2048)
+    if (true) {
+#elif defined(QMM_RESNORM_D4096)
+    if (false) {
+#else
     if (row_length == 2048u) {
+#endif
       uvec4 sv0 = uvec4(0u);
 #ifdef QMM_RESNORM_EPI_HOIST
       uvec4 wv0 = uvec4(0u);
@@ -4102,13 +4122,18 @@ void main() {
 // Multi-row form of the Q4 word main: same batch walk and bases as the
 // single-row main below, each slot owning ROWS_PER_SLOT consecutive
 // columns (see Q4_ROWS).
+#if defined(QMM_WORD_BATCH1) && (defined(QMM_VEC_MULTI) || defined(QMM_VEC_SWIGLU) || defined(QMM_VEC_RESNORM) || defined(QMM_VEC_TOKENS) || defined(QMM_VEC_BATCH) || defined(QMM_VEC_ROWS))
+#error "QMM_WORD_BATCH1 is only supported on single-weight word decode"
+#endif
 void main() {
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;
   uint lane_in_slot = lane % LANES;
+#ifndef QMM_WORD_BATCH1
   uint batch = params.shape[0];
   uint w_batch_words = params.shape[1];
   uint param_batch = params.shape[2];
+#endif
   uint column = gl_WorkGroupID.x * COLUMNS_PER_GROUP +
       column_slot * uint(ROWS_PER_SLOT);
   uint n = params.matrix_n;
@@ -4118,6 +4143,28 @@ void main() {
 #if QBITS == 8
   uint row_words = params.matrix_k / 4u;
 #endif
+#ifdef QMM_WORD_BATCH1
+  {
+    precise float acc[ROWS_PER_SLOT];
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      acc[r] = 0.0;
+    }
+    if (column_active) {
+      uint w_base = params.rhs_offset;
+      uint s_base = params.aux_offset;
+      uint b_base = params.aux_size;
+      uint x_row = params.lhs_offset;
+      Q4_ROWS(input_w, scales, biases)
+    }
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      float total = subgroupAdd(acc[r]);
+      if (lane_in_slot == 0u && column + r < n) {
+        output_data.values[params.output_offset + column + r] =
+            STORE_VALUE(total);
+      }
+    }
+  }
+#else
   for (uint b = 0u; b < batch; ++b) {
     precise float acc[ROWS_PER_SLOT];
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
@@ -4138,6 +4185,7 @@ void main() {
       }
     }
   }
+#endif
 }
 #endif
 #elif defined(QMM_VEC_GREEDY_WORD)
