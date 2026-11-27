@@ -1350,8 +1350,16 @@ def _bincount(a, weights=None, minlength=0):
     else:
         w, dt = _mx(weights), _mx(weights).dtype
         if w.dtype == mx.int64:
-            if w.size and int(np.array(mx.max(mx.abs(w))).item()) >= 2 ** 31:
-                return _raise("bincount int64 weights out of int32 range")
+            # Scatter::Sum accumulates int32, so the SUM must stay inside
+            # int32: refuse on the conservative bound max|w| * a.size, not
+            # just per-element magnitude (64 weights of 2**30 overflow the
+            # sum while each element passes). _raise falls back to torch,
+            # which returns exact int64 sums.
+            if w.size:
+                lo = int(np.array(mx.min(w)).item())
+                hi = int(np.array(mx.max(w)).item())
+                if max(abs(lo), abs(hi)) * a.size >= 2 ** 31:
+                    return _raise("bincount int64 weights exceed the int32 scatter sum range")
             w = w.astype(mx.int32)
         elif w.dtype not in (mx.float32, mx.float16, mx.bfloat16, mx.int32, mx.uint32):
             w = w.astype(mx.int32)
