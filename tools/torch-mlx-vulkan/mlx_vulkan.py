@@ -1768,21 +1768,23 @@ def _gn_native(a, w, b, N, C, HxW, group, eps):
 
 
 def _xlogy(a, b):
-    # aten.xlogy(self, other): self * log(other), except self == 0 -> 0 for
-    # every other, including other <= 0 where the product form is 0 * -inf.
-    # The wheel has no fused xlogy; mask the NaN lanes with where. Same
-    # shape works for xlog1py (self * log1p(other)) on the other arg.
+    # aten.xlogy(self, other): NaN in either operand -> NaN first (the aten
+    # kernel checks isnan before the zero rule), then self == 0 -> 0, which
+    # also masks the NaN that self * log(other) produces for other <= 0.
+    # The wheel has no fused xlogy; build the mask with where.
     a, b = _mx(a), _mx(b)
     r = a * mx.log(b)
-    return _ar(mx.where(mx.equal(a, 0), mx.zeros_like(r), r))
+    nan = mx.array(float("nan"), dtype=r.dtype)
+    return _ar(mx.where(mx.equal(a, 0), mx.where(mx.isnan(b), nan, mx.zeros_like(r)), r))
 
 
 def _xlog1py(a, b):
-    # aten.xlog1py(self, other): self * log1p(other) with the same self==0
-    # mask (KL-divergence / custom-loss graphs use both forms).
+    # aten.xlog1py(self, other): self * log1p(other) with the same NaN-first,
+    # then self==0 mask (KL-divergence / custom-loss graphs use both forms).
     a, b = _mx(a), _mx(b)
     r = a * mx.log1p(b)
-    return _ar(mx.where(mx.equal(a, 0), mx.zeros_like(r), r))
+    nan = mx.array(float("nan"), dtype=r.dtype)
+    return _ar(mx.where(mx.equal(a, 0), mx.where(mx.isnan(b), nan, mx.zeros_like(r)), r))
 
 
 _FUNC_SPECS = {

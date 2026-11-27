@@ -315,12 +315,13 @@ def test_remainder():
 
 def test_xlogy_xlog1py():
     # PT-AL-h: aten.xlogy/xlog1py (KL-divergence / custom-loss paths):
-    # self * log(other) / self * log1p(other) with aten's zero rule —
+    # self * log(other) / self * log1p(other) with aten's NaN-first rule —
+    # NaN in either operand gives NaN even when self == 0; otherwise
     # self == 0 gives 0 for every other, including other <= 0 where the
-    # product form is 0 * -inf. fp32 + bf16 parity vs torch CPU on zero
-    # and negative operands.
-    x = torch.tensor([[0.0, 2.0], [-3.0, 0.5], [0.0, -1.0]])
-    y = torch.tensor([[4.0, 0.0], [2.0, -1.0], [-2.0, 0.25]])
+    # product form is 0 * -inf. fp32 + bf16 parity vs torch CPU on zero,
+    # negative and NaN operands.
+    x = torch.tensor([[0.0, 2.0], [-3.0, 0.5], [0.0, -1.0], [0.0, float("nan")]])
+    y = torch.tensor([[4.0, 0.0], [2.0, -1.0], [-2.0, 0.25], [float("nan"), 2.0]])
     xb, yb = x.bfloat16(), y.bfloat16()
     cases = [
         (torch.ops.aten.xlogy.Tensor, (x, y), torch.xlogy(x, y), "xlogy", None),
