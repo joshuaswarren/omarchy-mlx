@@ -2274,6 +2274,10 @@ _FUNC_SPECS = {
     "gt": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "lt": lambda a, b: mx.less(_mx(a), _mx(b)),
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
+    # PT-AL-f: the wheel table already carries these; the dev table
+    # must match so traced graphs lower them too.
+    "expm1": mx.expm1, "expm1_": mx.expm1,
+    "logaddexp": lambda a, b: mx.logaddexp(_mx(a), _mx(b)),
     "xlogy": _xlogy, "xlog1py": _xlog1py,
     # aten registers torch.special.xlog1py as special_xlog1py
     "special_xlog1py": _xlog1py,

@@ -2804,6 +2804,42 @@ def test_pdist_cdist():
     print("test_pdist_cdist PASS")
 
 
+def test_log1p_expm1_logaddexp():
+    # PT-AL-f: the dev table must match the wheel table — aten.expm1,
+    # aten.logaddexp lower with fp32/bf16 parity including near-zero
+    # inputs where the naive forms lose precision.
+    torch.manual_seed(0)
+    x = torch.tensor([0.0, 1e-9, -1e-9, 1e-7, -1e-7, 1e-4, -1e-4,
+                      1e-2, -1e-2, -0.5, 0.5, 1.0, -0.9999, 2.0])
+    y = torch.tensor([0.0, 1e-9, -1e-9, -20.0, 20.0, 1e-4, -1.0,
+                      0.5, -0.5, 3.0, -3.0, 10.0, -10.0, 0.001])
+    cases = [
+        (torch.ops.aten.log1p.default, (x,), {}, "log1p"),
+        (torch.ops.aten.expm1.default, (x,), {}, "expm1"),
+        (torch.ops.aten.expm1_.default, (x,), {}, "expm1"),
+        (torch.ops.aten.logaddexp.default, (x, y), {}, "logaddexp"),
+        (torch.ops.aten.expm1.default, (x.bfloat16(),), {}, "expm1"),
+        (torch.ops.aten.logaddexp.default,
+         (x.bfloat16(), y.bfloat16()), {}, "logaddexp"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), got, ref)
+    print("test_log1p_expm1_logaddexp PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2848,6 +2884,7 @@ if __name__ == "__main__":
     test_xlogy_xlog1py()
     test_softplus_mish()
     test_elu_selu_celu()
+    test_log1p_expm1_logaddexp()
     test_logsumexp()
     test_glu()
     test_reciprocal_frac()
