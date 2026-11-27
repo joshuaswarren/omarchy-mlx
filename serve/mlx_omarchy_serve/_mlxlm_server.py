@@ -42,6 +42,10 @@ import threading
 import time
 from pathlib import Path
 
+# PAR-32: prevent OpenBLAS worker threads from spinning CPU (~9.5% on Apple
+# Silicon) during token decode; callers may still override explicitly.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 # PairGates: install /v1/internal/memory probe if the patcher is on
 # PYTHONPATH. Side-effect import — no-op if absent.
 try:

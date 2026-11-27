@@ -82,9 +82,22 @@ int main() {
   const auto lvp = write_json(dir, "lavapipe_icd.json",
                               "/usr/lib/x86_64-linux-gnu/libvulkan_lavapipe.so");
 
-  // 1. default-refuses: without the hatch the non-Apple ICD is refused.
-  expect_throws("default-refuses", "excludes Honeykrisp", {}, intel.c_str(),
+  // 1. default-accepts-hardware-discrete (#623): a non-Apple hardware ICD is
+  // accepted by default (marked foreign), while a software/CPU ICD stays refused.
+  {
+    const auto selection = resolve_honeykrisp_icd_detail(
+        {}, intel.c_str(), "", nullptr);
+    expect_selects("default-accepts-hardware-discrete", selection, intel, true,
+                   true);
+  }
+  expect_throws("default-refuses-software-icd", "software", {}, lvp.c_str(),
                 "", nullptr);
+  {
+    const auto selection = resolve_honeykrisp_icd_detail(
+        {lvp, intel}, nullptr, "", nullptr);
+    expect_selects("auto-candidates-accept-hardware-skip-software", selection,
+                   intel, false, true);
+  }
   // and the packaged/system path still resolves when no user override exists
   {
     const auto packaged = write_json(
