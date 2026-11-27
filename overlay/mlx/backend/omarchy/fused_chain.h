@@ -431,11 +431,20 @@ bool outgate_fold_enabled();
 bool qmm_residual_norm_enabled(
     const CapabilityReport& caps, int norm_cols, bool outgate);
 
+// Balanced multi-member GEMV groups (3-member QKV and 2-member balanced pairs
+// such as MLP gate/up and split GDN in_proj [6144,2048]+[16,16]) on the
+// epilogue-only route: unset follows gemv_balanced_qkv_part (G14C only) and
+// stays off when MLX_OMARCHY_FUSED_GEMV=0 is explicitly set;
+// MLX_OMARCHY_GEMV_BALANCED_QKV=1 enables on any part with
+// MLX_OMARCHY_QMM_EPILOGUE_GEMV=1 (including alongside
+// MLX_OMARCHY_FUSED_GEMV=0); =0 disables everywhere.
+bool gemv_balanced_qkv_route_enabled(const std::string& device_name);
+
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off
-// (explicit MLX_OMARCHY_FUSED_GEMV=0 and MLX_OMARCHY_FUSED_CHAIN=0 also
-// cover it); on by default where fused_gemv_enabled is on or on parts
-// whose balanced 2-member MLP pairs run on the epilogue-only route (G14C).
+// (explicit MLX_OMARCHY_FUSED_GEMV=0 without MLX_OMARCHY_GEMV_BALANCED_QKV=1
+// and MLX_OMARCHY_FUSED_CHAIN=0 also cover it); on by default where
+// fused_gemv_enabled is on or where gemv_balanced_qkv_route_enabled is on.
 bool fused_gemv_swiglu_route_enabled(const std::string& device_name);
 bool fused_gemv_swiglu_enabled(const Device& device);
 
