@@ -9,8 +9,9 @@
 // sum, two pad floats). The workgroup splits into BLOCK_LANES lane groups of D/4 threads; a thread owns one uvec4 of four output dimensions and
 // walks every BLOCK_LANES-th block, so pass 2 reads each value row with 16-byte loads and each lane group's partial lands in shared memory for
 // the first LANES threads to fold. The global max and the exp-sum denominator are scalar per head: every thread strides the blocks once for a
-// partial, the subgroup folds it (NaN maps to +inf, which poisons the output the same way the old serial walk did), and a shared broadcast hands
-// every thread the pair.
+// partial, the subgroup folds it (NaN maps to +inf, which poisons the output the same way the old serial walk did), thread 0 folds the
+// leader-thread partials at stride gl_SubgroupSize (safe for any subgroup width that divides 128: 16, 32 or 64 lanes), and a shared broadcast hands every thread the
+// pair.
 
 #version 460
 
@@ -69,7 +70,7 @@ const uint STRIDE = D + 4u;
 const uint LANES = D / 4u;          // uvec4 lanes covering one block's value row
 const uint BLOCK_LANES = 128u / LANES;  // lane groups, each walking a strided block subset
 
-shared float s_part[8u];
+shared float s_part[256u];
 shared float s_head[2u];
 shared vec4 s_acc[128u];
 
@@ -100,7 +101,6 @@ void main() {
   uint nblocks = (params.matrix_k + BK - 1u) / BK;
   uint base = head * nblocks * STRIDE;
   uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
-  uint sg = gl_SubgroupID;
   // Global max over all block headers: NaN folds to +inf so a poisoned block still poisons the answer.
   float part_max = uintBitsToFloat(0xff800000u);
   for (uint b = t; b < nblocks; b += 128u) {
@@ -109,11 +109,15 @@ void main() {
   }
   part_max = subgroupMax(part_max);
   if (gl_SubgroupInvocationID == 0u) {
-    s_part[sg] = part_max;
+    s_part[t] = part_max;
   }
   barrier();
   if (t == 0u) {
-    s_head[0] = max(max(s_part[0u], s_part[1u]), max(s_part[2u], s_part[3u]));
+    float m = s_part[0u];
+    for (uint i = gl_SubgroupSize; i < 128u; i += gl_SubgroupSize) {
+      m = max(m, s_part[i]);
+    }
+    s_head[0] = m;
   }
   barrier();
   float global_max = s_head[0];
@@ -125,11 +129,15 @@ void main() {
   }
   part_den = subgroupAdd(part_den);
   if (gl_SubgroupInvocationID == 0u) {
-    s_part[4u + sg] = part_den;
+    s_part[128u + t] = part_den;
   }
   barrier();
   if (t == 0u) {
-    s_head[1] = s_part[4u] + s_part[5u] + s_part[6u] + s_part[7u];
+    float d = s_part[128u];
+    for (uint i = 128u + gl_SubgroupSize; i < 256u; i += gl_SubgroupSize) {
+      d += s_part[i];
+    }
+    s_head[1] = d;
   }
   barrier();
   float denominator = s_head[1];
