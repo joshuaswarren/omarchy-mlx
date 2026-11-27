@@ -148,7 +148,8 @@ class _StageTimers:
     def summary(self) -> str:
         s = self.as_dict()
         return " ".join(
-            f"{k}={v}ms" for k, v in s.items() if k != "generate_calls")
+            f"{k}={v}ms" for k, v in s.items() if k != "generate_calls") \
+            + f" calls={self.generate_calls}"
 
 
 _TIMERS = _StageTimers()
