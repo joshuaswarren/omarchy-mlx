@@ -18964,6 +18964,7 @@ void rope_trig_gate(
     // MLX_OMARCHY_NO_ROPE_FREQS_HOST=1 restores the nested path. Read on every
     // call: nothing here caches environment state.
     const bool host_read = !omarchy::env_flag("MLX_OMARCHY_NO_ROPE_FREQS_HOST") &&
+        !omarchy::device_local_activations_enabled() &&
         freqs->dtype() == float32 && freqs->flags().row_contiguous &&
         freqs->size() > 0;
     if (omarchy::env_str("MLX_OMARCHY_TRACE_DISPATCH") != nullptr) {
@@ -18975,13 +18976,15 @@ void rope_trig_gate(
           freqs->has_primitive() ? 1 : 0,
           host_read ? 1 : 0);
     }
-    if (host_read) {
+    const size_t n_freqs =
+        std::min<size_t>(freqs->size(), static_cast<size_t>(dims / 2));
+    if (host_read && n_freqs > 0) {
       settle({*freqs});
       omarchy::get_command_encoder(stream).synchronize("rope_freqs_host");
       freqs->detach_event();
       const float* values = freqs->data<float>();
       float smallest = std::abs(values[0]);
-      for (size_t i = 0; i < freqs->size(); ++i) {
+      for (size_t i = 0; i < n_freqs; ++i) {
         const float magnitude = std::abs(values[i]);
         if (std::isnan(magnitude)) {
           smallest = magnitude;
@@ -19001,7 +19004,8 @@ void rope_trig_gate(
     inv_freq_bound =
         (beta >= 0.0f) ? 1.0f : std::exp(-static_cast<float>(dims / 2 - 1) * beta);
   }
-  float bound = (worst_offset + (T - 1)) * std::abs(scale) * inv_freq_bound;
+  const float max_pos = (worst_offset + (T - 1)) * std::abs(scale);
+  float bound = (max_pos == 0.0f) ? 0.0f : max_pos * inv_freq_bound;
   if (bound > kTrigArgumentLimit) {
     throw std::runtime_error(
         "[omarchy] " + name + " rotational argument magnitude " +
