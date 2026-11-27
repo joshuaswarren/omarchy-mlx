@@ -12982,6 +12982,12 @@ bool dispatch_rope_pair(
   return true;
 }
 
+bool dispatch_rope_pair(
+    std::array<array, 2>& nodes,
+    const Stream& stream) {
+  return dispatch_rope_pair(nodes, {nullptr, nullptr}, stream);
+}
+
 bool dispatch_add_norm_pair(
     std::array<array, 2>& nodes,
     const Stream& stream) {
