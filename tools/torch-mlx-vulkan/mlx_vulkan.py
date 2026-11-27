@@ -1349,23 +1349,22 @@ def _bincount(a, weights=None, minlength=0):
         w, dt = mx.ones(a.shape, dtype=mx.int32), mx.int64
     else:
         w, dt = _mx(weights), _mx(weights).dtype
-        if w.dtype == mx.int64:
-            # Scatter::Sum accumulates int32, so the SUM must stay inside
-            # int32: refuse on the conservative bound max|w| * a.size, not
-            # just per-element magnitude (64 weights of 2**30 overflow the
-            # sum while each element passes). _raise falls back to torch,
-            # which returns exact int64 sums.
+        if w.dtype == mx.float64:
+            # the scatter accumulates float32; the f64 -> f32 cast keeps the
+            # fraction (the catch-all int32 cast silently truncated it)
+            w = w.astype(mx.float32)
+        elif w.dtype not in (mx.float32, mx.float16, mx.bfloat16):
+            # every integer weight dtype accumulates through the int32
+            # Scatter::Sum: refuse when the SUM can leave int32
+            # (max|w| * a.size >= 2**31) — the old catch-all cast truncated
+            # uint64 to 0 and wrapped int8 sums, and the int64-only guard
+            # missed the same overflow on int32/uint32 weights. _raise
+            # falls back to torch, which returns exact sums for any width.
             if w.size:
                 lo = int(np.array(mx.min(w)).item())
                 hi = int(np.array(mx.max(w)).item())
                 if max(abs(lo), abs(hi)) * a.size >= 2 ** 31:
-                    return _raise("bincount int64 weights exceed the int32 scatter sum range")
-            w = w.astype(mx.int32)
-        elif w.dtype == mx.float64:
-            # the scatter accumulates float32; the f64 -> f32 cast keeps the
-            # fraction (the catch-all int32 cast silently truncated it)
-            w = w.astype(mx.float32)
-        elif w.dtype not in (mx.float32, mx.float16, mx.bfloat16, mx.int32, mx.uint32):
+                    return _raise("bincount integral weights exceed the int32 scatter sum range")
             w = w.astype(mx.int32)
     out = mx.zeros((n,), dtype=w.dtype)
     if a.size:

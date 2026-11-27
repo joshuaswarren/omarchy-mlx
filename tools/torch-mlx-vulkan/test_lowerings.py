@@ -113,19 +113,31 @@ def test_bincount():
     assert _np(out).dtype == np.int64
     assert np.array_equal(_np(out), t.bincount(torch.tensor(wi)).numpy())
     # PT-1088: large int64 weights whose SUM overflows int32 even though
-    # each element passes a per-element check. The lowering must refuse
-    # (fall back to torch) instead of returning wrapped sums: the result
-    # must equal torch exactly, and the pre-fix code returned wrong values
-    # here (64 weights of 2**30 sum past 2**31).
-    wbig = np.full(64, 2 ** 30, dtype=np.int64)
-    out = mlx_vulkan._bincount(mx.array(idx), weights=mx.array(wbig))
-    assert np.array_equal(_np(out), t.bincount(torch.tensor(wbig)).numpy()), \
-        "large int64 weights must return exact torch sums, not wrapped int32"
-    # mixed-sign variant: cancellation could hide the overflow; the bound
-    # is conservative, so this also refuses and stays exact.
-    wbig[1::2] = -(2 ** 30)
-    out = mlx_vulkan._bincount(mx.array(idx), weights=mx.array(wbig))
-    assert np.array_equal(_np(out), t.bincount(torch.tensor(wbig)).numpy())
+    # each element passes a per-element check. The refusal routes to torch
+    # through the executor fallback (the direct _raise call is the
+    # dispatch-time contract), so the compiled graph names aten.bincount in
+    # stats["cpu"] and the values come back exact — the pre-fix code
+    # returned wrapped int32 here (64 weights of 2**30 sum past 2**31).
+    g = torch.fx.Graph()
+    xi = g.placeholder("x")
+    wi = g.placeholder("w")
+    g.output(g.call_function(torch.ops.aten.bincount.default, (xi, wi), {}))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    for weights in (np.full(64, 2 ** 30, dtype=np.int64),
+                    np.where(np.arange(64) % 2 == 0, 2 ** 30, -(2 ** 30)).astype(np.int64)):
+        wt = torch.tensor(weights)
+        out = run(torch.tensor(idx), wt)
+        assert stats["cpu"], "the overflow case must fall back to torch"
+        assert np.array_equal(_np(out), wt.bincount(wt).numpy()), \
+            "large int64 weights must return exact torch sums, not wrapped int32"
+        stats["cpu"].clear()
+    # direct call documents the dispatch-time refusal contract
+    try:
+        mlx_vulkan._bincount(mx.array(idx), weights=mx.array(np.full(64, 2 ** 30, dtype=np.int64)))
+        raise AssertionError("the overflow case must refuse")
+    except NotImplementedError:
+        pass
     # empty input -> zeros(minlength)
     out = mlx_vulkan._bincount(mx.array(np.empty(0, np.int64)), minlength=4)
     assert np.array_equal(_np(out), torch.tensor([], dtype=torch.int64).bincount(minlength=4).numpy())
