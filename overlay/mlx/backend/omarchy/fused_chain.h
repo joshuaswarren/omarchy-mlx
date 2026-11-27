@@ -389,6 +389,26 @@ bool sdpa_outgate_enabled();
 const SdpaOutgatePlan* find_sdpa_outgate(const array& out);
 void commit_sdpa_outgate(const array& out);
 
+// Fused in_proj_a + in_proj_b quantized projections folded into idle subgroups
+// of the coalesced GdnConvDeltaUpdate kernel during Phase 1 (conv+SiLU+norm).
+// Bit-exact to standalone QmmVecQ4WordSubgroupBF16R2S8W2 for K % 512 == 0,
+// Hv % 8 == 0, affine 4-bit group-64 transposed weights sharing one bf16 row x.
+struct GdnInprojAbCtx {
+  const array* x{nullptr};
+  const array* wa{nullptr};
+  const array* sa{nullptr};
+  const array* ba{nullptr};
+  const array* wb{nullptr};
+  const array* sb{nullptr};
+  const array* bb{nullptr};
+  int k{0};
+  int hv{0};
+};
+bool gdn_inproj_ab_enabled();
+const GdnInprojAbCtx* find_gdn_inproj_ab(const array& out, const Stream& stream);
+void commit_gdn_inproj_ab(const array& out);
+void abort_gdn_inproj_ab(const array& out, const Stream& stream);
+
 class Device;
 struct CapabilityReport;
 

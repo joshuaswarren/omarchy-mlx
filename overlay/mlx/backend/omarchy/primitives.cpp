@@ -8976,7 +8976,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     if (group_size_ != 16 && group_size_ != 32) {
       omarchy::unsupported(tag + " group size", out);
     }
-    auto& fp_encoder = omarchy::get_command_encoder(out.primitive().stream());
+    auto& fp_encoder = omarchy::get_command_encoder(stream());
     require_float_dtype(tag, x, out, fp_encoder);
     if (
         w.dtype() != uint32 || w.ndim() < 2 || w.ndim() > 3 ||
@@ -9194,7 +9194,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (group_size_ != 32 && group_size_ != 64 && group_size_ != 128) {
     omarchy::unsupported(tag + " group size", out);
   }
-  auto& encoder = omarchy::get_command_encoder(out.primitive().stream());
+  auto& encoder = omarchy::get_command_encoder(stream());
   require_float_dtype(tag, x, out, encoder);
   if (w.dtype() != uint32 || w.ndim() < 2 || w.ndim() > 3) {
     omarchy::unsupported(tag + " weight layout", out);
@@ -17824,9 +17824,13 @@ void GdnConvDeltaUpdate::eval_gpu(
       omarchy::gdn_bf16a_untiled_default(device_name, Hk, Hv);
   const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   array h0 = inputs.at(7);
+  const auto* inproj_ab = omarchy::find_gdn_inproj_ab(outputs.at(0), s);
   const bool dense_inputs = [&] {
-    for (const auto& x : inputs) {
-      if (!x.flags().row_contiguous) {
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      if (inproj_ab != nullptr && (i == 3 || i == 4)) {
+        continue;
+      }
+      if (!inputs[i].flags().row_contiguous) {
         return false;
       }
     }
@@ -17845,6 +17849,9 @@ void GdnConvDeltaUpdate::eval_gpu(
       (equal_heads ? decode_tile == false : true) &&
       encoder.device().compute().binding_limit() >= (with_norm ? 13u : 11u);
   if (!supported) {
+    if (inproj_ab != nullptr) {
+      omarchy::abort_gdn_inproj_ab(outputs.at(0), s);
+    }
     auto result = fallback_(inputs);
     settle(result);
     encoder.synchronize("gdn_conv_delta_fallback");
@@ -17895,8 +17902,6 @@ void GdnConvDeltaUpdate::eval_gpu(
   // Raw gates (flag bit 8): a, b, A_log, dt_bias as in the unfused dispatch; A_log and dt_bias are
   // per model head, so the shader reads head % Hv (in_strides[2]); in_strides[3] = 0 means equal heads,
   // otherwise it carries Hk and the conv prologue reads q/k channels by the key-head index.
-  params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
-  params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
   params.in_strides[0] = checked_item_offset(A_log, A_log.size(), tag, out);
   params.in_strides[1] = checked_item_offset(dt_bias, dt_bias.size(), tag, out);
   params.in_strides[2] = checked_u32(Hv, tag, out);
@@ -17906,28 +17911,14 @@ void GdnConvDeltaUpdate::eval_gpu(
   params.out_strides[1] = std::bit_cast<uint32_t>(qk_eps());
   params.out_strides[2] = std::bit_cast<uint32_t>(qk_scale_q());
   params.out_strides[3] = std::bit_cast<uint32_t>(qk_scale_k());
-  array norm_gate = with_norm ? inputs.at(8) : a_in;
-  array norm_weight = with_norm ? inputs.at(9) : a_in;
+  array norm_gate = with_norm ? inputs.at(8) : in_state;
+  array norm_weight = with_norm ? inputs.at(9) : in_state;
   if (with_norm) {
     // The epilogue's fields (see gated_delta_decode_perrow_pf.comp): gate and weight item offsets, eps.
     params.shape[3] = checked_item_offset(norm_gate, norm_gate.size(), tag, out);
     params.output_size = checked_item_offset(norm_weight, norm_weight.size(), tag, out);
     params.alpha = norm_eps();
   }
-  std::array<omarchy::ComputeBinding, 13> bindings{
-      binding(in_state),
-      binding(in_x),
-      binding(in_w),
-      binding(a_in),
-      binding(b_in),
-      binding(h0),
-      binding(out),
-      binding(hf),
-      binding(A_log),
-      binding(dt_bias),
-      binding(conv_state_out),
-      binding(norm_gate),
-      binding(norm_weight)};
   const char* gdn_coal_env = omarchy::env_str("MLX_OMARCHY_GDN_COALESCED");
   omarchy::ComputeKernel kernel = !equal_heads
       ? (with_norm ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16PfGqa
@@ -17969,6 +17960,110 @@ void GdnConvDeltaUpdate::eval_gpu(
       }
     }
   }
+  bool use_inproj_ab = false;
+  omarchy::ComputeKernel ab_kernel = kernel;
+  uint32_t x_inproj_offset = 0u;
+  if (inproj_ab != nullptr) {
+    const bool kernel_supports_ab =
+        kernel == omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg16 ||
+        kernel == omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg16U2 ||
+        kernel == omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
+    const array& ix = *inproj_ab->x;
+    const array& iwa = *inproj_ab->wa;
+    const array& isa = *inproj_ab->sa;
+    const array& iba = *inproj_ab->ba;
+    const array& iwb = *inproj_ab->wb;
+    const array& isb = *inproj_ab->sb;
+    const array& ibb = *inproj_ab->bb;
+    const bool ab_dense = ix.flags().row_contiguous &&
+        iwa.flags().row_contiguous && isa.flags().row_contiguous &&
+        iba.flags().row_contiguous && iwb.flags().row_contiguous &&
+        isb.flags().row_contiguous && ibb.flags().row_contiguous;
+    if (kernel_supports_ab && ab_dense &&
+        encoder.device().compute().binding_limit() >= 18u &&
+        inproj_ab->hv == Hv && (inproj_ab->k % 512) == 0 && (Hv % 8) == 0 &&
+        ix.offset() % ix.itemsize() == 0 && iwa.offset() == 0 &&
+        isa.offset() == 0 && iba.offset() == 0 && iwb.offset() == 0 &&
+        isb.offset() == 0 && ibb.offset() == 0) {
+      x_inproj_offset = checked_item_offset(ix, ix.size(), tag, out);
+      if ((x_inproj_offset % 8u) == 0u) {
+        use_inproj_ab = true;
+        if (kernel == omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg16) {
+          ab_kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg16InprojAb;
+        } else if (
+            kernel == omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg16U2) {
+          ab_kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg16U2InprojAb;
+        } else {
+          ab_kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32InprojAb;
+        }
+      }
+    }
+    if (!use_inproj_ab) {
+      omarchy::abort_gdn_inproj_ab(outputs.at(0), s);
+    }
+  }
+  if (use_inproj_ab) {
+    const array& ix = *inproj_ab->x;
+    const array& iwa = *inproj_ab->wa;
+    const array& isa = *inproj_ab->sa;
+    const array& iba = *inproj_ab->ba;
+    const array& iwb = *inproj_ab->wb;
+    const array& isb = *inproj_ab->sb;
+    const array& ibb = *inproj_ab->bb;
+    encoder.add_temporary(ix);
+    encoder.add_temporary(iwa);
+    encoder.add_temporary(isa);
+    encoder.add_temporary(iba);
+    encoder.add_temporary(iwb);
+    encoder.add_temporary(isb);
+    encoder.add_temporary(ibb);
+    params.shape[0] = x_inproj_offset;
+    params.aux_offset = checked_u32(static_cast<size_t>(inproj_ab->k), tag, out);
+    std::array<omarchy::ComputeBinding, 18> ab_bindings{
+        binding(in_state),
+        binding(in_x),
+        binding(in_w),
+        binding(ix),
+        binding(iwa),
+        binding(h0),
+        binding(out),
+        binding(hf),
+        binding(A_log),
+        binding(dt_bias),
+        binding(conv_state_out),
+        binding(norm_gate),
+        binding(norm_weight),
+        binding(isa),
+        binding(iba),
+        binding(iwb),
+        binding(isb),
+        binding(ibb)};
+    encoder.dispatch_compute(
+        ab_kernel,
+        ab_bindings,
+        params,
+        static_cast<uint32_t>(B * Hv),
+        1,
+        1);
+    omarchy::commit_gdn_inproj_ab(outputs.at(0));
+    return;
+  }
+  params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
+  params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
+  std::array<omarchy::ComputeBinding, 13> bindings{
+      binding(in_state),
+      binding(in_x),
+      binding(in_w),
+      binding(a_in),
+      binding(b_in),
+      binding(h0),
+      binding(out),
+      binding(hf),
+      binding(A_log),
+      binding(dt_bias),
+      binding(conv_state_out),
+      binding(norm_gate),
+      binding(norm_weight)};
   encoder.dispatch_compute(
       kernel,
       std::span<const omarchy::ComputeBinding>(bindings.data(), with_norm ? 13u : 11u),

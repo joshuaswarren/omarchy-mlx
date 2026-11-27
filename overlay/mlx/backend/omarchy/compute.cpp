@@ -397,6 +397,9 @@
 #include "gated_delta_decode_conv_norm_bf16_sg16.h"
 #include "gated_delta_decode_conv_norm_bf16_sg16u2.h"
 #include "gated_delta_decode_conv_norm_bf16_sg32.h"
+#include "gated_delta_decode_conv_norm_bf16_sg16_inproj_ab.h"
+#include "gated_delta_decode_conv_norm_bf16_sg16u2_inproj_ab.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_inproj_ab.h"
 #include "sdpa_decode_online_sg32_bf16_hd256.h"
 #include "sdpa_decode_online_sg16_bf16_hd256.h"
 #include "sdpa_decode_online_outgate_sg32_bf16_hd128.h"
@@ -2553,6 +2556,18 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_decode_conv_norm_bf16_sg32,
           gated_delta_decode_conv_norm_bf16_sg32_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg16InprojAb:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg16_inproj_ab,
+          gated_delta_decode_conv_norm_bf16_sg16_inproj_ab_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg16U2InprojAb:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg16u2_inproj_ab,
+          gated_delta_decode_conv_norm_bf16_sg16u2_inproj_ab_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32InprojAb:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_inproj_ab,
+          gated_delta_decode_conv_norm_bf16_sg32_inproj_ab_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

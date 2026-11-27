@@ -1353,6 +1353,9 @@ enum class ComputeKernel : uint16_t {
   GatedDeltaDecodeConvNormBF16Sg16,
   GatedDeltaDecodeConvNormBF16Sg16U2,
   GatedDeltaDecodeConvNormBF16Sg32,
+  GatedDeltaDecodeConvNormBF16Sg16InprojAb,
+  GatedDeltaDecodeConvNormBF16Sg16U2InprojAb,
+  GatedDeltaDecodeConvNormBF16Sg32InprojAb,
   Count,
 };
 

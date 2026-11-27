@@ -30,8 +30,13 @@ layout(local_size_x = MODE_SG * 32, local_size_y = 1, local_size_z = 1) in;
 layout(set = 0, binding = 0, std430) readonly buffer ConvState { uint16_t v[]; } conv_state;
 layout(set = 0, binding = 1, std430) readonly buffer ConvX     { uint16_t v[]; } conv_x;
 layout(set = 0, binding = 2, std430) readonly buffer ConvW     { uint16_t v[]; } conv_w;
+#ifdef GDN_INPROJ_AB
+layout(set = 0, binding = 3, std430) readonly buffer InprojX   { uvec4    v[]; } inproj_x;
+layout(set = 0, binding = 4, std430) readonly buffer WaQ       { uint     v[]; } wa_q;
+#else
 layout(set = 0, binding = 3, std430) readonly buffer GBuf      { uint16_t v[]; } g_buf;
 layout(set = 0, binding = 4, std430) readonly buffer BBuf      { uint16_t v[]; } b_buf;
+#endif
 layout(set = 0, binding = 5, std430) readonly buffer SIn       { vec4     v[]; } s_in;
 layout(set = 0, binding = 6, std430) writeonly buffer YBuf     { uint16_t v[]; } y_buf;
 layout(set = 0, binding = 7, std430) buffer         SOut       { vec4     v[]; } s_out;
@@ -40,6 +45,13 @@ layout(set = 0, binding = 9, std430) readonly buffer DtBuf     { uint16_t v[]; }
 layout(set = 0, binding = 10, std430) buffer ConvStateOut      { uint16_t v[]; } conv_state_out;
 layout(set = 0, binding = 11, std430) readonly buffer NormGate { uint16_t v[]; } norm_gate;
 layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[]; } norm_w;
+#ifdef GDN_INPROJ_AB
+layout(set = 0, binding = 13, std430) readonly buffer SaBuf    { uint16_t v[]; } sa_buf;
+layout(set = 0, binding = 14, std430) readonly buffer BaBuf    { uint16_t v[]; } ba_buf;
+layout(set = 0, binding = 15, std430) readonly buffer WbQ      { uint     v[]; } wb_q;
+layout(set = 0, binding = 16, std430) readonly buffer SbBuf    { uint16_t v[]; } sb_buf;
+layout(set = 0, binding = 17, std430) readonly buffer BbBuf    { uint16_t v[]; } bb_buf;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -71,6 +83,9 @@ shared float skg[128];
 shared float sv[128];
 shared float so[128];
 shared float s_norm_buf[256];
+#ifdef GDN_INPROJ_AB
+shared uint16_t s_ab[2];
+#endif
 
 float bf16_load(uint16_t bits) {
   return uintBitsToFloat(uint(bits) << 16u);
@@ -147,14 +162,44 @@ void gdn_conv_state_out(uint channel) {
       conv_x.v[params.rhs_offset + channel];
 }
 
+#ifdef GDN_INPROJ_AB
+#define GDN_FIELD_UNIT(shift) uintBitsToFloat((150u - (shift)) << 23u)
+#define GDN_Q4_NIB(p, shift) \
+  (uintBitsToFloat(((p) & (0xfu << (shift))) + ((150u - (shift)) << 23u)) - \
+   GDN_FIELD_UNIT(shift))
+#define GDN_Q4_QUAD(packed, lo, hi) { \
+  float x0 = uintBitsToFloat(((lo) & 0xFFFFu) << 16u); \
+  float x1 = uintBitsToFloat((lo) & 0xFFFF0000u); \
+  float x2 = uintBitsToFloat(((hi) & 0xFFFFu) << 16u); \
+  float x3 = uintBitsToFloat((hi) & 0xFFFF0000u); \
+  input_sum += ((x0 + x1) + x2) + x3; \
+  uint p = (packed); \
+  dot += fma(x3, GDN_Q4_NIB(p, 12u), \
+      fma(x2, GDN_Q4_NIB(p, 8u), \
+          fma(x1, GDN_Q4_NIB(p, 4u), \
+              x0 * GDN_Q4_NIB(p, 0u)))); \
+}
+#define GDN_Q4_WORD(word, x_q_idx) { \
+  uint word_value = (word); \
+  uvec4 x_words = inproj_x.v[(x_q_idx)]; \
+  GDN_Q4_QUAD(word_value, x_words.x, x_words.y) \
+  GDN_Q4_QUAD(word_value >> 16u, x_words.z, x_words.w) \
+}
+#endif
+
 vec2 gdn_compute_gates(uint head) {
   float g;
   float beta;
   if ((params.flags & 8u) != 0u) {
+#ifdef GDN_INPROJ_AB
+    float b_in = bf16_load(s_ab[1u]);
+    float a_in = bf16_load(s_ab[0u]);
+#else
     float b_in = bf16_load(b_buf.v[params.aux_offset + head]);
+    float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
+#endif
     float beta_f = 1.0f / (1.0f + exp(-b_in));
     beta = bf16_load(bf16_store(beta_f));
-    float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
     uint ph = head % params.in_strides[2];
     float a_log;
     if ((params.flags & 512u) != 0u) {
@@ -173,8 +218,13 @@ vec2 gdn_compute_gates(uint head) {
                                              : bf16_load(bf16_store(sp_raw));
     g = exp(-(exp(a_log) * sp));
   } else {
+#ifdef GDN_INPROJ_AB
+    g = bf16_load(s_ab[0u]);
+    beta = bf16_load(s_ab[1u]);
+#else
     g = bf16_load(g_buf.v[params.shape[0] + head]);
     beta = bf16_load(b_buf.v[params.aux_offset + head]);
+#endif
   }
   return vec2(g, beta);
 }
@@ -197,11 +247,15 @@ void main() {
     khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
   }
 
+#ifndef GDN_INPROJ_AB
   vec2 gates = gdn_compute_gates(head);
   float g = gates.x;
   float beta = gates.y;
+#endif
 
-  // Phase 1: Conv + SiLU + Q/K RMSNorm (threads 0..127)
+  // Phase 1: Conv + SiLU + Q/K RMSNorm (threads 0..127); when GDN_INPROJ_AB is
+  // enabled, idle subgroups 4 and 5 compute row `head` of in_proj_a and
+  // in_proj_b in parallel (bit-exact to QmmVecQ4WordSubgroupBF16R2S8W2).
   uint16_t q_act = uint16_t(0u);
   uint16_t k_act = uint16_t(0u);
   if (tid < 128u) {
@@ -231,7 +285,62 @@ void main() {
     }
     gdn_conv_state_out(v_channel);
   }
+#ifdef GDN_INPROJ_AB
+  else if (sg == 4u) {
+    const uint k_dim = params.aux_offset;
+    const uint words_per_row = k_dim >> 3u;
+    const uint groups_per_row = k_dim >> 6u;
+    const uint x_q_base = params.shape[0] >> 3u;
+    const uint w_base = head * words_per_row;
+    const uint sb_base = head * groups_per_row;
+    precise float acc = 0.0;
+    for (uint w = lane * 2u; w < words_per_row; w += 64u) {
+      precise float dot = 0.0;
+      precise float input_sum = 0.0;
+      GDN_Q4_WORD(wa_q.v[w_base + w], x_q_base + w)
+      GDN_Q4_WORD(wa_q.v[w_base + w + 1u], x_q_base + w + 1u)
+      uint group = w >> 3u;
+      float scale = bf16_load(sa_buf.v[sb_base + group]);
+      float bias = bf16_load(ba_buf.v[sb_base + group]);
+      precise float bias_term = input_sum * bias;
+      acc += fma(scale, dot, bias_term);
+    }
+    float total = subgroupAdd(acc);
+    if (lane == 0u) {
+      s_ab[0u] = bf16_store(total);
+    }
+  } else if (sg == 5u) {
+    const uint k_dim = params.aux_offset;
+    const uint words_per_row = k_dim >> 3u;
+    const uint groups_per_row = k_dim >> 6u;
+    const uint x_q_base = params.shape[0] >> 3u;
+    const uint w_base = head * words_per_row;
+    const uint sb_base = head * groups_per_row;
+    precise float acc = 0.0;
+    for (uint w = lane * 2u; w < words_per_row; w += 64u) {
+      precise float dot = 0.0;
+      precise float input_sum = 0.0;
+      GDN_Q4_WORD(wb_q.v[w_base + w], x_q_base + w)
+      GDN_Q4_WORD(wb_q.v[w_base + w + 1u], x_q_base + w + 1u)
+      uint group = w >> 3u;
+      float scale = bf16_load(sb_buf.v[sb_base + group]);
+      float bias = bf16_load(bb_buf.v[sb_base + group]);
+      precise float bias_term = input_sum * bias;
+      acc += fma(scale, dot, bias_term);
+    }
+    float total = subgroupAdd(acc);
+    if (lane == 0u) {
+      s_ab[1u] = bf16_store(total);
+    }
+  }
+#endif
   barrier();
+
+#ifdef GDN_INPROJ_AB
+  vec2 gates = gdn_compute_gates(head);
+  float g = gates.x;
+  float beta = gates.y;
+#endif
 
   if (sg == 0u) {
     float acc = (s_norm_buf[lane] + s_norm_buf[lane + 64u]) +

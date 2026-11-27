@@ -902,6 +902,28 @@ struct SdpaOnlineRopePlan {
       State::pending};
 };
 
+struct GdnInprojAbPlan {
+  array a_node;
+  array b_node;
+  std::shared_ptr<Primitive> a_prim;
+  std::shared_ptr<Primitive> b_prim;
+  std::vector<array> a_inputs;
+  std::vector<array> b_inputs;
+  array x;
+  array wa;
+  array sa;
+  array ba;
+  array wb;
+  array sb;
+  array bb;
+  int k{0};
+  int hv{0};
+  GdnInprojAbCtx ctx;
+  bool a_skipped{false};
+  bool b_skipped{false};
+  enum class State : uint8_t { pending, done, failed } state{State::pending};
+};
+
 struct EagerFusionState {
   std::unordered_map<std::uintptr_t, EagerRole> roles;
   std::unordered_map<std::uintptr_t, FusedChain> chains;
@@ -919,6 +941,9 @@ struct EagerFusionState {
   std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_skip_roles;
   std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_su_roles;
   std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_roles;
+  std::vector<GdnInprojAbPlan> gdn_inproj_ab_plans;
+  std::unordered_map<std::uintptr_t, size_t> gdn_inproj_ab_skip_roles;
+  std::unordered_map<std::uintptr_t, size_t> gdn_inproj_ab_roles;
   TapeIndex<size_t> dense_gemv_roles;
   std::vector<DenseGemvGroup> dense_gemv_groups;
   TapeIndex<size_t> slice_update_roles;
@@ -974,6 +999,9 @@ struct EagerFusionState {
     sdpa_online_rope_skip_roles.clear();
     sdpa_online_rope_su_roles.clear();
     sdpa_online_rope_roles.clear();
+    gdn_inproj_ab_plans.clear();
+    gdn_inproj_ab_skip_roles.clear();
+    gdn_inproj_ab_roles.clear();
   }
 };
 
@@ -1682,6 +1710,120 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
 
   // Decode GEMV groups (per node: MLX_OMARCHY_FUSED_GEMV for the device
   // that executes the node; the trio plan below does not depend on it). Candidates: affine transposed 4-bit/group-64
+  // Fused GDN in_proj_a + in_proj_b fold: claim single-consumer decode
+  // QuantizedMatmul projections feeding GdnConvDeltaUpdate inputs[3] (a_in)
+  // and inputs[4] (b_in) when both share one bf16 row x and match the exact
+  // affine 4-bit group-64 transposed qmv_fast contract (K % 512 == 0,
+  // Hv % 8 == 0). Must run before the GEMV multi-weight scan so gemv_groups
+  // does not claim a_in / b_in.
+  if (gdn_inproj_ab_enabled()) {
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(fast::GdnConvDeltaUpdate)) ||
+          node.inputs().size() != 10 || claimed.count(node.id())) {
+        continue;
+      }
+      const array* a_node = lookup(node.inputs()[3]);
+      const array* b_node = lookup(node.inputs()[4]);
+      if (a_node == nullptr || b_node == nullptr ||
+          a_node->id() == b_node->id() || claimed.count(a_node->id()) ||
+          claimed.count(b_node->id()) || uses[a_node->id()] != 1 ||
+          uses[b_node->id()] != 1) {
+        continue;
+      }
+      if (!is_op(a_node, typeid(QuantizedMatmul)) ||
+          !is_op(b_node, typeid(QuantizedMatmul)) ||
+          a_node->inputs().size() != 4 || b_node->inputs().size() != 4 ||
+          a_node->primitive().stream() != node.primitive().stream() ||
+          b_node->primitive().stream() != node.primitive().stream()) {
+        continue;
+      }
+      auto [a_gs, a_bits, a_mode, a_tr] =
+          static_cast<const QuantizedMatmul&>(a_node->primitive()).state();
+      auto [b_gs, b_bits, b_mode, b_tr] =
+          static_cast<const QuantizedMatmul&>(b_node->primitive()).state();
+      if (a_mode != QuantizationMode::Affine || !a_tr || a_bits != 4 ||
+          a_gs != 64 || b_mode != QuantizationMode::Affine || !b_tr ||
+          b_bits != 4 || b_gs != 64) {
+        continue;
+      }
+      const array& x = a_node->inputs()[0];
+      if (b_node->inputs()[0].id() != x.id() || x.dtype() != bfloat16 ||
+          a_node->dtype() != bfloat16 || b_node->dtype() != bfloat16) {
+        continue;
+      }
+      const array& wa = a_node->inputs()[1];
+      const array& sa = a_node->inputs()[2];
+      const array& ba = a_node->inputs()[3];
+      const array& wb = b_node->inputs()[1];
+      const array& sb = b_node->inputs()[2];
+      const array& bb = b_node->inputs()[3];
+      if (lookup(wa) || lookup(sa) || lookup(ba) || lookup(wb) || lookup(sb) ||
+          lookup(bb) || wa.dtype() != uint32 || wb.dtype() != uint32 ||
+          sa.dtype() != bfloat16 || ba.dtype() != bfloat16 ||
+          sb.dtype() != bfloat16 || bb.dtype() != bfloat16) {
+        continue;
+      }
+      if (x.ndim() < 2 || x.shape(-2) != 1 ||
+          x.size() != static_cast<size_t>(x.shape(-1))) {
+        continue;
+      }
+      const int k = x.shape(-1);
+      const int hv = node.inputs()[3].shape(2);
+      if (k <= 0 || (k % 512) != 0 || hv <= 0 || (hv % 8) != 0 ||
+          a_node->size() != static_cast<size_t>(hv) ||
+          b_node->size() != static_cast<size_t>(hv)) {
+        continue;
+      }
+      if (wa.ndim() != 2 || wa.shape(0) != hv || wa.shape(1) != k / 8 ||
+          sa.ndim() != 2 || sa.shape(0) != hv || sa.shape(1) != k / 64 ||
+          ba.shape() != sa.shape() || wb.ndim() != 2 || wb.shape(0) != hv ||
+          wb.shape(1) != k / 8 || sb.ndim() != 2 || sb.shape(0) != hv ||
+          sb.shape(1) != k / 64 || bb.shape() != sb.shape()) {
+        continue;
+      }
+      const size_t plan_idx = state->gdn_inproj_ab_plans.size();
+      state->gdn_inproj_ab_plans.push_back(GdnInprojAbPlan{
+          *a_node,
+          *b_node,
+          a_node->primitive_ptr(),
+          b_node->primitive_ptr(),
+          a_node->inputs(),
+          b_node->inputs(),
+          x,
+          wa,
+          sa,
+          ba,
+          wb,
+          sb,
+          bb,
+          k,
+          hv,
+          GdnInprojAbCtx{},
+          false,
+          false,
+          GdnInprojAbPlan::State::pending});
+      state->gdn_inproj_ab_skip_roles.emplace(a_node->id(), plan_idx);
+      state->gdn_inproj_ab_skip_roles.emplace(b_node->id(), plan_idx);
+      state->gdn_inproj_ab_roles.emplace(node.id(), plan_idx);
+      for (const auto& sib : node.siblings()) {
+        state->gdn_inproj_ab_roles.emplace(sib.id(), plan_idx);
+      }
+      claimed.put_if_absent(a_node->id(), 1);
+      claimed.put_if_absent(b_node->id(), 1);
+    }
+    if (omarchy::env_str("MLX_OMARCHY_GDN_INPROJ_AB_TRACE") != nullptr &&
+        !state->gdn_inproj_ab_plans.empty()) {
+      static int gdn_ab_trace = 0;
+      if (gdn_ab_trace < 4) {
+        ++gdn_ab_trace;
+        std::fprintf(
+            stderr,
+            "[gdn-inproj-ab] planned=%zu\n",
+            state->gdn_inproj_ab_plans.size());
+      }
+    }
+  }
+
   // QuantizedMatmul nodes whose x is a single row and whose weight,
   // scale, and bias inputs were evaluated before this eval began (the
   // group dispatches when its FIRST member evaluates, so a later
@@ -4153,6 +4295,108 @@ void commit_sdpa_outgate(const array& out) {
   }
 }
 
+bool gdn_inproj_ab_enabled() {
+  if (!fused_chain_enabled()) {
+    return false;
+  }
+  const char* v = omarchy::env_str("MLX_OMARCHY_GDN_INPROJ_AB");
+  if (v != nullptr && *v != '\0') {
+    return std::strcmp(v, "0") != 0;
+  }
+  return false;
+}
+
+const GdnInprojAbCtx* find_gdn_inproj_ab(
+    const array& out,
+    const Stream& stream) {
+  if (!eager_state) {
+    return nullptr;
+  }
+  auto it = eager_state->gdn_inproj_ab_roles.find(out.id());
+  if (it == eager_state->gdn_inproj_ab_roles.end()) {
+    return nullptr;
+  }
+  auto& plan = eager_state->gdn_inproj_ab_plans[it->second];
+  if (plan.state != GdnInprojAbPlan::State::pending) {
+    return nullptr;
+  }
+  if (plan.x.data_shared_ptr() == nullptr ||
+      plan.wa.data_shared_ptr() == nullptr ||
+      plan.sa.data_shared_ptr() == nullptr ||
+      plan.ba.data_shared_ptr() == nullptr ||
+      plan.wb.data_shared_ptr() == nullptr ||
+      plan.sb.data_shared_ptr() == nullptr ||
+      plan.bb.data_shared_ptr() == nullptr) {
+    abort_gdn_inproj_ab(out, stream);
+    return nullptr;
+  }
+  plan.ctx = GdnInprojAbCtx{
+      &plan.x,
+      &plan.wa,
+      &plan.sa,
+      &plan.ba,
+      &plan.wb,
+      &plan.sb,
+      &plan.bb,
+      plan.k,
+      plan.hv};
+  return &plan.ctx;
+}
+
+void commit_gdn_inproj_ab(const array& out) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->gdn_inproj_ab_roles.find(out.id());
+  if (it == eager_state->gdn_inproj_ab_roles.end()) {
+    return;
+  }
+  eager_state->gdn_inproj_ab_plans[it->second].state =
+      GdnInprojAbPlan::State::done;
+  if (omarchy::env_str("MLX_OMARCHY_GDN_INPROJ_AB_TRACE") != nullptr) {
+    static int commit_trace = 0;
+    if (commit_trace < 4) {
+      ++commit_trace;
+      std::fprintf(stderr, "[gdn-inproj-ab] committed=%d\n", commit_trace);
+    }
+  }
+}
+
+void abort_gdn_inproj_ab(const array& out, const Stream& stream) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->gdn_inproj_ab_roles.find(out.id());
+  if (it == eager_state->gdn_inproj_ab_roles.end()) {
+    return;
+  }
+  auto& plan = eager_state->gdn_inproj_ab_plans[it->second];
+  if (plan.state == GdnInprojAbPlan::State::done ||
+      plan.state == GdnInprojAbPlan::State::failed) {
+    return;
+  }
+  plan.state = GdnInprojAbPlan::State::failed;
+  auto& encoder = get_command_encoder(stream);
+  auto replay = [&](array& node,
+                    const std::shared_ptr<Primitive>& prim,
+                    const std::vector<array>& ins) {
+    if (node.data_shared_ptr() != nullptr) {
+      return;
+    }
+    for (const auto& in : ins) {
+      encoder.add_temporary(in);
+    }
+    std::vector<array> outs{node};
+    prim->eval_gpu(ins, outs);
+  };
+  if (plan.a_skipped) {
+    replay(plan.a_node, plan.a_prim, plan.a_inputs);
+  }
+  if (plan.b_skipped) {
+    replay(plan.b_node, plan.b_prim, plan.b_inputs);
+  }
+}
+
 void bind_kv_window_storage(KvDirectWindow& window, const Stream& stream) {
   if (window.node.data_shared_ptr() != nullptr) {
     auto& encoder = get_command_encoder(stream);
@@ -4475,6 +4719,19 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     // can still fire.
     return eager_state->rope_norms[*skip].state !=
         RopeNormFold::State::failed;
+  }
+  if (auto gdn_skip = eager_state->gdn_inproj_ab_skip_roles.find(node.id());
+      gdn_skip != eager_state->gdn_inproj_ab_skip_roles.end()) {
+    auto& plan = eager_state->gdn_inproj_ab_plans[gdn_skip->second];
+    if (plan.state != GdnInprojAbPlan::State::failed ||
+        node.data_shared_ptr() != nullptr) {
+      if (node.id() == plan.a_node.id()) {
+        plan.a_skipped = true;
+      } else if (node.id() == plan.b_node.id()) {
+        plan.b_skipped = true;
+      }
+      return true;
+    }
   }
   if (auto sr_skip = eager_state->sdpa_online_rope_skip_roles.find(node.id());
       sr_skip != eager_state->sdpa_online_rope_skip_roles.end()) {
