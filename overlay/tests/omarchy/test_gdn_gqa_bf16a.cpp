@@ -768,7 +768,8 @@ TEST_CASE("gdn raw decode f32 A_log: coalesced Sg32 kernel default, off-switch a
   CHECK(omarchy::gdn_decode_coalesced_default("Apple M2 Max (G14C B1)", 16, 32));
   CHECK(omarchy::gdn_decode_coalesced_default("Apple M2 Max (G14C B1)", 16, 48));
   CHECK_FALSE(omarchy::gdn_decode_coalesced_default("Apple M2 Max (G14C B1)", 16, 16));
-  CHECK_FALSE(omarchy::gdn_decode_coalesced_default("Apple M1 Max (G13C C0)", 16, 32));
+  CHECK(omarchy::gdn_decode_coalesced_default("Apple M1 Max (G13C C0)", 16, 32));
+  CHECK_FALSE(omarchy::gdn_decode_coalesced_default("Apple M1 Max (G13C C0)", 16, 16));
   CHECK_FALSE(omarchy::gdn_decode_coalesced_default("Apple M4 Pro (G16S B1)", 16, 32));
   CHECK_FALSE(omarchy::gdn_decode_coalesced_default("Apple M6 (G18G B1)", 16, 32));
   CHECK_FALSE(omarchy::gdn_decode_coalesced_default("llvmpipe (LLVM 15.0.6, 256 bits)", 16, 32));

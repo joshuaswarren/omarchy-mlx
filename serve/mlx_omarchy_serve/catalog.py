@@ -18,6 +18,8 @@ maintainer-side refresher contract).
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import json
 import math
 import mlx_omarchy_paths
@@ -45,6 +47,13 @@ DEFAULT_CATALOG_URL = (
 DEFAULT_TTL_HOURS = 24.0
 TTL_ENV = "MLX_OMARCHY_CATALOG_TTL_HOURS"
 DEFAULT_TIMEOUT_SECONDS = 5.0
+# The stored ETag goes back out as an If-None-Match header, bound to the
+# cached body's SHA-256 (<etag>\n<sha256>\n). GitHub sends a 66-byte quoted
+# SHA-256; anything over this cap is not an ETag file we wrote.
+ETAG_MAX_BYTES = 1024
+# RFC 9110 entity-tag: optional W/, then a quoted run of etagc
+# (%x21 / %x23-7E / obs-text %x80-FF): no space, quote, control or DEL.
+ETAG_PATTERN = re.compile(r'(?:W/)?"[\x21\x23-\x7e\x80-\xff]*"\Z')
 
 APPROVED_CATALOG_HOSTS = frozenset({"raw.githubusercontent.com"})
 APPROVED_CATALOG_PREFIX = "/joshuaswarren/omarchy-mlx/"
@@ -385,26 +394,49 @@ def _check_iso(value, field: str) -> None:
         _fail(f"{field}: not an ISO-8601 timestamp")
 
 
-def validate_file(path: Path) -> dict:
+@contextlib.contextmanager
+def _open_regular_file(path: Path, *, follow_symlinks: bool = True):
+    """Open a regular file unbuffered and non-blocking; yield (fh, fstat).
+
+    Raises CatalogError for a FIFO or device (opened non-blocking, never
+    waited on), and OSError when the path cannot be opened as a file, which
+    includes a missing file, a directory (IsADirectoryError), or a symlink
+    when follow_symlinks is False."""
+    nofollow = 0 if follow_symlinks else os.O_NOFOLLOW
     with open(
         path,
         "rb",
         buffering=0,  # a buffered read would read ahead past the cap
-        opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK),
+        opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK | nofollow),
     ) as fh:
         st = os.fstat(fh.fileno())
         if not stat.S_ISREG(st.st_mode):
             raise CatalogError(f"{path}: not a regular file")
-        if st.st_size > CATALOG_MAX_BYTES:
-            raise CatalogError(f"{path}: {st.st_size} bytes exceeds {CATALOG_MAX_BYTES}")
-        raw = bytearray()
-        while len(raw) <= CATALOG_MAX_BYTES:  # a short read is not EOF; stop at cap + 1
-            chunk = fh.read(CATALOG_MAX_BYTES + 1 - len(raw))
-            if not chunk:
-                break
-            raw += chunk
-    if len(raw) > CATALOG_MAX_BYTES:
-        raise CatalogError(f"{path}: {len(raw)} bytes exceeds {CATALOG_MAX_BYTES}")
+        yield fh, st
+
+
+def _read_capped(fh, st: os.stat_result, path: Path, cap: int) -> bytes:
+    """Read at most cap bytes from an open unbuffered regular file."""
+    if st.st_size > cap:
+        raise CatalogError(f"{path}: {st.st_size} bytes exceeds {cap}")
+    raw = bytearray()
+    while len(raw) <= cap:  # a short read is not EOF; stop at cap + 1
+        chunk = fh.read(cap + 1 - len(raw))
+        if not chunk:
+            break
+        raw += chunk
+    if len(raw) > cap:
+        raise CatalogError(f"{path}: {len(raw)} bytes exceeds {cap}")
+    return bytes(raw)
+
+
+def _read_regular_file(path: Path, cap: int, *, follow_symlinks: bool = True) -> bytes:
+    """_open_regular_file() then _read_capped(): CatalogError past cap bytes."""
+    with _open_regular_file(path, follow_symlinks=follow_symlinks) as (fh, st):
+        return _read_capped(fh, st, path, cap)
+
+
+def _parse_catalog(raw: bytes, path: Path) -> dict:
     try:
         obj = json.loads(raw)
     # ValueError covers bad JSON, bad UTF-8 and over-long integers.
@@ -417,12 +449,42 @@ def validate_file(path: Path) -> dict:
     return obj
 
 
-def _is_fresh(path: Path, ttl_hours: float, now: float | None) -> bool:
-    if not path.is_file():
-        return False
-    ts = now if now is not None else datetime.now(timezone.utc).timestamp()
-    age_hours = (ts - path.stat().st_mtime) / 3600.0
-    return age_hours < ttl_hours
+def validate_file(path: Path) -> dict:
+    return _parse_catalog(_read_regular_file(path, CATALOG_MAX_BYTES), path)
+
+
+def _cache_state(path: Path, *, renew_if: str | None = None) -> tuple[float, str] | None:
+    """(mtime, sha256) of the cache file refresh() may revalidate, or None.
+    Only a valid regular file counts, never a symlink: refresh() would
+    otherwise renew, and send the ETag for, a file it does not own. With
+    renew_if, also renew the mtime, through the descriptor that was just
+    validated and only while its bytes still hash to renew_if."""
+    try:
+        with _open_regular_file(path, follow_symlinks=False) as (fh, st):
+            raw = _read_capped(fh, st, path, CATALOG_MAX_BYTES)
+            _parse_catalog(raw, path)
+            digest = hashlib.sha256(raw).hexdigest()
+            if renew_if is not None:
+                if digest != renew_if:
+                    return None
+                os.utime(fh.fileno())
+    except (OSError, CatalogError):
+        return None
+    return st.st_mtime, digest
+
+
+def _read_etag(path: Path, expected_digest: str) -> str | None:
+    """The stored ETag bound to expected_digest, or None when it is missing,
+    not a regular file (a symlink, FIFO or directory), over ETAG_MAX_BYTES,
+    not the exact '<etag>\\n<sha256>\\n' format, or bound to different bytes."""
+    try:
+        text = _read_regular_file(path, ETAG_MAX_BYTES, follow_symlinks=False).decode("utf-8")
+    except (OSError, CatalogError, ValueError):
+        return None
+    stored, _, rest = text.partition("\n")
+    if rest != f"{expected_digest}\n":
+        return None
+    return stored if ETAG_PATTERN.match(stored) else None
 
 
 def _ttl_hours(ttl_hours: float | None) -> float:
@@ -441,14 +503,6 @@ def _ttl_hours(ttl_hours: float | None) -> float:
     print(f"warning: ignoring {TTL_ENV}={raw!r}, not a finite number of hours; "
           f"using {default:g}h", file=sys.stderr)
     return default
-
-
-def _is_valid(path: Path) -> bool:
-    try:
-        validate_file(path)
-    except (OSError, CatalogError):
-        return False
-    return True
 
 
 def load_catalog(home: Path | None = None, prefer_cache: bool = True) -> dict:
@@ -470,14 +524,18 @@ def _atomic_write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
     try:
-        with os.fdopen(fd, "wb") as fh:
+        try:
+            fh = os.fdopen(fd, "wb")
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            raise
+        with fh:
             fh.write(data)
         os.replace(tmp, path)
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 
@@ -503,7 +561,26 @@ def validate_catalog_url(url: str) -> None:
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *_args, **_kwargs):
-        return None  # a catalog fetch must not silently follow a redirect
+        # A catalog fetch must not silently follow a redirect. Returning None
+        # here also skips the base handler's unbounded read of the 3xx body:
+        # the response becomes an HTTPError whose body is never read.
+        return None
+
+
+def _store_etag(path: Path, etag: str, digest: str) -> None:
+    """Best effort: a missing ETag only costs the next conditional request.
+    An ETag that _read_etag() would refuse is not stored, and any old one is
+    removed, a dangling symlink included."""
+    try:
+        if ETAG_PATTERN.match(etag):
+            payload = f"{etag}\n{digest}\n".encode()
+            if len(payload) <= ETAG_MAX_BYTES:
+                _atomic_write(path, payload)
+                return
+    except OSError:  # e.g. a directory in the way; fall through and try to remove it
+        pass
+    with contextlib.suppress(OSError):
+        path.unlink(missing_ok=True)
 
 
 def refresh(
@@ -536,22 +613,23 @@ def refresh(
     if offline:
         return {"status": "skipped", "path": str(dest), "detail": "offline opt-out honored"}
     ttl = _ttl_hours(ttl_hours)
-    # A missing or damaged cache is never fresh and never revalidated with
-    # the stored ETag: a 304 would leave it damaged until upstream changes.
-    cache_ok = _is_valid(dest)
-    if cache_ok and _is_fresh(dest, ttl, now):
-        return {"status": "fresh", "path": str(dest), "detail": f"cache younger than {ttl:g}h"}
-
+    # A missing, damaged or symlinked cache is never fresh and never
+    # revalidated with the stored ETag: a 304 would leave it damaged until
+    # upstream changes. A fetched catalog replaces a symlink, not its target.
     etag_path = dest.with_suffix(dest.suffix + ".etag")
+    state = _cache_state(dest)
+    stored = digest = None
+    if state is not None:
+        mtime, digest = state
+        ts = now if now is not None else datetime.now(timezone.utc).timestamp()
+        if (ts - mtime) / 3600.0 < ttl:
+            return {"status": "fresh", "path": str(dest),
+                    "detail": f"cache younger than {ttl:g}h"}
+        stored = _read_etag(etag_path, digest)
+
     headers = {"User-Agent": "mlx-omarchy-serve-catalog"}
-    try:
-        if cache_ok and etag_path.is_file():
-            stored = etag_path.read_text(encoding="utf-8").strip()
-            # Send it only as one Latin-1 header line (read_text already turned CR into LF).
-            if stored and max(stored) <= "\xff" and "\n" not in stored:
-                headers["If-None-Match"] = stored
-    except (OSError, ValueError):  # unreadable or undecodable: fetch without it
-        pass
+    if stored is not None:
+        headers["If-None-Match"] = stored
 
     try:
         request = urllib.request.Request(url, headers=headers)
@@ -562,13 +640,12 @@ def refresh(
             body = response.read(CATALOG_MAX_BYTES + 1)
             new_etag = response.headers.get("ETag", "")
     except urllib.error.HTTPError as exc:
-        if exc.code == 304 and _is_valid(dest):  # recheck: the cache may change in flight
-            try:
-                os.utime(dest)  # unlike touch(), never creates a missing cache
-            except OSError:
-                pass
-            else:
-                return {"status": "not-modified", "path": str(dest), "detail": "etag match"}
+        exc.close()  # the error body is never read
+        # A 304 counts only as the answer to the ETag we sent, and renews
+        # only the bytes that ETag is bound to (the cache may change in flight).
+        if exc.code == 304 and stored is not None \
+                and _cache_state(dest, renew_if=digest) is not None:
+            return {"status": "not-modified", "path": str(dest), "detail": "etag match"}
         status = "fallback" if not os.path.isfile(dest) else "kept"
         return {"status": status, "path": str(dest), "detail": f"fetch failed: {exc}"}
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -584,9 +661,11 @@ def refresh(
         return {"status": "kept" if os.path.isfile(dest) else "fallback", "path": str(dest),
                 "detail": f"fetched catalog rejected: {exc}"}
 
-    _atomic_write(dest, body)
-    if new_etag:
-        _atomic_write(etag_path, new_etag.encode())
-    elif etag_path.exists():
-        etag_path.unlink()
+    try:
+        _atomic_write(dest, body)
+    except OSError as exc:
+        status = "kept" if os.path.isfile(dest) else "fallback"
+        return {"status": status, "path": str(dest),
+                "detail": f"could not write cache: {exc}"}
+    _store_etag(etag_path, new_etag.strip(" \t"), hashlib.sha256(body).hexdigest())
     return {"status": "updated", "path": str(dest), "detail": f"{len(body)} bytes from {url}"}

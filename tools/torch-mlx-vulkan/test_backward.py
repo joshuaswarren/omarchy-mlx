@@ -47,6 +47,22 @@ def test_native_layer_norm_backward():
             mx.array(w.numpy()), mx.array(b.numpy()), [True, True, True])
         for tag, m, r in zip(("dx", "dw", "db"), my, ref):
             _cmp(f"ln_bwd{ns_shape}.{tag}", m, r)
+    # PAR-41 census rerun: the OpInfo/aot graph can hand mean/rstd squeezed
+    # (x.shape[:-ndim] without the trailing singletons); the lowering must
+    # restore keepdims so they broadcast over the normalized dims.
+    x = torch.randn(2, 4)
+    w = torch.randn(4)
+    b = torch.randn(4)
+    out, mean, rstd = torch.native_layer_norm(x, [4], w, b, 1e-5)
+    g = torch.randn_like(out)
+    ref = torch.ops.aten.native_layer_norm_backward(
+        g, x, [4], mean, rstd, w, b, [True, True, True])
+    my = mlx_vulkan.ATEN_TABLE["native_layer_norm_backward"](
+        mx.array(g.numpy()), mx.array(x.numpy()), [4],
+        mx.array(mean.squeeze(-1).numpy()), mx.array(rstd.squeeze(-1).numpy()),
+        mx.array(w.numpy()), mx.array(b.numpy()), [True, True, True])
+    for tag, m, r in zip(("dx", "dw", "db"), my, ref):
+        _cmp(f"ln_bwd_squeezed_stats.{tag}", m, r)
 
 
 def test_native_layer_norm_backward_bf16_and_fp32():

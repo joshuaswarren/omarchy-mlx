@@ -3348,7 +3348,10 @@ TEST_CASE("sdpa online rope norm: bit-exact output and k_cache with two fewer di
   CHECK(omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 512u));
   CHECK(omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 2304u));
   CHECK(!omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 2305u));
-  CHECK(!omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 512u, 256, true));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 512u, 256, true));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 4096u, 256, true));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 4097u, 256, true));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M1 Max (G13C C0)", 512u, 256, false));
   CHECK(omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 512u, 128, false));
   CHECK(omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 1024u, 128, false));
   CHECK(!omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 1025u, 128, false));
@@ -3371,9 +3374,11 @@ TEST_CASE("sdpa online rope norm: bit-exact output and k_cache with two fewer di
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 (G13G B1)", 8u, 127u), 1u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 (G13G B1)", 16u, 512u), 1u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 Max (G13C C0)", 8u, 512u), 1u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 Max (G13C C0)", 16u, 512u), 2u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 Max (G13C C0)", 16u, 63u), 1u);
   CHECK(omarchy::sdpa_outgate_default("Apple M2 Max (G14C B1)"));
   CHECK(omarchy::sdpa_outgate_default("Apple M1 (G13G B1)"));
-  CHECK(!omarchy::sdpa_outgate_default("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::sdpa_outgate_default("Apple M1 Max (G13C C0)"));
   CHECK(!omarchy::sdpa_outgate_default("Apple M4 (G16G B1)"));
   if (!compute_available()) {
     return;

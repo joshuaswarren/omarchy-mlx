@@ -71,6 +71,21 @@ def test_conv1d_fp32_shapes():
     print("test_conv1d_fp32_shapes PASS")
 
 
+def test_conv1d_unbatched():
+    # PAR-41 census rerun: aten.conv1d's unbatched 2-D (C, L) input crashed the
+    # lowering - x.transpose(0, 2, 1) asked 3 axes of a 2-D array. Torch treats
+    # a missing batch dim as N=1 and squeezes the output back.
+    rng = np.random.RandomState(7)
+    for c, l, o, k in ((6, 23, 5, 4), (3, 11, 8, 3), (1, 7, 1, 1)):
+        a = rng.randn(c, l).astype(np.float32)
+        w = rng.randn(o, c, k).astype(np.float32)
+        b = rng.randn(o).astype(np.float32)
+        _check(a, w, b, 1, 0, 1, torch.float32, 1e-4, 1e-5)
+        _check(a, w, b, 2, 1, 1, torch.float32, 1e-4, 1e-5)
+        _check(a, w, None, 1, 2, 2, torch.float32, 1e-4, 1e-5)
+    print("test_conv1d_unbatched PASS")
+
+
 def test_conv1d_bf16():
     rng = np.random.RandomState(2)
     a = rng.randn(2, 6, 23)
@@ -178,6 +193,26 @@ def test_conv1d_census_grouped():
     print("test_conv1d_census_grouped PASS")
 
 
+def test_conv1d_unbatched_executor():
+    # PT-U5 residual complement to test_conv1d_unbatched (PAR-41, #1098):
+    # the unbatched (C, L) form must route through the executor's mlx leg
+    # end-to-end, not just lower correctly at the table level.
+    rng = np.random.RandomState(7)
+    a = rng.randn(4, 16).astype(np.float32)   # (C, L) unbatched
+    w = rng.randn(3, 4, 5).astype(np.float32)  # (O, I, K)
+    g = torch.fx.Graph()
+    px, pw = g.placeholder("x"), g.placeholder("w")
+    g.output(g.call_function(torch.ops.aten.conv1d.default, (px, pw)))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(torch.tensor(a), torch.tensor(w))
+    exp = torch.ops.aten.conv1d.default(torch.tensor(a), torch.tensor(w))
+    np.testing.assert_allclose(np.asarray(out), exp.numpy(), rtol=1e-4, atol=1e-5)
+    assert "conv1d" in stats["mlx"], stats
+    assert "conv1d" not in stats["cpu"], stats
+    print("test_conv1d_unbatched_executor PASS")
+
+
 if __name__ == "__main__":
     test_conv1d_fp32_configs()
     test_conv1d_fp32_shapes()
@@ -185,3 +220,5 @@ if __name__ == "__main__":
     test_conv1d_groups()
     test_conv1d_census_lowered()
     test_conv1d_census_grouped()
+    test_conv1d_unbatched()
+    test_conv1d_unbatched_executor()

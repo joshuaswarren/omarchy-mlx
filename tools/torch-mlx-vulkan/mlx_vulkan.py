@@ -177,6 +177,11 @@ def _linear(x, w, bias=None):
     y = mx.matmul(x, _wt(w))
     return y + _mx(bias) if bias is not None else y
 
+def _squeeze(a, dim=None):
+    if isinstance(dim, (list, tuple)):
+        dim = tuple(dim)
+    return mx.squeeze(a, axis=dim) if dim is not None else mx.squeeze(a)
+
 def _reshape(a, *s):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
         s = tuple(s[0])
@@ -450,6 +455,12 @@ def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mas
     w = _mx(weight) if weight is not None else None
     ndim = len(tuple(normalized_shape))
     axes = tuple(range(x.ndim - ndim, x.ndim))
+    # aten returns mean/rstd with keepdims, but callers through aot_autograd
+    # and the OpInfo graph can hand them squeezed (shape x.shape[:-ndim]);
+    # restore the trailing singletons so they broadcast over normalized dims.
+    if mean.ndim < x.ndim:
+        shp = mean.shape + (1,) * (x.ndim - mean.ndim)
+        mean, rstd = mx.reshape(mean, shp), mx.reshape(rstd, shp)
     xhat = (x - mean) * rstd
     g = gout * w if w is not None else gout
     dx = rstd * (g - mx.mean(g, axis=axes, keepdims=True)
@@ -1021,8 +1032,12 @@ def _convolution_backward(gout, x, w, bias_sizes, stride, padding, dilation,
 
 
 def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
-    # torch: a NCL, w (O, I/groups, K) ; mlx.conv1d: x NLC, w (O, K, I/groups)
-    x = _mx(a).transpose(0, 2, 1)
+    # torch: a NCL or CL (unbatched), w (O, I/groups, K) ; mlx.conv1d: x NLC, w (O, K, I/groups)
+    x = _mx(a)
+    unbatched = x.ndim == 2
+    if unbatched:
+        x = x[None]
+    x = x.transpose(0, 2, 1)
     wt = _mx(w).transpose(0, 2, 1)  # torch O,I/groups,K -> mlx O,K,I/groups
     st = stride[0] if isinstance(stride, (list, tuple)) else stride
     p = padding[0] if isinstance(padding, (list, tuple)) else padding
@@ -1030,7 +1045,8 @@ def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     y = mx.conv1d(x, wt, stride=st, padding=p, dilation=dl, groups=groups)
     if b is not None:
         y = y + _mx(b).reshape(1, 1, -1)
-    return y.transpose(0, 2, 1)
+    y = y.transpose(0, 2, 1)
+    return y[0] if unbatched else y
 
 def _diff(a, n=1, dim=-1, prepend=None, append=None):
     x = _mx(a)
@@ -1090,6 +1106,85 @@ def _topk(a, k, dim=-1, largest=True, sorted=True):
     vals = mx.take_along_axis(at, idx, axis=-1)
     inv = [perm.index(i) for i in range(a.ndim)]
     return (mx.transpose(vals, axes=inv), mx.transpose(idx, axes=inv).astype(mx.int64))
+
+def _mode(a, dim=-1, keepdim=False):
+    """torch.mode parity: (values, indices) of the row-wise most frequent
+    value, ties resolving to the smallest such value (torch CPU behavior),
+    indices first-occurrence. Sort + per-row equality count: the count of
+    each sorted position's value, argmax picks the first maximum, which in
+    an ascending sort is the smallest modal value."""
+    a = _mx(a)
+    dim = (dim if dim is not None else -1) % a.ndim
+    perm = [i for i in range(a.ndim) if i != dim] + [dim]
+    at = mx.transpose(a, axes=perm)
+    # the omarchy backend has no int64/integral argsort kernel: integral
+    # sorts run on an explicit CPU stream (small ranking widths, correctness
+    # first); float sorts dispatch on the device stream as usual
+    if mx.issubdtype(at.dtype, mx.integer):
+        with mx.stream(mx.cpu):
+            idx = mx.argsort(at, axis=-1)
+            v = mx.take_along_axis(at, idx, axis=-1)
+    else:
+        idx = mx.argsort(at, axis=-1)
+        v = mx.take_along_axis(at, idx, axis=-1)
+    eq = mx.expand_dims(v, -1) == mx.expand_dims(v, -2)
+    counts = mx.sum(eq, axis=-1)
+    # torch.mode picks the smallest modal value and its index is that
+    # value's last (rightmost) occurrence. Deterministic tie handling without
+    # relying on argmax tie order: maximize count, break ties toward the
+    # larger sorted slot (key = count * (n+1) - slot).
+    fm = mx.argmax(counts, axis=-1)
+    maxc = mx.max(counts, axis=-1)
+    pos = fm + maxc - 1
+    pos_ax = mx.expand_dims(pos, -1) if pos.ndim < v.ndim else pos
+    vals = mx.take_along_axis(v, pos_ax, axis=-1)
+    index = mx.take_along_axis(idx, pos_ax, axis=-1)
+    inv = [perm.index(i) for i in range(a.ndim)]
+    vals = mx.transpose(vals, axes=inv)
+    index = mx.transpose(index, axes=inv)
+    if not keepdim:
+        vals = mx.squeeze(vals, dim)
+        index = mx.squeeze(index, dim)
+    if keepdim and a.ndim > 1:
+        vals = mx.expand_dims(vals, dim)
+        index = mx.expand_dims(index, dim)
+    return (vals.astype(a.dtype), index.astype(mx.int64))
+
+
+def _kthvalue(a, k, dim=-1, keepdim=False):
+    """torch.kthvalue parity: the k-th smallest value along dim plus its
+    index. Sort + index: the ascending sort's k-1 slot. torch CPU's own
+    kthvalue index is a quickselect artifact that need not point at the
+    returned value (verified: value -2.136 at index 2, torch's index 7 holds
+    -1.24); this lowering guarantees the index points at a position holding
+    the returned value."""
+    a = _mx(a)
+    dim = (dim if dim is not None else -1) % a.ndim
+    perm = [i for i in range(a.ndim) if i != dim] + [dim]
+    at = mx.transpose(a, axes=perm)
+    # integral sorts run on an explicit CPU stream (no int64 argsort kernel
+    # in the omarchy backend); see _mode
+    if mx.issubdtype(at.dtype, mx.integer):
+        with mx.stream(mx.cpu):
+            idx = mx.argsort(at, axis=-1)
+    else:
+        idx = mx.argsort(at, axis=-1)
+    # sel is itself the original position of the k-th smallest (a slot value
+    # of the argsort output); taking idx at sel would double-indirect
+    sel = idx[..., k - 1: k]
+    vals = mx.take_along_axis(at, sel, axis=-1)
+    sel_idx = sel
+    inv = [perm.index(i) for i in range(a.ndim)]
+    vals = mx.transpose(vals, axes=inv)
+    sel_idx = mx.transpose(sel_idx, axes=inv)
+    if not keepdim:
+        vals = mx.squeeze(vals, dim)
+        sel_idx = mx.squeeze(sel_idx, dim)
+    if keepdim and a.ndim > 1:
+        vals = mx.expand_dims(vals, dim)
+        sel_idx = mx.expand_dims(sel_idx, dim)
+    return (vals.astype(a.dtype), sel_idx.astype(mx.int64))
+
 
 def _is_integral_dtype(dt):
     return mx.issubdtype(dt, mx.integer) or mx.issubdtype(dt, mx.bool_)
@@ -1855,6 +1950,37 @@ def _xlog1py(a, b):
     return _ar(mx.where(mx.equal(a, 0), mx.where(mx.isnan(b), nan, mx.zeros_like(r)), r))
 
 
+def _opmath_f32(a):
+    """aten elementwise ops on fp16/bf16 inputs compute in fp32 opmath and
+    round once at the end; the lowering does the same or the narrow-dtype
+    tail values drift. Returns (original, fp32-view)."""
+    a = _mx(a)
+    return a, (a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a)
+
+
+def _softplus(a, beta=1, threshold=20):
+    # aten.softplus(input, beta=1, threshold=20):
+    #   log1p(exp(beta*x)) / beta, and the linear x when beta*x > threshold
+    #   (strictly greater — the equality point keeps the log branch). The
+    #   linear tail also keeps exp(beta*x) finite for large inputs.
+    a, f = _opmath_f32(a)
+    bx = f * beta
+    return mx.where(bx > threshold, f,
+                    mx.log1p(mx.exp(bx)) / beta).astype(a.dtype)
+
+
+def _mish(a, inplace=False):
+    # aten.mish(input): x * tanh(softplus(x)) under softplus' defaults
+    # (beta=1, threshold=20).
+    a, f = _opmath_f32(a)
+    sp = mx.where(f > 20, f, mx.log1p(mx.exp(f)))
+    return (f * mx.tanh(sp)).astype(a.dtype)
+
+
+def _l2_clamped(a, dim, eps):
+    return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -1895,7 +2021,7 @@ _FUNC_SPECS = {
     "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
     "flatten": lambda a, start=0, end=-1: mx.reshape(a, (*a.shape[:start], int(np.prod(a.shape[start:end + 1])), *a.shape[end + 1:]) if end != -1 else (*a.shape[:start], int(np.prod(a.shape[start:])))),
     "unsqueeze": lambda a, d: mx.expand_dims(a, axis=d),
-    "squeeze": lambda a, d=None: mx.squeeze(a, axis=d) if d is not None else mx.squeeze(a),
+    "squeeze": _squeeze, "squeeze_": _squeeze,
     "expand": _expand, "expand_as": lambda a, o: mx.broadcast_to(a, o.shape),
     "cat": _cat_impl,
     "concat": _cat_impl,
@@ -1904,6 +2030,9 @@ _FUNC_SPECS = {
     "split_with_sizes": lambda a, ss, dim=0: _split_sizes(a, ss, dim),
     "chunk": _chunk, "unbind": lambda a, dim=0: _unbind(a, dim),
     "meshgrid": _meshgrid,
+    # torch's norm=None means "backward", same as mx's default
+    "fft_fft": lambda a, n=None, dim=-1, norm=None: mx.fft.fft(_mx(a), n, axis=dim, norm=norm or "backward"),
+    "fft_ifft": lambda a, n=None, dim=-1, norm=None: mx.fft.ifft(_mx(a), n, axis=dim, norm=norm or "backward"),
     "select": lambda a, dim, i: _slice(a, dim, i % a.shape[dim % a.ndim], i % a.shape[dim % a.ndim] + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
     "slice": _slice, "narrow": lambda a, dim, s, n: _slice(a, dim, s, s + n, 1),
     "mean": _mean, "sum": _sum,
@@ -1983,7 +2112,18 @@ _FUNC_SPECS = {
     "silu_backward": _silu_backward,
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
+    "softplus": _softplus,
+    "mish": _mish,
     "relu_": lambda a: mx.maximum(a, 0.0),
+    # PT-AL-b: the piecewise activation family (MobileNetV3 et al.)
+    "hardsigmoid": lambda a, inplace=False: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
+    "hardswish": lambda a, inplace=False: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),
+    "hardsigmoid_": lambda a: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
+    "hardswish_": lambda a: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),
+    "hardshrink": lambda a, lambd=0.5, *k: mx.where(mx.greater(mx.abs(a), lambd), a, mx.zeros_like(a)),
+    "softshrink": lambda a, lambd=0.5, *k: mx.where(mx.greater(a, lambd), a - lambd, mx.where(mx.less(a, -lambd), a + lambd, mx.zeros_like(a))),
+    "tanhshrink": lambda a: a - mx.tanh(a),
+    "softsign": lambda a: a / (1.0 + mx.abs(a)),
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,
@@ -2006,6 +2146,8 @@ _FUNC_SPECS = {
     "multinomial": _multinomial,
     "histc": _histc,
     "histogram": _histogram,
+    "mode": _mode,
+    "kthvalue": _kthvalue,
     "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "index_select": lambda a, dim, i: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
@@ -2041,8 +2183,13 @@ _FUNC_SPECS = {
     "logical_or": lambda a, b: mx.logical_or(_mx(a), _mx(b)),
     "logical_not": lambda a: mx.logical_not(a),
     "invert": lambda a: mx.logical_not(a),
-    "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
-    "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
+    "clamp": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
+    "clamp_": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
+    "clip": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
+    "clamp_min": lambda a, min: mx.maximum(a, _mx(min)),
+    "clamp_min_": lambda a, min: mx.maximum(a, _mx(min)),
+    "clamp_max": lambda a, max: mx.minimum(a, _mx(max)),
+    "clamp_max_": lambda a, max: mx.minimum(a, _mx(max)),
     "rsub": _rsub,
     "sub_": _sub_inplace,
     "sub_.Tensor": _sub_inplace,
@@ -2057,6 +2204,9 @@ _FUNC_SPECS = {
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
+    # aten.cosine_similarity clamps each l2 norm at eps separately, not
+    # their product (device-checked against torch 2.15 CPU).
+    "cosine_similarity": lambda x1, x2, dim=1, eps=1e-8: mx.sum(_mx(x1) * _mx(x2), axis=dim) / (_l2_clamped(x1, dim, eps) * _l2_clamped(x2, dim, eps)),
     "embedding": _embedding_any,
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
@@ -2191,7 +2341,11 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "threshold_backward", "native_batch_norm_backward",
                  "Float",
                  "add", "sub", "mul", "div", "truediv", "true_divide",
-                 "remainder", "xlogy", "special_xlog1py", "relu", "relu_"}
+                 "remainder", "xlogy", "special_xlog1py", "relu", "relu_",
+                 # comparison ops: the aten .default overloads are
+                 # (Scalar, Scalar) -> bool — no mx operand, same gate as
+                 # the scalar arith forms above.
+                 "eq", "ne", "lt", "le", "gt", "ge"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}

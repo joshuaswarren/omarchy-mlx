@@ -114,5 +114,76 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     (name, dtype, float((got - ref.float()).abs().max())))
 
 
+    def test_searchsorted_bucketize_parity(self):
+        """PT-IDX-a: the wheel backend lowers aten.searchsorted (right,
+        out_int32) and aten.bucketize — int64/fp32 parity vs torch CPU."""
+        import numpy as np
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        ss = ATEN_TABLE["searchsorted"]
+        bz = ATEN_TABLE["bucketize"]
+        cases = [
+            (torch.tensor([1, 3, 3, 5, 7, 9]),
+             torch.tensor([0, 3, 4, 9, 10])),
+            (torch.tensor([1.0, 3.0, 3.0, 5.0, 7.0, 9.0]),
+             torch.tensor([0.0, 3.0, 3.5, 9.0, 10.0])),
+        ]
+        for seq, vals in cases:
+            mseq = mx.array(seq.numpy())
+            mvals = mx.array(vals.numpy())
+            for right in (False, True):
+                ref = torch.searchsorted(seq, vals, right=right)
+                got = torch.from_numpy(np.array(ss(mseq, mvals, right=right)))
+                self.assertEqual(got.dtype, torch.int64)
+                self.assertTrue(torch.equal(got, ref), (seq, vals, right, got, ref))
+            ref_b = torch.bucketize(vals, seq)
+            got_b = torch.from_numpy(np.array(bz(mvals, mseq)))
+            self.assertEqual(got_b.dtype, torch.int64)
+            self.assertTrue(torch.equal(got_b, ref_b), (seq, vals, got_b, ref_b))
+            ref32 = torch.searchsorted(seq, vals, out_int32=True)
+            got32 = torch.from_numpy(np.array(ss(mseq, mvals, out_int32=True)))
+            self.assertEqual(got32.dtype, torch.int32)
+            self.assertTrue(torch.equal(got32, ref32), (seq, vals, got32, ref32))
+
+
+
+    def test_piecewise_activations(self):
+        """PT-AL-b: the piecewise activation family lowers in the wheel
+        backend — fp32 and bf16 parity against the torch functions."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x = torch.tensor([[-4.0, -2.9, -0.49, 0.0, 0.51, 3.1, 7.0],
+                          [-3.2, -0.5, 0.5, 1.0, -1.0, 2.9, -7.0]])
+        F = torch.nn.functional
+        cases = [
+            ("hardswish", (x,), F.hardswish(x)),
+            ("hardsigmoid", (x,), F.hardsigmoid(x)),
+            ("hardshrink", (x, 0.5), F.hardshrink(x, 0.5)),
+            ("softshrink", (x, 0.5), F.softshrink(x, 0.5)),
+            ("tanhshrink", (x,), F.tanhshrink(x)),
+            ("softsign", (x,), F.softsign(x)),
+        ]
+        for name, ins, ref in cases:
+            lowering = ATEN_TABLE[name]
+            for dtype, tol in ((torch.float32, 1e-5),
+                               (torch.bfloat16, 2e-2)):
+                mins = tuple(
+                    (mx.array(t.float().numpy()).astype(mx.bfloat16)
+                     if dtype == torch.bfloat16 else mx.array(t.numpy()))
+                    if torch.is_tensor(t) else t for t in ins)
+                got = torch.from_numpy(
+                    np.array(lowering(*mins).astype(mx.float32)))
+                self.assertTrue(
+                    torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                    (name, dtype, float((got - ref.float()).abs().max())))
+
+
 if __name__ == "__main__":
     unittest.main()

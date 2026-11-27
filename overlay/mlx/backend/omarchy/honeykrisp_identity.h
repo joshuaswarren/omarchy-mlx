@@ -212,10 +212,8 @@ inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
       }
       return {item, false, true, false};
     }
-    // Escape hatch (Main decision 2026-11-22 01:15 CST): one named
-    // non-Apple discrete ICD may be accepted, opt-in per deployment via
-    // MLX_OMARCHY_FOREIGN_ICD. The default stays Honeykrisp-only, and
-    // software/CPU ICDs stay refused with the hatch set.
+    // When MLX_OMARCHY_FOREIGN_ICD is explicitly set, enforce exact-path pinning
+    // (no symlinks, no relative paths, no software ICDs).
     if (foreign_allowed != nullptr && foreign_allowed[0] != '\0') {
       size_t start = 0;
       while (start <= value.size()) {
@@ -247,6 +245,41 @@ inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
           " Honeykrisp and does not match MLX_OMARCHY_FOREIGN_ICD (" +
           std::string(foreign_allowed) + "): " + value);
     }
+    // #623: admit non-Apple hardware Vulkan GPUs by default when no Honeykrisp
+    // ICD is present in VK_DRIVER_FILES / VK_ICD_FILENAMES. Software/CPU ICDs
+    // remain refused.
+    bool saw_software = false;
+    std::string software_item;
+    size_t start = 0;
+    while (start <= value.size()) {
+      const size_t end = value.find(':', start);
+      const std::string item = value.substr(start, end - start);
+      if (!item.empty()) {
+        std::error_code existence;
+        if (!std::filesystem::exists(item, existence) || existence) {
+          throw std::runtime_error(
+              "Honeykrisp ICD selection refused: user Vulkan ICD JSON does"
+              " not exist: " +
+              item);
+        }
+        if (is_software_icd_json(item)) {
+          saw_software = true;
+          software_item = item;
+        } else {
+          return {item, false, true, true};
+        }
+      }
+      if (end == std::string::npos) {
+        break;
+      }
+      start = end + 1;
+    }
+    if (saw_software) {
+      throw std::runtime_error(
+          "Honeykrisp ICD selection refused: user Vulkan ICD names a software"
+          " renderer; CPU ICDs stay refused: " +
+          software_item);
+    }
     throw std::runtime_error(
         "Honeykrisp ICD selection refused: user Vulkan ICD value excludes Honeykrisp: " +
         value);
@@ -262,6 +295,15 @@ inline HoneykrispIcdSelection resolve_honeykrisp_icd_detail(
   for (const auto& candidate : candidates) {
     if (is_honeykrisp_icd(candidate)) {
       return {candidate, false, false, false};
+    }
+  }
+  // #623: fall back to the first hardware Vulkan ICD on non-Apple hosts
+  // (discrete NVIDIA/AMD/Intel GPUs), while still refusing software/CPU ICDs.
+  for (const auto& candidate : candidates) {
+    std::error_code existence;
+    if (!candidate.empty() && std::filesystem::exists(candidate, existence) &&
+        !existence && !is_software_icd_json(candidate)) {
+      return {candidate, false, false, true};
     }
   }
   throw std::runtime_error("Honeykrisp Vulkan ICD JSON was not found" +

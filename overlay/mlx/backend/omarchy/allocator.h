@@ -110,6 +110,26 @@ inline size_t default_batch_limit(size_t memory_limit, size_t heap_bytes) {
 }
 // END default limits
 
+// True when the buffer's host-visible storage is a detached shadow copy
+// (device-local or inference-weight placement): NumPy/CPU exports must copy
+// instead of aliasing it, and buffer-protocol views must be read-only.
+// Exposed for the python bindings' export paths (convert.cpp, buffer.h).
+inline int buffer_debug_flags(Buffer b) {
+  if (b.ptr() == nullptr) {
+    return -1;
+  }
+  auto* buf = static_cast<VulkanBuffer*>(b.ptr());
+  return (buf->device_local ? 2 : 0) | (buf->inference_weight ? 1 : 0);
+}
+
+inline bool buffer_is_shadow(Buffer b) {
+  if (b.ptr() == nullptr) {
+    return false;
+  }
+  auto* buf = static_cast<VulkanBuffer*>(b.ptr());
+  return buf->device_local || buf->inference_weight;
+}
+
 class VulkanAllocator : public allocator::Allocator {
  public:
   Buffer malloc(size_t size) override;

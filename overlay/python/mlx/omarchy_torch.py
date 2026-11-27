@@ -249,6 +249,17 @@ def _bitwise_or_logical(a, b, bitop, logop):
         return logop(a.astype(_b), b.astype(_b))
     return bitop(a, b)
 
+def _searchsorted(sorted_seq, values, out_int32=False, right=False,
+                  side=None, out=None, sorter=None, **k):
+    # torch's right/side select the insertion edge; sorter and out have no
+    # mx equivalent -> raise so the node falls back to torch CPU.
+    if sorter is not None or out is not None:
+        _raise("searchsorted sorter/out")
+    s = "right" if right else (side if side in ("left", "right") else "left")
+    v = values if isinstance(values, mx.array) else mx.array(values)
+    r = mx.searchsorted(_mx(sorted_seq), v, side=s)
+    return r.astype(mx.int32 if out_int32 else mx.int64)
+
 # ---------------- lowering tables ----------------
 
 # torch-level function objects -> lowering. Built lazily below so missing
@@ -325,6 +336,15 @@ _FUNC_SPECS = {
     "gelu": lambda a, approximate="none": a * mx.sigmoid(1.702 * a) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0))),
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
+    # the piecewise activation family (MobileNetV3 et al.), PT-AL-b
+    "hardsigmoid": lambda a, inplace=False: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
+    "hardswish": lambda a, inplace=False: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),
+    "hardsigmoid_": lambda a: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
+    "hardswish_": lambda a: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),
+    "hardshrink": lambda a, lambd=0.5, *k: mx.where(mx.greater(mx.abs(a), lambd), a, mx.zeros_like(a)),
+    "softshrink": lambda a, lambd=0.5, *k: mx.where(mx.greater(a, lambd), a - lambd, mx.where(mx.less(a, -lambd), a + lambd, mx.zeros_like(a))),
+    "tanhshrink": lambda a: a - mx.tanh(a),
+    "softsign": lambda a: a / (1.0 + mx.abs(a)),
     "scaled_dot_product_attention": _sdpa,
     "eq": lambda a, b: mx.equal(_mx(a), _mx(b)),
     "ne": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
@@ -374,6 +394,9 @@ _FUNC_SPECS = {
     "rsub": lambda a, b: _mx(b) - _mx(a),
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
+    "searchsorted": _searchsorted,
+    "bucketize": lambda a, b, out_int32=False, right=False: _searchsorted(
+        b, a, out_int32=out_int32, right=right),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
     "std": lambda a, dim=None, correction=None, keepdim=False: mx.std(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "roll": lambda a, shifts, dims=None: mx.roll(a, shifts, axis=dims),
