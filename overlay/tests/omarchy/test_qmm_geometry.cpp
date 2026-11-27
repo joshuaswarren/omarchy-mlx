@@ -390,6 +390,12 @@ int main(int argc, char** argv) {
       std::cout << "FAIL: qmm_resnorm_vec4_default part check\n";
       ++failures;
     }
+    if (!mlx::core::omarchy::qmm_resnorm_r2s32_default("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_resnorm_r2s32_default("Apple M1 Max (G13C C0)") ||
+        mlx::core::omarchy::qmm_resnorm_r2s32_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: qmm_resnorm_r2s32_default part check\n";
+      ++failures;
+    }
   }
   // Low-register SwiGLU (R1S8W2) must be bit-identical to 2x4 and R2S8W2.
   {
@@ -421,16 +427,27 @@ int main(int argc, char** argv) {
     int rc = run_child(name, base.c_str());
     setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
     setenv("MLX_OMARCHY_RESNORM_VEC4", "1", 1);
+    setenv("MLX_OMARCHY_RESNORM_R2S32", "0", 1);
     int rc2 = run_child(name, other.c_str());
-    unsetenv("MLX_OMARCHY_QMM_GEOM");
-    unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
-    unsetenv("MLX_OMARCHY_RESNORM_VEC4");
     if (rc != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
       std::cout << "FAIL: " << name << " ResNormVec4 R2S16W2 differed from unfused (rc "
                 << rc << "/" << rc2 << ")\n";
       ++failures;
     } else {
       std::cout << "ok: " << name << " ResNormVec4 R2S16W2 identical\n";
+    }
+    setenv("MLX_OMARCHY_RESNORM_R2S32", "1", 1);
+    int rc3 = run_child(name, other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+    unsetenv("MLX_OMARCHY_RESNORM_VEC4");
+    unsetenv("MLX_OMARCHY_RESNORM_R2S32");
+    if (rc != 0 || rc3 != 0 || fnv(base) != fnv(other)) {
+      std::cout << "FAIL: " << name << " ResNormVec4 R2S32W2 differed from unfused (rc "
+                << rc << "/" << rc3 << ")\n";
+      ++failures;
+    } else {
+      std::cout << "ok: " << name << " ResNormVec4 R2S32W2 identical\n";
     }
   }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")

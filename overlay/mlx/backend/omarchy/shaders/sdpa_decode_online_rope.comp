@@ -88,6 +88,15 @@ layout(set = 0, binding = 8, std430) readonly buffer Gate {
   uint16_t values[];
 } gate_data;
 #endif
+#ifdef SDPA_SPLIT_K
+layout(set = 0, binding = 9, std430) coherent buffer SplitScratch {
+  float values[];
+} split_scratch;
+layout(set = 0, binding = 10, std430) coherent buffer SplitTicket {
+  uint done[];
+} split_ticket;
+shared uint s_split_is_last;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;           // k_write_vec_base (>>2 for HD=128, >>3 for HD=256)
@@ -191,7 +200,15 @@ float tree_reduce32(float v) {
 }
 
 void main() {
+#ifdef SDPA_SPLIT_K
+  uint splits = params.out_strides[3];
+  uint head = gl_WorkGroupID.x / splits;
+  uint split_id = gl_WorkGroupID.x % splits;
+#else
+  uint splits = 1u;
   uint head = gl_WorkGroupID.x;
+  uint split_id = 0u;
+#endif
   uint heads = params.matrix_m;
   uint kv_heads = params.matrix_n;
   uint k_len = params.matrix_k;
@@ -568,7 +585,7 @@ void main() {
     s_k_words[lane * 4u + 1u] = w1;
     s_k_words[lane * 4u + 2u] = w2;
     s_k_words[lane * 4u + 3u] = w3;
-    if (write_k && head == kv_head * repeats) {
+    if (write_k && split_id == 0u && head == kv_head * repeats) {
       uint k_write_idx =
           params.count + kv_head * (params.shape[3] >> 3u) + lane;
       key_data.values[k_write_idx] = uvec4(w0, w1, w2, w3);
@@ -586,21 +603,23 @@ void main() {
   float o7 = 0.0;
 
   uint last_key = k_len - 1u;
+  uint total_sgs = splits * uint(SUBGROUPS);
+  uint global_sg = split_id * uint(SUBGROUPS) + sg;
 
-  if (sg < k_len) {
+  if (global_sg < k_len) {
     uint k_stride_v = params.shape[2] >> 3u;
     uint v_stride_v = params.in_strides[2] >> 3u;
     uint k_idx = ((params.rhs_offset + kv_head * params.shape[1]) >> 3u) +
-        sg * k_stride_v + lane;
+        global_sg * k_stride_v + lane;
     uint v_idx = ((params.aux_offset + kv_head * params.in_strides[1]) >> 3u) +
-        sg * v_stride_v + lane;
-    uint k_step = uint(SUBGROUPS) * k_stride_v;
-    uint v_step = uint(SUBGROUPS) * v_stride_v;
+        global_sg * v_stride_v + lane;
+    uint k_step = total_sgs * k_stride_v;
+    uint v_step = total_sgs * v_stride_v;
 
     float m_i;
     float l_i;
 
-    if (sg < last_key) {
+    if (global_sg < last_key) {
       uvec4 kw = key_data.values[k_idx];
       uvec4 vw = value_data.values[v_idx];
       float dot = fma(q0, uintBitsToFloat(kw.x << 16u),
@@ -624,7 +643,7 @@ void main() {
 
       k_idx += k_step;
       v_idx += v_step;
-      for (uint key = sg + uint(SUBGROUPS); key < last_key; key += uint(SUBGROUPS)) {
+      for (uint key = global_sg + total_sgs; key < last_key; key += total_sgs) {
         kw = key_data.values[k_idx];
         vw = value_data.values[v_idx];
         k_idx += k_step;
@@ -654,7 +673,7 @@ void main() {
         o7 = fma(o7, factor, p * uintBitsToFloat(vw.w & 0xffff0000u));
       }
 
-      if (sg == (last_key & 31u)) {
+      if (global_sg == (last_key % total_sgs)) {
         kw = uvec4(
             s_k_words[lane * 4u + 0u],
             s_k_words[lane * 4u + 1u],
@@ -730,11 +749,16 @@ void main() {
 
   barrier();
 
-  uint active_sg = min(uint(SUBGROUPS), k_len);
+  uint active_sg = (k_len > split_id * uint(SUBGROUPS))
+      ? min(uint(SUBGROUPS), k_len - split_id * uint(SUBGROUPS))
+      : 0u;
   float w = 0.0;
   float denom = 1.0;
   uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
   uint out_base = params.output_offset + head * out_head;
+#ifdef SDPA_SPLIT_K
+  uint sb = (head * splits + split_id) * 260u;
+#endif
 
   if (t < TILE_D) {
     float m = (lane < active_sg) ? s_max[lane] : uintBitsToFloat(0xff800000u);
@@ -747,7 +771,13 @@ void main() {
     for (uint s = 0u; s < active_sg; ++s) {
       acc = fma(s_o[s * TILE_D + t], subgroupShuffle(w, s), acc);
     }
-#ifdef SDPA_OUTGATE
+#ifdef SDPA_SPLIT_K
+    if (t == 0u) {
+      split_scratch.values[sb + 0u] = gmax;
+      split_scratch.values[sb + 1u] = denom;
+    }
+    split_scratch.values[sb + 2u + t] = acc;
+#elif defined(SDPA_OUTGATE)
     uint gate_base = params.out_strides[1] + head * params.out_strides[2];
     output_data.values[out_base + t] = apply_outgate(acc / denom, gate_base + t);
 #else
@@ -757,7 +787,7 @@ void main() {
 
   barrier();
 
-  if (sg < k_len && lane >= 16u) {
+  if (global_sg < k_len && lane >= 16u) {
     uint obase = sg * TILE_D + (lane - 16u) * 8u;
     s_o[obase + 0u] = o0;
     s_o[obase + 1u] = o1;
@@ -776,7 +806,9 @@ void main() {
     for (uint s = 0u; s < active_sg; ++s) {
       acc = fma(s_o[s * TILE_D + t], subgroupShuffle(w, s), acc);
     }
-#ifdef SDPA_OUTGATE
+#ifdef SDPA_SPLIT_K
+    split_scratch.values[sb + 2u + TILE_D + t] = acc;
+#elif defined(SDPA_OUTGATE)
     uint gate_base = params.out_strides[1] + head * params.out_strides[2];
     output_data.values[out_base + TILE_D + t] =
         apply_outgate(acc / denom, gate_base + TILE_D + t);
@@ -784,5 +816,43 @@ void main() {
     output_data.values[out_base + TILE_D + t] = bf16_store(acc / denom);
 #endif
   }
+#ifdef SDPA_SPLIT_K
+  barrier();
+  memoryBarrierBuffer();
+  if (t == 0u) {
+    uint prev = atomicAdd(split_ticket.done[head], 1u);
+    s_split_is_last = (prev == splits - 1u) ? 1u : 0u;
+  }
+  barrier();
+  if (s_split_is_last == 0u) {
+    return;
+  }
+  if (t == 0u) {
+    split_ticket.done[head] = 0u;
+  }
+  memoryBarrierBuffer();
+  barrier();
+  if (t < D) {
+    uint hbase = head * splits * 260u;
+    float gm = uintBitsToFloat(0xff800000u);
+    for (uint s = 0u; s < splits; ++s) {
+      gm = max(gm, split_scratch.values[hbase + s * 260u + 0u]);
+    }
+    float gl = 0.0;
+    float gacc = 0.0;
+    for (uint s = 0u; s < splits; ++s) {
+      uint b = hbase + s * 260u;
+      float ws = exp2(split_scratch.values[b + 0u] - gm);
+      gl = fma(split_scratch.values[b + 1u], ws, gl);
+      gacc = fma(split_scratch.values[b + 2u + t], ws, gacc);
+    }
+#ifdef SDPA_OUTGATE
+    uint gate_base = params.out_strides[1] + head * params.out_strides[2];
+    output_data.values[out_base + t] = apply_outgate(gacc / gl, gate_base + t);
+#else
+    output_data.values[out_base + t] = bf16_store(gacc / gl);
+#endif
+  }
+#endif
 #endif
 }
