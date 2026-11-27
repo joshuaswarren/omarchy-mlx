@@ -1402,6 +1402,11 @@ enum class ComputeKernel : uint16_t {
   // coalescing while leaving G13C on low-reg QmmVecQ4MultiSubgroupBF16R2S8W2).
   // Appended to keep profile kernel ids stable.
   QmmVecQ4MultiSubgroupBF16R2S8W2Upfront,
+  // G13C-gated HD=128 SdpaOnlineRope (parallel Phase-A RoPE trig + 2-barrier
+  // subgroupShuffleDown K pack + preloaded epilogue). Appended to keep profile
+  // kernel ids stable.
+  SdpaDecodeOnlineRopeSg32BF16Hd128G13C,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C,
   Count,
 };
 
