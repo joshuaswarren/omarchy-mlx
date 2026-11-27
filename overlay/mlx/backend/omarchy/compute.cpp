@@ -268,6 +268,7 @@
 #include "fast_rope_norm_apple_bf16.h"
 #include "fast_rope_norm_pair_bf16.h"
 #include "fast_rope_norm_pair_apple_bf16.h"
+#include "fast_rope_norm_pair_bf16_w64.h"
 #include "fast_rope_norm_bf16_w128.h"
 #include "fast_rope_norm_apple_bf16_w128.h"
 
@@ -1501,6 +1502,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::FastRopeNormPairAppleBF16:
       return {fast_rope_norm_pair_apple_bf16,
               fast_rope_norm_pair_apple_bf16_size};
+    case ComputeKernel::FastRopeNormPairBF16W64:
+      return {fast_rope_norm_pair_bf16_w64, fast_rope_norm_pair_bf16_w64_size};
     case ComputeKernel::SdpaDecodeOnlineSg32BF16Hd128:
       return {sdpa_decode_online_sg32_bf16_hd128,
               sdpa_decode_online_sg32_bf16_hd128_size};

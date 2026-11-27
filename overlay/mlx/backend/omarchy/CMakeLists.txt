@@ -1087,6 +1087,7 @@ omarchy_shader(fast_rope_norm_bf16 shaders/fast_rope_norm.comp -DUSE_BF16=1)
 omarchy_shader(fast_rope_norm_apple_bf16 shaders/fast_rope_norm.comp -DUSE_BF16=1 -DAPPLE_REDUCTION=1)
 omarchy_shader(fast_rope_norm_pair_bf16 shaders/fast_rope_norm_pair.comp)
 omarchy_shader(fast_rope_norm_pair_apple_bf16 shaders/fast_rope_norm_pair.comp -DAPPLE_REDUCTION=1)
+omarchy_shader(fast_rope_norm_pair_bf16_w64 shaders/fast_rope_norm_pair.comp -DROPE_NORM_THREADS=64)
 omarchy_shader(fast_rope_norm_bf16_w128 shaders/fast_rope_norm.comp -DUSE_BF16=1 -DROPE_NORM_THREADS=128)
 omarchy_shader(fast_rope_norm_apple_bf16_w128 shaders/fast_rope_norm.comp -DUSE_BF16=1 -DAPPLE_REDUCTION=1 -DROPE_NORM_THREADS=128)
 

@@ -1329,6 +1329,12 @@ enum class ComputeKernel : uint16_t {
   // (+0.0)-neutral on every element the 128-thread build computes.
   FastRopeNormBF16W128,
   FastRopeNormAppleBF16W128,
+  // M2D-3: 64-thread two-elements-per-thread rope+norm pair build for
+  // D <= 128 rows (the decode 4B shape). Word-granular IO drops the scalar
+  // half-word selects, the tree starts at stride 64 with the same
+  // association, and a shared per-position cos/sin table replaces the
+  // per-head recompute. Appended to keep profile kernel ids stable.
+  FastRopeNormPairBF16W64,
   // Fused SDPA output-gate epilogue (out * sigmoid(gate) with direct strided
   // gate read from q_proj split output), deleting CopyGeneral + Sigmoid +
   // Multiply dispatches and 2 CDM barriers per full-attention layer.

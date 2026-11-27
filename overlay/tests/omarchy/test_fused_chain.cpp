@@ -2459,7 +2459,9 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   Stream stream = gpu_stream();
   enable_fusion();
   set_compile_mode(CompileMode::disabled);
-  const int D = 64;
+  // D=128 is the decode 4B head width; the norm-pair host selects the
+  // 64-thread two-element build (M2D-3) at this row length.
+  const int D = 128;
   array xq = astype(
       random::normal(Shape{1, 8, 1, D}, float32, std::nullopt, stream),
       bfloat16, stream);
@@ -2498,8 +2500,11 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
       omarchy::ComputeKernel::FastRopeNormPairBF16);
   const int64_t norm_pair_b = static_cast<int64_t>(
       omarchy::ComputeKernel::FastRopeNormPairAppleBF16);
+  const int64_t norm_pair_w64 = static_cast<int64_t>(
+      omarchy::ComputeKernel::FastRopeNormPairBF16W64);
   auto pair_kernel_seen = [&](int64_t last) {
-    return last == norm_pair_a || last == norm_pair_b;
+    return last == norm_pair_a || last == norm_pair_b ||
+        last == norm_pair_w64;
   };
   // Phase A: only the two rope outputs on the tape. The pair collapses
   // two rope dispatches into one and leaves its kernel id as the most

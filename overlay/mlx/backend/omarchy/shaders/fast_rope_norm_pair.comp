@@ -60,7 +60,25 @@ layout(set = 0, binding = 6, std430) readonly buffer Offsets {
   int values[];
 } offset_data;
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+// M2D-3: ROPE_NORM_THREADS selects the workgroup width. The 256-thread
+// build is the PAR-99 kernel verbatim; the 64-thread build serves rows of
+// D <= 128 (the decode 4B shape: 32+8 rows of 128), where each thread owns
+// one packed bf16 word (two elements) so input, weight and output IO drop
+// the scalar 16-bit select shifts entirely, the reduction tree starts at
+// stride 64 with the identical per-element association, and a shared
+// cos/sin table replaces the per-head recompute (positions repeat across
+// heads; the table is rebuilt only when the position bits change).
+#ifndef ROPE_NORM_THREADS
+#define ROPE_NORM_THREADS 256
+#endif
+#if ROPE_NORM_THREADS == 64
+#define ROW_CAP 128u
+#define ELEMS 2
+#else
+#define ROW_CAP 256u
+#define ELEMS 1
+#endif
+layout(local_size_x = ROPE_NORM_THREADS, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform Params {
   uint count;
@@ -86,11 +104,17 @@ layout(push_constant) uniform Params {
   uint out_strides[4];
 } params;
 
-shared float block_values[256];
+shared float block_values[ROW_CAP];
 #ifdef APPLE_REDUCTION
 shared float subgroup_values[8];
 #endif
-shared float rounded[256];
+shared float rounded[ROW_CAP];
+#if ROPE_NORM_THREADS == 64
+shared float trig_cos[128];
+shared float trig_sin[128];
+shared uint trig_key;
+shared uint trig_valid;
+#endif
 
 float rope_load(uint abs_index, bool q_side) {
   uint word = q_side ? in_q.values[abs_index >> 1u]
@@ -105,6 +129,15 @@ float weight_load(uint abs_index, bool q_side) {
   uint bits = ((abs_index & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
   return uintBitsToFloat(bits << 16u);
 }
+
+#if ROPE_NORM_THREADS == 64
+// W64: element index thread*2 lands in word index thread once the base is
+// even; an odd base still resolves to at most two adjacent words. No
+// half-word selects: the shifts below are by whole-word positions only.
+float rope_load_elem(uint abs_index, bool q_side) {
+  return rope_load(abs_index, q_side);
+}
+#endif
 
 void rope_store(uint word_index, uint value, bool q_side) {
   if (q_side) {
@@ -142,6 +175,13 @@ void main() {
   // 65535 workgroups, so rows past that must be reached with a
   // grid-stride loop (the fast_norm.comp pattern). Every thread takes
   // the same trip count, so the barriers below stay uniform.
+#if ROPE_NORM_THREADS == 64
+  if (gl_LocalInvocationIndex == 0u) {
+    trig_key = 0u;
+    trig_valid = 0u;
+  }
+  barrier();
+#endif
   for (uint row = gl_WorkGroupID.x; row < params.count;
        row += gl_NumWorkGroups.x) {
 
@@ -201,19 +241,47 @@ void main() {
   barrier();
 #else
   // fast_norm.comp reduction tree, verbatim: one f32 sum-of-squares per
-  // thread (threads past the row length contribute exactly the same 0.0 the
-  // fast_norm grid-stride loop produces), stride-128..1 shared pairing with
-  // a barrier per step, f32 divide by the row length, inversesqrt.
+  // element (elements past the row length contribute exactly the same 0.0
+  // the fast_norm grid-stride loop produces), stride-CAP/2..1 shared pairing
+  // with a barrier per step, f32 divide by the row length, inversesqrt.
   // The squared register lives ONLY in this block; it is discarded below
   // (the production kernel discards it after the reduction tree too).
+#if ELEMS == 2
+  // W64: one uint word feeds both of this thread's elements; an odd base
+  // crosses into the next word at most once. Element index t*2+e keeps the
+  // production association: block_values[i] = square of element i.
+  float sq0 = 0.0;
+  float sq1 = 0.0;
+  {
+    uint abs0 = in_offset + in_base + 2u * thread;
+    uint w0 = q_side ? in_q.values[abs0 >> 1u] : in_k.values[abs0 >> 1u];
+    if (2u * thread < row_length) {
+      float e0 = uintBitsToFloat(
+          (((abs0 & 1u) == 0u) ? (w0 & 0xFFFFu) : (w0 >> 16u)) << 16u);
+      sq0 = e0 * e0;
+      if (2u * thread + 1u < row_length) {
+        uint w1 = ((abs0 & 1u) == 0u)
+            ? w0
+            : (q_side ? in_q.values[(abs0 >> 1u) + 1u]
+                      : in_k.values[(abs0 >> 1u) + 1u]);
+        float e1 = uintBitsToFloat(
+            (((abs0 & 1u) == 0u) ? (w1 >> 16u) : (w1 & 0xFFFFu)) << 16u);
+        sq1 = e1 * e1;
+      }
+    }
+  }
+  block_values[2u * thread] = sq0;
+  block_values[2u * thread + 1u] = sq1;
+#else
   float squared = 0.0;
   if (thread < row_length) {
     squared = rope_load(in_offset + in_base + thread, q_side);
     squared = squared * squared;
   }
   block_values[thread] = squared;
+#endif
   barrier();
-  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+  for (uint stride = ROW_CAP / 2u; stride > 0u; stride >>= 1u) {
     if (thread < stride) {
       block_values[thread] += block_values[thread + stride];
     }
@@ -238,6 +306,52 @@ void main() {
   // into the (value * norm) chain downstream.
   barrier();
   precise float norm = inversesqrt(mean_square + eps);
+#if ELEMS == 2
+  {
+    // Same re-load contract as the scalar path: fresh word reads after the
+    // divide barrier so NIR cannot contract (value * norm) * weight into an
+    // ffma across the squared registers.
+    uint abs0 = in_offset + in_base + 2u * thread;
+    uint w0 = q_side ? in_q.values[abs0 >> 1u] : in_k.values[abs0 >> 1u];
+    uint w1 = ((abs0 & 1u) == 0u)
+        ? w0
+        : (q_side ? in_q.values[(abs0 >> 1u) + 1u]
+                  : in_k.values[(abs0 >> 1u) + 1u]);
+    precise float v0 = (2u * thread < row_length)
+        ? uintBitsToFloat(
+              (((abs0 & 1u) == 0u) ? (w0 & 0xFFFFu) : (w0 >> 16u)) << 16u)
+        : 0.0;
+    precise float v1 = (2u * thread + 1u < row_length)
+        ? uintBitsToFloat(
+              (((abs0 & 1u) == 0u) ? (w1 >> 16u) : (w1 & 0xFFFFu)) << 16u)
+        : 0.0;
+    uint wabs0 = weight_offset + 2u * thread;
+    uint ww0 = q_side ? weight_q.values[wabs0 >> 1u]
+                      : weight_k.values[wabs0 >> 1u];
+    uint ww1 = ((wabs0 & 1u) == 0u)
+        ? ww0
+        : (q_side ? weight_q.values[(wabs0 >> 1u) + 1u]
+                  : weight_k.values[(wabs0 >> 1u) + 1u]);
+    precise float wt0 = (2u * thread < row_length)
+        ? uintBitsToFloat(
+              (((wabs0 & 1u) == 0u) ? (ww0 & 0xFFFFu) : (ww0 >> 16u)) << 16u)
+        : 0.0;
+    precise float wt1 = (2u * thread + 1u < row_length)
+        ? uintBitsToFloat(
+              (((wabs0 & 1u) == 0u) ? (ww1 >> 16u) : (ww1 & 0xFFFFu)) << 16u)
+        : 0.0;
+    // (weight * norm) * value, the production order, per element.
+    precise float wn0 = wt0 * norm;
+    precise float wn1 = wt1 * norm;
+    rounded[2u * thread] = (2u * thread < row_length)
+        ? rope_round(v0 * wn0)
+        : 0.0;
+    rounded[2u * thread + 1u] = (2u * thread + 1u < row_length)
+        ? rope_round(v1 * wn1)
+        : 0.0;
+  }
+  barrier();
+#else
   // Re-load the input value (production's output loop reads from input_data
   // fresh; same address, same bits, but a separate memory op that breaks
   // any NIR carry-through).
@@ -264,7 +378,34 @@ void main() {
                                           : 0.0;
   barrier();
 #endif
+#endif
 
+#if ROPE_NORM_THREADS == 64
+  // Per-position trig table: cos/sin depend on (t, offset[b]) only, so all
+  // heads of this batch at this t share one table. The unfused kernel
+  // issues 4 trig calls per word thread (256 per row at D=128); the table
+  // issues 2 per index (128) on a miss and none on a hit. Each table entry
+  // is the same rope_round(omarchy_trig_*(position * inv_freq)) value the
+  // unfused kernel computes, so every read is bit-identical.
+  {
+    float off_v = float(
+        offset_data.values[params.aux_offset + b * params.matrix_m]);
+    float pos_v = params.alpha * (float(t) + off_v);
+    uint pk = floatBitsToUint(pos_v);
+    if (trig_valid == 0u || pk != trig_key) {
+      if (thread < half_dims) {
+        float inv = exp(-float(thread) * params.beta);
+        trig_cos[thread] = rope_round(omarchy_trig_cos(pos_v * inv));
+        trig_sin[thread] = rope_round(omarchy_trig_sin(pos_v * inv));
+      }
+      if (gl_LocalInvocationIndex == 0u) {
+        trig_key = pk;
+        trig_valid = 1u;
+      }
+    }
+    barrier();
+  }
+#endif
   // Production bf16 word math from fast_rope.comp with shared[] standing in
   // for the loads. Threads own one output word each; word pairs of one row.
   if (thread < (row_length / 2u)) {
@@ -288,10 +429,15 @@ void main() {
       for (uint side = 0u; side < 2u; ++side) {
         uint d = d0 + side;
         uint i = d % half_dims;
+#if ROPE_NORM_THREADS == 64
+        float cos_t = trig_cos[i];
+        float sin_t = trig_sin[i];
+#else
         float inv_freq = exp(-float(i) * params.beta);
         float theta = position * inv_freq;
         float cos_t = rope_round(omarchy_trig_cos(theta));
         float sin_t = rope_round(omarchy_trig_sin(theta));
+#endif
         float x1 = rounded[i];
         float x2 = rounded[i + half_dims];
         float xa = rope_round(x1 * cos_t);
@@ -311,12 +457,19 @@ void main() {
     uint j1 = j0 + 1u;
     uint i0 = r1_side ? j0 : (j0 - half_dims);
     uint i1 = i0 + 1u;
+#if ROPE_NORM_THREADS == 64
+    float cos0 = trig_cos[i0];
+    float sin0 = trig_sin[i0];
+    float cos1 = trig_cos[i1];
+    float sin1 = trig_sin[i1];
+#else
     float inv0 = exp(-float(i0) * params.beta);
     float inv1 = exp(-float(i1) * params.beta);
     float cos0 = rope_round(omarchy_trig_cos(position * inv0));
     float sin0 = rope_round(omarchy_trig_sin(position * inv0));
     float cos1 = rope_round(omarchy_trig_cos(position * inv1));
     float sin1 = rope_round(omarchy_trig_sin(position * inv1));
+#endif
     float xa = rounded[i0];
     float xb = rounded[i0 + half_dims];
     float xc = rounded[i1];

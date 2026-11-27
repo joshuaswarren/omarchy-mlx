@@ -12894,13 +12894,23 @@ bool dispatch_rope_pair(
         binding(w_k),
         binding(offset),
         filler};
+    const bool pair_w64 =
+        !apple_norm_enabled(
+            encoder.device(),
+            static_cast<size_t>(params.reduce_size),
+            static_cast<size_t>(params.count)) &&
+        static_cast<size_t>(params.reduce_size) <= 128u;
+    // D <= 128 rows run the 64-thread two-elements-per-thread build (M2D-3):
+    // the composed chain selects the shared-tree norm at these widths, so
+    // the W64 tree over ROW_CAP=128 keeps the identical association.
     encoder.dispatch_compute(
         apple_norm_enabled(
             encoder.device(),
             static_cast<size_t>(params.reduce_size),
             static_cast<size_t>(params.count))
             ? ComputeKernel::FastRopeNormPairAppleBF16
-            : ComputeKernel::FastRopeNormPairBF16,
+            : (pair_w64 ? ComputeKernel::FastRopeNormPairBF16W64
+                        : ComputeKernel::FastRopeNormPairBF16),
         bindings,
         params,
         std::min(params.count, omarchy::kMaxComputeGroupCountX));
