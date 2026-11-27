@@ -2363,8 +2363,22 @@ def make_executor(gm):
                     lowering = None
                 if lowering is not None and (has_mx(args) or is_producer):
                     try:
-                        val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in kwargs.items()})
+                        # aten.<op>.out: the out kwarg is write-only for the
+                        # lowering - strip it, then rebind the out arg's env
+                        # entry to the computed value (the in-place convention
+                        # the "_" ops use on node.args[0]).
+                        out_node = None
+                        lkw = kwargs
+                        # overload spellings: aten.mul.out, aten.sum.IntList_out
+                        if str(node.target).rsplit(".", 1)[-1].endswith("out"):
+                            out_node = node.kwargs.get("out")
+                            lkw = {k: v for k, v in kwargs.items() if k != "out"}
+                        val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in lkw.items()})
                         on_mlx = True
+                        if isinstance(out_node, torch.fx.Node):
+                            env[out_node] = val
+                        elif torch.is_tensor(out_node):
+                            out_node.copy_(_torch(val))
                         # d-review: an in-place ATen op (masked_fill_, add_, ...)
                         # must mutate the graph's input placeholder, so later
                         # nodes - and an output that returns the placeholder -

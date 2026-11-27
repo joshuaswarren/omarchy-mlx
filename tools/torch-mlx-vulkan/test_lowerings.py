@@ -2314,6 +2314,104 @@ def test_softplus_mish():
     print("test_softplus_mish PASS")
 
 
+def test_out_variants():
+    # PAR-41 census fallback: aten.mul.out (and the .out family) passed an
+    # out= kwarg the functional spec rejected, so every .out overload fell
+    # back - and specs that accepted it silently dropped the write. The
+    # walk now strips out= for the lowering and rebinds the out arg's env
+    # entry (or copies into a baked literal) - pinned below.
+    import numpy as np
+    a = torch.randn(4)
+    b = torch.randn(4)
+
+    # 1) mul.out with the out tensor as a graph input: the node result AND
+    #    the rebased out placeholder must both equal a*b.
+    g = torch.fx.Graph()
+    pa, pb, po = g.placeholder("a"), g.placeholder("b"), g.placeholder("o")
+    n = g.call_function(torch.ops.aten.mul.out, (pa, pb), {"out": po})
+    g.output((n, po))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    ref_buf = torch.empty(4)
+    ref = torch.ops.aten.mul.out(a, b, out=ref_buf)
+    run, stats = mlx_vulkan.make_executor(gm)
+    buf = torch.empty(4)
+    got, got_o = run(a, b, buf)
+    assert stats["cpu"] == [], stats
+    assert np.allclose(torch.as_tensor(got).float().numpy(), ref.float().numpy(), atol=3e-2)
+    assert np.allclose(torch.as_tensor(got_o).float().numpy(), ref_buf.float().numpy(), atol=3e-2), (
+        "out placeholder was not rebound to the computed value", got_o, ref_buf)
+
+    # 2) a downstream consumer of the out arg sees the written value:
+    #    add(out, out) == 2*a*b after mul.out writes it.
+    g = torch.fx.Graph()
+    pa, pb, po = g.placeholder("a"), g.placeholder("b"), g.placeholder("o")
+    n1 = g.call_function(torch.ops.aten.mul.out, (pa, pb), {"out": po})
+    n2 = g.call_function(torch.ops.aten.add.Tensor, (po, po), {})
+    g.output(n2)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    got = run(a, b, torch.empty(4))
+    assert stats["cpu"] == [], stats
+    assert np.allclose(torch.as_tensor(got).float().numpy(), (2 * a * b).numpy(), atol=3e-2)
+
+    # 3) sum.out: previously "lowered" while silently ignoring out=.
+    g = torch.fx.Graph()
+    pa, po = g.placeholder("a"), g.placeholder("o")
+    n = g.call_function(torch.ops.aten.sum.IntList_out,
+                        (pa, [0]), {"keepdim": False, "out": po})
+    g.output((n, po))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    ref_buf = torch.empty(())
+    ref = torch.ops.aten.sum.IntList_out(a, [0], keepdim=False, out=ref_buf)
+    run, stats = mlx_vulkan.make_executor(gm)
+    got, got_o = run(a, torch.empty(()))
+    assert stats["cpu"] == [], stats
+    assert np.allclose(torch.as_tensor(got).float().numpy(), ref.float().numpy(), atol=3e-2)
+    assert np.allclose(torch.as_tensor(got_o).float().numpy(), ref_buf.float().numpy(), atol=3e-2), (
+        "sum.IntList_out lowered but did not write the out buffer", got_o, ref_buf)
+
+    # 4) add.out sibling arm + a baked-literal out tensor (copy_ path).
+    g = torch.fx.Graph()
+    pa, pb = g.placeholder("a"), g.placeholder("b")
+    lit = torch.empty(4)
+    n = g.call_function(torch.ops.aten.add.out, (pa, pb), {"out": lit})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    got = run(a, b)
+    assert stats["cpu"] == [], stats
+    assert np.allclose(lit.float().numpy(), (a + b).float().numpy(), atol=3e-2), (
+        "baked-literal out tensor was not written", lit, a + b)
+
+    # 5) out=None behaves like the functional op (no write target).
+    g = torch.fx.Graph()
+    pa, pb = g.placeholder("a"), g.placeholder("b")
+    n = g.call_function(torch.ops.aten.mul.out, (pa, pb), {"out": None})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    got = run(a, b)
+    assert stats["cpu"] == [], stats
+    assert np.allclose(torch.as_tensor(got).float().numpy(), (a * b).numpy(), atol=3e-2)
+
+    # 6) bf16: dtype fidelity at the lowering (out buffer dtype matches
+    #    torch's .out result).
+    ab, bb = a.bfloat16(), b.bfloat16()
+    ref_buf = torch.empty(4, dtype=torch.bfloat16)
+    ref = torch.ops.aten.mul.out(ab, bb, out=ref_buf)
+    g = torch.fx.Graph()
+    pa, pb, po = g.placeholder("a"), g.placeholder("b"), g.placeholder("o")
+    n = g.call_function(torch.ops.aten.mul.out, (pa, pb), {"out": po})
+    g.output((n, po))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    got, got_o = run(ab, bb, torch.empty(4, dtype=torch.bfloat16))
+    assert stats["cpu"] == [], stats
+    assert np.allclose(torch.as_tensor(got).float().numpy(), ref.float().numpy(), atol=3e-2)
+    assert np.allclose(torch.as_tensor(got_o).float().numpy(), ref_buf.float().numpy(), atol=3e-2)
+    print("test_out_variants PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2355,6 +2453,7 @@ if __name__ == "__main__":
     test_mv_addmv()
     test_xlogy_xlog1py()
     test_softplus_mish()
+    test_out_variants()
     print("ALL PASS")
 
 
