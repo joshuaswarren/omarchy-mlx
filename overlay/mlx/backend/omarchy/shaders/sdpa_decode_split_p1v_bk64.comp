@@ -73,7 +73,9 @@ const uint SUBGROUPS = 4u;
 
 shared float s_q[SPLIT_R * D];
 shared float s_p[SPLIT_R * BK];
-shared float s_part[2u * SPLIT_R * BK];
+// s_part aliases the not-yet-written upper half of s_o (2 KB): it is dead
+// after the two-half score merge and s_o writes begin only at the value phase.
+#define s_part(addr) s_o[(2u * SPLIT_R * D) + (addr)]
 shared float s_max[SPLIT_R * SUBGROUPS];
 shared float s_sum[SPLIT_R * SUBGROUPS];
 shared float s_o[4u * SPLIT_R * D];
@@ -126,11 +128,11 @@ void main() {
     }
   }
   for (uint r = 0u; r < SPLIT_R; ++r) {
-    s_part[(half_id * SPLIT_R + r) * BK + kt] = score[r];
+    s_part((half_id * SPLIT_R + r) * BK + kt) = score[r];
   }
   barrier();
   for (uint r = 0u; r < SPLIT_R; ++r) {
-    score[r] = valid ? s_part[r * BK + kt] + s_part[(SPLIT_R + r) * BK + kt] : uintBitsToFloat(0xff800000u);
+    score[r] = valid ? s_part(r * BK + kt) + s_part((SPLIT_R + r) * BK + kt) : uintBitsToFloat(0xff800000u);
   }
 
   for (uint r = 0u; r < SPLIT_R; ++r) {
