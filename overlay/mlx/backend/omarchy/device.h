@@ -827,6 +827,22 @@ inline bool gdn_decode_coalesced_default(
   return device_name.find("G14C") != std::string::npos && hk != hv;
 }
 
+// Low-register dedicated SwiGLU (QmmVecQ4SwigluBF16R1S8W2: ROWS_PER_SLOT=1,
+// 8 subgroups, uvec2 weight loads — 2 live rows/SG across gate+up instead of 4,
+// bit-identical to R2S8W2). Default on G14C; MLX_OMARCHY_SWIGLU_R1=0 disables.
+inline bool qmm_swiglu_r1_default(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
+// Coalesced 128-bit uvec4 ResNorm epilogue with 512-thread workgroups
+// (QmmVecQ4ResNormVec4BF16R2S16W2: 32 cols/WG halving ticket.done atomic
+// contention + single-pass coherent sum0_v4 load held in registers across the
+// RMSNorm barriers, bit-identical to fast_norm_apple.comp for 2048 and 4096).
+// Default on G14C; MLX_OMARCHY_RESNORM_VEC4=0 disables.
+inline bool qmm_resnorm_vec4_default(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
 // Fused GatedDeltaUpdate on G18G (Apple M6): the fused update and raw
 // decode routes miscompute there. On the 2026-11-24 PAR-35 A/B the fused
 // path diverged from the ops reference from layer 1 prefill on, while the

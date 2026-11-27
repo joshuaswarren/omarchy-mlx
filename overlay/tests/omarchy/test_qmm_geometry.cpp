@@ -39,6 +39,7 @@
 #include "mlx/backend/omarchy/device_local_activations.h"
 #include "mlx/backend/omarchy/fused_chain.h"
 #include "mlx/backend/gpu/device_info.h"
+#include "mlx/fast.h"
 #include "mlx/ops.h"
 #include "mlx/stream.h"
 #include "mlx/transforms.h"
@@ -139,6 +140,20 @@ int scenario(const std::string& name, const std::string& out) {
     eval(oa, ob);
     outs.push_back(oa);
     outs.push_back(ob);
+  } else if (name == "resnorm2048" || name == "resnorm4096") {
+    const int n = (name == "resnorm2048") ? 2048 : 4096;
+    const int k = 2048;
+    auto x = make_x(k, rng);
+    auto w = make_lin(n, k, rng);
+    auto resid = make_x(n, rng);
+    auto nw = make_x(n, rng);
+    nw = reshape(nw, Shape{n});
+    eval(x, w.w, w.s, w.b, resid, nw);
+    auto sum = add(qmm(x, w), resid);
+    auto normed = fast::rms_norm(sum, nw, 1e-6f);
+    eval(sum, normed);
+    outs.push_back(sum);
+    outs.push_back(normed);
   } else if (name == "name") {
     std::ofstream f(out);
     f << mlx::core::omarchy::qmm_geometry_name();
@@ -358,6 +373,64 @@ int main(int argc, char** argv) {
     } else {
       std::cout << "ok: 2x16kcont k1024 marked non-bit-identical (diffs="
                 << d.count << " max_ulp=" << d.max_ulp << ")\n";
+    }
+  }
+  // Part-default checks for G14C low-register SwiGLU (R1S8W2) and coalesced
+  // uvec4 ResNorm (R2S16W2).
+  {
+    if (!mlx::core::omarchy::qmm_swiglu_r1_default("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_swiglu_r1_default("Apple M1 Max (G13C C0)") ||
+        mlx::core::omarchy::qmm_swiglu_r1_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: qmm_swiglu_r1_default part check\n";
+      ++failures;
+    }
+    if (!mlx::core::omarchy::qmm_resnorm_vec4_default("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_resnorm_vec4_default("Apple M1 Max (G13C C0)") ||
+        mlx::core::omarchy::qmm_resnorm_vec4_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: qmm_resnorm_vec4_default part check\n";
+      ++failures;
+    }
+  }
+  // Low-register SwiGLU (R1S8W2) must be bit-identical to 2x4 and R2S8W2.
+  {
+    std::string base = "/tmp/w7p-geom-base.bin";
+    std::string other = "/tmp/w7p-geom-other.bin";
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
+    unsetenv("MLX_OMARCHY_SWIGLU_R1");
+    int rc = run_child("swiglu", base.c_str());
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+    setenv("MLX_OMARCHY_SWIGLU_R1", "1", 1);
+    int rc2 = run_child("swiglu", other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    unsetenv("MLX_OMARCHY_SWIGLU_R1");
+    if (rc != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+      std::cout << "FAIL: swiglu R1S8W2 differed from 2x4 (rc " << rc << "/" << rc2 << ")\n";
+      ++failures;
+    } else {
+      std::cout << "ok: swiglu R1S8W2 identical\n";
+    }
+  }
+  // Coalesced uvec4 ResNorm (R2S16W2) must be bit-identical to unfused and
+  // scalar ResNorm at both 2048 and 4096 row lengths.
+  for (const char* name : {"resnorm2048", "resnorm4096"}) {
+    std::string base = "/tmp/w7p-geom-base.bin";
+    std::string other = "/tmp/w7p-geom-other.bin";
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+    setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
+    unsetenv("MLX_OMARCHY_RESNORM_VEC4");
+    int rc = run_child(name, base.c_str());
+    setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+    setenv("MLX_OMARCHY_RESNORM_VEC4", "1", 1);
+    int rc2 = run_child(name, other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+    unsetenv("MLX_OMARCHY_RESNORM_VEC4");
+    if (rc != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+      std::cout << "FAIL: " << name << " ResNormVec4 R2S16W2 differed from unfused (rc "
+                << rc << "/" << rc2 << ")\n";
+      ++failures;
+    } else {
+      std::cout << "ok: " << name << " ResNormVec4 R2S16W2 identical\n";
     }
   }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")
