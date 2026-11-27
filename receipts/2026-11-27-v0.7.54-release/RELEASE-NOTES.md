@@ -4,7 +4,7 @@ Measured decode defaults for the Apple M1 Max and Apple M1 that beat or
 match macOS, the G14C (Apple M2 Max) GDN/Mamba decode stack, a
 one-dispatch online-softmax decode SDPA, cooperative-matrix and flash
 prefill kernels for discrete GPUs, 39 new `aten` lowerings in
-torch-mlx-vulkan, and a serving/assistant hardening batch. 224 non-merge commits
+torch-mlx-vulkan, and a serving/assistant hardening batch. 298 non-merge commits
 since v0.7.53.
 
 ## Decode and kernel speedups
