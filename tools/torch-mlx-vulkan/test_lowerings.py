@@ -81,6 +81,54 @@ def test_multinomial():
     print("test_multinomial PASS")
 
 
+def test_bincount():
+    rng = np.random.RandomState(7)
+    idx = rng.randint(0, 11, size=(64,)).astype(np.int64)
+    t = torch.tensor(idx)
+    out = mlx_vulkan._bincount(mx.array(idx))
+    assert _np(out).dtype == np.int64
+    assert np.array_equal(_np(out), t.bincount().numpy())
+    # minlength above the max index pads the output
+    out = mlx_vulkan._bincount(mx.array(idx), minlength=16)
+    assert np.array_equal(_np(out), t.bincount(minlength=16).numpy())
+    # minlength below the max index: the max still wins
+    out = mlx_vulkan._bincount(mx.array(idx), minlength=3)
+    assert np.array_equal(_np(out), t.bincount(minlength=3).numpy())
+    # float32 weights: output takes the weights dtype
+    w = rng.randn(64).astype(np.float32)
+    out = mlx_vulkan._bincount(mx.array(idx), weights=mx.array(w), minlength=13)
+    assert _np(out).dtype == np.float32
+    assert np.allclose(_np(out), t.bincount(torch.tensor(w), 13).numpy(), atol=1e-6)
+    # int32 input and int64 weights
+    x32 = rng.randint(0, 5, size=(33,)).astype(np.int32)
+    out = mlx_vulkan._bincount(mx.array(x32))
+    assert np.array_equal(_np(out), torch.tensor(x32).bincount().numpy())
+    wi = rng.randint(-9, 10, size=(64,)).astype(np.int64)
+    out = mlx_vulkan._bincount(mx.array(idx), weights=mx.array(wi))
+    assert _np(out).dtype == np.int64
+    assert np.array_equal(_np(out), t.bincount(torch.tensor(wi)).numpy())
+    # empty input -> zeros(minlength)
+    out = mlx_vulkan._bincount(mx.array(np.empty(0, np.int64)), minlength=4)
+    assert np.array_equal(_np(out), torch.tensor([], dtype=torch.int64).bincount(minlength=4).numpy())
+    print("test_bincount PASS")
+
+
+def test_bincount_lowering():
+    # aten.bincount lowers through the executor (no CPU fallback) on an
+    # int64 index tensor — the embedding-grad accumulation shape.
+    g = torch.fx.Graph()
+    x = g.placeholder("x")
+    bc = g.call_function(torch.ops.aten.bincount.default, (x,), {"minlength": 16})
+    g.output(bc)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    idx = torch.tensor([0, 5, 5, 2, 15], dtype=torch.int64)
+    out = run(idx)
+    assert stats["cpu"] == [], (stats, [str(n.target) for n in gm.graph.nodes])
+    assert np.array_equal(_np(out), torch.bincount(idx, minlength=16).numpy())
+    print("test_bincount_lowering PASS")
+
+
 def test_convolution_backward():
     rng = np.random.RandomState(0)
     for (n, ci, co, k, s, p, d) in ((2, 3, 8, 3, 1, 1, 1), (1, 4, 4, 2, 2, 0, 1), (2, 3, 5, 3, 1, 2, 2)):
@@ -576,10 +624,11 @@ def test_cat_clone():
 def test_dispatch_registered():
     assert torch.topk in mlx_vulkan.FUNC_TABLE
     assert torch.multinomial in mlx_vulkan.FUNC_TABLE
+    assert torch.bincount in mlx_vulkan.FUNC_TABLE
     for name in ("topk", "multinomial", "convolution", "convolution_backward",
                  "_native_batch_norm_legit_functional", "threshold_backward", "t",
                  "gelu_backward", "tanh_backward", "embedding_dense_backward", "linear",
-                 "cat", "clone"):
+                 "cat", "clone", "bincount"):
         assert name in mlx_vulkan.ATEN_TABLE, name
     print("test_dispatch_registered PASS")
 
@@ -1884,6 +1933,8 @@ def test_mv_addmv():
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
+    test_bincount()
+    test_bincount_lowering()
     test_convolution_backward()
     test_threshold_backward()
     test_t()

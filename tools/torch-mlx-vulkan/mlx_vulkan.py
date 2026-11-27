@@ -1330,6 +1330,36 @@ def _multinomial(probs, num_samples, replacement=False, **kw):
         return mx.random.categorical(lp, num_samples=num_samples).astype(mx.int64)
     return mx.argsort(-(lp + mx.random.gumbel(p.shape)), axis=-1)[..., :num_samples].astype(mx.int64)
 
+def _bincount(a, weights=None, minlength=0):
+    """aten.bincount: out[i] = count (or sum of weights) of positions where
+    a == i. Output length = max(minlength, max(a) + 1); int64 out unless
+    weights is given, then the weights dtype.
+    The backend's Scatter::Sum has no 64-bit accumulator, so counts
+    accumulate in int32 (exact: counts are bounded by the input length)
+    and cast to the torch output dtype."""
+    a = _mx(a)
+    if a.ndim != 1:
+        return _raise("bincount ndim>1")
+    n = int(minlength)
+    if a.size:
+        if int(np.array(mx.min(a)).item()) < 0:
+            raise ValueError("bincount only supports 1-d non-negative integral inputs")
+        n = max(n, int(np.array(mx.max(a)).item()) + 1)
+    if weights is None:
+        w, dt = mx.ones(a.shape, dtype=mx.int32), mx.int64
+    else:
+        w, dt = _mx(weights), _mx(weights).dtype
+        if w.dtype == mx.int64:
+            if w.size and int(np.array(mx.max(mx.abs(w))).item()) >= 2 ** 31:
+                return _raise("bincount int64 weights out of int32 range")
+            w = w.astype(mx.int32)
+        elif w.dtype not in (mx.float32, mx.float16, mx.bfloat16, mx.int32, mx.uint32):
+            w = w.astype(mx.int32)
+    out = mx.zeros((n,), dtype=w.dtype)
+    if a.size:
+        out = out.at[a.astype(mx.int32)].add(w)
+    return out.astype(dt)
+
 def _bitwise_or_logical(a, b, bitop, logop):
     a, b = _mx(a), _mx(b)
     _float_dts = (mx.float32, mx.float16, mx.bfloat16)
@@ -1918,6 +1948,7 @@ _FUNC_SPECS = {
     "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
     "take_along_dim": lambda a, i, dim: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
     "index": lambda a, idx: a[tuple(_mx(i) if isinstance(i, (torch.Tensor, list)) else i for i in (idx if isinstance(idx, (list, tuple)) else (idx,)))],
+    "bincount": _bincount,
     "tril": lambda a, k=0: mx.tril(a, k), "triu": lambda a, k=0: mx.triu(a, k),
     "pad": lambda a, p, mode="constant", value=0: mx.pad(a, _pad_width(a, p)),
     "tile": lambda a, d: mx.tile(a, tuple(d)),
