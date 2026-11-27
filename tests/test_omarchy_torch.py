@@ -122,7 +122,7 @@ class TestOmarchyTorchBackend(unittest.TestCase):
             x = torch.randn(*shape)
             ref = x.unfold(dim, size, step)
             mine = lowering(mx.array(x.numpy()), dim, size, step)
-            got = torch.from_numpy(__import__("numpy").array(mine.numpy()))
+            got = torch.from_numpy(__import__("numpy").array(mine))
             self.assertTrue(got.shape == ref.shape, (shape, got.shape, ref.shape))
             self.assertTrue(torch.allclose(got.float(), ref.float(), atol=0, rtol=0),
                             (shape, float((got - ref).abs().max())))
@@ -140,7 +140,7 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         x = torch.randn(2, 4, 6)
         ref = x.unfold(1, 3, 2)
         mine = lowering(mx.array(x.numpy()), 1, 3, 2)
-        got = torch.from_numpy(__import__("numpy").array(mine.numpy()))
+        got = torch.from_numpy(__import__("numpy").array(mine))
         self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
         self.assertTrue(torch.allclose(got.float(), ref.float(), atol=0, rtol=0))
 
@@ -156,11 +156,11 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         torch.manual_seed(3)
         fold = ATEN_TABLE["fold"]
         unfold = ATEN_TABLE["unfold"]
-        x = torch.randn(2, 6, 9)  # [N, C*k, L] for C=3, k=3, L=3
+        x = torch.randn(2, 9, 1)  # [N, C*k, L] for C=3, k=3x3, stride=3x3: L=1
         ref = torch.nn.functional.fold(
             x, output_size=(3, 3), kernel_size=(3, 3))
         mine = fold(mx.array(x.numpy()), (3, 3), (3, 3))
-        got = torch.from_numpy(__import__("numpy").array(mine.numpy()))
+        got = torch.from_numpy(__import__("numpy").array(mine))
         self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
         self.assertTrue(torch.allclose(got.float(), ref.float(), atol=1e-5, rtol=1e-5))
 
@@ -178,7 +178,7 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         ref = torch.nn.functional.fold(
             x, output_size=(5, 5), kernel_size=(2, 2), stride=(1, 1))
         mine = fold(mx.array(x.numpy()), (5, 5), (2, 2), (1, 1), (0, 0))
-        got = torch.from_numpy(__import__("numpy").array(mine.numpy()))
+        got = torch.from_numpy(__import__("numpy").array(mine))
         self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
         self.assertTrue(torch.allclose(got.float(), ref.float(), atol=1e-5, rtol=1e-5),
                         float((got - ref).abs().max()))

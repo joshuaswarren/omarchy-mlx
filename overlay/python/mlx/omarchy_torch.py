@@ -154,8 +154,8 @@ def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mas
 
 def _unfold(x, dim, size, step):
     """aten.unfold: gather size-window slices along dim at `step` intervals;
-    the aten view shape is (N, C, n_windows, size, *rest_dims), which is
-    exactly take()'s in-place (n_windows, size) slot order — no transpose."""
+    the aten view replaces dim d with n_windows and appends size last:
+    (s0..s_{d-1}, n_windows, s_{d+1}.., size)."""
     d = dim if dim >= 0 else dim + x.ndim
     length = x.shape[d]
     if length < size:
@@ -164,10 +164,14 @@ def _unfold(x, dim, size, step):
     n_windows = (length - size) // step + 1
     idx = (mx.arange(n_windows) * step)[:, None] + mx.arange(size)[None, :]
     idx = mx.asarray(idx, mx.int32)
-    gathered = mx.take(x, mx.reshape(idx, -1), axis=d)
+    gathered = mx.take(x, mx.reshape(idx, (-1,)), axis=d)
     shape = list(x.shape)
-    return mx.reshape(
-        gathered, shape[:d] + (n_windows, size) + shape[d + 1:])
+    gathered = mx.reshape(
+        gathered, shape[:d] + [n_windows, size] + shape[d + 1:])
+    # the aten view replaces dim d with n_windows and appends size last
+    nd = gathered.ndim
+    axes = [k for k in range(nd) if k != d + 1] + [d + 1]
+    return mx.transpose(gathered, axes)
 
 
 def _fold(x, output_size, kernel_size, dilation=(1, 1), padding=(0, 0), stride=(1, 1)):
