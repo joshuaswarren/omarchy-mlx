@@ -2145,7 +2145,11 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "threshold_backward", "native_batch_norm_backward",
                  "Float",
                  "add", "sub", "mul", "div", "truediv", "true_divide",
-                 "remainder", "xlogy", "special_xlog1py", "relu", "relu_"}
+                 "remainder", "xlogy", "special_xlog1py", "relu", "relu_",
+                 # comparison ops: the aten .default overloads are
+                 # (Scalar, Scalar) -> bool — no mx operand, same gate as
+                 # the scalar arith forms above.
+                 "eq", "ne", "lt", "le", "gt", "ge"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}

@@ -509,6 +509,69 @@ def test_tanh_backward():
     print("test_tanh_backward PASS")
 
 
+def test_comparisons():
+    # PT-U7: the comparison family — aten .default overloads are the
+    # (Scalar, Scalar) -> bool forms, which hit the has_mx gate with no mx
+    # operand (same miss class as PT-U8's scalar arith). The .Tensor and
+    # .Scalar overloads lower via the tensor operand already.
+    rng = np.random.RandomState(5)
+    a = rng.randn(4, 6).astype(np.float32)
+    b = rng.randn(4, 6).astype(np.float32)
+    OPS = [
+        ("eq", torch.ops.aten.eq.Tensor, mx.equal),
+        ("ne", torch.ops.aten.ne.Tensor, mx.not_equal),
+        ("lt", torch.ops.aten.lt.Tensor, mx.less),
+        ("le", torch.ops.aten.le.Tensor, mx.less_equal),
+        ("gt", torch.ops.aten.gt.Tensor, mx.greater),
+        ("ge", torch.ops.aten.ge.Tensor, mx.greater_equal),
+    ]
+    # elementwise Tensor forms: bool dtype + value parity vs aten
+    for name, aten_op, _ in OPS:
+        ref = aten_op(torch.tensor(a), torch.tensor(b))
+        got = mlx_vulkan.ATEN_TABLE[name](mx.array(a), mx.array(b))
+        assert got.dtype == mx.bool_, (name, got.dtype)
+        assert np.array_equal(_np(got), ref.numpy()), name
+    # Scalar overloads: (Scalar, Scalar) -> bool through the executor must
+    # lower despite no tensor operand (the _ALWAYS_LOWER fix).
+    for name, aten_default, _ in [
+            ("eq", torch.ops.aten.eq.default, None),
+            ("ne", torch.ops.aten.ne.default, None),
+            ("lt", torch.ops.aten.lt.default, None),
+            ("le", torch.ops.aten.le.default, None),
+            ("gt", torch.ops.aten.gt.default, None),
+            ("ge", torch.ops.aten.ge.default, None)]:
+        gfx = torch.fx.Graph()
+        gfx.output(gfx.call_function(aten_default, (2, 2)))
+        gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run()
+        exp = aten_default(2, 2)
+        assert bool(torch.as_tensor(out)) == exp, (name, out, exp)
+        assert name in stats["mlx"], (name, stats)
+        assert name not in stats["cpu"], (name, stats)
+    # .Scalar (Tensor, Scalar) forms: mixed dtype must still lower via the
+    # tensor operand, bool result parity.
+    for name, aten_scalar in [
+            ("eq", torch.ops.aten.eq.Scalar), ("ne", torch.ops.aten.ne.Scalar),
+            ("lt", torch.ops.aten.lt.Scalar), ("le", torch.ops.aten.le.Scalar),
+            ("gt", torch.ops.aten.gt.Scalar), ("ge", torch.ops.aten.ge.Scalar)]:
+        ref = aten_scalar(torch.tensor(a), 0.5)
+        got = mlx_vulkan.ATEN_TABLE[name](mx.array(a), mx.array(0.5))
+        assert got.dtype == mx.bool_, name
+        assert np.array_equal(_np(got), ref.numpy()), name
+    # executor path on a Tensor pair: lands in stats["mlx"]
+    gfx = torch.fx.Graph()
+    pa, pb = gfx.placeholder("a"), gfx.placeholder("b")
+    gfx.output(gfx.call_function(torch.ops.aten.eq.Tensor, (pa, pb)))
+    gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(torch.tensor(a), torch.tensor(b))
+    assert np.array_equal(_np(out), torch.eq(torch.tensor(a), torch.tensor(b)).numpy())
+    assert "eq" in stats["mlx"], stats
+    assert "eq" not in stats["cpu"], stats
+    print("test_comparisons PASS")
+
+
 def test_linear():
     rng = np.random.RandomState(3)
     x = rng.randn(2, 4, 8).astype(np.float32)   # batched input
@@ -2143,6 +2206,7 @@ if __name__ == "__main__":
     test_compiled_executor_nonarray_outputs()
     test_gelu_backward()
     test_tanh_backward()
+    test_comparisons()
     test_linear()
     test_dispatch_registered()
     test_numel()
