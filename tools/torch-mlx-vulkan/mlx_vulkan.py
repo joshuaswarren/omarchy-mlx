@@ -177,6 +177,11 @@ def _linear(x, w, bias=None):
     y = mx.matmul(x, _wt(w))
     return y + _mx(bias) if bias is not None else y
 
+def _squeeze(a, dim=None):
+    if isinstance(dim, (list, tuple)):
+        dim = tuple(dim)
+    return mx.squeeze(a, axis=dim) if dim is not None else mx.squeeze(a)
+
 def _reshape(a, *s):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
         s = tuple(s[0])
@@ -450,6 +455,12 @@ def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mas
     w = _mx(weight) if weight is not None else None
     ndim = len(tuple(normalized_shape))
     axes = tuple(range(x.ndim - ndim, x.ndim))
+    # aten returns mean/rstd with keepdims, but callers through aot_autograd
+    # and the OpInfo graph can hand them squeezed (shape x.shape[:-ndim]);
+    # restore the trailing singletons so they broadcast over normalized dims.
+    if mean.ndim < x.ndim:
+        shp = mean.shape + (1,) * (x.ndim - mean.ndim)
+        mean, rstd = mx.reshape(mean, shp), mx.reshape(rstd, shp)
     xhat = (x - mean) * rstd
     g = gout * w if w is not None else gout
     dx = rstd * (g - mx.mean(g, axis=axes, keepdims=True)
@@ -1021,8 +1032,12 @@ def _convolution_backward(gout, x, w, bias_sizes, stride, padding, dilation,
 
 
 def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
-    # torch: a NCL, w (O, I/groups, K) ; mlx.conv1d: x NLC, w (O, K, I/groups)
-    x = _mx(a).transpose(0, 2, 1)
+    # torch: a NCL or CL (unbatched), w (O, I/groups, K) ; mlx.conv1d: x NLC, w (O, K, I/groups)
+    x = _mx(a)
+    unbatched = x.ndim == 2
+    if unbatched:
+        x = x[None]
+    x = x.transpose(0, 2, 1)
     wt = _mx(w).transpose(0, 2, 1)  # torch O,I/groups,K -> mlx O,K,I/groups
     st = stride[0] if isinstance(stride, (list, tuple)) else stride
     p = padding[0] if isinstance(padding, (list, tuple)) else padding
@@ -1030,7 +1045,8 @@ def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     y = mx.conv1d(x, wt, stride=st, padding=p, dilation=dl, groups=groups)
     if b is not None:
         y = y + _mx(b).reshape(1, 1, -1)
-    return y.transpose(0, 2, 1)
+    y = y.transpose(0, 2, 1)
+    return y[0] if unbatched else y
 
 def _diff(a, n=1, dim=-1, prepend=None, append=None):
     x = _mx(a)
@@ -1827,7 +1843,7 @@ _FUNC_SPECS = {
     "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
     "flatten": lambda a, start=0, end=-1: mx.reshape(a, (*a.shape[:start], int(np.prod(a.shape[start:end + 1])), *a.shape[end + 1:]) if end != -1 else (*a.shape[:start], int(np.prod(a.shape[start:])))),
     "unsqueeze": lambda a, d: mx.expand_dims(a, axis=d),
-    "squeeze": lambda a, d=None: mx.squeeze(a, axis=d) if d is not None else mx.squeeze(a),
+    "squeeze": _squeeze, "squeeze_": _squeeze,
     "expand": _expand, "expand_as": lambda a, o: mx.broadcast_to(a, o.shape),
     "cat": _cat_impl,
     "concat": _cat_impl,
@@ -1971,8 +1987,13 @@ _FUNC_SPECS = {
     "logical_or": lambda a, b: mx.logical_or(_mx(a), _mx(b)),
     "logical_not": lambda a: mx.logical_not(a),
     "invert": lambda a: mx.logical_not(a),
-    "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
-    "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
+    "clamp": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
+    "clamp_": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
+    "clip": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
+    "clamp_min": lambda a, min: mx.maximum(a, _mx(min)),
+    "clamp_min_": lambda a, min: mx.maximum(a, _mx(min)),
+    "clamp_max": lambda a, max: mx.minimum(a, _mx(max)),
+    "clamp_max_": lambda a, max: mx.minimum(a, _mx(max)),
     "rsub": _rsub,
     "sub_": _sub_inplace,
     "sub_.Tensor": _sub_inplace,
