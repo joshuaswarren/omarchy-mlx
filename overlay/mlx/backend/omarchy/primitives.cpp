@@ -9703,18 +9703,30 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           (params.shape[1] % 2u == 0u))) {
         vec_kernel = geometry.word;
         qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
-        if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u) &&
-            params.matrix_n >= 2048u) {
+        if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u)) {
           const auto& w_caps = encoder.device().capabilities();
-          const char* wr2s4_env = omarchy::env_str("MLX_OMARCHY_WORD_R2S4");
-          const bool wr2s4_want =
-              (wr2s4_env != nullptr && wr2s4_env[0] != '\0')
-                  ? (std::strcmp(wr2s4_env, "0") != 0)
-                  : omarchy::qmm_word_r2s4_default(w_caps.device_name);
-          if (wr2s4_want && w_caps.max_compute_work_group_invocations >= 128u &&
-              w_caps.max_compute_work_group_size[0] >= 128u) {
-            vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2;
-            qmm_groups = (params.matrix_n + 7u) / 8u;
+          const char* up_env = omarchy::env_str("MLX_OMARCHY_Q4_UPFRONT");
+          const bool q4_up = up_env != nullptr && std::strcmp(up_env, "1") == 0;
+          const char* sm_env = omarchy::env_str("MLX_OMARCHY_WORD_R2S2_SM");
+          const bool sm_r2s2 = sm_env != nullptr && std::strcmp(sm_env, "1") == 0;
+          if (sm_r2s2 && params.matrix_n < 2048u &&
+              w_caps.max_compute_work_group_invocations >= 64u &&
+              w_caps.max_compute_work_group_size[0] >= 64u) {
+            vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S2W2Upfront;
+            qmm_groups = (params.matrix_n + 3u) / 4u;
+          } else if (params.matrix_n >= 2048u) {
+            const char* wr2s4_env = omarchy::env_str("MLX_OMARCHY_WORD_R2S4");
+            const bool wr2s4_want =
+                (wr2s4_env != nullptr && wr2s4_env[0] != '\0')
+                    ? (std::strcmp(wr2s4_env, "0") != 0)
+                    : omarchy::qmm_word_r2s4_default(w_caps.device_name);
+            if (wr2s4_want && w_caps.max_compute_work_group_invocations >= 128u &&
+                w_caps.max_compute_work_group_size[0] >= 128u) {
+              vec_kernel = q4_up
+                  ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2Upfront
+                  : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2;
+              qmm_groups = (params.matrix_n + 7u) / 8u;
+            }
           }
         }
       }
@@ -11175,16 +11187,60 @@ bool dispatch_quantized_gemv_group(
       const bool rn_s32_want = (rn_s32_env != nullptr && rn_s32_env[0] != '\0')
           ? (std::strcmp(rn_s32_env, "0") != 0)
           : omarchy::qmm_resnorm_r2s32_default(qmm_dev_name);
+      const char* up_env = omarchy::env_str("MLX_OMARCHY_Q4_UPFRONT");
+      const bool q4_up = up_env != nullptr && std::strcmp(up_env, "1") == 0;
       if (rn_s32_want &&
           encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
           encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
-        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2;
+        resnorm_kernel = q4_up
+            ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Upfront
+            : ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2;
         resnorm_cols = 64u;
       } else {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
         resnorm_cols = 32u;
       }
       resnorm_vec4_active = true;
+    }
+  }
+  bool clean_group_active = false;
+  ComputeKernel clean_group_kernel = ComputeKernel::QmmVecQ4PairBF16R2S4W2;
+  uint32_t clean_group_cols = 8u;
+  if (!res_norm_active && !dedicated_swiglu_active && !token_route &&
+      outgate == nullptr && !rope_epi_active && dtype == bfloat16 &&
+      subgroup_ready && members.size() >= 2 && members.size() <= 4) {
+    const char* cg_env = omarchy::env_str("MLX_OMARCHY_CLEAN_GROUP");
+    const bool cg_pair = cg_env != nullptr && std::strcmp(cg_env, "pair") == 0;
+    const bool cg_quad = cg_env != nullptr && std::strcmp(cg_env, "quad") == 0;
+    const bool cg_all = cg_env != nullptr && std::strcmp(cg_env, "all") == 0;
+    bool all_raw = true;
+    int max_n = 0;
+    for (const auto& m : members) {
+      if (m.epilogue || m.sum_window || m.out_view) {
+        all_raw = false;
+        break;
+      }
+      max_n = std::max(max_n, m.node.inputs()[1].shape(0));
+    }
+    if (all_raw) {
+      if (members.size() == 2 && (cg_pair || cg_quad || cg_all) &&
+          encoder.device().compute().binding_limit() >= 9u) {
+        clean_group_active = true;
+        if (max_n <= 64) {
+          clean_group_kernel = ComputeKernel::QmmVecQ4PairBF16R2S2W2;
+          clean_group_cols = 4u;
+        } else {
+          clean_group_kernel = ComputeKernel::QmmVecQ4PairBF16R2S4W2;
+          clean_group_cols = 8u;
+        }
+      } else if ((members.size() == 4 && (cg_quad || cg_all)) ||
+                 (members.size() == 3 && cg_all)) {
+        if (encoder.device().compute().binding_limit() >= 17u) {
+          clean_group_active = true;
+          clean_group_kernel = ComputeKernel::QmmVecQ4QuadBF16R2S4W2;
+          clean_group_cols = 8u;
+        }
+      }
     }
   }
   // Columns per workgroup of the kernel selected below: the geometry applies
@@ -11197,6 +11253,8 @@ bool dispatch_quantized_gemv_group(
                                    : resnorm_cols))
       : dedicated_swiglu_active
       ? swiglu_cols
+      : clean_group_active
+      ? clean_group_cols
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
              ? geom.columns
@@ -11855,6 +11913,43 @@ bool dispatch_quantized_gemv_group(
         1u);
     return true;
   }
+  if (clean_group_active) {
+    if (members.size() == 2) {
+      std::array<ComputeBinding, 9> cg_bindings{
+          binding(x),
+          binding(members[0].node.inputs()[1]),
+          binding(members[0].node.inputs()[2]),
+          binding(members[0].node.inputs()[3]),
+          binding(members[0].node),
+          binding(members[1].node.inputs()[1]),
+          binding(members[1].node.inputs()[2]),
+          binding(members[1].node.inputs()[3]),
+          binding(members[1].node)};
+      encoder.dispatch_compute(
+          clean_group_kernel, cg_bindings, params, total_groups, 1u, 1u);
+    } else {
+      const ComputeBinding cg_filler = binding(members[0].node);
+      std::array<ComputeBinding, 17> cg_bindings{};
+      cg_bindings[0] = binding(x);
+      for (uint32_t i = 0; i < 4u; ++i) {
+        uint32_t b = 1u + i * 4u;
+        if (i < members.size()) {
+          cg_bindings[b] = binding(members[i].node.inputs()[1]);
+          cg_bindings[b + 1] = binding(members[i].node.inputs()[2]);
+          cg_bindings[b + 2] = binding(members[i].node.inputs()[3]);
+          cg_bindings[b + 3] = binding(members[i].node);
+        } else {
+          cg_bindings[b] = cg_filler;
+          cg_bindings[b + 1] = cg_filler;
+          cg_bindings[b + 2] = cg_filler;
+          cg_bindings[b + 3] = cg_filler;
+        }
+      }
+      encoder.dispatch_compute(
+          clean_group_kernel, cg_bindings, params, total_groups, 1u, 1u);
+    }
+    return true;
+  }
   for (size_t i = 0; i < members.size(); ++i) {
     if (!members[i].out_view) {
       continue;
@@ -11912,7 +12007,11 @@ bool dispatch_quantized_gemv_group(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
-            qmm_geometry().multi)
+            (qmm_geometry().multi == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 &&
+             omarchy::env_str("MLX_OMARCHY_Q4_UPFRONT") != nullptr &&
+             std::strcmp(omarchy::env_str("MLX_OMARCHY_Q4_UPFRONT"), "1") == 0)
+                ? ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Upfront
+                : qmm_geometry().multi)
       : select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiF32,
@@ -17478,7 +17577,11 @@ void GreedyQuantizedArgmax::eval_gpu(
         if (lm_r2s32_want && n >= 65536u && (params.rhs_offset % 2u == 0u) &&
             caps.max_compute_work_group_invocations >= 1024u &&
             caps.max_compute_work_group_size[0] >= 1024u) {
-          gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
+          const char* up_env = omarchy::env_str("MLX_OMARCHY_Q4_UPFRONT");
+          const bool q4_up = up_env != nullptr && std::strcmp(up_env, "1") == 0;
+          gemv_kernel = q4_up
+              ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2Upfront
+              : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
           gemv_groups = (n + 63u) / 64u;
         }
       } else {

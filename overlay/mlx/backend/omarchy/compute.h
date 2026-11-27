@@ -1390,6 +1390,16 @@ enum class ComputeKernel : uint16_t {
   // bit-identical to QmmVecQ4ResNormBF16R2S8W2). Appended to keep profile ids
   // stable.
   QmmVecQ4ResNormBF16R2S8W2Vec,
+  // Wave 4B upfront-8-load G14C recovery + clean epilogue-free Pair/Quad GDN
+  // in_proj fusion (appended to keep profile kernel ids stable).
+  QmmVecQ4WordSubgroupBF16R2S4W2Upfront,
+  QmmVecQ4WordSubgroupBF16R2S32W2Upfront,
+  QmmVecQ4WordSubgroupBF16R2S2W2Upfront,
+  QmmVecQ4ResNormVec4BF16R2S32W2Upfront,
+  QmmVecQ4MultiSubgroupBF16R2S8W2Upfront,
+  QmmVecQ4PairBF16R2S4W2,
+  QmmVecQ4PairBF16R2S2W2,
+  QmmVecQ4QuadBF16R2S4W2,
   Count,
 };
 

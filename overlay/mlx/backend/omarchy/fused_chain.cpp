@@ -1837,22 +1837,64 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           for (const auto& m : group.members) {
             widths.push_back(m.node.inputs()[1].shape(0));
           }
-          balanced_qkv = group.members.size() == 3 &&
-              gemv_balanced_qkv_widths_ok(widths);
+          const char* gdn_fuse_env = omarchy::env_str("MLX_OMARCHY_GDN_FUSE");
+          const bool gdn_quad = gdn_fuse_env != nullptr &&
+              std::strcmp(gdn_fuse_env, "quad") == 0;
+          const bool gdn_pair_sort = gdn_fuse_env != nullptr &&
+              std::strcmp(gdn_fuse_env, "pair_sort") == 0;
+          const bool gdn_pair_ab = gdn_fuse_env != nullptr &&
+              std::strcmp(gdn_fuse_env, "pair_ab") == 0;
+          balanced_qkv = (group.members.size() == 3 &&
+              gemv_balanced_qkv_widths_ok(widths)) ||
+              (gdn_quad && group.members.size() == 4);
           if (!balanced_qkv) {
-            // Split-pair admission: each consecutive member pair whose
-            // widths sit within a 4:1 ratio plans as its own dispatch,
-            // so an asymmetric window never folds as one group while
-            // its balanced pairs still fuse (members outside a passing
-            // pair stay on the per-node path).
-            for (size_t p = 0; p + 1 < group.members.size(); p += 2) {
-              if (!gemv_balanced_pair_widths_ok(widths[p], widths[p + 1])) {
-                continue;
+            if (gdn_pair_sort && group.members.size() == 4) {
+              // Sort 4-member GDN in_proj window descending by N so
+              // [6144, 2048, 16, 16] pairs into (6144, 2048) + (16, 16).
+              std::array<size_t, 4> ord{0, 1, 2, 3};
+              std::sort(ord.begin(), ord.end(), [&](size_t a, size_t b) {
+                return widths[a] > widths[b];
+              });
+              std::vector<GemvFusionMember> sorted_m;
+              std::vector<int64_t> sorted_w;
+              sorted_m.reserve(4);
+              sorted_w.reserve(4);
+              for (size_t idx : ord) {
+                sorted_m.push_back(std::move(group.members[idx]));
+                sorted_w.push_back(widths[idx]);
               }
-              GemvGroup pair;
-              pair.members.push_back(std::move(group.members[p]));
-              pair.members.push_back(std::move(group.members[p + 1]));
-              pair_groups.push_back(std::move(pair));
+              group.members = std::move(sorted_m);
+              widths = std::move(sorted_w);
+            }
+            if (gdn_pair_ab && group.members.size() == 4) {
+              // Pair only the two small N<=64 projections (in_proj_a + in_proj_b).
+              std::vector<size_t> small_idx;
+              for (size_t idx = 0; idx < 4; ++idx) {
+                if (widths[idx] <= 64) {
+                  small_idx.push_back(idx);
+                }
+              }
+              if (small_idx.size() == 2) {
+                GemvGroup pair;
+                pair.members.push_back(std::move(group.members[small_idx[0]]));
+                pair.members.push_back(std::move(group.members[small_idx[1]]));
+                pair_groups.push_back(std::move(pair));
+              }
+            } else {
+              // Split-pair admission: each consecutive member pair whose
+              // widths sit within a 4:1 ratio plans as its own dispatch,
+              // so an asymmetric window never folds as one group while
+              // its balanced pairs still fuse (members outside a passing
+              // pair stay on the per-node path).
+              for (size_t p = 0; p + 1 < group.members.size(); p += 2) {
+                if (!gemv_balanced_pair_widths_ok(widths[p], widths[p + 1])) {
+                  continue;
+                }
+                GemvGroup pair;
+                pair.members.push_back(std::move(group.members[p]));
+                pair.members.push_back(std::move(group.members[p + 1]));
+                pair_groups.push_back(std::move(pair));
+              }
             }
           }
         }
