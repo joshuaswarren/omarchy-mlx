@@ -5,10 +5,12 @@ import contextlib
 import errno
 import fcntl
 import hashlib
+import importlib.util
 import io
 import json
 import math
 import os
+import stat
 import struct
 import sys
 import tempfile
@@ -1087,6 +1089,382 @@ class FromLocalCliTests(_ConvertBase):
             base / "out",
             "convert: %s does not hold model.safetensors" % src,
         )
+
+
+class EmitWeightsTests(_ConvertBase):
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(os.umask, os.umask(0o022))
+        pkg = sys.modules["mlx_omarchy_laya"]
+        had_model_mod = "mlx_omarchy_laya.model" in sys.modules
+        prev_model_mod = sys.modules.get("mlx_omarchy_laya.model")
+        had_model_attr = hasattr(pkg, "model")
+        prev_model_attr = getattr(pkg, "model", None)
+
+        def _restore_model():
+            if had_model_mod:
+                sys.modules["mlx_omarchy_laya.model"] = prev_model_mod
+            else:
+                sys.modules.pop("mlx_omarchy_laya.model", None)
+            if had_model_attr:
+                pkg.model = prev_model_attr
+            elif hasattr(pkg, "model"):
+                delattr(pkg, "model")
+
+        self.addCleanup(_restore_model)
+        try:
+            has_mlx = importlib.util.find_spec("mlx") is not None
+        except ValueError:
+            has_mlx = False
+        if not has_mlx:
+            self.enterContext(mock.patch.dict(
+                sys.modules,
+                {"mlx": types.ModuleType("mlx"), "mlx.core": types.ModuleType("mlx.core")},
+            ))
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _umask(mask: int):
+        prev = os.umask(mask)
+        try:
+            yield
+        finally:
+            os.umask(prev)
+
+    @staticmethod
+    def _serialize(tensors: dict) -> bytes:
+        return "".join("%s=%s\n" % (k, tensors[k]) for k in sorted(tensors)).encode("utf-8")
+
+    def _default_save(self, tensors: dict, path: str):
+        with open(path, "wb") as f:
+            f.write(self._serialize(tensors))
+
+    def _fake_safetensors(self, save_file=None, tensors=None):
+        data = (
+            {"scorer.layers.0.weight": "w0", "temperature": "t0"}
+            if tensors is None else tensors
+        )
+        writer = self._default_save if save_file is None else save_file
+        pkg = types.ModuleType("safetensors")
+        pkg.__path__ = []
+        st_np = types.ModuleType("safetensors.numpy")
+        st_np.load_file = lambda path: dict(data)
+        st_np.save_file = writer
+        pkg.numpy = st_np
+        return mock.patch.dict(sys.modules, {"safetensors": pkg, "safetensors.numpy": st_np})
+
+    def _make_src_out(self) -> tuple[Path, Path, Path]:
+        base = self._tmp()
+        src = base / "src.safetensors"
+        src.write_bytes(b"src")
+        out = base / "out"
+        out.mkdir()
+        return base, src, out
+
+    @staticmethod
+    def _replace_file_mode(out: Path) -> int:
+        ref = out / "mode_ref.json"
+        with convert._replace_file(ref) as f:
+            f.write(b"{}")
+        return stat.S_IMODE(os.lstat(ref).st_mode)
+
+    @staticmethod
+    def _parts(root: Path) -> list[Path]:
+        return [p for p in root.rglob("*") if p.name.endswith(".part")]
+
+    def test_emit_weights_writes_canonical_keys_and_hash(self):
+        # Pin: passes on base.
+        _, src, out = self._make_src_out()
+        dst = out / "model.safetensors"
+        seen = []
+
+        def _save(tensors, path):
+            seen.append(sorted(tensors))
+            self._default_save(tensors, path)
+
+        with self._fake_safetensors(save_file=_save):
+            aliases, digest = _run_pinned(lambda: convert._emit_weights(src, dst))
+        expected = self._serialize({"scorer.0.weight": "w0", "temperature": "t0"})
+        self.assertTrue(stat.S_ISREG(os.lstat(dst).st_mode))
+        self.assertTrue(aliases)
+        self.assertEqual(seen, [["scorer.0.weight", "temperature"]])
+        self.assertEqual(dst.read_bytes(), expected)
+        self.assertEqual(digest, hashlib.sha256(expected).hexdigest())
+        self.assertEqual(self._parts(out), [])
+
+    def test_emit_weights_mode_matches_replace_file_outputs(self):
+        def _atomic_080_save(tensors, path):
+            p = Path(path)
+            fd, tmp = tempfile.mkstemp(dir=p.parent)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(self._serialize(tensors))
+                os.replace(tmp, p)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+
+        for u in (0o022, 0o027, 0o077, 0o222):
+            for label, writer in (
+                ("in-place", self._default_save),
+                ("atomic-0600", _atomic_080_save),
+            ):
+                with self.subTest(writer=label, umask=oct(u)):
+                    _, src, out = self._make_src_out()
+                    dst = out / "model.safetensors"
+                    with self._umask(u):
+                        expected_mode = self._replace_file_mode(out)
+                        with self._fake_safetensors(save_file=writer):
+                            aliases, digest = _run_pinned(lambda: convert._emit_weights(src, dst))
+                    st = os.lstat(dst)
+                    self.assertTrue(stat.S_ISREG(st.st_mode))
+                    self.assertEqual(stat.S_IMODE(st.st_mode), expected_mode)
+                    self.assertTrue(aliases)
+                    self.assertEqual(digest, hashlib.sha256(dst.read_bytes()).hexdigest())
+                    self.assertEqual(self._parts(out), [])
+
+    def test_emit_weights_hash_read_failure_preserves_previous_file(self):
+        real_open = builtins.open
+
+        class _FailingRead:
+            def __init__(self, f, err):
+                self._f = f
+                self._err = err
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return self._f.__exit__(*exc)
+
+            def fileno(self):
+                return self._f.fileno()
+
+            def close(self):
+                return self._f.close()
+
+            def read(self, *args, **kwargs):
+                raise self._err
+
+        for label, exc in (
+            ("eio", OSError(errno.EIO, os.strerror(errno.EIO))),
+            ("keyboard-interrupt", KeyboardInterrupt("interrupted")),
+        ):
+            with self.subTest(label):
+                _, src, out = self._make_src_out()
+                dst = out / "model.safetensors"
+                dst.write_bytes(b"previous-good-weights")
+                saved = []
+
+                def _save(tensors, path):
+                    self._default_save(tensors, path)
+                    saved.append(path)
+
+                def _failing_open(file, *args, err=exc, **kwargs):
+                    f = real_open(file, *args, **kwargs)
+                    mode = args[0] if args else kwargs.get("mode", "r")
+                    if mode == "rb" and str(file).endswith(".part"):
+                        return _FailingRead(f, err)
+                    return f
+
+                with self._fake_safetensors(save_file=_save), \
+                        mock.patch.object(convert, "open", create=True, side_effect=_failing_open), \
+                        self.assertRaises(type(exc)) as ctx:
+                    _run_pinned(lambda: convert._emit_weights(src, dst))
+                self.assertIs(ctx.exception, exc)
+                self.assertEqual(len(saved), 1)
+                self.assertEqual(dst.read_bytes(), b"previous-good-weights")
+                self.assertEqual(self._parts(out), [])
+
+    def test_emit_weights_failed_write_preserves_previous_file(self):
+        for label, exc in (
+            ("enospc", OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))),
+            ("keyboard-interrupt", KeyboardInterrupt("interrupted")),
+        ):
+            with self.subTest(label):
+                _, src, out = self._make_src_out()
+                dst = out / "model.safetensors"
+                dst.write_bytes(b"previous-good-weights")
+
+                def _partial_fail(tensors, path, err=exc):
+                    with open(path, "wb") as f:
+                        f.write(b"partial-bytes")
+                    raise err
+
+                with self._fake_safetensors(save_file=_partial_fail):
+                    with self.assertRaises(type(exc)) as ctx:
+                        _run_pinned(lambda: convert._emit_weights(src, dst))
+                self.assertIs(ctx.exception, exc)
+                self.assertEqual(dst.read_bytes(), b"previous-good-weights")
+                self.assertEqual(self._parts(out), [])
+
+    def test_emit_weights_replaces_symlink_to_outside_file(self):
+        base, src, out = self._make_src_out()
+        outside = base / "outside.bin"
+        outside.write_bytes(b"outside-secret")
+        dst = out / "model.safetensors"
+        os.symlink(outside, dst)
+        with self._fake_safetensors():
+            _, digest = _run_pinned(lambda: convert._emit_weights(src, dst))
+        self.assertEqual(outside.read_bytes(), b"outside-secret")
+        self.assertTrue(stat.S_ISREG(os.lstat(dst).st_mode))
+        self.assertEqual(digest, hashlib.sha256(dst.read_bytes()).hexdigest())
+        self.assertEqual(self._parts(out), [])
+
+    def test_emit_weights_replaces_fifo_without_blocking(self):
+        _, src, out = self._make_src_out()
+        dst = out / "model.safetensors"
+        os.mkfifo(dst)
+        with self._fake_safetensors():
+            _, digest = _run_pinned(lambda: convert._emit_weights(src, dst))
+        self.assertTrue(stat.S_ISREG(os.lstat(dst).st_mode))
+        self.assertEqual(digest, hashlib.sha256(dst.read_bytes()).hexdigest())
+        self.assertEqual(self._parts(out), [])
+
+    def test_emit_weights_replaces_dangling_symlink(self):
+        base, src, out = self._make_src_out()
+        target = base / "nowhere" / "target.bin"
+        dst = out / "model.safetensors"
+        os.symlink(target, dst)
+        with self._fake_safetensors():
+            _, digest = _run_pinned(lambda: convert._emit_weights(src, dst))
+        self.assertFalse(target.exists())
+        self.assertTrue(stat.S_ISREG(os.lstat(dst).st_mode))
+        self.assertEqual(digest, hashlib.sha256(dst.read_bytes()).hexdigest())
+        self.assertEqual(self._parts(out), [])
+
+    def test_emit_weights_directory_at_dst_raises_oserror(self):
+        # Pin: passes on base.
+        _, src, out = self._make_src_out()
+        dst = out / "model.safetensors"
+        dst.mkdir()
+        keep = dst / "keep"
+        keep.write_bytes(b"keep")
+        with self._fake_safetensors(), self.assertRaises(IsADirectoryError):
+            _run_pinned(lambda: convert._emit_weights(src, dst))
+        self.assertTrue(stat.S_ISDIR(os.lstat(dst).st_mode))
+        self.assertEqual(keep.read_bytes(), b"keep")
+        self.assertEqual(self._parts(out), [])
+
+    def test_emit_weights_cleans_stale_part_file(self):
+        _, src, out = self._make_src_out()
+        stale = out / ".model.safetensors.part"
+        stale.write_bytes(b"stale-from-killed-run")
+        dst = out / "model.safetensors"
+        with self._fake_safetensors():
+            _, digest = _run_pinned(lambda: convert._emit_weights(src, dst))
+        self.assertTrue(stat.S_ISREG(os.lstat(dst).st_mode))
+        self.assertEqual(digest, hashlib.sha256(dst.read_bytes()).hexdigest())
+        self.assertFalse(stale.exists())
+        self.assertEqual(self._parts(out), [])
+
+    def test_emit_weights_rejects_non_regular_part(self):
+        with self.subTest("fifo"):
+            _, src, out = self._make_src_out()
+            dst = out / "model.safetensors"
+            dst.write_bytes(b"previous-good-weights")
+
+            def _put_fifo(tensors, path):
+                os.unlink(path)
+                os.mkfifo(path)
+
+            with self._fake_safetensors(save_file=_put_fifo):
+                self._assert_exit(
+                    lambda: convert._emit_weights(src, dst),
+                    "staged weights file .model.safetensors.part is not a regular file",
+                )
+            self.assertEqual(dst.read_bytes(), b"previous-good-weights")
+            self.assertEqual(self._parts(out), [])
+
+        with self.subTest("symlink"):
+            base, src, out = self._make_src_out()
+            outside = base / "outside.bin"
+            outside.write_bytes(b"outside-secret")
+            dst = out / "model.safetensors"
+            dst.write_bytes(b"previous-good-weights")
+
+            def _put_symlink(tensors, path):
+                os.unlink(path)
+                os.symlink(outside, path)
+
+            with self._fake_safetensors(save_file=_put_symlink), self.assertRaises(OSError) as ctx:
+                _run_pinned(lambda: convert._emit_weights(src, dst))
+            self.assertEqual(ctx.exception.errno, errno.ELOOP)
+            self.assertEqual(outside.read_bytes(), b"outside-secret")
+            self.assertEqual(dst.read_bytes(), b"previous-good-weights")
+            self.assertEqual(self._parts(out), [])
+
+    def test_convert_failed_weights_emit_preserves_previous_weights(self):
+        base = self._tmp()
+        src = _make_source_snapshot(base / "src")
+        out = base / "out"
+        with self._fake_safetensors(), contextlib.redirect_stdout(io.StringIO()):
+            manifest = _run_pinned(
+                lambda: convert.convert(src, "convaiinnovations/laya", "rev0123456789", out, "laya-mlx")
+            )
+        first_weights = (out / "model.safetensors").read_bytes()
+        self.assertEqual(manifest["weights_sha256"], hashlib.sha256(first_weights).hexdigest())
+        self.assertTrue(manifest["key_aliases_applied"])
+        self.assertTrue((out / "manifest.json").is_file())
+
+        err = OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+        def _partial_enospc(tensors, path):
+            with open(path, "wb") as f:
+                f.write(b"partial-enospc")
+            raise err
+
+        with self._fake_safetensors(save_file=_partial_enospc), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(OSError) as ctx:
+            _run_pinned(
+                lambda: convert.convert(src, "convaiinnovations/laya", "rev0123456789", out, "laya-mlx")
+            )
+        self.assertIs(ctx.exception, err)
+        self.assertEqual((out / "model.safetensors").read_bytes(), first_weights)
+        self.assertFalse((out / "manifest.json").exists())
+        self.assertEqual(self._parts(out), [])
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("safetensors") and importlib.util.find_spec("numpy"),
+        "requires safetensors and numpy",
+    )
+    def test_emit_weights_real_safetensors_replaces_symlink_and_matches_mode(self):
+        import numpy as np
+        from safetensors.numpy import load_file, save_file
+
+        base = self._tmp()
+        src = base / "src.safetensors"
+        orig = {
+            "scorer.layers.0.weight": np.array([1.0, 2.0, 3.0], dtype=np.float32),
+            "temperature": np.array([0.5, 1.5, 2.5], dtype=np.float32),
+        }
+        save_file(orig, str(src))
+        outside = base / "outside.bin"
+        outside.write_bytes(b"outside-weights")
+
+        for u in (0o022, 0o027, 0o077, 0o222):
+            with self.subTest(umask=oct(u)):
+                out = base / ("out-%03o" % u)
+                out.mkdir()
+                dst = out / "model.safetensors"
+                os.symlink(outside, dst)
+                with self._umask(u):
+                    expected_mode = self._replace_file_mode(out)
+                    aliases, digest = _run_pinned(lambda d=dst: convert._emit_weights(src, d))
+                self.assertTrue(aliases)
+                self.assertEqual(outside.read_bytes(), b"outside-weights")
+                st = os.lstat(dst)
+                self.assertTrue(stat.S_ISREG(st.st_mode))
+                self.assertEqual(stat.S_IMODE(st.st_mode), expected_mode)
+                loaded = load_file(str(dst))
+                self.assertEqual(sorted(loaded), ["scorer.0.weight", "temperature"])
+                np.testing.assert_array_equal(
+                    loaded["scorer.0.weight"], orig["scorer.layers.0.weight"]
+                )
+                np.testing.assert_array_equal(loaded["temperature"], orig["temperature"])
+                self.assertEqual(digest, hashlib.sha256(dst.read_bytes()).hexdigest())
+                self.assertEqual(self._parts(out), [])
 
 
 if __name__ == "__main__":
