@@ -320,13 +320,16 @@
 #include "qmm_vec_q4_multi_subgroup_bf16.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s16.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s8w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s8w2_fast.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16kcont.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16kconts16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s4w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast.h"
 #include "qmm_vec_q4_swiglu_bf16_r2s8w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r2s8w2_fast.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s8w2.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
 #include "qmm_vec_q4_resnorm_bf16.h"
@@ -334,6 +337,7 @@
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s16w2.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2.h"
 #include "qmm_vec_q4_resnorm_bf16_r2s8w2_vec.h"
+#include "qmm_vec_q4_resnorm_bf16_r2s8w2_vec_fast.h"
 #include "qmm_vec_q4_outgate_resnorm_bf16.h"
 #include "qmm_vec_q4_outgate_resnorm_bf16_r2s8w2.h"
 #include "qmm_vec_q4_multi_token4_subgroup_bf16.h"
@@ -2493,6 +2497,22 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_resnorm_bf16_r2s8w2_vec,
           qmm_vec_q4_resnorm_bf16_r2s8w2_vec_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2Fast:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s8w2_fast,
+          qmm_vec_q4_word_subgroup_bf16_r2s8w2_fast_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R2S8W2Fast:
+      return {
+          qmm_vec_q4_swiglu_bf16_r2s8w2_fast,
+          qmm_vec_q4_swiglu_bf16_r2s8w2_fast_size};
+    case ComputeKernel::QmmVecQ4ResNormBF16R2S8W2VecFast:
+      return {
+          qmm_vec_q4_resnorm_bf16_r2s8w2_vec_fast,
+          qmm_vec_q4_resnorm_bf16_r2s8w2_vec_fast_size};
     case ComputeKernel::QmmVecQ4OutgateResNormBF16R2S8W2:
       return {
           qmm_vec_q4_outgate_resnorm_bf16_r2s8w2,

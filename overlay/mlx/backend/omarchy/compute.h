@@ -1390,6 +1390,14 @@ enum class ComputeKernel : uint16_t {
   // bit-identical to QmmVecQ4ResNormBF16R2S8W2). Appended to keep profile ids
   // stable.
   QmmVecQ4ResNormBF16R2S8W2Vec,
+  // Fast-tile-only CFG variants of R2S8W2 Q4 decode kernels (K % 512 == 0,
+  // N % 8 == 0, even w_base; trims unreachable slow-path fallback loops to
+  // reduce SPIR-V CFG size and AGX register pressure, bit-identical).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S8W2Fast,
+  QmmVecQ4MultiSubgroupBF16R2S8W2Fast,
+  QmmVecQ4SwigluBF16R2S8W2Fast,
+  QmmVecQ4ResNormBF16R2S8W2VecFast,
   Count,
 };
 
