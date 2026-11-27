@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import tracemalloc
 import unittest
 import wave
 from pathlib import Path
@@ -1006,6 +1007,14 @@ class VoiceChoiceTests(unittest.TestCase):
         self.assertEqual(result["accent"], "English")
         self.assertFalse(result["default"])
 
+    def test_set_voice_writes_0600_under_restrictive_umask(self):
+        old_umask = os.umask(0o477)
+        self.addCleanup(os.umask, old_umask)
+        self.s.set_voice("ryan")
+        target = self.s._voice_choice_path()
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+        self.assertEqual(synthesis.Synthesis(self.home).current_voice(), "ryan")
+
     def test_corrupt_voice_choice_is_a_named_refusal_not_fallback(self):
         target = self.s._voice_choice_path()
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1108,7 +1117,7 @@ class AssetCacheTests(unittest.TestCase):
         raise AssertionError(url)
 
     def test_cache_hit_skips_rehash(self):
-        with mock.patch.object(synthesis, "_sha256_file",
+        with mock.patch.object(synthesis, "_sha256_stream",
                                side_effect=AssertionError("rehash on poll")):
             status = self.s.status()
         self.assertTrue(status["assets"]["verified"])
@@ -1135,13 +1144,13 @@ class AssetCacheTests(unittest.TestCase):
     def test_fresh_process_hashes_once_then_uses_cache(self):
         synthesis.forget_asset_cache()
         calls = []
-        real_hash = synthesis._sha256_file
+        real_hash = synthesis._sha256_stream
 
-        def counting(path):
-            calls.append(path)
-            return real_hash(path)
+        def counting(fh, *args, **kwargs):
+            calls.append(fh.name)
+            return real_hash(fh, *args, **kwargs)
 
-        with mock.patch.object(synthesis, "_sha256_file", counting):
+        with mock.patch.object(synthesis, "_sha256_stream", counting):
             self.assertTrue(self.s.status()["assets"]["verified"])
             after_first = len(calls)
             self.assertEqual(after_first, len(self.pack["files"]))
@@ -1154,6 +1163,738 @@ class AssetCacheTests(unittest.TestCase):
         del receipt["files"]  # pins live in code, not in this file
         receipt_path.write_text(json.dumps(receipt))
         self.assertTrue(self.s.status()["assets"]["verified"])
+
+
+def _call_on_fifo(case, path: Path, fn, *, writer: bool, payload: bytes = b"{}"):
+    """fn() in a bounded worker while path is a FIFO. Without a writer a
+    blocking open never returns; with one holding payload, a blocking read
+    never sees EOF. The FIFO is released afterwards either way."""
+    result = {}
+
+    def run():
+        try:
+            result["value"] = fn()
+        except BaseException as exc:  # re-raised in the caller
+            result["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    wfd = os.open(path, os.O_RDWR | os.O_NONBLOCK) if writer else None
+    try:
+        if wfd is not None:
+            case.assertEqual(os.write(wfd, payload), len(payload))
+        worker.start()
+        worker.join(timeout=5)
+        blocked = worker.is_alive()
+    finally:
+        if wfd is not None:
+            os.close(wfd)
+        elif worker.is_alive():  # a blocked open returns once a writer opens
+            with contextlib.suppress(OSError):
+                os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+    worker.join(timeout=5)
+    case.assertFalse(blocked, f"blocked on FIFO {path.name}")
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
+
+
+class StateFileReadTests(unittest.TestCase):
+    """manifest.json, qualification.json and voice.json are read with one
+    bounded, non-blocking reader, and pack files are hashed only when they
+    are regular files: a FIFO, device, directory, oversized or deeply nested
+    state file, or an unreadable pack file, never hangs, exhausts memory or
+    crashes status()."""
+
+    CAP = 1 << 20  # literal, so base fails on behavior, not AttributeError
+    OVER_DEPTH = 40
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+        self.pack, self.content = make_fixture_pack()
+        self.enterContext(mock.patch.object(synthesis, "VOICE_PACK", self.pack))
+        self.enterContext(mock.patch.object(synthesis, "VOICE_ENGINES",
+                                            (self.pack,)))
+        self.enterContext(mock.patch.object(
+            synthesis, "probe_accelerator",
+            return_value={"available": True, "device": "gpu", "detail": ""}))
+        self.enterContext(mock.patch.object(
+            synthesis, "probe_dependencies",
+            return_value={"present": [], "missing": [], "detail": {}}))
+        synthesis.forget_asset_cache()
+        self.addCleanup(synthesis.forget_asset_cache)
+        self.s = synthesis.Synthesis(self.home)
+        self.s.prepare(approve_download=True, fetch=self._static_fetch)
+        self.voice = self.s._voice_choice_path()
+        self.manifest = self.s.assets_dir() / "manifest.json"
+        self.qualification = self.s.assets_dir() / "qualification.json"
+        self.receipt = self.manifest.read_bytes()
+
+    def _static_fetch(self, url, dest):
+        for entry in self.pack["files"]:
+            if url.endswith("/" + entry["name"]):
+                dest.write_bytes(self.content[entry["name"]])
+                return
+        raise AssertionError(url)
+
+    def _verified(self):
+        synthesis.forget_asset_cache()
+        return self.s.status()["assets"]["verified"]
+
+    def _qualification_receipt(self):
+        return self.s.status()["qualification"]["receipt"]
+
+    @staticmethod
+    def _matched_backend():
+        return {
+            "present": True, "verified": "match", "detail": None,
+            "identity": {"extension_sha256": "a" * 64,
+                         "libmlx_sha256": "b" * 64},
+            "files": [{"label": "mlx.core extension", "path": "/x/core.so"}],
+            "dist_version": "0.32.3.dev", "mx_version": "0.32.3.dev",
+            "libmlx_loaded_path": "/x/libmlx.so",
+        }
+
+    def _assert_voice_refused(self, pattern):
+        with self.assertRaisesRegex(synthesis.VoiceError, pattern) as ctx:
+            self.s.current_voice()
+        status = self.s.status()
+        self.assertEqual(status["pack"]["voice"], self.pack["voice"])
+        self.assertRegex(status["voice_choice_error"] or "", pattern)
+        return str(ctx.exception)
+
+    @contextlib.contextmanager
+    def _fstat_reporting(self, size: int, *, match=None):
+        """fstat reports `size`; yields dups of each fstat'd fd, which share
+        its file offset and so show how far the read went."""
+        real = os.fstat
+        dups = []
+
+        def fake(fd):
+            info = real(fd)
+            if match is not None and not match(info):
+                return info
+            dups.append(os.dup(fd))
+            self.addCleanup(os.close, dups[-1])
+            return os.stat_result(info[:6] + (size,) + info[7:10])
+        with mock.patch.object(os, "fstat", fake):
+            yield dups
+
+    @contextlib.contextmanager
+    def _fifo_at(self, path: Path):
+        """Place one FIFO at path, restoring any original file afterwards."""
+        saved = path.read_bytes() if path.exists() else None
+        if saved is not None:
+            path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.mkfifo(path)
+        try:
+            yield
+        finally:
+            if path.exists() or path.is_symlink():
+                path.unlink()
+            if saved is not None:
+                path.write_bytes(saved)
+
+    def test_fifo_state_files_are_refused_without_blocking(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFO unavailable")
+        voice = json.dumps({"voice": "ryan"}).encode()
+        assets_dir = self.s.assets_dir()
+        assets_status = {"verified": True}
+        accel = {"available": True}
+        with self._fifo_at(self.voice):
+            for writer in (False, True):
+                with self.subTest(file="voice.json", writer=writer), \
+                        self.assertRaisesRegex(synthesis.VoiceError,
+                                               "not a regular file"):
+                    _call_on_fifo(self, self.voice, self.s.current_voice,
+                                  writer=writer, payload=voice)
+        with self._fifo_at(self.manifest):
+            for writer in (False, True):
+                with self.subTest(file="manifest.json", writer=writer):
+                    self.assertIsNone(_call_on_fifo(
+                        self, self.manifest,
+                        lambda: synthesis.read_receipt(assets_dir),
+                        writer=writer, payload=self.receipt))
+        with self._fifo_at(self.qualification), \
+                mock.patch.object(synthesis, "_backend_provenance",
+                                  return_value={"verified": "no-mlx",
+                                                "identity": None}):
+            for writer in (False, True):
+                with self.subTest(file="qualification.json", writer=writer):
+                    qual = _call_on_fifo(
+                        self, self.qualification,
+                        lambda: self.s._qualification_status(
+                            assets_status, accel),
+                        writer=writer, payload=b'{"pack_revision": "x"}')
+                    self.assertIsNone(qual["receipt"])
+
+    def test_device_and_directory_voice_choice_is_a_named_refusal(self):
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(os.devnull, self.voice)
+        msg = self._assert_voice_refused("not a regular file")
+        self.assertEqual(msg.count(str(self.voice)), 1)
+        self.voice.unlink()
+        self.voice.mkdir()
+        msg = self._assert_voice_refused("unreadable")
+        self.assertEqual(msg.count(str(self.voice)), 1)
+
+    def test_unreadable_voice_choice_is_a_named_refusal(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads a mode-000 file")
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        self.voice.write_text(json.dumps({"voice": "ryan"}))
+        os.chmod(self.voice, 0)
+        self.addCleanup(os.chmod, self.voice, 0o600)
+        msg = self._assert_voice_refused("unreadable")
+        self.assertEqual(msg.count(str(self.voice)), 1)
+
+    def test_missing_or_dangling_voice_choice_is_the_default(self):
+        self.assertEqual(self.s.current_voice(), self.pack["voice"])
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(self.home / "nowhere.json", self.voice)
+        self.assertEqual(self.s.current_voice(), self.pack["voice"])
+
+    def test_symlinked_state_files_are_followed(self):
+        self.s.set_voice("ryan")
+        for path in (self.voice, self.manifest):
+            target = path.with_name(path.name + ".real")
+            os.replace(path, target)
+            os.symlink(target, path)
+        self.assertEqual(self.s.current_voice(), "ryan")
+        self.assertTrue(self._verified())
+
+    def test_state_files_over_cap_are_refused(self):
+        def padded(path, data, size):
+            path.write_bytes(data + b" " * (size - len(data)))
+
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        voice = json.dumps({"voice": "ryan"}).encode()
+        qualification = b'{"pack_revision": "x"}'
+        padded(self.voice, voice, self.CAP)
+        padded(self.manifest, self.receipt, self.CAP)
+        padded(self.qualification, qualification, self.CAP)
+        self.assertEqual(self.s.current_voice(), "ryan")
+        self.assertTrue(self._verified())
+        self.assertEqual(self._qualification_receipt(), {"pack_revision": "x"})
+        padded(self.voice, voice, self.CAP + 1)
+        padded(self.manifest, self.receipt, self.CAP + 1)
+        padded(self.qualification, qualification, self.CAP + 1)
+        msg = self._assert_voice_refused(f"exceeds {self.CAP} bytes")
+        self.assertEqual(msg.count(str(self.voice)), 1)
+        self.assertFalse(self._verified())
+        self.assertIsNone(self._qualification_receipt())
+
+    def test_state_file_size_is_checked_before_reading(self):
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        self.voice.write_bytes(json.dumps({"voice": "ryan"}).encode())
+        with self._fstat_reporting(self.CAP + 1) as dups, \
+                self.assertRaisesRegex(synthesis.VoiceError,
+                                       f"exceeds {self.CAP} bytes"):
+            self.s.current_voice()
+        self.assertEqual(os.lseek(dups[0], 0, os.SEEK_CUR), 0)
+
+    def test_state_file_grown_after_fstat_is_refused_with_bounded_read(self):
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps({"voice": "ryan"}).encode()
+        for size in (self.CAP + 1, 64 * self.CAP):  # the larger one is sparse
+            with self.subTest(size=size):
+                self.voice.write_bytes(payload)
+                os.truncate(self.voice, size)
+                tracing = tracemalloc.is_tracing()
+                if not tracing:
+                    tracemalloc.start()
+                try:
+                    tracemalloc.reset_peak()
+                    before = tracemalloc.get_traced_memory()[0]
+                    with self._fstat_reporting(len(payload)) as dups, \
+                            self.assertRaisesRegex(synthesis.VoiceError,
+                                                   f"exceeds {self.CAP} bytes"):
+                        self.s.current_voice()
+                    peak = tracemalloc.get_traced_memory()[1]
+                finally:
+                    if not tracing:
+                        tracemalloc.stop()
+                self.assertLess(peak - before, 4 * self.CAP)
+                self.assertEqual(os.lseek(dups[0], 0, os.SEEK_CUR),
+                                 self.CAP + 1)
+
+    def test_short_reads_are_joined_up_to_the_cap(self):
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps({"voice": "ryan"}).encode()
+        real_open = open
+
+        def short_open(*args, **kwargs):  # a short read is not end of file
+            stream = real_open(*args, **kwargs)
+            read = stream.read
+            stream.read = lambda n=-1: read(min(n, 4096))
+            return stream
+
+        with mock.patch.object(synthesis, "open", short_open, create=True):
+            self.voice.write_bytes(b" " * (self.CAP - len(payload)) + payload)
+            self.assertEqual(self.s.current_voice(), "ryan")
+            self.voice.write_bytes(
+                b" " * (self.CAP + 1 - len(payload)) + payload)
+            with self._fstat_reporting(len(payload)), \
+                    self.assertRaisesRegex(synthesis.VoiceError,
+                                           f"exceeds {self.CAP} bytes"):
+                self.s.current_voice()
+
+    def test_deeply_nested_state_files_are_refused_deterministically(self):
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        deep_dict = '{"": ' * self.OVER_DEPTH + '1' + '}' * self.OVER_DEPTH
+        deep_list = '[' * self.OVER_DEPTH + '1' + ']' * self.OVER_DEPTH
+        self.voice.write_text('{"voice": ' + deep_dict + '}')
+        self.qualification.write_text(
+            '{"pack_revision": "x", "extra": ' + deep_list + '}')
+        self.manifest.write_text(
+            '{"revision": "' + self.pack["revision"] + '", "extra": '
+            + deep_list + '}')
+        self._assert_voice_refused("nesting depth")
+        self.assertIsNone(synthesis.read_receipt(self.s.assets_dir()))
+        self.assertFalse(self._verified())
+        self.assertIsNone(self._qualification_receipt())
+        self.assertTrue(json.dumps(self.s.status()))
+
+    def test_parse_time_recursion_error_is_caught_in_all_three_readers(self):
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        self.voice.write_text(json.dumps({"voice": "ryan"}))
+        self.qualification.write_text(json.dumps({"pack_revision": "x"}))
+        with mock.patch.object(synthesis.json, "loads",
+                               side_effect=RecursionError("too deep")):
+            self._assert_voice_refused("unreadable")
+            self.assertIsNone(synthesis.read_receipt(self.s.assets_dir()))
+            self.assertIsNone(self._qualification_receipt())
+
+    def test_record_qualification_enforces_size_and_depth_caps(self):
+        sentinel = b'{"existing": true}'
+        self.qualification.write_bytes(sentinel)
+        deep = 1
+        for _ in range(self.OVER_DEPTH):
+            deep = [deep]
+        with mock.patch.object(synthesis, "_backend_provenance",
+                               return_value=self._matched_backend()):
+            with self.assertRaisesRegex(ValueError,
+                                        f"exceeds {self.CAP} bytes"):
+                self.s.record_qualification({
+                    "listener_verified": True, "cpu_tensor_dispatches": 0,
+                    "latency_receipt": {"p95_full_s": 1.0},
+                    "receipt_source": "x" * self.CAP,
+                })
+            self.assertEqual(self.qualification.read_bytes(), sentinel)
+            with self.assertRaisesRegex(ValueError, "nesting depth"):
+                self.s.record_qualification({
+                    "listener_verified": True, "cpu_tensor_dispatches": 0,
+                    "latency_receipt": deep,
+                    "receipt_source": "/tmp/run.log",
+                })
+            self.assertEqual(self.qualification.read_bytes(), sentinel)
+            recorded = self.s.record_qualification({
+                "listener_verified": True, "cpu_tensor_dispatches": 0,
+                "latency_receipt": {"p95_full_s": 1.0},
+                "receipt_source": "/tmp/run.log",
+            })
+            self.assertTrue(recorded["recorded"])
+            self.assertTrue(self.s.status()["qualification"]["qualified"])
+
+    def test_resolve_voice_non_string_shows_type_name(self):
+        deep = []
+        for _ in range(2000):
+            deep = [deep]
+        for bad, shown in ((deep, "list"), ({"a": 1}, "dict"),
+                           (123, "123"), (1.5, "1.5"),
+                           (True, "True"), (None, "None")):
+            with self.subTest(shown=shown):
+                with self.assertRaises(synthesis.VoiceError) as ctx:
+                    synthesis.resolve_voice(bad)
+                self.assertIn(f"unknown voice {shown};", str(ctx.exception))
+        with self.assertRaisesRegex(synthesis.VoiceError,
+                                    "unknown voice list;"):
+            self.s.set_voice(deep)
+
+    def test_hashing_refuses_fifo_and_device(self):
+        with self.assertRaisesRegex(OSError, "not a regular file"):
+            synthesis._sha256_file(Path(os.devnull))
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFO unavailable")
+        fifo = self.home / "fifo"
+        os.mkfifo(fifo)
+        for writer in (False, True):
+            with self.subTest(writer=writer), \
+                    self.assertRaisesRegex(OSError, "not a regular file"):
+                _call_on_fifo(self, fifo, lambda: synthesis._sha256_file(fifo),
+                              writer=writer)
+
+    def test_missing_pack_file_is_unverified_not_a_crash(self):
+        (self.s.assets_dir() / "tiny.json").unlink()
+        self.assertFalse(self.s.status()["assets"]["verified"])
+        self.assertFalse(self._verified())
+
+    def test_unreadable_pack_file_is_unverified_not_a_crash(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads a mode-000 file")
+        victim = self.s.assets_dir() / "tiny.json"
+        os.chmod(victim, 0)
+        self.addCleanup(os.chmod, victim, 0o600)
+        self.assertFalse(self._verified())
+        os.chmod(victim, 0o600)
+        subdir = self.s.assets_dir() / "dir"
+        os.chmod(subdir, 0)
+        self.addCleanup(os.chmod, subdir, 0o700)
+        self.assertFalse(self._verified())
+
+    def test_unreadable_backend_binary_is_a_mismatch_not_a_crash(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads a mode-000 file")
+        extension = self.home / "mlx" / "core.so"
+        binary = self.home / "mlx" / "lib" / "libmlx.so"
+        binary.parent.mkdir(parents=True)
+        extension.write_bytes(b"extension-bytes")
+        binary.write_bytes(b"libmlx-bytes")
+        record = {"mlx/core.so": hashlib.sha256(b"extension-bytes").hexdigest(),
+                  "mlx/lib/libmlx.so": hashlib.sha256(b"libmlx-bytes").hexdigest()}
+        self.assertEqual(synthesis._provenance_from_paths(
+            extension, binary, record, "0.32.3.dev", "0.32.3.dev")["verified"],
+            "match")
+        os.chmod(binary, 0)
+        try:
+            result = synthesis._provenance_from_paths(
+                extension, binary, record, "0.32.3.dev", "0.32.3.dev")
+            self.assertEqual(result["verified"], "mismatch")
+            self.assertFalse(result["present"])
+            self.assertIn("is unreadable", result["detail"])
+            self.assertEqual(result["detail"].count(str(binary)), 1)
+        finally:
+            os.chmod(binary, 0o600)
+        os.chmod(binary.parent, 0)
+        real_open = open
+
+        def no_proc_maps(file, *args, **kwargs):
+            if str(file) == "/proc/self/maps":
+                raise OSError("proc maps hidden")
+            return real_open(file, *args, **kwargs)
+
+        try:
+            result = synthesis._provenance_from_paths(
+                extension, binary, record, "0.32.3.dev", "0.32.3.dev")
+            self.assertEqual(result["verified"], "mismatch")
+            self.assertFalse(result["present"])
+            self.assertIn("is unreadable", result["detail"])
+            self.assertEqual(result["detail"].count(str(binary)), 1)
+            with mock.patch.object(synthesis, "open", side_effect=no_proc_maps,
+                                   create=True):
+                self.assertIsNone(
+                    synthesis._loaded_libmlx_path(self.home / "mlx"))
+        finally:
+            os.chmod(binary.parent, 0o700)
+        binary.unlink()
+        os.symlink(os.devnull, binary)
+        result = synthesis._provenance_from_paths(
+            extension, binary, record, "0.32.3.dev", "0.32.3.dev")
+        self.assertEqual(result["verified"], "mismatch")
+        self.assertIn("not a regular file", result["detail"])
+        self.assertEqual(result["detail"].count(str(binary)), 1)
+
+    def test_backend_binary_grown_after_fstat_is_mismatch_with_bounded_read(self):
+        extension = self.home / "mlx" / "core.so"
+        binary = self.home / "mlx" / "lib" / "libmlx.so"
+        binary.parent.mkdir(parents=True)
+        extension.write_bytes(b"extension-bytes")
+        payload = b"libmlx-bytes"
+        binary.write_bytes(payload)
+        os.truncate(binary, 64 * self.CAP)
+        binary_ino = binary.stat().st_ino
+        record = {
+            "mlx/core.so": hashlib.sha256(b"extension-bytes").hexdigest(),
+            "mlx/lib/libmlx.so": hashlib.sha256(payload).hexdigest(),
+        }
+        with self._fstat_reporting(
+                len(payload), match=lambda st: st.st_ino == binary_ino) as dups:
+            result = synthesis._provenance_from_paths(
+                extension, binary, record, "0.32.3.dev", "0.32.3.dev")
+        self.assertEqual(result["verified"], "mismatch")
+        self.assertFalse(result["present"])
+        self.assertIn("is unreadable", result["detail"])
+        self.assertEqual(len(dups), 1)
+        self.assertLessEqual(os.lseek(dups[0], 0, os.SEEK_CUR),
+                             len(payload) + 1)
+
+    def test_pack_file_grown_after_fstat_is_refused_with_bounded_read(self):
+        victim = self.s.assets_dir() / "tiny.json"
+        pinned = len(self.content["tiny.json"])
+        victim.write_bytes(self.content["tiny.json"])
+        os.truncate(victim, 64 * self.CAP)
+        victim_ino = victim.stat().st_ino
+        with self._fstat_reporting(
+                pinned, match=lambda st: st.st_ino == victim_ino) as dups:
+            self.assertFalse(self._verified())
+        self.assertTrue(dups)
+        for dup in dups:
+            self.assertLessEqual(os.lseek(dup, 0, os.SEEK_CUR), pinned + 1)
+
+        prep_assets = self.home / "prep_grown"
+        grown_inos = set()
+        real_replace = os.replace
+
+        def grow_on_replace(src, dst):
+            real_replace(src, dst)
+            if Path(dst) == prep_assets / "tiny.json":
+                os.truncate(dst, 64 * self.CAP)
+                grown_inos.add(Path(dst).stat().st_ino)
+
+        with mock.patch.object(os, "replace", grow_on_replace), \
+                self._fstat_reporting(
+                    pinned, match=lambda st: st.st_ino in grown_inos) as dups, \
+                self.assertRaisesRegex(synthesis.VoiceError,
+                                       r"tiny\.json.*failed verification"):
+            self.s._prepare_pack(self.pack, prep_assets, self._static_fetch)
+        self.assertEqual(len(dups), 1)
+        self.assertLessEqual(os.lseek(dups[0], 0, os.SEEK_CUR), pinned + 1)
+
+    def test_status_caches_identity_of_hashed_descriptor(self):
+        victim = self.s.assets_dir() / "tiny.json"
+        good = self.content["tiny.json"]
+        bad = good[:-1] + b"?"
+        self.assertEqual(len(bad), len(good))
+        staged = victim.with_name("tiny.json.swap")
+        staged.write_bytes(bad)
+        synthesis.forget_asset_cache()
+        real_hash = synthesis._sha256_stream
+        replaced = False
+
+        def hash_then_replace(fh, *args, **kwargs):
+            nonlocal replaced
+            digest = real_hash(fh, *args, **kwargs)
+            if not replaced and Path(fh.name) == victim:
+                os.replace(staged, victim)
+                replaced = True
+            return digest
+
+        with mock.patch.object(synthesis, "_sha256_stream", hash_then_replace):
+            first = self.s._asset_status_for(self.s.assets_dir(), self.pack)
+        self.assertTrue(replaced)
+        self.assertTrue(first["verified"])
+        rehashed = []
+
+        def counting(fh, *args, **kwargs):
+            rehashed.append(Path(fh.name))
+            return real_hash(fh, *args, **kwargs)
+
+        with mock.patch.object(synthesis, "_sha256_stream", counting):
+            status = self.s.status()
+        self.assertIn(victim, rehashed)
+        self.assertFalse(status["assets"]["verified"])
+
+    def test_prepare_caches_identity_of_hashed_descriptor(self):
+        fresh = synthesis.Synthesis(self.home / "prep_swap")
+        victim = fresh.assets_dir() / "tiny.json"
+        good = self.content["tiny.json"]
+        bad = good[:-1] + b"?"
+        self.assertEqual(len(bad), len(good))
+        synthesis.forget_asset_cache()
+        real_hash = synthesis._sha256_stream
+        replaced = False
+
+        def hash_then_replace(fh, *args, **kwargs):
+            nonlocal replaced
+            digest = real_hash(fh, *args, **kwargs)
+            if not replaced and Path(fh.name) == victim:
+                staged = victim.with_name("tiny.json.swap")
+                staged.write_bytes(bad)
+                os.replace(staged, victim)
+                replaced = True
+            return digest
+
+        with mock.patch.object(synthesis, "_sha256_stream", hash_then_replace):
+            fresh.prepare(approve_download=True, fetch=self._static_fetch)
+        self.assertTrue(replaced)
+        rehashed = []
+
+        def counting(fh, *args, **kwargs):
+            rehashed.append(Path(fh.name))
+            return real_hash(fh, *args, **kwargs)
+
+        with mock.patch.object(synthesis, "_sha256_stream", counting):
+            status = fresh.status()
+        self.assertIn(victim, rehashed)
+        self.assertFalse(status["assets"]["verified"])
+
+    def test_prepare_without_approval_survives_untraversable_voice_dir(self):
+        if os.geteuid() == 0:
+            self.skipTest("root traverses a mode-000 directory")
+        voice_dir = self.home / "voice"
+        os.chmod(voice_dir, 0)
+        self.addCleanup(os.chmod, voice_dir, 0o700)
+        result = self.s.prepare(approve_download=False)
+        self.assertFalse(result["downloaded"])
+        self.assertFalse(result["verified"])
+        self.assertIn("requires explicit approval", result["reason"])
+
+    def test_oversized_part_download_is_refused_with_bounded_read(self):
+        prep_assets = self.home / "prep_part_grown"
+        pinned = len(self.content["tiny.json"])
+        part_inos = set()
+
+        def oversized_fetch(url, dest):
+            self._static_fetch(url, dest)
+            if url.endswith("/tiny.json"):
+                os.truncate(dest, 64 * self.CAP)
+                part_inos.add(dest.stat().st_ino)
+
+        expected_sha = next(
+            e["sha256"] for e in self.pack["files"]
+            if e["name"] == "tiny.json")
+        with self._fstat_reporting(
+                pinned, match=lambda st: st.st_ino in part_inos) as dups, \
+                self.assertRaisesRegex(
+                    synthesis.VoiceError,
+                    rf"tiny\.json: sha256 mismatch \(expected {expected_sha}, "
+                    r"got a file of the wrong size\); "
+                    r"delete the pack and retry the download"):
+            self.s._prepare_pack(self.pack, prep_assets, oversized_fetch)
+        self.assertEqual(len(dups), 1)
+        self.assertLessEqual(os.lseek(dups[0], 0, os.SEEK_CUR), pinned + 1)
+        self.assertFalse((prep_assets / "tiny.json").exists())
+        self.assertFalse((prep_assets / "tiny.json.part").exists())
+
+        def non_regular_fetch(url, dest):
+            if url.endswith("/tiny.json"):
+                os.symlink(os.devnull, dest)
+                return
+            self._static_fetch(url, dest)
+
+        with self.assertRaisesRegex(
+                synthesis.VoiceError,
+                r"tiny\.json failed verification: not a regular file"):
+            self.s._prepare_pack(self.pack, self.home / "prep_part_dev",
+                                 non_regular_fetch)
+
+    def test_prepare_pack_oserror_names_file_once(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads a mode-000 file")
+        prep_assets = self.home / "prep_unreadable"
+        real_replace = os.replace
+
+        def chmod_on_replace(src, dst):
+            real_replace(src, dst)
+            if Path(dst) == prep_assets / "tiny.json":
+                os.chmod(dst, 0)
+                self.addCleanup(os.chmod, dst, 0o600)
+
+        with mock.patch.object(os, "replace", chmod_on_replace), \
+                self.assertRaisesRegex(synthesis.VoiceError,
+                                       r"tiny\.json failed verification") as ctx:
+            self.s._prepare_pack(self.pack, prep_assets, self._static_fetch)
+        msg = str(ctx.exception)
+        self.assertEqual(msg.count("tiny.json"), 1)
+        self.assertNotIn(str(prep_assets), msg)
+
+    def test_prepare_pack_redownloads_unreadable_existing_dest(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads a mode-000 file")
+        prep_assets = self.home / "prep_existing_bad"
+        prep_assets.mkdir(parents=True, exist_ok=True)
+        existing = prep_assets / "tiny.json"
+        existing.write_bytes(self.content["tiny.json"])
+        os.chmod(existing, 0)
+        self.addCleanup(lambda: existing.exists() and os.chmod(existing, 0o600))
+        result = self.s._prepare_pack(self.pack, prep_assets,
+                                      self._static_fetch)
+        self.assertTrue(result["verified"])
+        self.assertEqual(existing.read_bytes(), self.content["tiny.json"])
+
+    def test_state_depth_boundary_at_32_containers(self):
+        def nested(containers: int):
+            value: object = 1
+            for _ in range(containers):
+                value = [value]
+            return value
+
+        # Outer dict is container 1, so 31 nested lists is depth 32 and 32 is 33.
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        self.voice.write_text(json.dumps({"voice": "ryan", "pad": nested(31)}))
+        self.assertEqual(self.s.current_voice(), "ryan")
+        self.voice.write_text(json.dumps({"voice": "ryan", "pad": nested(32)}))
+        self._assert_voice_refused("nesting depth")
+
+        with mock.patch.object(synthesis, "_backend_provenance",
+                               return_value=self._matched_backend()):
+            recorded = self.s.record_qualification({
+                "listener_verified": True, "cpu_tensor_dispatches": 0,
+                "latency_receipt": nested(31),
+                "receipt_source": "/tmp/run.log",
+            })
+            self.assertTrue(recorded["recorded"])
+            self.assertTrue(self.s.status()["qualification"]["qualified"])
+            with self.assertRaisesRegex(ValueError, "nesting depth"):
+                self.s.record_qualification({
+                    "listener_verified": True, "cpu_tensor_dispatches": 0,
+                    "latency_receipt": nested(32),
+                    "receipt_source": "/tmp/run.log",
+                })
+
+    def test_atomic_state_writes_clean_up_temp_file_on_replace_failure(self):
+        assets = self.s.assets_dir()
+        qual_sentinel = b'{"existing": "qualification"}'
+        self.qualification.write_bytes(qual_sentinel)
+        with mock.patch.object(synthesis, "_backend_provenance",
+                               return_value=self._matched_backend()), \
+                mock.patch.object(synthesis.os, "replace",
+                                  side_effect=OSError("disk full")), \
+                self.assertRaises(OSError):
+            self.s.record_qualification({
+                "listener_verified": True, "cpu_tensor_dispatches": 0,
+                "latency_receipt": {"p95_full_s": 1.0},
+                "receipt_source": "/tmp/run.log",
+            })
+        self.assertEqual(self.qualification.read_bytes(), qual_sentinel)
+        self.assertEqual(list(assets.glob("*.tmp")), [])
+
+        manifest_sentinel = self.manifest.read_bytes()
+        with mock.patch.object(synthesis.os, "replace",
+                               side_effect=OSError("disk full")), \
+                self.assertRaises(OSError):
+            self.s._write_receipt(assets, self.pack)
+        self.assertEqual(self.manifest.read_bytes(), manifest_sentinel)
+        self.assertEqual(list(assets.glob("*.tmp")), [])
+
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        voice_sentinel = json.dumps({"voice": "ryan"}).encode()
+        self.voice.write_bytes(voice_sentinel)
+        for exc_cls in (OSError, KeyboardInterrupt):
+            with self.subTest(exc=exc_cls.__name__):
+                with mock.patch.object(synthesis.os, "replace",
+                                       side_effect=exc_cls("aborted")), \
+                        self.assertRaises(exc_cls):
+                    self.s.set_voice("aiden")
+                self.assertEqual(self.voice.read_bytes(), voice_sentinel)
+                self.assertEqual(
+                    [p for p in self.voice.parent.iterdir()
+                     if p.suffix == ".tmp"],
+                    [])
+
+    def test_atomic_write_closes_fd_and_unlinks_when_fdopen_fails(self):
+        self.voice.parent.mkdir(parents=True, exist_ok=True)
+        real_mkstemp = tempfile.mkstemp
+        fds = []
+
+        def tracking_mkstemp(*args, **kwargs):
+            fd, name = real_mkstemp(*args, **kwargs)
+            fds.append(fd)
+            return fd, name
+
+        with mock.patch.object(synthesis.tempfile, "mkstemp", tracking_mkstemp), \
+                mock.patch.object(synthesis.os, "fdopen",
+                                  side_effect=KeyboardInterrupt("aborted")), \
+                self.assertRaises(KeyboardInterrupt):
+            synthesis._atomic_write_bytes(self.voice, b"{}")
+        self.assertEqual(len(fds), 1)
+        with self.assertRaises(OSError):
+            os.fstat(fds[0])
+        self.assertEqual(
+            [p for p in self.voice.parent.iterdir() if p.suffix == ".tmp"], [])
 
 
 class CloseTests(unittest.TestCase):
