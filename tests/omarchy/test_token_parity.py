@@ -30,8 +30,8 @@ HF = Path(os.environ.get("HF_HUB_CACHE", "")) if os.environ.get("HF_HUB_CACHE") 
     else Path.home() / ".cache" / "huggingface" / "hub"
 
 MODELS = {
-    "2B": "models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/0867d98bfb174b042d88461c0e7c97b86b34b381",
-    "4B": "models--mlx-community--Qwen3-4B-Instruct-2507-4bit/snapshots/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+    "Qwen3.8-2B-mlx-4Bit": "models--SiddhJagani--Qwen3.8-2B-mlx-4Bit/snapshots/0867d98bfb174b042d88461c0e7c97b86b34b381",
+    "Qwen3-4B-Instruct-2507-4bit": "models--mlx-community--Qwen3-4B-Instruct-2507-4bit/snapshots/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
 }
 CONTEXTS = ("512", "2048", "2304", "2305")
 
@@ -92,7 +92,7 @@ class TokenParityTests(unittest.TestCase):
         machine = table[family]
         tried = 0
         for model_name, contexts in machine.items():
-            if model_name.startswith("_"):
+            if model_name.startswith("_") or not isinstance(contexts, dict):
                 continue
             model_dir = model_snapshot(model_name)
             if model_dir is None:
