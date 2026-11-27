@@ -101,6 +101,29 @@ def test_histogram_edges_list_form():
     print("test_histogram_edges_list_form PASS")
 
 
+def test_histc_collapsed_auto_range():
+    """PT-HIST review: torch widens a collapsed auto range to [v-0.5, v+0.5];
+    the pre-fix lowering NaN'd the width math and dropped the mass in bin 0."""
+    x = np.full(50, 5.0, dtype=np.float32)
+    got = mlx_vulkan._histc(mx.array(x), bins=4)
+    want = torch.histc(torch.from_numpy(x), bins=4)
+    assert np.array_equal(_np(got).astype(np.float64), want.numpy().astype(np.float64)), (got, want.numpy())
+    print("test_histc_collapsed_auto_range PASS")
+
+
+def test_histogram_density_non_uniform_edges():
+    """PT-HIST review: density normalizes by PER-BIN widths, not one uniform
+    width — a non-uniform (list) edge sequence has unequal bin widths."""
+    rng = np.random.RandomState(11)
+    x = rng.randn(120).astype(np.float32)
+    edges_list = [-3.0, -1.0, 0.0, 1.0, 3.0]
+    got, edges = mlx_vulkan._histogram(mx.array(x), bins=edges_list, density=True)
+    want, want_edges = torch.histogram(torch.from_numpy(x), bins=torch.tensor(edges_list), density=True)
+    assert np.allclose(_np(got).astype(np.float64), want.numpy().astype(np.float64), atol=1e-6), (got, want.numpy())
+    assert np.allclose(_np(edges).astype(np.float64), want_edges.numpy().astype(np.float64))
+    print("test_histogram_density_non_uniform_edges PASS")
+
+
 if __name__ == "__main__":
     _provenance() if False else None
     for name, fn in sorted(globals().items()):

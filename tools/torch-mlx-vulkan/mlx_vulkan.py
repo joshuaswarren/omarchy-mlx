@@ -1333,6 +1333,10 @@ def _histc(a, bins=100, min=None, max=None, **kw):
     hi = float(mx.max(x).item()) if auto else float(max)
     if hi < lo:
         raise ValueError("histc needs max >= min")
+    if hi == lo:
+        # torch widens a collapsed range to [v-0.5, v+0.5]; without this the
+        # width is 0 and (x - lo) / width puts the whole mass in bin 0
+        lo, hi = lo - 0.5, hi + 0.5
     width = (hi - lo) / nb
     idx = mx.clip(mx.floor((x - lo) / width).astype(mx.int32), 0, nb - 1)
     keep = ((x >= lo) & (x <= hi)).astype(mx.float32)
@@ -1376,7 +1380,10 @@ def _histogram(a, bins=10, range=None, weight=None, density=False, **kw):
     else:
         hist = onehot.sum(axis=0)
     if density:
-        hist = hist / (hist.sum() * width)
+        # torch normalizes by the PER-BIN widths, not one uniform width —
+        # a non-uniform (list) edge sequence has unequal bin widths
+        widths = edges[1:] - edges[:-1]
+        hist = hist / (hist.sum() * widths)
     return hist.astype(_mx(a).dtype), edges
 
 
