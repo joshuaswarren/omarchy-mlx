@@ -212,6 +212,35 @@ struct ResNormPlan {
   float eps;
 };
 
+// GDN decode in_proj_a/b prologue fold: the single-consumer Q4/g64 affine
+// QuantizedMatmul nodes producing a and b for fast::GdnConvDeltaUpdate fold
+// into the coalesced Sg32 GDN dispatch's idle Phase-1 subgroups (sg 12/13),
+// eliminating the tiny [Hv, Hv] in_proj_a/b dispatches and CDM barrier with
+// zero extra barriers or shared memory.
+struct GdnInProjBaPlan {
+  array x;
+  array w_a;
+  array s_a;
+  array b_a;
+  array w_b;
+  array s_b;
+  array b_b;
+  uint32_t k;
+  uint32_t hv;
+};
+
+// MLX_OMARCHY_GDN_INPROJ_BA_FOLD=1 opts into folding in_proj_a/b into the
+// coalesced Sg32 fast::gdn_conv_delta_update dispatch (default OFF until
+// hardware-proved).
+bool gdn_inproj_ba_fold_enabled();
+// Lookup, commit, or replay a planned GdnInProjBaPlan for |gdn_out| (any
+// output sibling of GdnConvDeltaUpdate). replay_gdn_inproj_ba_fold evaluates
+// the skipped a/b QuantizedMatmul nodes in place before a dispatch-time
+// fallback.
+GdnInProjBaPlan* find_gdn_inproj_ba_fold(const array& gdn_out);
+void commit_gdn_inproj_ba_fold(const array& gdn_out);
+void replay_gdn_inproj_ba_fold(const array& gdn_out, const Stream& stream);
+
 // Forward epilogue fold: a decode group's member outputs feed the two
 // fused RMSNorm+RoPE nodes (q, k) of one attention head set. The last
 // finishing workgroup of the group's dispatch runs both norms and

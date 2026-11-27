@@ -8976,7 +8976,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     if (group_size_ != 16 && group_size_ != 32) {
       omarchy::unsupported(tag + " group size", out);
     }
-    auto& fp_encoder = omarchy::get_command_encoder(out.primitive().stream());
+    auto& fp_encoder = omarchy::get_command_encoder(stream());
     require_float_dtype(tag, x, out, fp_encoder);
     if (
         w.dtype() != uint32 || w.ndim() < 2 || w.ndim() > 3 ||
@@ -9194,7 +9194,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (group_size_ != 32 && group_size_ != 64 && group_size_ != 128) {
     omarchy::unsupported(tag + " group size", out);
   }
-  auto& encoder = omarchy::get_command_encoder(out.primitive().stream());
+  auto& encoder = omarchy::get_command_encoder(stream());
   require_float_dtype(tag, x, out, encoder);
   if (w.dtype() != uint32 || w.ndim() < 2 || w.ndim() > 3) {
     omarchy::unsupported(tag + " weight layout", out);
@@ -18133,6 +18133,7 @@ void GdnConvDeltaUpdate::eval_gpu(
   // gate z and the norm weight (then output 0 is rms_norm_gated(delta output, z, weight)).
   // Outputs: delta output, recurrent state out, conv carry-out state.
   const bool with_norm = inputs.size() == 10;
+  auto* ba_fold = omarchy::find_gdn_inproj_ba_fold(outputs.at(0));
   const int B = inputs.at(1).shape(0);
   const int C = inputs.at(1).shape(2);
   const int K = inputs.at(2).shape(1);
@@ -18148,19 +18149,23 @@ void GdnConvDeltaUpdate::eval_gpu(
       omarchy::gdn_bf16a_untiled_default(device_name, Hk, Hv);
   const bool gdn_pf_env = decode_path_override("MLX_OMARCHY_GDN_PF") != 0;
   array h0 = inputs.at(7);
-  const bool dense_inputs = [&] {
-    for (const auto& x : inputs) {
-      if (!x.flags().row_contiguous) {
+  auto check_dense_inputs = [&](bool skip_ba) {
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      if (skip_ba && (i == 3 || i == 4)) {
+        continue;
+      }
+      if (!inputs[i].flags().row_contiguous) {
         return false;
       }
     }
     return true;
-  }();
+  };
+  bool dense_inputs = check_dense_inputs(ba_fold != nullptr);
   const uint32_t h0_offset = dense_inputs
       ? checked_item_offset(h0, h0.size(), tag, outputs.at(0))
       : 0u;
-  const bool gdn_pf = gdn_pf_env && dense_inputs && (h0_offset % 4u) == 0u;
-  const bool decode_tile = tile_on && !(bf16a_untiled_default && gdn_pf);
+  bool gdn_pf = gdn_pf_env && dense_inputs && (h0_offset % 4u) == 0u;
+  bool decode_tile = tile_on && !(bf16a_untiled_default && gdn_pf);
   const bool apple_norm = apple_norm_enabled(encoder.device(), size_t{128}, size_t{static_cast<size_t>(B) * C});
   const bool a_log_f32 = inputs.at(5).dtype() == float32;
   const char* gdn_coal_env = omarchy::env_str("MLX_OMARCHY_GDN_COALESCED");
@@ -18179,6 +18184,38 @@ void GdnConvDeltaUpdate::eval_gpu(
       (gdn_caps.subgroup_operations & kGdnSgFeatures) == kGdnSgFeatures &&
       gdn_caps.max_compute_work_group_invocations >= 1024u &&
       gdn_caps.max_compute_work_group_size[0] >= 1024u;
+  const auto whole_zero_dense = [](const array& a) {
+    return a.data_shared_ptr() != nullptr && a.flags().row_contiguous &&
+        a.offset() == 0 && a.size() == a.data_size();
+  };
+  bool use_ba_fold = false;
+  if (ba_fold != nullptr) {
+    // GdnConvDeltaUpdate always runs in raw-gates mode (flag bit 8 set below);
+    // verify the coalesced Sg32 kernel + 18-binding + aligned-x contract before
+    // adopting, and replay the skipped a/b QuantizedMatmul nodes on any miss.
+    const bool base_ok = B == 1 && K == 4 && gdn_pf && !apple_norm &&
+        (a_log_f32 ? gdn_coal_sg32_ok
+                   : (equal_heads ? decode_tile == false : true));
+    const bool ba_ok = base_ok && with_norm && gdn_coal_sg32_ok &&
+        encoder.device().compute().binding_limit() >= 18u &&
+        ba_fold->x.data_shared_ptr() != nullptr &&
+        ba_fold->x.flags().row_contiguous &&
+        ba_fold->x.offset() % (8 * ba_fold->x.itemsize()) == 0 &&
+        ba_fold->k > 0u && (ba_fold->k % 512u) == 0u &&
+        ba_fold->hv == static_cast<uint32_t>(Hv) &&
+        whole_zero_dense(ba_fold->w_a) && whole_zero_dense(ba_fold->s_a) &&
+        whole_zero_dense(ba_fold->b_a) && whole_zero_dense(ba_fold->w_b) &&
+        whole_zero_dense(ba_fold->s_b) && whole_zero_dense(ba_fold->b_b);
+    if (ba_ok) {
+      use_ba_fold = true;
+    } else {
+      omarchy::replay_gdn_inproj_ba_fold(outputs.at(0), s);
+      ba_fold = nullptr;
+      dense_inputs = check_dense_inputs(false);
+      gdn_pf = gdn_pf_env && dense_inputs && (h0_offset % 4u) == 0u;
+      decode_tile = tile_on && !(bf16a_untiled_default && gdn_pf);
+    }
+  }
   // Equal heads: the fused kernel must byte-match the unfused pair, so it only runs where the
   // unfused route picks the same untiled prefetch delta kernel. Unequal heads: the GQA fused
   // variant is the only fused build and the unfused route's kernel choice does not bind it.
@@ -18238,8 +18275,13 @@ void GdnConvDeltaUpdate::eval_gpu(
   // Raw gates (flag bit 8): a, b, A_log, dt_bias as in the unfused dispatch; A_log and dt_bias are
   // per model head, so the shader reads head % Hv (in_strides[2]); in_strides[3] = 0 means equal heads,
   // otherwise it carries Hk and the conv prologue reads q/k channels by the key-head index.
-  params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
-  params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
+  if (use_ba_fold) {
+    params.shape[0] = ba_fold->k;
+    params.aux_offset = checked_item_offset(ba_fold->x, ba_fold->x.size(), tag, out);
+  } else {
+    params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
+    params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
+  }
   params.in_strides[0] = checked_item_offset(A_log, A_log.size(), tag, out);
   if (a_log_f32) {
     params.in_strides[0] *= 2u;
@@ -18260,6 +18302,43 @@ void GdnConvDeltaUpdate::eval_gpu(
     params.shape[3] = checked_item_offset(norm_gate, norm_gate.size(), tag, out);
     params.output_size = checked_item_offset(norm_weight, norm_weight.size(), tag, out);
     params.alpha = norm_eps();
+  }
+  if (use_ba_fold) {
+    encoder.add_temporary(ba_fold->x);
+    encoder.add_temporary(ba_fold->w_a);
+    encoder.add_temporary(ba_fold->s_a);
+    encoder.add_temporary(ba_fold->b_a);
+    encoder.add_temporary(ba_fold->w_b);
+    encoder.add_temporary(ba_fold->s_b);
+    encoder.add_temporary(ba_fold->b_b);
+    std::array<omarchy::ComputeBinding, 18> ba_bindings{
+        binding(in_state),
+        binding(in_x),
+        binding(in_w),
+        binding(ba_fold->x),
+        binding(ba_fold->w_a),
+        binding(h0),
+        binding(out),
+        binding(hf),
+        binding(A_log),
+        binding(dt_bias),
+        binding(conv_state_out),
+        binding(norm_gate),
+        binding(norm_weight),
+        binding(ba_fold->s_a),
+        binding(ba_fold->b_a),
+        binding(ba_fold->w_b),
+        binding(ba_fold->s_b),
+        binding(ba_fold->b_b)};
+    omarchy::commit_gdn_inproj_ba_fold(outputs.at(0));
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32,
+        ba_bindings,
+        params,
+        static_cast<uint32_t>(B * Hv),
+        1,
+        1);
+    return;
   }
   std::array<omarchy::ComputeBinding, 13> bindings{
       binding(in_state),

@@ -605,6 +605,7 @@ omarchy_shader(gated_delta_decode_perrow_pf_conv_norm_gqa_bf16 shaders/gated_del
 # Coalesced-state fused GDN decode conv + gated-delta + gated-RMSNorm (1024 threads, 32 SGs, 4 rows/SG).
 omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32 shaders/gated_delta_decode_conv_coalesced.comp)
 omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32_fast shaders/gated_delta_decode_conv_coalesced.comp -DGDN_SG32_FAST=1)
+omarchy_shader(gated_delta_decode_conv_norm_ba_bf16_sg32 shaders/gated_delta_decode_conv_coalesced.comp -DGDN_INPROJ_BA_FUSED=1)
 # Coalesced-state standalone GDN decode (Dk == Dv == 128, f32 state, bf16/f32 A_log, native GQA; 1024 threads, 32 SGs).
 omarchy_shader(gated_delta_decode_bf16_sg32 shaders/gated_delta_decode_coalesced.comp)
 omarchy_shader(gated_delta_decode_composed_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_COMPOSED_ORDER=1)

@@ -1412,6 +1412,11 @@ enum class ComputeKernel : uint16_t {
   // epilogue (MLX_OMARCHY_GDN_SG32_FAST=0/1). Appended to keep profile kernel
   // ids stable.
   GatedDeltaDecodeConvNormBF16Sg32Fast,
+  // Coalesced-state fused GDN decode conv + gated-delta + gated-RMSNorm with
+  // folded in_proj_a/b Q4/g64 projections executed concurrently on idle
+  // subgroups 12 and 13 during Phase 1 (18 bindings, zero extra barriers).
+  // Appended to keep profile kernel ids stable.
+  GatedDeltaDecodeConvNormBaBF16Sg32,
   Count,
 };
 

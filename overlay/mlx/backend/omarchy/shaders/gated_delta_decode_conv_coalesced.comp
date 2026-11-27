@@ -25,8 +25,15 @@ layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
 layout(set = 0, binding = 0, std430) readonly buffer ConvState { uint16_t v[]; } conv_state;
 layout(set = 0, binding = 1, std430) readonly buffer ConvX     { uint16_t v[]; } conv_x;
 layout(set = 0, binding = 2, std430) readonly buffer ConvW     { uint16_t v[]; } conv_w;
+#ifdef GDN_INPROJ_BA_FUSED
+// Folded in_proj_a / in_proj_b Q4/g64 affine projections: slots 3..4 and 13..17 carry
+// the shared normed input row x plus a/b weights, scales, and biases (18 bindings total).
+layout(set = 0, binding = 3, std430) readonly buffer BaX       { uvec4    v[]; } ba_x;
+layout(set = 0, binding = 4, std430) readonly buffer BaWA      { uvec2    v[]; } ba_wa;
+#else
 layout(set = 0, binding = 3, std430) readonly buffer GBuf      { uint16_t v[]; } g_buf;
 layout(set = 0, binding = 4, std430) readonly buffer BBuf      { uint16_t v[]; } b_buf;
+#endif
 layout(set = 0, binding = 5, std430) readonly buffer SIn       { vec4     v[]; } s_in;
 layout(set = 0, binding = 6, std430) writeonly buffer YBuf     { uint16_t v[]; } y_buf;
 layout(set = 0, binding = 7, std430) buffer         SOut       { vec4     v[]; } s_out;
@@ -35,6 +42,13 @@ layout(set = 0, binding = 9, std430) readonly buffer DtBuf     { uint16_t v[]; }
 layout(set = 0, binding = 10, std430) buffer ConvStateOut      { uint16_t v[]; } conv_state_out;
 layout(set = 0, binding = 11, std430) readonly buffer NormGate { uint16_t v[]; } norm_gate;
 layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[]; } norm_w;
+#ifdef GDN_INPROJ_BA_FUSED
+layout(set = 0, binding = 13, std430) readonly buffer BaSA     { uint16_t v[]; } ba_sa;
+layout(set = 0, binding = 14, std430) readonly buffer BaBA     { uint16_t v[]; } ba_ba;
+layout(set = 0, binding = 15, std430) readonly buffer BaWB     { uvec2    v[]; } ba_wb;
+layout(set = 0, binding = 16, std430) readonly buffer BaSB     { uint16_t v[]; } ba_sb;
+layout(set = 0, binding = 17, std430) readonly buffer BaBB     { uint16_t v[]; } ba_bb;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -160,6 +174,124 @@ void gdn_conv_state_out(uint channel) {
       conv_x.v[params.rhs_offset + channel];
 }
 
+#ifdef GDN_INPROJ_BA_FUSED
+float gdn_compute_beta_from_b(float b_in) {
+  float beta_f = 1.0f / (1.0f + exp(-b_in));
+  return bf16_load(bf16_store(beta_f));
+}
+
+float gdn_compute_g_from_a(uint head, float a_in) {
+  uint ph = head % params.in_strides[2];
+  float a_log;
+  if ((params.flags & 512u) != 0u) {
+    uint base = params.in_strides[0] + 2u * ph;
+    a_log = uintBitsToFloat(
+        uint(alog_buf.v[base]) | (uint(alog_buf.v[base + 1u]) << 16u));
+  } else {
+    a_log = bf16_load(alog_buf.v[params.in_strides[0] + ph]);
+  }
+  float dt = bf16_load(dt_buf.v[params.in_strides[1] + ph]);
+  float x = bf16_load(bf16_store(a_in + dt));
+  float u = 1.0f + exp(-abs(x));
+  float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+  float sp_raw = max(x, 0.0f) + l1p;
+  float sp = ((params.flags & 512u) != 0u) ? sp_raw
+                                           : bf16_load(bf16_store(sp_raw));
+  return exp(-(exp(a_log) * sp));
+}
+
+// Exact 32-lane Q4/g64 affine projection for one value head's scalar a[head] or
+// b[head], matching qmm_vec.comp QMM_W2 QGROUP=64 QMM_LANES=32 bit-for-bit
+// (K % 512 == 0, N % 8 == 0, 16-byte aligned x_offset). Splitting xa/xb live
+// ranges keeps register pressure minimal while preserving exact FMA order.
+#define GDN_FIELD_UNIT(shift) uintBitsToFloat((150u - (shift)) << 23u)
+#define GDN_Q4_NIB(p, shift) \
+  (uintBitsToFloat(((p) & (0xfu << (shift))) + ((150u - (shift)) << 23u)) - \
+   GDN_FIELD_UNIT(shift))
+
+#define GDN_BA_DOT_BODY(WBUF, SBUF, BBUF) \
+  const uint k = params.shape[0]; \
+  const uint pairs_per_row = k >> 4u; \
+  const uint groups_per_row = k >> 6u; \
+  const uint g0 = lane >> 2u; \
+  uint wp = head * pairs_per_row + lane; \
+  uint sp = head * groups_per_row + g0; \
+  uint xp = (params.aux_offset >> 3u) + (lane << 1u); \
+  const uint iters = pairs_per_row >> 5u; \
+  precise float acc = 0.0; \
+  for (uint wi = 0u; wi < iters; ++wi) { \
+    uvec2 w = WBUF.v[wp]; \
+    wp += 32u; \
+    float sc = bf16_load(SBUF.v[sp]); \
+    float bi = bf16_load(BBUF.v[sp]); \
+    sp += 8u; \
+    precise float input_sum = 0.0; \
+    precise float dot = 0.0; \
+    { \
+      uvec4 xa = ba_x.v[xp]; \
+      { \
+        float x0 = uintBitsToFloat((xa.x & 0xFFFFu) << 16u); \
+        float x1 = uintBitsToFloat(xa.x & 0xFFFF0000u); \
+        float x2 = uintBitsToFloat((xa.y & 0xFFFFu) << 16u); \
+        float x3 = uintBitsToFloat(xa.y & 0xFFFF0000u); \
+        input_sum += ((x0 + x1) + x2) + x3; \
+        uint p = w.x; \
+        dot += fma(x3, GDN_Q4_NIB(p, 12u), \
+            fma(x2, GDN_Q4_NIB(p, 8u), \
+                fma(x1, GDN_Q4_NIB(p, 4u), x0 * GDN_Q4_NIB(p, 0u)))); \
+      } \
+      { \
+        float x0 = uintBitsToFloat((xa.z & 0xFFFFu) << 16u); \
+        float x1 = uintBitsToFloat(xa.z & 0xFFFF0000u); \
+        float x2 = uintBitsToFloat((xa.w & 0xFFFFu) << 16u); \
+        float x3 = uintBitsToFloat(xa.w & 0xFFFF0000u); \
+        input_sum += ((x0 + x1) + x2) + x3; \
+        uint p = w.x >> 16u; \
+        dot += fma(x3, GDN_Q4_NIB(p, 12u), \
+            fma(x2, GDN_Q4_NIB(p, 8u), \
+                fma(x1, GDN_Q4_NIB(p, 4u), x0 * GDN_Q4_NIB(p, 0u)))); \
+      } \
+    } \
+    { \
+      uvec4 xb = ba_x.v[xp + 1u]; \
+      { \
+        float x0 = uintBitsToFloat((xb.x & 0xFFFFu) << 16u); \
+        float x1 = uintBitsToFloat(xb.x & 0xFFFF0000u); \
+        float x2 = uintBitsToFloat((xb.y & 0xFFFFu) << 16u); \
+        float x3 = uintBitsToFloat(xb.y & 0xFFFF0000u); \
+        input_sum += ((x0 + x1) + x2) + x3; \
+        uint p = w.y; \
+        dot += fma(x3, GDN_Q4_NIB(p, 12u), \
+            fma(x2, GDN_Q4_NIB(p, 8u), \
+                fma(x1, GDN_Q4_NIB(p, 4u), x0 * GDN_Q4_NIB(p, 0u)))); \
+      } \
+      { \
+        float x0 = uintBitsToFloat((xb.z & 0xFFFFu) << 16u); \
+        float x1 = uintBitsToFloat(xb.z & 0xFFFF0000u); \
+        float x2 = uintBitsToFloat((xb.w & 0xFFFFu) << 16u); \
+        float x3 = uintBitsToFloat(xb.w & 0xFFFF0000u); \
+        input_sum += ((x0 + x1) + x2) + x3; \
+        uint p = w.y >> 16u; \
+        dot += fma(x3, GDN_Q4_NIB(p, 12u), \
+            fma(x2, GDN_Q4_NIB(p, 8u), \
+                fma(x1, GDN_Q4_NIB(p, 4u), x0 * GDN_Q4_NIB(p, 0u)))); \
+      } \
+    } \
+    xp += 64u; \
+    precise float bias_term = input_sum * bi; \
+    acc += fma(sc, dot, bias_term); \
+  } \
+  float tot = subgroupAdd(acc); \
+  return bf16_load(bf16_store(tot));
+
+float gdn_ba_dot_a(uint head, uint lane) {
+  GDN_BA_DOT_BODY(ba_wa, ba_sa, ba_ba)
+}
+
+float gdn_ba_dot_b(uint head, uint lane) {
+  GDN_BA_DOT_BODY(ba_wb, ba_sb, ba_bb)
+}
+#else
 vec2 gdn_compute_gates(uint head) {
   float g;
   float beta;
@@ -191,6 +323,7 @@ vec2 gdn_compute_gates(uint head) {
   }
   return vec2(g, beta);
 }
+#endif
 
 void main() {
   uint head = gl_WorkGroupID.x;
@@ -210,15 +343,19 @@ void main() {
     khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
   }
 
+#ifndef GDN_INPROJ_BA_FUSED
   // Single-thread gate computation (avoids 1023x redundant exp/log SFU traffic).
   if (tid == 0u) {
     vec2 gates = gdn_compute_gates(head);
     s_g_val = gates.x;
     s_beta_val = gates.y;
   }
+#endif
 
   // Phase 1: Parallel Q (0..127), K (128..255), V (256..383) conv + SiLU +
-  // conv_state_out update.
+  // conv_state_out update. With GDN_INPROJ_BA_FUSED, idle subgroups 12 and 13
+  // run in_proj_a -> g and in_proj_b -> beta concurrently before the existing
+  // Phase-1 barrier (zero extra barriers, zero extra shared memory).
   uint16_t act_val = uint16_t(0u);
   if (tid < 384u) {
     const uint key_dim = params.rhs_size;
@@ -252,6 +389,23 @@ void main() {
       gdn_conv_state_out(ch);
     }
   }
+#ifdef GDN_INPROJ_BA_FUSED
+  else if (sg == 12u) {
+    float a_in = gdn_ba_dot_a(head, lane);
+    if (lane == 0u) {
+      s_g_val = ((params.flags & 8u) != 0u)
+          ? gdn_compute_g_from_a(head, a_in)
+          : a_in;
+    }
+  } else if (sg == 13u) {
+    float b_in = gdn_ba_dot_b(head, lane);
+    if (lane == 0u) {
+      s_beta_val = ((params.flags & 8u) != 0u)
+          ? gdn_compute_beta_from_b(b_in)
+          : b_in;
+    }
+  }
+#endif
   barrier();
 
 #ifdef GDN_SG32_FAST
