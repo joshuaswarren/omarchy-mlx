@@ -142,7 +142,7 @@ class LoadLockFallback(TempDir):
         cases = (
             ("list", b"[1]", "is not a JSON object"),
             ("utf8", b'{"a": "\xff"}', "unreadable"),
-            ("recursion", DEEP, "unreadable"),
+            ("recursion", DEEP, r"unreadable|nests deeper than 32 levels"),
             ("depth", TOO_DEEP, "nests deeper than 32 levels"),
             ("syntax", b"{", "unreadable"),
         )
@@ -153,6 +153,15 @@ class LoadLockFallback(TempDir):
                     self.load()
                 # a local file is not a damaged archive
                 self.assertNotIsInstance(caught.exception, transfer.UnsafeArchive)
+
+    def test_parser_recursion_error_is_refused(self) -> None:
+        self.lock_path().write_text('{"pair_id": "p"}')
+        with mock.patch.object(
+            transfer.json, "loads",
+            side_effect=RecursionError("maximum recursion depth exceeded"),
+        ), self.assertRaisesRegex(transfer.TransferError, "unreadable") as caught:
+            self.load()
+        self.assertNotIsInstance(caught.exception, transfer.UnsafeArchive)
 
     def test_oversized_lock_refused(self) -> None:
         sparse(self.lock_path(), (1 << 20) + 1)
@@ -216,7 +225,7 @@ class VoiceReceipt(TempDir):
         cases = (
             ("list", b"[1]", "is not a JSON object"),
             ("utf8", utf8_body, "unreadable"),
-            ("recursion", DEEP, "unreadable"),
+            ("recursion", DEEP, r"unreadable|nests deeper than 32 levels"),
             ("depth", depth_body, "nests deeper than 32 levels"),
         )
         for label, body, pattern in cases:
@@ -227,6 +236,14 @@ class VoiceReceipt(TempDir):
                         self.add(pack)
                 finally:
                     shutil.rmtree(pack)
+
+    def test_parser_recursion_error_is_refused(self) -> None:
+        pack = self.pack()
+        with mock.patch.object(
+            transfer.json, "loads",
+            side_effect=RecursionError("maximum recursion depth exceeded"),
+        ), self.assertRaisesRegex(transfer.TransferError, "unreadable"):
+            self.add(pack)
 
     def test_oversized_receipt_refused(self) -> None:
         pack = self.pack()
