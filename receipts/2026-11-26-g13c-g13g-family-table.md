@@ -21,7 +21,7 @@ digests match per ABBA). ms/token = 1000 / decode_tps, rounded to one decimal.
 
 | ctx | ON (candidate wheel) ms/token | OFF (shipped wheel) ms/token | ON vs OFF |
 |---|---|---|---|
-| 512 | 43.9 | 47.7 | +8.3% tps |
+| 512 | 43.9 | 47.7 | +8.6% tps |
 | 1024 | 45.9 | 51.1 | +11.3% tps |
 | 1536 | 47.9 | 56.1 | +17.0% tps |
 | 2304 | 49.9 | 63.9 | +28.0% tps |
@@ -32,7 +32,7 @@ digests match per ABBA). ms/token = 1000 / decode_tps, rounded to one decimal.
 | ctx | ON ms/token | OFF ms/token | ON vs OFF |
 |---|---|---|---|
 | 1920 | 35.4 | 35.8 | +1.2% tps |
-| 2304 | 35.0 | 36.1 | +4.1% tps |
+| 2304 | 35.0 | 36.1 | +3.3% tps |
 | 4096 | 36.1 | 38.0 | +5.1% tps |
 
 Boot 815d8eb4 (post-restart) reproduces the fb9ebb8c numbers at 2B ctx1920
@@ -49,7 +49,7 @@ Boot 815d8eb4 (post-restart) reproduces the fb9ebb8c numbers at 2B ctx1920
    was shape/device-dependent. Shared recommendation: the knob stays off on the
    M1 Max; the 13-inch needs its own A/B before any generalization.
 2. Matched-wheel lever (dev202611241944+61b0bff3 vs shipped): measured on jwm1
-   ONLY tonight, G13G gemv, and it WINS everywhere: 4B +8.3% at ctx512 growing
+   ONLY tonight, G13G gemv, and it WINS everywhere: 4B +8.6% at ctx512 growing
    to +28% at ctx2304, 2B +1.2-5.1%. The gain grows with context on 4B. CHIP
    COVERAGE: unmeasured on jw16 tonight (SUP-5's wheel was a different dev
    build) - treat as jwm1-positive, jw16-open.
