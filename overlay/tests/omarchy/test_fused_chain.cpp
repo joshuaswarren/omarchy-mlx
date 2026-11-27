@@ -3308,9 +3308,15 @@ TEST_CASE("sdpa online rope norm: bit-exact output and k_cache with two fewer di
   CHECK(omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 1024u, 128, false));
   CHECK(!omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 1025u, 128, false));
   CHECK(omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 512u, 256, true));
-  CHECK(!omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 1025u, 256, true));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 4096u, 256, true));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 4097u, 256, true));
   CHECK(!omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 512u, 256, false));
   CHECK(!omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 512u));
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 8u, 512u), 4u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 8u, 127u), 1u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 16u, 512u), 2u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 16u, 63u), 1u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 Max (G13C C0)", 8u, 512u), 1u);
   CHECK(omarchy::sdpa_outgate_default("Apple M2 Max (G14C B1)"));
   CHECK(!omarchy::sdpa_outgate_default("Apple M1 Max (G13C C0)"));
   CHECK(!omarchy::sdpa_outgate_default("Apple M1 (G13G B1)"));
@@ -3613,7 +3619,7 @@ TEST_CASE("sdpa outgate and online-rope hd256: bit-exact output and k_cache") {
   const int KVH = 2;
   const int D = 256;
   const int ROPE_DIMS = 64;
-  const int CAP = 64;
+  const int CAP = 512;
   const float scale = 1.0f / std::sqrt(static_cast<float>(D));
   std::vector<float> xv_float(128, 0.125f);
   array xv = astype(array(xv_float.data(), {1, 128}, float32), bfloat16, stream);
@@ -3707,7 +3713,7 @@ TEST_CASE("sdpa outgate and online-rope hd256: bit-exact output and k_cache") {
     int64_t last_k = counters().last_dispatched_kernel.load();
     return std::make_tuple(gated, keys_out, launched, last_k);
   };
-  for (int pos : {0, 36}) {
+  for (int pos : {0, 36, 319}) {
     // 1. Online HD=256 + Outgate only (deletes CopyGeneral + Sigmoid + Multiply).
     auto [g_base, k_base, n_base, lk_base] = run(pos, "32", "0", "0");
     auto [g_og, k_og, n_og, lk_og] = run(pos, "32", "0", "1");
@@ -3721,8 +3727,10 @@ TEST_CASE("sdpa outgate and online-rope hd256: bit-exact output and k_cache") {
     }
     expect_bit_exact(g_base, g_og, stream);
     expect_bit_exact(k_base, k_og, stream);
-    // 2. OnlineRope HD=256 (dims=64) + Outgate (6 dispatches -> 1).
+    // 2. OnlineRope HD=256 (dims=64) + Outgate (6 dispatches -> 1), non-split.
+    setenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_SPLIT", "1", 1);
     auto [g_or, k_or, n_or, lk_or] = run(pos, "32", "1", "1");
+    unsetenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_SPLIT");
     INFO("online-rope+outgate pos=" << pos);
     if (online_ready) {
       CHECK_EQ(n_or + 5, n_base);
@@ -3733,6 +3741,23 @@ TEST_CASE("sdpa outgate and online-rope hd256: bit-exact output and k_cache") {
     }
     expect_bit_exact(g_base, g_or, stream);
     expect_bit_exact(k_base, k_or, stream);
+    if (pos == 319 && online_ready) {
+      for (const char* sp : {"2", "4", "8"}) {
+        setenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_SPLIT", sp, 1);
+        auto [g_sp, k_sp, n_sp, lk_sp] = run(pos, "32", "1", "1");
+        unsetenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_SPLIT");
+        INFO("online-rope-split=" << sp << " pos=" << pos);
+        CHECK_EQ(n_sp + 5, n_base);
+        CHECK_EQ(
+            lk_sp,
+            static_cast<int64_t>(
+                omarchy::ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split));
+        expect_bit_exact(k_base, k_sp, stream);
+        auto md = max(abs(astype(g_base, float32, stream) - astype(g_sp, float32, stream)), stream);
+        eval({md});
+        CHECK_MESSAGE(md.item<float>() <= 2e-2f, "split=", sp, " max_diff=", md.item<float>());
+      }
+    }
     // 3. Split-K HD=256 + Outgate (online disabled).
     auto [g_sp_base, k_sp_base, n_sp_base, lk_sp_base] = run(pos, "0", "0", "0");
     auto [g_sp_og, k_sp_og, n_sp_og, lk_sp_og] = run(pos, "0", "0", "1");
@@ -3750,4 +3775,41 @@ TEST_CASE("sdpa outgate and online-rope hd256: bit-exact output and k_cache") {
   unsetenv("MLX_OMARCHY_ROPE_NORM_PAIR");
   unsetenv("MLX_OMARCHY_FUSED_TRIO");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
+}
+
+TEST_CASE("prologue fold accepts uint32 token ids bit-exact and collapses 4 dispatches to 1") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  const int V = 128;
+  const int D = 2048;
+  array w = astype(
+      random::normal(Shape{V, D}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  auto q = quantize(w, 64, 4, "affine", std::nullopt, stream);
+  array ids_u32 = array(std::vector<uint32_t>{42u}.data(), Shape{1, 1}, uint32);
+  eval(std::vector<array>{q[0], q[1], q[2], ids_u32});
+  sync_stream(stream);
+  auto run_embed = [&](const char* fold_flag) {
+    setenv("MLX_OMARCHY_PROLOGUE_FOLD", fold_flag, 1);
+    array gw = take(q[0], ids_u32, 0, stream);
+    array gs = take(q[1], ids_u32, 0, stream);
+    array gb = take(q[2], ids_u32, 0, stream);
+    array out = dequantize(gw, gs, gb, 64, 4, "affine", std::nullopt, bfloat16, stream);
+    uint64_t before = counters().vk_compute_dispatches.load();
+    eval(std::vector<array>{out});
+    sync_stream(stream);
+    uint64_t launched = counters().vk_compute_dispatches.load() - before;
+    unsetenv("MLX_OMARCHY_PROLOGUE_FOLD");
+    return std::make_pair(out, launched);
+  };
+  auto [ref_out, ref_n] = run_embed("0");
+  auto [fold_out, fold_n] = run_embed("1");
+  CHECK(ref_n >= 4u);
+  CHECK_EQ(fold_n, 1u);
+  expect_bit_exact(ref_out, fold_out, stream);
 }

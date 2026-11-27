@@ -437,6 +437,7 @@ omarchy_shader(qmm_vec_q4_multi_outgate_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -
 omarchy_shader(qmm_vec_q4_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_RESNORM=1 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_resnorm_vec4_bf16_r2s16w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_resnorm_vec4_bf16_r2s32w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_outgate_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_OUTGATE=1 -DQMM_VEC_RESNORM=1)
 omarchy_shader(qmm_vec_q4_outgate_resnorm_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_OUTGATE=1 -DQMM_VEC_RESNORM=1 -DQMM_W2=1)
 # Multi-token (verify / small-batch) variants: the multi column with the
@@ -563,6 +564,7 @@ omarchy_shader(sdpa_decode_online_rope_sg32_bf16_hd128 shaders/sdpa_decode_onlin
 omarchy_shader(sdpa_decode_online_rope_outgate_sg32_bf16_hd128 shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=128 -DSDPA_OUTGATE=1)
 omarchy_shader(sdpa_decode_online_rope_sg32_bf16_hd256 shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=256)
 omarchy_shader(sdpa_decode_online_rope_outgate_sg32_bf16_hd256 shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=256 -DSDPA_OUTGATE=1)
+omarchy_shader(sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=256 -DSDPA_OUTGATE=1 -DSDPA_SPLIT_K=1)
 omarchy_shader(sdpa_decode_online_sg32_bf16_hd256 shaders/sdpa_decode_online.comp -DSUBGROUPS=32 -DHD=256)
 omarchy_shader(sdpa_decode_online_sg16_bf16_hd256 shaders/sdpa_decode_online.comp -DSUBGROUPS=16 -DHD=256)
 omarchy_shader(sdpa_decode_online_outgate_sg32_bf16_hd128 shaders/sdpa_decode_online.comp -DSUBGROUPS=32 -DHD=128 -DSDPA_OUTGATE=1)

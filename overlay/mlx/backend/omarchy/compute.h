@@ -1365,6 +1365,12 @@ enum class ComputeKernel : uint16_t {
   // the fp16-operand CMAT16 build. Appended to keep profile kernel ids
   // stable.
   QmmPrefillCoopmatBF16x16,
+  // Single-dispatch split-K Q/K RMSNorm + RoPE + K-cache write + online-softmax
+  // SDPA + outgate (HD=256, 32 subgroups, runtime split_k in out_strides[3]).
+  // Appended to keep profile kernel ids stable.
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split,
+  // 1024-thread (32 subgroups, 64 cols/WG) coalesced uvec4 ResNormVec4.
+  QmmVecQ4ResNormVec4BF16R2S32W2,
   Count,
 };
 

@@ -856,6 +856,15 @@ inline bool qmm_resnorm_vec4_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// 1024-thread (32 subgroups, 64 cols/WG) coalesced uvec4 ResNormVec4
+// (QmmVecQ4ResNormVec4BF16R2S32W2). Cuts N=2048 from 64 WGs (2 waves on 38
+// cores) to 32 WGs (1 wave) and halves ticket.done atomic contention again.
+// Default on G14C; MLX_OMARCHY_RESNORM_R2S32=0 restores R2S16W2,
+// MLX_OMARCHY_RESNORM_VEC4=0 disables Vec4. Pure.
+inline bool qmm_resnorm_r2s32_default(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
 // Fused GatedDeltaUpdate on G18G (Apple M6): the fused update and raw
 // decode routes miscompute there. On the 2026-11-24 PAR-35 A/B the fused
 // path diverged from the ops reference from layer 1 prefill on, while the
@@ -1312,7 +1321,7 @@ inline uint32_t sdpa_online_rope_max_keys(
   }
   if (device_name.find("G14C") != std::string::npos) {
     if (head_dim == 128) return 1024u;
-    if (head_dim == 256 && has_outgate) return 1024u;
+    if (head_dim == 256 && has_outgate) return 4096u;
   }
   return 0u;
 }
@@ -1325,6 +1334,27 @@ inline bool sdpa_online_rope_default(
   uint32_t max_keys =
       sdpa_online_rope_max_keys(device_name, head_dim, has_outgate);
   return max_keys != 0u && k_len <= max_keys;
+}
+
+// Split-K factor for single-dispatch SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split.
+// Targets ~32 WGs (1 full wave on 38-core G14C): split=4 for <=10 Q-heads
+// (Qwen3.8-2B: 8 heads x 4 = 32 WGs) at k_len >= 128, split=2 for 11..20 Q-heads
+// (Qwen3.5-9B: 16 heads x 2 = 32 WGs) at k_len >= 64.
+// MLX_OMARCHY_SDPA_ONLINE_ROPE_SPLIT=0/1/2/4/8 overrides. Pure.
+inline uint32_t sdpa_online_rope_split_default(
+    const std::string& device_name,
+    uint32_t heads,
+    uint32_t k_len) {
+  if (device_name.find("G14C") == std::string::npos) {
+    return 1u;
+  }
+  if (heads <= 10u && k_len >= 128u) {
+    return 4u;
+  }
+  if (heads > 10u && heads <= 20u && k_len >= 64u) {
+    return 2u;
+  }
+  return 1u;
 }
 
 // Fused SDPA output-gate epilogue (tail = Reshape(Transpose(SDPA)) *

@@ -1465,9 +1465,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // Prescan gate: every pass below needs an anchor primitive
   // (QuantizedMatmul or Matmul for GEMV groups, SliceUpdate for cache
   // pairs, Sigmoid for swiglu/out-gate plans, fast::RoPE for trio
-  // plans). Tapes with none of these can fire no plan, so skip the
-  // node/use maps and all pattern passes. Set
-  // MLX_OMARCHY_NO_FUSION_GATE to restore the unconditional scan.
+  // plans, fast::Quantize for embedding prologue folds). Tapes with none
+  // of these can fire no plan, so skip the node/use maps and all pattern
+  // passes. Set MLX_OMARCHY_NO_FUSION_GATE to restore the unconditional scan.
   if (omarchy::env_str("MLX_OMARCHY_NO_FUSION_GATE") == nullptr) {
     bool anchor = false;
     for (const auto& node : tape) {
@@ -1475,7 +1475,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           is_op(&node, typeid(Matmul)) ||
           is_op(&node, typeid(SliceUpdate)) ||
           is_op(&node, typeid(Sigmoid)) ||
-          is_op(&node, typeid(fast::RoPE))) {
+          is_op(&node, typeid(fast::RoPE)) ||
+          is_op(&node, typeid(fast::Quantize))) {
         anchor = true;
         break;
       }
@@ -3526,7 +3527,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         elems_per_row % group_size != 0 ||
         groups_per_row * group_size != elems_per_row ||
         node.size() != nrows * elems_per_row || nrows <= 0 ||
-        ids->dtype() != int32 ||
+        (ids->dtype() != int32 && ids->dtype() != uint32) ||
         w.dtype() != uint32 || scales.dtype() != node.dtype() ||
         biases.dtype() != node.dtype() ||
         (node.dtype() != float32 && node.dtype() != float16 &&
@@ -4361,6 +4362,7 @@ bool dispatch_prologue_fold(
   params.matrix_m = static_cast<uint32_t>(w.shape(0));
   params.matrix_n = static_cast<uint32_t>(fold.words_per_row);
   params.matrix_k = static_cast<uint32_t>(fold.groups_per_row);
+  params.flags = ids.dtype() == uint32 ? 1u : 0u;
   params.dims =
       static_cast<uint32_t>(ids.offset() / ids.itemsize());
   std::array<ComputeBinding, 5> bindings{
