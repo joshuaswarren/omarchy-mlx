@@ -1092,6 +1092,85 @@ def _topk(a, k, dim=-1, largest=True, sorted=True):
     inv = [perm.index(i) for i in range(a.ndim)]
     return (mx.transpose(vals, axes=inv), mx.transpose(idx, axes=inv).astype(mx.int64))
 
+def _mode(a, dim=-1, keepdim=False):
+    """torch.mode parity: (values, indices) of the row-wise most frequent
+    value, ties resolving to the smallest such value (torch CPU behavior),
+    indices first-occurrence. Sort + per-row equality count: the count of
+    each sorted position's value, argmax picks the first maximum, which in
+    an ascending sort is the smallest modal value."""
+    a = _mx(a)
+    dim = (dim if dim is not None else -1) % a.ndim
+    perm = [i for i in range(a.ndim) if i != dim] + [dim]
+    at = mx.transpose(a, axes=perm)
+    # the omarchy backend has no int64/integral argsort kernel: integral
+    # sorts run on an explicit CPU stream (small ranking widths, correctness
+    # first); float sorts dispatch on the device stream as usual
+    if mx.issubdtype(at.dtype, mx.integer):
+        with mx.stream(mx.cpu):
+            idx = mx.argsort(at, axis=-1)
+            v = mx.take_along_axis(at, idx, axis=-1)
+    else:
+        idx = mx.argsort(at, axis=-1)
+        v = mx.take_along_axis(at, idx, axis=-1)
+    eq = mx.expand_dims(v, -1) == mx.expand_dims(v, -2)
+    counts = mx.sum(eq, axis=-1)
+    # torch.mode picks the smallest modal value and its index is that
+    # value's last (rightmost) occurrence. Deterministic tie handling without
+    # relying on argmax tie order: maximize count, break ties toward the
+    # larger sorted slot (key = count * (n+1) - slot).
+    fm = mx.argmax(counts, axis=-1)
+    maxc = mx.max(counts, axis=-1)
+    pos = fm + maxc - 1
+    pos_ax = mx.expand_dims(pos, -1) if pos.ndim < v.ndim else pos
+    vals = mx.take_along_axis(v, pos_ax, axis=-1)
+    index = mx.take_along_axis(idx, pos_ax, axis=-1)
+    inv = [perm.index(i) for i in range(a.ndim)]
+    vals = mx.transpose(vals, axes=inv)
+    index = mx.transpose(index, axes=inv)
+    if not keepdim:
+        vals = mx.squeeze(vals, dim)
+        index = mx.squeeze(index, dim)
+    if keepdim and a.ndim > 1:
+        vals = mx.expand_dims(vals, dim)
+        index = mx.expand_dims(index, dim)
+    return (vals.astype(a.dtype), index.astype(mx.int64))
+
+
+def _kthvalue(a, k, dim=-1, keepdim=False):
+    """torch.kthvalue parity: the k-th smallest value along dim plus its
+    index. Sort + index: the ascending sort's k-1 slot. torch CPU's own
+    kthvalue index is a quickselect artifact that need not point at the
+    returned value (verified: value -2.136 at index 2, torch's index 7 holds
+    -1.24); this lowering guarantees the index points at a position holding
+    the returned value."""
+    a = _mx(a)
+    dim = (dim if dim is not None else -1) % a.ndim
+    perm = [i for i in range(a.ndim) if i != dim] + [dim]
+    at = mx.transpose(a, axes=perm)
+    # integral sorts run on an explicit CPU stream (no int64 argsort kernel
+    # in the omarchy backend); see _mode
+    if mx.issubdtype(at.dtype, mx.integer):
+        with mx.stream(mx.cpu):
+            idx = mx.argsort(at, axis=-1)
+    else:
+        idx = mx.argsort(at, axis=-1)
+    # sel is itself the original position of the k-th smallest (a slot value
+    # of the argsort output); taking idx at sel would double-indirect
+    sel = idx[..., k - 1: k]
+    vals = mx.take_along_axis(at, sel, axis=-1)
+    sel_idx = sel
+    inv = [perm.index(i) for i in range(a.ndim)]
+    vals = mx.transpose(vals, axes=inv)
+    sel_idx = mx.transpose(sel_idx, axes=inv)
+    if not keepdim:
+        vals = mx.squeeze(vals, dim)
+        sel_idx = mx.squeeze(sel_idx, dim)
+    if keepdim and a.ndim > 1:
+        vals = mx.expand_dims(vals, dim)
+        sel_idx = mx.expand_dims(sel_idx, dim)
+    return (vals.astype(a.dtype), sel_idx.astype(mx.int64))
+
+
 def _is_integral_dtype(dt):
     return mx.issubdtype(dt, mx.integer) or mx.issubdtype(dt, mx.bool_)
 
@@ -1913,6 +1992,8 @@ _FUNC_SPECS = {
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),
     "topk": _topk,
     "multinomial": _multinomial,
+    "mode": _mode,
+    "kthvalue": _kthvalue,
     "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "index_select": lambda a, dim, i: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
