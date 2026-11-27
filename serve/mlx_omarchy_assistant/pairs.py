@@ -823,6 +823,7 @@ class PairManager:
         self._chat_prompt_cache_size: int = 0
         self._available_bytes_override: int | None = None  # test seam
         self._cancel = threading.Event()
+        self._replacing_chat = False
 
 
     def _available_bytes(self) -> int:
@@ -878,7 +879,6 @@ class PairManager:
         if self._lifetime_read_fd is None or self._lifetime_write_fd is None:
             self._close_lifetime()
             read_fd, write_fd = os.pipe()
-            os.set_inheritable(read_fd, True)
             self._lifetime_read_fd = read_fd
             self._lifetime_write_fd = write_fd
         return self._lifetime_read_fd
@@ -890,14 +890,24 @@ class PairManager:
         partial downloads. Returns the verified-complete path."""
         progress("download", role="chat" if patterns is not None else "download",
                  model_id=model_id)
-        lifetime_r = self._ensure_lifetime_pipe()
         log_path = self.home / "assistant" / "logs" / f"download-{model_id}.log"
         argv = [sys.executable, "-c", _download_child_code(
             resolved.repo, resolved.revision, str(serve_cli.hf_cache_dir()),
             patterns)]
-        proc = managed.spawn_supervised(argv, lifetime_read_fd=lifetime_r,
-                                        env=self._child_env(),
-                                        log_path=log_path)
+        try:
+            lifetime_r = self._ensure_lifetime_pipe()
+            proc = managed.spawn_supervised(argv, lifetime_read_fd=lifetime_r,
+                                            env=self._child_env(),
+                                            log_path=log_path,
+                                            log_root=self.home)
+        except (OSError, ValueError, managed.WorkerError) as exc:
+            unverified = exc.proc if isinstance(exc, managed.WorkerError) else None
+            if unverified is not None:
+                role = f"download-{model_id}"
+                self._children[role] = managed.ManagedChild(role, unverified, "")
+            raise PairError(
+                f"{model_id}: could not start download ({exc}); "
+                f"log: {log_path}") from exc
         deadline = time.monotonic() + DOWNLOAD_TIMEOUT_SECONDS
         while proc.poll() is None:
             if self._cancel.is_set():
@@ -913,10 +923,12 @@ class PairManager:
             raise PairError(f"{model_id}: download failed (exit "
                             f"{proc.returncode}); log: {log_path}")
         try:
-            lines = [ln for ln in log_path.read_text(encoding="utf-8")
+            lines = [ln for ln in managed.read_log_tail(log_path, root=self.home)
                      .strip().splitlines() if ln.strip()]
+            if not lines or "\x00" in lines[-1]:
+                raise ValueError("empty or invalid snapshot path")
             path = Path(lines[-1])
-        except (OSError, IndexError) as exc:
+        except (OSError, ValueError) as exc:
             raise PairError(
                 f"{model_id}: download finished but reported no snapshot path "
                 f"({exc}); log: {log_path}") from exc
@@ -982,14 +994,20 @@ class PairManager:
 
 
     def status(self) -> dict:
-        if self._children:
-            managed.reap_pair_records(self._pair_id, self.home,
-                                      children=tuple(self._children.values()))
-        dead = sorted(c.role for c in tuple(self._children.values())
-                      if c.popen.poll() is not None)
-        if dead and self._state == "ready":
-            self._state = "error"
-            self._error = f"worker(s) exited: {', '.join(dead)}"
+        if self._op_lock.acquire(blocking=False):
+            try:
+                if not self._replacing_chat:
+                    if self._children and self._pair_id:
+                        managed.reap_pair_records(
+                            self._pair_id, self.home,
+                            children=tuple(self._children.values()))
+                    dead = sorted(c.role for c in tuple(self._children.values())
+                                  if c.popen.poll() is not None)
+                    if dead and self._state == "ready":
+                        self._state = "error"
+                        self._error = f"worker(s) exited: {', '.join(dead)}"
+            finally:
+                self._op_lock.release()
         pair = (self._pair(self._pair_id) if self._pair_id else None)
         children = [{"role": c.role, "pid": c.popen.pid,
                      "alive": c.popen.poll() is None}
@@ -1284,11 +1302,21 @@ class PairManager:
                 "--variant", "root", "--revision", decision["revision"], "--yes"]
         # supervised like downloads: manager death or cancel kills the
         # converter (bounded, no orphan), output lands in a readable log
-        lifetime_r = self._ensure_lifetime_pipe()
         log_path = (self.home / "assistant" / "logs"
                     / f"convert-{decision['id']}.log")
-        proc = managed.spawn_supervised(argv, lifetime_read_fd=lifetime_r,
-                                        env=env, log_path=log_path)
+        try:
+            lifetime_r = self._ensure_lifetime_pipe()
+            proc = managed.spawn_supervised(argv, lifetime_read_fd=lifetime_r,
+                                            env=env, log_path=log_path,
+                                            log_root=self.home)
+        except (OSError, ValueError, managed.WorkerError) as exc:
+            unverified = exc.proc if isinstance(exc, managed.WorkerError) else None
+            if unverified is not None:
+                role = f"convert-{decision['id']}"
+                self._children[role] = managed.ManagedChild(role, unverified, "")
+            raise PairError(
+                f"{decision['id']}: could not start conversion ({exc}); "
+                f"log: {log_path}") from exc
         deadline = time.monotonic() + CONVERT_TIMEOUT_SECONDS
         while proc.poll() is None:
             if self._cancel.is_set():
@@ -1302,10 +1330,12 @@ class PairManager:
             time.sleep(0.2)
         if proc.returncode != 0:
             try:
-                tail = " | ".join(log_path.read_text(encoding="utf-8",
-                                                     errors="replace")
-                                  .strip().splitlines()[-5:])
-            except OSError:
+                tail = " | ".join(
+                    managed.read_log_tail(log_path, root=self.home)
+                    .strip().splitlines()[-5:])
+            except (OSError, ValueError):
+                tail = ""
+            if not tail:
                 tail = f"log: {log_path}"
             raise PairError(
                 f"{decision['id']}: conversion failed (exit {proc.returncode}): "
@@ -1433,7 +1463,7 @@ class PairManager:
             # a child whose termination cannot be verified stays owned
             survivors = {}
             for child in self._children.values():
-                if not managed.terminate(child.popen):
+                if not self._safe_terminate(child.popen):
                     survivors[child.role] = child
             managed.reap_pair_records(pair["id"], self.home,
                                       children=self._children.values())
@@ -1496,11 +1526,12 @@ class PairManager:
             self._context_tokens = context
             self._chat_prompt_cache_size = cache_size
             self._error = None
-            lifetime_r = self._ensure_lifetime_pipe()
             env = self._child_env()
             log_dir = self.home / "assistant" / "logs"
             chat_port = decision_port = None
+            spawning: tuple[str, str, str] | None = None
             try:
+                lifetime_r = self._ensure_lifetime_pipe()
                 chat_port, decision_port = managed.free_ports(2)
                 specs = {
                     "chat": managed.WorkerSpec("chat", prepared["chat_path"],
@@ -1522,14 +1553,16 @@ class PairManager:
                                "bytes": record["bytes"],
                                "pair_id": pair["id"]}
                     log_path = log_dir / f"{pair['id']}-{role}.log"
+                    spawning = (role, record_name, record["owner"])
                     popen = managed.spawn_claiming_worker(
                         builders[role](specs[role]), payload,
                         lifetime_read_fd=lifetime_r, env=child_env,
-                        log_path=log_path)
+                        log_path=log_path, log_root=self.home)
                     # register IMMEDIATELY: a later role's failure must be
                     # able to terminate and reap this child
-                    self._children[role] = managed.ManagedChild(role, popen,
-                                                                record_name)
+                    self._children[role] = managed.ManagedChild(
+                        role, popen, record_name, owner=record["owner"])
+                    spawning = None
                 self._check_cancel("health wait")
 
                 def _abort():
@@ -1560,15 +1593,23 @@ class PairManager:
                     raise managed.WorkerError(
                         f"workers failed to become healthy: {'; '.join(failed)}")
             except Exception as exc:
+                unverified = (exc.proc if isinstance(exc, managed.WorkerError)
+                              else None)
+                if unverified is not None and spawning is not None:
+                    s_role, s_record, s_owner = spawning
+                    self._children[s_role] = managed.ManagedChild(
+                        s_role, unverified, s_record, owner=s_owner)
                 survivors = {}
                 for role, child in self._children.items():
-                    if not managed.terminate(child.popen):
+                    if not self._safe_terminate(child.popen):
                         # termination unconfirmed: keep the child owned so
                         # status()/stop() keep watching it and its record
                         survivors[role] = child
                 managed.reap_pair_records(pair["id"], self.home,
                                           children=self._children.values())
-                self._release_unclaimed_records(pair["id"])
+                self._release_unclaimed_records(
+                    pair["id"],
+                    retained={c.record_name for c in survivors.values()})
                 self._children = survivors
                 self._close_lifetime()
                 self._chat_prompt_cache_size = 0
@@ -1611,16 +1652,31 @@ class PairManager:
         }
         write_pair_lock(self.home, pair["id"], lock)
 
-    def _release_unclaimed_records(self, pair_id: str) -> None:
+    def _release_unclaimed_records(self, pair_id: str, *,
+                                   retained: set[str] | frozenset[str] = frozenset()) -> None:
         """Parent-owned (never claimed) records — e.g. voice admission — are
-        released only by the manager that owns their tokens."""
+        released only by the manager that owns their tokens. Records whose
+        name is in `retained` belong to live children with unverified exits
+        and must keep their reservations."""
         for name, record in budget.pair_records(pair_id, self.home).items():
+            if name in retained:
+                continue
+            owned = self._records.get(name)
+            if owned is None or owned.get("owner") != record.get("owner"):
+                continue
             if record.get("claimed") is None:
                 try:
                     budget.clear_reservation(name, home=self.home,
-                                             owner=record["owner"])
+                                             owner=owned["owner"])
                 except budget.BudgetError:
                     pass
+
+    @staticmethod
+    def _safe_terminate(popen) -> bool:
+        try:
+            return bool(managed.terminate(popen))
+        except Exception:
+            return popen.poll() is not None
 
     def _close_lifetime(self) -> None:
         for attr in ("_lifetime_write_fd", "_lifetime_read_fd"):
@@ -1657,23 +1713,26 @@ class PairManager:
             report = {"stopped": False, "children": {}, "cleared": [],
                       "retained": []}
             for role, child in self._children.items():
-                confirmed = managed.terminate(child.popen)
+                confirmed = self._safe_terminate(child.popen)
                 report["children"][role] = {
                     "pid": child.popen.pid,
                     "confirmed_dead": confirmed,
                     "returncode": child.popen.poll(),
                 }
             self._close_lifetime()
+            retained_children = {
+                role: child for role, child in self._children.items()
+                if not report["children"][role]["confirmed_dead"]}
             if self._pair_id:
                 report["cleared"] = managed.reap_pair_records(
                     self._pair_id, self.home, children=self._children.values())
-                self._release_unclaimed_records(self._pair_id)
+                self._release_unclaimed_records(
+                    self._pair_id,
+                    retained={c.record_name for c in retained_children.values()})
                 report["retained"] = sorted(
                     set(budget.pair_records(self._pair_id, self.home))
                     - set(report["cleared"]))
-            self._children = {role: child for role, child in
-                              self._children.items()
-                              if not report["children"][role]["confirmed_dead"]}
+            self._children = retained_children
             self._context_tokens = None
             self._chat_prompt_cache_size = 0
             if self._prepared:
@@ -1690,7 +1749,8 @@ class PairManager:
         """Grow the chat worker's admitted context to at least required_tokens:
         one atomic fit-checked reservation resize, then a chat-worker restart
         at the new cap (the mlx-lm cap is fixed at launch). The decision worker
-        is untouched. Refusal retains the prior cap."""
+        is untouched. Admission or health refusal retains the prior cap; a
+        post-termination spawn or port-allocation failure settles the pair."""
         with self._op_lock:
             if self._state != "ready" or self._prepared is None:
                 raise PairError("ensure_context requires a running pair")
@@ -1782,7 +1842,7 @@ class PairManager:
                     lifetime_read_fd=self._lifetime_read_fd,
                     env=dict(self._child_env(),
                              **{cap_shim.LIMIT_ENV: str(tokens)}),
-                    log_path=log_path)
+                    log_path=log_path, log_root=self.home)
 
             def restore_reservation():
                 budget.resize_reservation(chat["id"], current_bytes,
@@ -1798,62 +1858,86 @@ class PairManager:
                         "retained with its reservation")
 
             old_child = self._children["chat"]
-            if not managed.terminate(old_child.popen):
-                # the old worker is still live at `current`: put the
-                # reservation back so admitted bytes match the running worker
+            self._replacing_chat = True
+            try:
+                if not managed.terminate(old_child.popen):
+                    # the old worker is still live at `current`: put the
+                    # reservation back so admitted bytes match the running worker
+                    restore_reservation()
+                    return {"ok": False, "changed": False, "reason": "worker",
+                            "error": "chat worker did not confirm termination; "
+                                     "the running worker keeps the prior "
+                                     "reservation",
+                            "context_tokens": current,
+                            "requested": required_tokens}
+                try:
+                    new_port = managed.free_port()
+                    popen = spawn_chat(required_tokens, new_port, new_cache)
+                except Exception as exc:
+                    unverified = (exc.proc if isinstance(exc, managed.WorkerError)
+                                  else None)
+                    if unverified is not None:
+                        self._children = {
+                            **self._children,
+                            "chat": managed.ManagedChild(
+                                "chat", unverified, chat["id"],
+                                owner=record["owner"]),
+                        }
+                    raise PairError(stop_note(
+                        f"chat worker restart failed to spawn: {exc}")) from exc
+                self._children = {**self._children,
+                                  "chat": managed.ManagedChild(
+                                      "chat", popen, chat["id"],
+                                      owner=record["owner"])}
+                abort = self._abort_predicate()
+                if managed.wait_health(f"http://127.0.0.1:{new_port}/v1/models",
+                                       deadline=HEALTH_TIMEOUT_SECONDS, abort=abort):
+                    prepared["chat_url"] = f"http://127.0.0.1:{new_port}/v1"
+                    self._context_tokens = required_tokens
+                    self._chat_prompt_cache_size = new_cache
+                    self._records[chat["id"]]["bytes"] = new_bytes
+                    return {"ok": True, "changed": True,
+                            "context_tokens": required_tokens,
+                            "chat_prompt_cache_size": new_cache,
+                            "limits": sizing["limits"], "requested": required_tokens}
+                # the growth failed: the failed candidate is terminated and
+                # verified dead BEFORE the reservation is touched or any
+                # fallback spawns, and it stays tracked until then
+                candidate = self._children["chat"]
+                if not managed.terminate(candidate.popen):
+                    raise PairError(stop_note(
+                        "grown chat worker would not confirm termination"))
                 restore_reservation()
+                try:
+                    fallback_port = managed.free_port()
+                    popen = spawn_chat(current, fallback_port, current_cache)
+                except Exception as exc:
+                    unverified = (exc.proc if isinstance(exc, managed.WorkerError)
+                                  else None)
+                    if unverified is not None:
+                        self._children = {
+                            **self._children,
+                            "chat": managed.ManagedChild(
+                                "chat", unverified, chat["id"],
+                                owner=record["owner"]),
+                        }
+                    raise PairError(stop_note(
+                        f"chat worker failed health at {required_tokens} tokens "
+                        f"and the fallback did not spawn: {exc}")) from exc
+                self._children = {**self._children,
+                                  "chat": managed.ManagedChild(
+                                      "chat", popen, chat["id"],
+                                      owner=record["owner"])}
+                if not managed.wait_health(
+                        f"http://127.0.0.1:{fallback_port}/v1/models",
+                        deadline=HEALTH_TIMEOUT_SECONDS, abort=abort):
+                    raise PairError(stop_note(
+                        "chat worker failed to restart at either context"))
+                prepared["chat_url"] = f"http://127.0.0.1:{fallback_port}/v1"
+                self._context_tokens = current
                 return {"ok": False, "changed": False, "reason": "worker",
-                        "error": "chat worker did not confirm termination; "
-                                 "the running worker keeps the prior "
-                                 "reservation",
-                        "context_tokens": current,
-                        "requested": required_tokens}
-            new_port = managed.free_port()
-            try:
-                popen = spawn_chat(required_tokens, new_port, new_cache)
-            except Exception as exc:
-                restore_reservation()
-                raise PairError(f"chat worker restart failed to spawn: {exc}; "
-                                "reservation restored to the prior context"
-                                ) from exc
-            self._children = {**self._children,
-                              "chat": managed.ManagedChild("chat", popen, chat["id"])}
-            abort = self._abort_predicate()
-            if managed.wait_health(f"http://127.0.0.1:{new_port}/v1/models",
-                                   deadline=HEALTH_TIMEOUT_SECONDS, abort=abort):
-                prepared["chat_url"] = f"http://127.0.0.1:{new_port}/v1"
-                self._context_tokens = required_tokens
-                self._chat_prompt_cache_size = new_cache
-                self._records[chat["id"]]["bytes"] = new_bytes
-                return {"ok": True, "changed": True,
-                        "context_tokens": required_tokens,
-                        "chat_prompt_cache_size": new_cache,
-                        "limits": sizing["limits"], "requested": required_tokens}
-            # the growth failed: the failed candidate is terminated and
-            # verified dead BEFORE the reservation is touched or any
-            # fallback spawns, and it stays tracked until then
-            candidate = self._children["chat"]
-            if not managed.terminate(candidate.popen):
-                raise PairError(stop_note(
-                    "grown chat worker would not confirm termination"))
-            restore_reservation()
-            fallback_port = managed.free_port()
-            try:
-                popen = spawn_chat(current, fallback_port, current_cache)
-            except Exception as exc:
-                raise PairError(stop_note(
-                    f"chat worker failed health at {required_tokens} tokens "
-                    f"and the fallback did not spawn: {exc}")) from exc
-            self._children = {**self._children,
-                              "chat": managed.ManagedChild("chat", popen, chat["id"])}
-            if not managed.wait_health(
-                    f"http://127.0.0.1:{fallback_port}/v1/models",
-                    deadline=HEALTH_TIMEOUT_SECONDS, abort=abort):
-                raise PairError(stop_note(
-                    "chat worker failed to restart at either context"))
-            prepared["chat_url"] = f"http://127.0.0.1:{fallback_port}/v1"
-            self._context_tokens = current
-            return {"ok": False, "changed": False, "reason": "worker",
-                    "error": f"chat worker failed health at {required_tokens} "
-                             "tokens; the prior context is still serving",
-                    "context_tokens": current, "requested": required_tokens}
+                        "error": f"chat worker failed health at {required_tokens} "
+                                 "tokens; the prior context is still serving",
+                        "context_tokens": current, "requested": required_tokens}
+            finally:
+                self._replacing_chat = False
