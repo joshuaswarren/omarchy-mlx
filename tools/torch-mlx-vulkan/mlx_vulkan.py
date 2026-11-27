@@ -1969,6 +1969,28 @@ def _softplus(a, beta=1, threshold=20):
                     mx.log1p(mx.exp(bx)) / beta).astype(a.dtype)
 
 
+def _elu(a, alpha=1.0, scale=1.0, input_scale=1.0):
+    # aten.elu(input, alpha=1, scale=1, input_scale=1):
+    #   scale*x when x > 0, else alpha*scale*(exp(input_scale*x) - 1)
+    a, f = _opmath_f32(a)
+    out = mx.where(mx.greater(f, 0.0), scale * f,
+                   scale * alpha * (mx.exp(input_scale * f) - 1.0))
+    return out.astype(a.dtype)
+
+
+def _selu(a):
+    # aten.selu is elu with the published constants folded in:
+    #   scale=1.0507009873554805, alpha=1.6732632423543772, input_scale=1
+    return _elu(a, alpha=1.6732632423543772, scale=1.0507009873554805)
+
+
+def _celu(a, alpha=1.0):
+    # aten.celu(input, alpha=1): max(0, x) + min(0, alpha*(exp(x/alpha) - 1))
+    a, f = _opmath_f32(a)
+    out = mx.maximum(f, 0.0) + mx.minimum(alpha * (mx.exp(f / alpha) - 1.0), 0.0)
+    return out.astype(a.dtype)
+
+
 def _mish(a, inplace=False):
     # aten.mish(input): x * tanh(softplus(x)) under softplus' defaults
     # (beta=1, threshold=20).
@@ -2115,6 +2137,13 @@ _FUNC_SPECS = {
     "softplus": _softplus,
     "mish": _mish,
     "relu_": lambda a: mx.maximum(a, 0.0),
+    # PT-AL-a: the elu family (ViT, Conformer, speech models).
+    "elu": _elu,
+    "elu_": _elu,
+    "selu": _selu,
+    "selu_": _selu,
+    "celu": _celu,
+    "celu_": _celu,
     # PT-AL-b: the piecewise activation family (MobileNetV3 et al.)
     "hardsigmoid": lambda a, inplace=False: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
     "hardswish": lambda a, inplace=False: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),
