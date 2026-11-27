@@ -12094,7 +12094,9 @@ bool dispatch_quantized_gemv_group(
       if (kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 &&
           omarchy::qmm_fast_only_default_part(
               encoder.device().capabilities().device_name)) {
-        kernel = ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast;
+        kernel = (members.size() <= 3u)
+            ? ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast3w
+            : ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast;
       } else if (kernel ==
                      ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Upfront &&
           omarchy::qmm_g14c_fast_only_default_part(

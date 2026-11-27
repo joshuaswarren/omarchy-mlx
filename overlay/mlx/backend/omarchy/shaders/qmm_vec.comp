@@ -1221,6 +1221,59 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   } \
 }
 #endif
+#elif defined(QMM_W2_UPFIFO) && defined(QMM_FAST_ONLY)
+// G13C-gated fast-tile-only FIFO-ordered upfront uvec2 loop (wv -> xa,xb ->
+// s,b -> 4 quads -> fma): issues DRAM weights first, L1-hot x second, and
+// late-use scale/bias last so single-slot FIFO waits overlap s/b with quad
+// math on shipped Mesa and AGX_SMART_WAITS places s/b in slot 1. Uses uniform
+// sb_delta (no bp[]) and trims unreachable slow-path CFG. Bit-identical (0 ULP).
+#define Q4_ROWS(W, S, B) { \
+  uint row_base[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    row_base[r] = min(column + r, n - 1u); \
+  } \
+  uint pairs_per_row = words_per_row >> 1u; \
+  uint w_base_pair = w_base >> 1u; \
+  uint wp[ROWS_PER_SLOT]; \
+  uint sp[ROWS_PER_SLOT]; \
+  uint sb_delta = b_base - s_base; \
+  uint g0 = lane_in_slot >> 2u; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    wp[r] = w_base_pair + row_base[r] * pairs_per_row + lane_in_slot; \
+    sp[r] = s_base + row_base[r] * groups_per_row + g0; \
+  } \
+  uint xp = (x_row >> 3u) + (lane_in_slot << 1u); \
+  uint iters = pairs_per_row >> 5u; \
+  for (uint wi_ = 0u; wi_ < iters; ++wi_) { \
+    precise float dot[ROWS_PER_SLOT]; \
+    precise float input_sum = 0.0; \
+    uvec2 wv[ROWS_PER_SLOT]; \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      dot[r] = 0.0; \
+      wv[r] = W.values[wp[r]]; \
+      wp[r] += 32u; \
+    } \
+    uvec4 xa = OUTGATE_XQUAD(xp); \
+    uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
+    xp += 64u; \
+    float scale_r[ROWS_PER_SLOT]; \
+    float bias_r[ROWS_PER_SLOT]; \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      uint spr = sp[r]; \
+      sp[r] = spr + 8u; \
+      scale_r[r] = LOAD_VALUE(S.values[spr]); \
+      bias_r[r] = LOAD_VALUE(B.values[spr + sb_delta]); \
+    } \
+    Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
+    Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
+    Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
+    Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      precise float bias_term = input_sum * bias_r[r]; \
+      acc[r] += fma(scale_r[r], dot[r], bias_term); \
+    } \
+  } \
+}
 #else
 // Hoisted uvec2 fast-tile loop with low register footprint: replaces bp[] with
 // uniform sb_delta, splits xa/xb live ranges across the two halves of each
@@ -1533,6 +1586,13 @@ void main() {
     which = 1u;
     workgroup -= groups0;
     n = n1;
+#ifdef QMM_MULTI_3W
+  } else {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  }
+#else
   } else if (workgroup < groups0 + groups1 + groups2) {
     which = 2u;
     workgroup -= groups0 + groups1;
@@ -1542,6 +1602,7 @@ void main() {
     workgroup -= groups0 + groups1 + groups2;
     n = n3;
   }
+#endif
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
   bool column_active = column < n;
   uint words_per_row = params.matrix_k / 8u;
@@ -2141,6 +2202,13 @@ void main() {
     which = 1u;
     workgroup -= groups0;
     n = n1;
+#ifdef QMM_MULTI_3W
+  } else {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  }
+#else
   } else if (workgroup < groups0 + groups1 + groups2) {
     which = 2u;
     workgroup -= groups0 + groups1;
@@ -2150,6 +2218,7 @@ void main() {
     workgroup -= groups0 + groups1 + groups2;
     n = n3;
   }
+#endif
 #endif
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
   bool column_active = column < n;
@@ -2197,7 +2266,7 @@ void main() {
       Q4_ROWS(input_w0, scales0, biases0)
     } else if (which == 1u) {
       Q4_ROWS(input_w1, scales1, biases1)
-#ifdef QMM_MULTI_3M_PLAIN
+#if defined(QMM_MULTI_3M_PLAIN) || defined(QMM_MULTI_3W)
     } else {
       Q4_ROWS(input_w2, scales2, biases2)
     }
@@ -2220,7 +2289,7 @@ void main() {
           Q4_MULTI_STORE(0, rounded)
         } else if (which == 1u) {
           Q4_MULTI_STORE(1, rounded)
-#ifdef QMM_MULTI_3M_PLAIN
+#if defined(QMM_MULTI_3M_PLAIN) || defined(QMM_MULTI_3W)
         } else {
           Q4_MULTI_STORE(2, rounded)
         }
@@ -2273,6 +2342,13 @@ void main() {
     which = 1u;
     workgroup -= groups0;
     n = n1;
+#ifdef QMM_MULTI_3W
+  } else {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  }
+#else
   } else if (workgroup < groups0 + groups1 + groups2) {
     which = 2u;
     workgroup -= groups0 + groups1;
@@ -2282,6 +2358,7 @@ void main() {
     workgroup -= groups0 + groups1 + groups2;
     n = n3;
   }
+#endif
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot;
   bool column_active = column < n;
   precise float accumulator = 0.0;
