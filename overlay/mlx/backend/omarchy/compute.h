@@ -1385,6 +1385,13 @@ enum class ComputeKernel : uint16_t {
   // kernel ids stable).
   QmmVecQ4WordSubgroupBF16R2S4W2,
   QmmVecQ4SwigluBF16R1S4W2,
+  // Serial-row Metal qmv_fast_impl-style Q4 word/SwiGLU/ResNormVec4 variants.
+  QmmVecQ4WordSubgroupBF16R4S2W2Ser,
+  QmmVecQ4WordSubgroupBF16R4S4W2Ser,
+  QmmVecQ4WordSubgroupBF16R4S16W2Ser,
+  QmmVecQ4ResNormVec4BF16R4S16W2Ser,
+  QmmVecQ4SwigluBF16R1S4W2Ser,
+  QmmVecQ4SwigluBF16R2S2W2Ser,
   Count,
 };
 
