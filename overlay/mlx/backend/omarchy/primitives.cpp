@@ -212,8 +212,18 @@ inline bool g14c_fast_only_swar() {
 }
 inline bool q4_w4_want(const char* family) {
   const char* v = omarchy::env_str("MLX_OMARCHY_Q4_W4");
-  return v != nullptr &&
-      (std::strcmp(v, "1") == 0 || std::strcmp(v, family) == 0);
+  if (v == nullptr || v[0] == '\0') {
+    return false;
+  }
+  if (std::strcmp(v, "1") == 0 || std::strcmp(v, "hoist") == 0 ||
+      std::strcmp(v, family) == 0) {
+    return true;
+  }
+  return std::strncmp(v, "hoist_", 6) == 0 && std::strcmp(v + 6, family) == 0;
+}
+inline bool q4_w4_hoist_only() {
+  const char* v = omarchy::env_str("MLX_OMARCHY_Q4_W4");
+  return v != nullptr && std::strncmp(v, "hoist", 5) == 0;
 }
 inline bool q4_r4_want(const char* family) {
   const char* v = omarchy::env_str("MLX_OMARCHY_Q4_R4");
@@ -9764,14 +9774,18 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               w_caps.max_compute_work_group_size[0] >= 128u) {
             const bool fo_word = g14c_fast_only_want() &&
                 (params.matrix_k % 512u == 0u) && (params.matrix_n % 8u == 0u);
-            const bool w4_word = w_caps.shader_float16 && q4_w4_want("word") &&
+            const bool w4_hoist = q4_w4_hoist_only();
+            const bool w4_word = (w4_hoist || w_caps.shader_float16) &&
+                q4_w4_want("word") &&
                 (params.matrix_k % 1024u == 0u) && (params.matrix_n % 8u == 0u) &&
                 (params.rhs_offset % 4u == 0u) && (params.shape[1] % 4u == 0u);
             const bool r4_word = q4_r4_want("word") &&
                 (params.matrix_k % 512u == 0u) && (params.matrix_n % 8u == 0u);
             if (w4_word) {
-              vec_kernel = omarchy::ComputeKernel::
-                  QmmVecQ4WordSubgroupBF16R2S4W4SwarF16Fo;
+              vec_kernel = w4_hoist
+                  ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W4HoistFo
+                  : omarchy::ComputeKernel::
+                        QmmVecQ4WordSubgroupBF16R2S4W4SwarF16Fo;
               qmm_groups = (params.matrix_n + 7u) / 8u;
             } else if (r4_word) {
               const bool r4_swar = w_caps.shader_float16 && !q4_r4_hoist_only();
@@ -11228,9 +11242,34 @@ bool dispatch_quantized_gemv_group(
     const uint32_t sw_k = static_cast<uint32_t>(x.shape(-1));
     const uint32_t sw_n = static_cast<uint32_t>(members[0].node.shape(-1));
     const bool sw_fo_ok = (sw_k % 512u == 0u) && (sw_n % 8u == 0u);
-    const char* sw_r2_swar_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_SWAR_R2");
+    const char* sw_hoist_geom_env =
+        omarchy::env_str("MLX_OMARCHY_SWIGLU_HOIST_GEOM");
     bool sw_r2_swar_picked = false;
-    if (sw_r2_swar_env != nullptr && sw_r2_swar_env[0] != '\0' &&
+    if (sw_hoist_geom_env != nullptr && sw_hoist_geom_env[0] != '\0' &&
+        sw_fo_ok) {
+      if (std::strcmp(sw_hoist_geom_env, "r2s4") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 128u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 128u) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R2S4W2HoistFo;
+        swiglu_cols = 8u;
+        sw_r2_swar_picked = true;
+      } else if (std::strcmp(sw_hoist_geom_env, "r2s2") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 64u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 64u) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R2S2W2HoistFo;
+        swiglu_cols = 4u;
+        sw_r2_swar_picked = true;
+      } else if (std::strcmp(sw_hoist_geom_env, "r1s8") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 256u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 256u) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2HoistFo;
+        swiglu_cols = 8u;
+        sw_r2_swar_picked = true;
+      }
+    }
+    const char* sw_r2_swar_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_SWAR_R2");
+    if (!sw_r2_swar_picked &&
+        sw_r2_swar_env != nullptr && sw_r2_swar_env[0] != '\0' &&
         encoder.device().capabilities().shader_float16) {
       if (std::strcmp(sw_r2_swar_env, "4") == 0 &&
           encoder.device().capabilities().max_compute_work_group_invocations >= 128u &&
@@ -11267,7 +11306,9 @@ bool dispatch_quantized_gemv_group(
       if (sw_s4_on &&
           encoder.device().capabilities().max_compute_work_group_invocations >= 128u &&
           encoder.device().capabilities().max_compute_work_group_size[0] >= 128u) {
-        const bool sw_w4 = encoder.device().capabilities().shader_float16 &&
+        const bool sw_w4_hoist = q4_w4_hoist_only();
+        const bool sw_w4 =
+            (sw_w4_hoist || encoder.device().capabilities().shader_float16) &&
             q4_w4_want("swiglu") && (sw_k % 1024u == 0u) && (sw_n % 8u == 0u);
         const bool swar_swiglu =
             encoder.device().capabilities().shader_float16 &&
@@ -11275,7 +11316,9 @@ bool dispatch_quantized_gemv_group(
         const bool hoist_swiglu =
             !swar_swiglu && q4_hoist_loads_want("swiglu");
         if (sw_w4) {
-          swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S4W4SwarF16Fo;
+          swiglu_kernel = sw_w4_hoist
+              ? ComputeKernel::QmmVecQ4SwigluBF16R1S4W4HoistFo
+              : ComputeKernel::QmmVecQ4SwigluBF16R1S4W4SwarF16Fo;
         } else if (g14c_fast_only_want() && sw_fo_ok) {
           const bool fo_swar = encoder.device().capabilities().shader_float16 &&
               (swar_swiglu || g14c_fast_only_swar());
@@ -11318,7 +11361,9 @@ bool dispatch_quantized_gemv_group(
         const uint32_t rn_n = static_cast<uint32_t>(members[0].node.shape(-1));
         const bool rn_vec4_dim = (rn_n == 2048u || rn_n == 4096u);
         const bool rn_fo_ok = rn_vec4_dim && (rn_k % 512u == 0u);
-        const bool rn_w4 = encoder.device().capabilities().shader_float16 &&
+        const bool rn_w4_hoist = q4_w4_hoist_only();
+        const bool rn_w4 =
+            (rn_w4_hoist || encoder.device().capabilities().shader_float16) &&
             q4_w4_want("resnorm") && rn_vec4_dim && (rn_k % 1024u == 0u);
         const bool rn_r4 = q4_r4_want("resnorm") && rn_fo_ok;
         const char* rn_epifast_env =
@@ -11332,7 +11377,9 @@ bool dispatch_quantized_gemv_group(
              (rn_epifast_on && std::strcmp(rn_epifast_env, "swar") == 0));
         const bool hoist_rn = !swar_rn && q4_hoist_loads_want("resnorm");
         if (rn_w4) {
-          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W4SwarF16Fo;
+          resnorm_kernel = rn_w4_hoist
+              ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W4HoistFo
+              : ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W4SwarF16Fo;
         } else if (rn_r4) {
           const bool r4_swar = encoder.device().capabilities().shader_float16 &&
               !q4_r4_hoist_only();
@@ -11363,6 +11410,27 @@ bool dispatch_quantized_gemv_group(
       resnorm_vec4_active = true;
     }
   }
+  uint32_t multi_cols = geom.columns;
+  ComputeKernel multi_geom_kernel = geom.multi;
+  bool multi_geom_override = false;
+  if (!res_norm_active && !dedicated_swiglu_active && !token_route &&
+      outgate == nullptr && dtype == bfloat16 && subgroup_ready &&
+      geom.multi == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2) {
+    const char* mg_env = omarchy::env_str("MLX_OMARCHY_MULTI_GEOM");
+    if (mg_env != nullptr && mg_env[0] != '\0') {
+      bool mg_fo_ok = (static_cast<uint32_t>(x.shape(-1)) % 512u == 0u);
+      for (size_t mi = 0; mi < members.size(); ++mi) {
+        if ((static_cast<uint32_t>(members[mi].node.shape(-1)) % 8u) != 0u) {
+          mg_fo_ok = false;
+        }
+      }
+      if (mg_fo_ok && std::strcmp(mg_env, "r4s4") == 0) {
+        multi_geom_kernel = ComputeKernel::QmmVecQ4MultiSubgroupBF16R4S4W2HoistFo;
+        multi_cols = 16u;
+        multi_geom_override = true;
+      }
+    }
+  }
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
   // resnorm epilogue kernels.
@@ -11375,7 +11443,7 @@ bool dispatch_quantized_gemv_group(
       ? swiglu_cols
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
-             ? geom.columns
+             ? multi_cols
              : 8u);
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
@@ -12091,6 +12159,9 @@ bool dispatch_quantized_gemv_group(
             (qmm_geometry().multi ==
              ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2)
                 ? ([&]() {
+                    if (multi_geom_override) {
+                      return multi_geom_kernel;
+                    }
                     bool multi_fo_ok = (params.matrix_k % 512u == 0u);
                     for (uint32_t mi = 0; mi < members.size(); ++mi) {
                       if ((params.shape[mi] % 8u) != 0u) {
@@ -17793,7 +17864,8 @@ void GreedyQuantizedArgmax::eval_gpu(
             caps.max_compute_work_group_size[0] >= 1024u) {
           const bool lm_fo_ok =
               (params.matrix_k % 512u == 0u) && (n % 8u == 0u);
-          const bool lm_w4 = caps.shader_float16 &&
+          const bool lm_w4_hoist = q4_w4_hoist_only();
+          const bool lm_w4 = (lm_w4_hoist || caps.shader_float16) &&
               (q4_w4_want("word") || q4_w4_want("lm_head")) &&
               (params.matrix_k % 1024u == 0u) && (n % 8u == 0u) &&
               (params.rhs_offset % 4u == 0u);
@@ -17804,8 +17876,10 @@ void GreedyQuantizedArgmax::eval_gpu(
           const bool hoist_lm = !swar_lm &&
               (q4_hoist_loads_want("word") || q4_hoist_loads_want("lm_head"));
           if (lm_w4) {
-            gemv_kernel = omarchy::ComputeKernel::
-                QmmVecQ4WordSubgroupBF16R2S32W4SwarF16Fo;
+            gemv_kernel = lm_w4_hoist
+                ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W4HoistFo
+                : omarchy::ComputeKernel::
+                      QmmVecQ4WordSubgroupBF16R2S32W4SwarF16Fo;
           } else if (lm_r4) {
             const bool r4_swar = caps.shader_float16 && !q4_r4_hoist_only();
             gemv_kernel = r4_swar

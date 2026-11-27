@@ -1465,6 +1465,16 @@ enum class ComputeKernel : uint16_t {
   // Fused GatherDequantBF16 + FastRmsNormAppleBF16 prologue (env-gated via
   // MLX_OMARCHY_PROLOGUE_NORM).
   GatherDequantNormBF16,
+  // Non-SWAR hoisted W4 (128-bit uvec4) and non-SWAR SwiGLU/Multi hoisted
+  // geometries (all env-gated default-OFF).
+  QmmVecQ4WordSubgroupBF16R2S4W4HoistFo,
+  QmmVecQ4WordSubgroupBF16R2S32W4HoistFo,
+  QmmVecQ4SwigluBF16R1S4W4HoistFo,
+  QmmVecQ4ResNormVec4BF16R2S32W4HoistFo,
+  QmmVecQ4SwigluBF16R2S4W2HoistFo,
+  QmmVecQ4SwigluBF16R2S2W2HoistFo,
+  QmmVecQ4SwigluBF16R1S8W2HoistFo,
+  QmmVecQ4MultiSubgroupBF16R4S4W2HoistFo,
   Count,
 };
 

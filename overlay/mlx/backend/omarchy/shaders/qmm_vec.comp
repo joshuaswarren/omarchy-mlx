@@ -2816,6 +2816,7 @@ void main() {
           bu[r] = LOAD_VALUE(biases1.values[sp[r]]);
           sp[r] += 16u;
         }
+#ifdef QMM_SWAR_F16
         #define SW_W4_STEP(WGE, WUE, XQ) { \
           float x0 = uintBitsToFloat(((XQ).x & 0xFFFFu) << 16u); \
           float x1 = uintBitsToFloat((XQ).x & 0xFFFF0000u); \
@@ -2832,6 +2833,11 @@ void main() {
             Q4_WORD_SWAR_F16_ACC(dot_u[r], (WUE), x0, x1, x2, x3, x4, x5, x6, x7) \
           } \
         }
+#else
+        #define SW_W4_STEP(WGE, WUE, XQ) \
+          Q4_QUAD_SWIGLU((WGE), (WUE), (XQ).x, (XQ).y) \
+          Q4_QUAD_SWIGLU((WGE) >> 16u, (WUE) >> 16u, (XQ).z, (XQ).w)
+#endif
         SW_W4_STEP(wvg[r].x, wvu[r].x, xa)
         SW_W4_STEP(wvg[r].y, wvu[r].y, xb)
         SW_W4_STEP(wvg[r].z, wvu[r].z, xc)
