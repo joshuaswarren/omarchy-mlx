@@ -1427,6 +1427,11 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast,
   QmmVecQ4SwigluBF16R1S4W2Fast,
   QmmVecQ4ResNormVec4BF16R2S32W2Fast,
+  // Track L: single-dispatch bf16 ArgReduce (uvec4 + 32-WG ticket combine)
+  // and wider-WG SwiGLU R1S16/R1S32 fast variants (env-gated default OFF).
+  ArgReduceSinglePassBF16,
+  QmmVecQ4SwigluBF16R1S16W2Fast,
+  QmmVecQ4SwigluBF16R1S32W2Fast,
   Count,
 };
 

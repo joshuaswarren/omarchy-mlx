@@ -4743,6 +4743,36 @@ void dispatch_arg_reduce_suffix(
   if (!walk_prefetch_enabled(encoder)) {
     params.flags |= kWalkLegacyFlag;
   }
+  if (rows == 1 && src.dtype() == bfloat16 && row_length >= 4096u &&
+      (row_length & 7u) == 0u && (params.lhs_offset & 7u) == 0u &&
+      omarchy::env_flag("MLX_OMARCHY_ARGREDUCE_SINGLE")) {
+    const auto& ar_caps = encoder.device().capabilities();
+    constexpr VkSubgroupFeatureFlags kArgSingleSg =
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+    if (ar_caps.subgroup_size == 32u &&
+        (ar_caps.subgroup_operations & kArgSingleSg) == kArgSingleSg &&
+        ar_caps.max_compute_work_group_invocations >= 1024u &&
+        ar_caps.max_compute_work_group_size[0] >= 1024u &&
+        encoder.device().compute().binding_limit() >= 4u) {
+      const uint32_t total_vecs = static_cast<uint32_t>(row_length >> 3u);
+      const uint32_t num_wgs =
+          std::min<uint32_t>(32u, (total_vecs + 1023u) / 1024u);
+      array partials(Shape{static_cast<int>(num_wgs * 2u)}, uint32, nullptr, {});
+      partials.set_data(allocate_omarchy(partials.nbytes()));
+      std::array<omarchy::ComputeBinding, 4> sp_bindings{
+          binding(src),
+          binding(partials),
+          binding(out),
+          encoder.resnorm_ticket_binding()};
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::ArgReduceSinglePassBF16,
+          sp_bindings,
+          params,
+          num_wgs);
+      encoder.add_temporary(partials);
+      return;
+    }
+  }
   bool float_row = src.dtype() == float32 || src.dtype() == float16 ||
       src.dtype() == bfloat16;
   uint32_t chunks = float_row &&
@@ -11153,23 +11183,42 @@ bool dispatch_quantized_gemv_group(
   ComputeKernel swiglu_kernel = geom.swiglu;
   uint32_t swiglu_cols = geom.swiglu_columns;
   if (dedicated_swiglu_active) {
-    const char* sw_r1_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_R1");
-    const bool sw_r1_on = (sw_r1_env != nullptr && sw_r1_env[0] != '\0')
-        ? (std::strcmp(sw_r1_env, "0") != 0)
-        : omarchy::qmm_swiglu_r1_default(qmm_dev_name);
-    if (sw_r1_on) {
-      const char* sw_s4_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_R1S4");
-      const bool sw_s4_on = (sw_s4_env != nullptr && sw_s4_env[0] != '\0')
-          ? (std::strcmp(sw_s4_env, "0") != 0)
-          : omarchy::qmm_swiglu_r1s4_default(qmm_dev_name);
-      if (sw_s4_on &&
-          encoder.device().capabilities().max_compute_work_group_invocations >= 128u &&
-          encoder.device().capabilities().max_compute_work_group_size[0] >= 128u) {
-        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S4W2;
-        swiglu_cols = 4u;
-      } else {
-        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
-        swiglu_cols = 8u;
+    const char* sw_r1s_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_R1S");
+    const bool sw_r1s_fast_ok = (k % 512 == 0) &&
+        members[0].node.inputs().size() == 4 &&
+        members[0].node.inputs()[1].ndim() == 2 &&
+        (members[0].node.inputs()[1].shape(0) % 8 == 0);
+    if (sw_r1s_env != nullptr && std::strcmp(sw_r1s_env, "32") == 0 &&
+        sw_r1s_fast_ok &&
+        encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
+        encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
+      swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S32W2Fast;
+      swiglu_cols = 32u;
+    } else if (sw_r1s_env != nullptr && std::strcmp(sw_r1s_env, "16") == 0 &&
+        sw_r1s_fast_ok &&
+        encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
+        encoder.device().capabilities().max_compute_work_group_size[0] >= 512u) {
+      swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S16W2Fast;
+      swiglu_cols = 16u;
+    } else {
+      const char* sw_r1_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_R1");
+      const bool sw_r1_on = (sw_r1_env != nullptr && sw_r1_env[0] != '\0')
+          ? (std::strcmp(sw_r1_env, "0") != 0)
+          : omarchy::qmm_swiglu_r1_default(qmm_dev_name);
+      if (sw_r1_on) {
+        const char* sw_s4_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_R1S4");
+        const bool sw_s4_on = (sw_s4_env != nullptr && sw_s4_env[0] != '\0')
+            ? (std::strcmp(sw_s4_env, "0") != 0)
+            : omarchy::qmm_swiglu_r1s4_default(qmm_dev_name);
+        if (sw_s4_on &&
+            encoder.device().capabilities().max_compute_work_group_invocations >= 128u &&
+            encoder.device().capabilities().max_compute_work_group_size[0] >= 128u) {
+          swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S4W2;
+          swiglu_cols = 4u;
+        } else {
+          swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
+          swiglu_cols = 8u;
+        }
       }
     }
   }
