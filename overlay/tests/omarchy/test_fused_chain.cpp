@@ -2208,8 +2208,8 @@ TEST_CASE("greedy prune default: the part rule and overrides") {
 
 TEST_CASE("greedy word over staged default: the part rule and overrides") {
   CHECK(omarchy::greedy_word_over_staged_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::greedy_word_over_staged_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M4 (G16G B1)"));
   CHECK_FALSE(omarchy::greedy_word_over_staged_part(""));
 
@@ -3356,15 +3356,25 @@ TEST_CASE("sdpa online rope norm: bit-exact output and k_cache with two fewer di
   CHECK(omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 4096u, 256, true));
   CHECK(!omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 4097u, 256, true));
   CHECK(!omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 512u, 256, false));
-  CHECK(!omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 512u));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 512u, 128, false));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 2304u, 128, false));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 2305u, 128, false));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 512u, 256, true));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 4096u, 256, true));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 4097u, 256, true));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 512u, 256, false));
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 8u, 512u), 4u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 8u, 127u), 1u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 16u, 512u), 2u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 16u, 63u), 1u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 (G13G B1)", 8u, 512u), 2u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 (G13G B1)", 8u, 127u), 1u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 (G13G B1)", 16u, 512u), 1u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 Max (G13C C0)", 8u, 512u), 1u);
   CHECK(omarchy::sdpa_outgate_default("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::sdpa_outgate_default("Apple M1 (G13G B1)"));
   CHECK(!omarchy::sdpa_outgate_default("Apple M1 Max (G13C C0)"));
-  CHECK(!omarchy::sdpa_outgate_default("Apple M1 (G13G B1)"));
+  CHECK(!omarchy::sdpa_outgate_default("Apple M4 (G16G B1)"));
   if (!compute_available()) {
     return;
   }

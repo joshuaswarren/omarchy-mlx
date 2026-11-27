@@ -439,10 +439,11 @@ TEST_CASE("GdnConvUpdate reads offset-carrying inputs, not flat bindings") {
 }
 
 TEST_CASE("coalesced GDN Sg32 default policy, accuracy, dispatch count, and off-switch") {
-  // Chip default: G14C equal-head only; every other part and unequal-head GQA stay off.
+  // Chip default: G14C and G13G equal-head only; other parts and unequal-head GQA stay off.
   CHECK(omarchy::gdn_conv_coalesced_default("Apple M2 Max (G14C B1)", 16, 16));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M2 Max (G14C B1)", 16, 32));
-  CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M1 (G13G B1)", 16, 16));
+  CHECK(omarchy::gdn_conv_coalesced_default("Apple M1 (G13G B1)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M1 (G13G B1)", 16, 32));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M1 Max (G13C C0)", 16, 16));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M6 (G18G B1)", 16, 16));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_default("", 16, 16));

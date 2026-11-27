@@ -379,24 +379,28 @@ int main(int argc, char** argv) {
   // uvec4 ResNorm (R2S16W2).
   {
     if (!mlx::core::omarchy::qmm_swiglu_r1_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_swiglu_r1_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_swiglu_r1_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_swiglu_r1_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_swiglu_r1_default part check\n";
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_resnorm_vec4_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_resnorm_vec4_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_resnorm_vec4_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_resnorm_vec4_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_resnorm_vec4_default part check\n";
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_resnorm_r2s32_default("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_resnorm_r2s32_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_resnorm_r2s32_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_resnorm_r2s32_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_resnorm_r2s32_default part check\n";
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_lm_r2s32_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_lm_r2s32_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_lm_r2s32_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_lm_r2s32_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_lm_r2s32_default part check\n";
