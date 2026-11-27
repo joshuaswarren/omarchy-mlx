@@ -435,27 +435,35 @@ def write_pair_lock(home: Path, pair_id: str, lock: dict) -> Path:
     return path
 
 
+def _read_capped(path: Path, cap: int) -> bytearray:
+    """A small regular file's bytes as a bytearray, or ValueError: never a
+    blocked open or read, never more than cap + 1 bytes in memory. A symlink to
+    a regular file is followed (Hugging Face snapshots link config.json into
+    blobs/)."""
+    # O_NONBLOCK: a FIFO opens without a writer and is refused below instead
+    # of blocking the open or the read.
+    with open(path, "rb", buffering=0,  # a buffered read would read ahead past the cap
+              opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("not a regular file")
+        if info.st_size > cap:
+            raise ValueError(f"exceeds {cap} bytes")
+        raw = bytearray()
+        while len(raw) <= cap:  # a short read is not EOF; stop at cap + 1
+            chunk = stream.read(cap + 1 - len(raw))
+            if not chunk:
+                break
+            raw += chunk
+    if len(raw) > cap:
+        raise ValueError(f"exceeds {cap} bytes")
+    return raw
+
+
 def load_pair_lock(home: Path, pair_id: str) -> dict | None:
     path = pair_lock_path(home, pair_id)
     try:
-        # O_NONBLOCK: a FIFO at the lock path opens without a writer and is
-        # refused below instead of blocking the open or the read.
-        with open(path, "rb", buffering=0,  # a buffered read would read ahead past the cap
-                  opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode):
-                raise ValueError("not a regular file")
-            if info.st_size > PAIR_LOCK_MAX_BYTES:
-                raise ValueError(f"exceeds {PAIR_LOCK_MAX_BYTES} bytes")
-            raw = bytearray()
-            while len(raw) <= PAIR_LOCK_MAX_BYTES:  # a short read is not EOF; stop at cap + 1
-                chunk = stream.read(PAIR_LOCK_MAX_BYTES + 1 - len(raw))
-                if not chunk:
-                    break
-                raw += chunk
-        if len(raw) > PAIR_LOCK_MAX_BYTES:
-            raise ValueError(f"exceeds {PAIR_LOCK_MAX_BYTES} bytes")
-        lock = json.loads(raw.decode("utf-8"))
+        lock = json.loads(_read_capped(path, PAIR_LOCK_MAX_BYTES).decode("utf-8"))
     except FileNotFoundError:
         return None
     except (OSError, ValueError, RecursionError) as exc:
@@ -712,12 +720,17 @@ def _artifact_int(value, where: str, minimum: int = 1) -> int:
     return value
 
 
+# A converted manifest is about 1 KiB and an encoder config a few KiB; the cap
+# bounds a damaged or hostile one, as the converter's own reads do.
+ARTIFACT_JSON_MAX_BYTES = 1 << 20
+
+
 def _encoder_cfg(encoder_dir: Path):
     """The three fields the Laya workspace math needs, read with stdlib only
     (mlx_omarchy_laya.model pulls mlx.core)."""
     path = Path(encoder_dir) / "config.json"
     try:
-        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg = json.loads(_read_capped(path, ARTIFACT_JSON_MAX_BYTES).decode("utf-8"))
     except (OSError, ValueError, RecursionError) as exc:
         raise PairError(f"encoder config {path} is unreadable: {exc}") from exc
     if not isinstance(cfg, dict):
@@ -730,7 +743,7 @@ def _encoder_cfg(encoder_dir: Path):
 def _read_manifest(model_dir: Path) -> dict:
     path = Path(model_dir) / "manifest.json"
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(_read_capped(path, ARTIFACT_JSON_MAX_BYTES).decode("utf-8"))
     except (OSError, ValueError, RecursionError):
         return {}
     return data if isinstance(data, dict) else {}

@@ -2314,6 +2314,39 @@ class UndecodablePairFileTests(BasePairTest):
                 self.assertEqual(_on_pinned_stack(lambda: pairs._read_manifest(model_dir)), {})
 
 
+def _call_on_fifo(case, path: Path, fn, *, writer: bool, payload: bytes = b"{}"):
+    """fn() in a bounded worker while path is a FIFO. Without a writer a
+    blocking open never returns; with one holding payload, a blocking read
+    never sees EOF. The FIFO is released afterwards either way."""
+    result = {}
+
+    def run():
+        try:
+            result["value"] = fn()
+        except BaseException as exc:  # re-raised in the caller
+            result["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    wfd = os.open(path, os.O_RDWR | os.O_NONBLOCK) if writer else None
+    try:
+        if wfd is not None:
+            case.assertEqual(os.write(wfd, payload), len(payload))
+        worker.start()
+        worker.join(timeout=5)
+        blocked = worker.is_alive()
+    finally:
+        if wfd is not None:
+            os.close(wfd)
+        elif worker.is_alive():  # a blocked open returns once a writer opens
+            with contextlib.suppress(OSError):
+                os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+    worker.join(timeout=5)
+    case.assertFalse(blocked, f"blocked on FIFO {path.name}")
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
+
+
 class BoundedPairLockReadTests(BasePairTest):
     """A pair lock that is not a regular file, or is over the size cap, is a
     PairError: never a blocked read, never an unbounded read into memory."""
@@ -2346,36 +2379,7 @@ class BoundedPairLockReadTests(BasePairTest):
             yield dups
 
     def _call_on_fifo(self, fn, *, writer: bool):
-        """fn() in a bounded worker. Without a writer a blocking open never
-        returns; with one holding a valid lock, a blocking read never sees
-        EOF. The FIFO is released afterwards either way."""
-        result = {}
-
-        def run():
-            try:
-                result["value"] = fn()
-            except BaseException as exc:  # re-raised in the caller
-                result["error"] = exc
-
-        worker = threading.Thread(target=run, daemon=True)
-        wfd = os.open(self.path, os.O_RDWR | os.O_NONBLOCK) if writer else None
-        try:
-            if wfd is not None:
-                self.assertEqual(os.write(wfd, self.LOCK), len(self.LOCK))
-            worker.start()
-            worker.join(timeout=5)
-            blocked = worker.is_alive()
-        finally:
-            if wfd is not None:
-                os.close(wfd)
-            elif worker.is_alive():  # a blocked open returns once a writer opens
-                with contextlib.suppress(OSError):
-                    os.close(os.open(self.path, os.O_WRONLY | os.O_NONBLOCK))
-        worker.join(timeout=5)
-        self.assertFalse(blocked, "blocked on a FIFO pair lock")
-        if "error" in result:
-            raise result["error"]
-        return result["value"]
+        return _call_on_fifo(self, self.path, fn, writer=writer, payload=self.LOCK)
 
     def test_fifo_lock_is_refused_without_blocking(self):
         if not hasattr(os, "mkfifo"):
@@ -2568,6 +2572,133 @@ class DamagedDecisionArtifactTests(BasePairTest):
                 self._refused("config.json hidden_size must be an int >= 1")
         path.unlink()
         self._refused("encoder config .* is unreadable")
+
+
+class BoundedArtifactJsonReadTests(BasePairTest):
+    """The decision manifest and encoder config are read like the pair lock:
+    a FIFO, device, directory or oversized file is refused without blocking
+    or reading it whole, and a symlink to a regular file (how a Hugging Face
+    snapshot holds its files) is still followed."""
+
+    CAP = 1 << 20  # literal, so base fails on behavior, not AttributeError
+    CONFIG = "encoder config .* is unreadable"
+    NO_MANIFEST = "manifest.json is missing, unreadable, empty or not a JSON object"
+
+    def setUp(self):
+        super().setUp()
+        self.conv = self.make_converted_laya()
+        self.config = self.conv / "encoder" / "config.json"
+        self.manifest = self.conv / "manifest.json"
+        self.expected = self._requirement()
+
+    def _requirement(self):
+        return pairs.decision_requirement_bytes(self.conv, 4)
+
+    @contextlib.contextmanager
+    def _replaced(self, path: Path, make):
+        """path swapped for what make(path) creates, yielding its bytes, then put back."""
+        data = path.read_bytes()
+        path.unlink()
+        make(path)
+        try:
+            yield data
+        finally:
+            if path.is_dir() and not path.is_symlink():
+                path.rmdir()
+            else:
+                path.unlink()
+            path.write_bytes(data)
+
+    def test_fifo_is_refused_without_blocking(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFO unavailable")
+        self.make_chat_snapshot(CHAT_SMALL_ID)
+        manager = pairs.PairManager(self.home)
+        for path, pattern in ((self.config, self.CONFIG), (self.manifest, self.NO_MANIFEST)):
+            with self.subTest(path.name), self._replaced(path, os.mkfifo) as data:
+                for writer in (False, True):
+                    with self.subTest(writer=writer):
+                        with self.assertRaisesRegex(pairs.PairError, pattern):
+                            _call_on_fifo(self, path, self._requirement, writer=writer,
+                                          payload=data)
+                        if path is self.manifest:
+                            self.assertEqual(_call_on_fifo(
+                                self, path, lambda: pairs._read_manifest(self.conv),
+                                writer=writer, payload=data), {})
+                if path is self.config:  # setup's plan sizes the converted artifact
+                    with self.assertRaisesRegex(pairs.PairError,
+                                                f"{self.CONFIG}: not a regular file"):
+                        _call_on_fifo(self, path, lambda: manager.setup("everyday"),
+                                      writer=False, payload=data)
+        self.assertEqual(self._requirement(), self.expected)
+
+    def test_device_and_directory_are_refused(self):
+        for name, make, detail in (("device", lambda p: os.symlink(os.devnull, p),
+                                    "not a regular file"),
+                                   ("directory", os.mkdir, "")):
+            for path in (self.config, self.manifest):
+                with self.subTest(name, file=path.name), self._replaced(path, make):
+                    if path is self.config:
+                        with self.assertRaisesRegex(pairs.PairError,
+                                                    f"{self.CONFIG}: {detail}"):
+                            self._requirement()
+                    else:
+                        self.assertEqual(pairs._read_manifest(self.conv), {})
+                        with self.assertRaisesRegex(pairs.PairError, self.NO_MANIFEST):
+                            self._requirement()
+
+    def test_symlinks_to_regular_files_are_followed(self):
+        manifest = json.loads(self.manifest.read_bytes())
+        blobs = self.home / "blobs"
+        blobs.mkdir()
+        for path in (self.config, self.manifest):
+            blob = blobs / hashlib.sha256(path.read_bytes()).hexdigest()
+            blob.write_bytes(path.read_bytes())
+            path.unlink()
+            path.symlink_to(os.path.relpath(blob, path.parent))  # relative, as in a snapshot
+        self.assertEqual(pairs._read_manifest(self.conv), manifest)
+        self.assertEqual(self._requirement(), self.expected)
+        for blob in blobs.iterdir():  # a dangling link reads as a missing file
+            blob.unlink()
+        self.assertEqual(pairs._read_manifest(self.conv), {})
+        self.manifest.unlink()
+        self.manifest.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(pairs.PairError, f"{self.CONFIG}: .*No such file"):
+            self._requirement()
+
+    def test_file_over_cap_is_refused_with_bounded_read(self):
+        for path in (self.config, self.manifest):
+            data = path.read_bytes()
+            with self.subTest(path.name):
+                path.write_bytes(data + b" " * (self.CAP - len(data)))
+                self.assertEqual(self._requirement(), self.expected)
+                for size in (self.CAP + 1, 64 * self.CAP):  # the larger one is sparse
+                    with self.subTest(size=size):
+                        if size == self.CAP + 1:
+                            path.write_bytes(data + b" " * (size - len(data)))
+                        else:
+                            path.write_bytes(data)
+                            os.truncate(path, size)
+                        tracing = tracemalloc.is_tracing()
+                        if not tracing:
+                            tracemalloc.start()
+                        try:
+                            tracemalloc.reset_peak()
+                            before = tracemalloc.get_traced_memory()[0]
+                            if path is self.config:
+                                with self.assertRaisesRegex(
+                                        pairs.PairError,
+                                        f"{self.CONFIG}: exceeds {self.CAP} bytes"):
+                                    self._requirement()
+                            else:
+                                self.assertEqual(pairs._read_manifest(self.conv), {})
+                            peak = tracemalloc.get_traced_memory()[1]
+                        finally:
+                            if not tracing:
+                                tracemalloc.stop()
+                        self.assertLess(peak - before, 4 * self.CAP)
+            path.write_bytes(data)
+        self.assertEqual(self._requirement(), self.expected)
 
 
 class ArtifactFilesTests(unittest.TestCase):
