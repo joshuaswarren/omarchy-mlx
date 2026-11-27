@@ -1026,8 +1026,12 @@ def _convolution_backward(gout, x, w, bias_sizes, stride, padding, dilation,
 
 
 def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
-    # torch: a NCL, w (O, I/groups, K) ; mlx.conv1d: x NLC, w (O, K, I/groups)
-    x = _mx(a).transpose(0, 2, 1)
+    # torch: a NCL or CL (unbatched), w (O, I/groups, K) ; mlx.conv1d: x NLC, w (O, K, I/groups)
+    x = _mx(a)
+    unbatched = x.ndim == 2
+    if unbatched:
+        x = x[None]
+    x = x.transpose(0, 2, 1)
     wt = _mx(w).transpose(0, 2, 1)  # torch O,I/groups,K -> mlx O,K,I/groups
     st = stride[0] if isinstance(stride, (list, tuple)) else stride
     p = padding[0] if isinstance(padding, (list, tuple)) else padding
@@ -1035,7 +1039,8 @@ def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     y = mx.conv1d(x, wt, stride=st, padding=p, dilation=dl, groups=groups)
     if b is not None:
         y = y + _mx(b).reshape(1, 1, -1)
-    return y.transpose(0, 2, 1)
+    y = y.transpose(0, 2, 1)
+    return y[0] if unbatched else y
 
 def _diff(a, n=1, dim=-1, prepend=None, append=None):
     x = _mx(a)
