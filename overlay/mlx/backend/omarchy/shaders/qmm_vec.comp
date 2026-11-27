@@ -403,6 +403,20 @@ layout(set = 0, binding = 8, std430) writeonly buffer NormOutput {
 layout(set = 0, binding = 9, std430) coherent buffer Ticket {
   uint done;
 } ticket;
+#if defined(QMM_RESNORM_VEC4) && !defined(QMM_VEC_OUTGATE)
+// 128-bit uvec4 aliases (8 bf16 elements/lane) for coalesced RMSNorm epilogue
+// on row_length == 2048 or 4096. Host binds the exact same backing buffers as
+// bindings 6, 7, 8 (sum0, norm_weight, norm_output).
+layout(set = 0, binding = 10, std430) readonly coherent buffer Sum0V4 {
+  uvec4 values[];
+} sum0_v4;
+layout(set = 0, binding = 11, std430) readonly buffer NormWeightV4 {
+  uvec4 values[];
+} norm_weight_v4;
+layout(set = 0, binding = 12, std430) writeonly buffer NormOutputV4 {
+  uvec4 values[];
+} norm_output_v4;
+#endif
 #if defined(QMM_VEC_OUTGATE)
 layout(set = 0, binding = 10, std430) readonly buffer OutgateOut {
   uvec4 values[];
@@ -2154,6 +2168,138 @@ void main() {
   uint n_reads = row_length / 256u;
   bool reg_path =
       (row_length == 2048u || row_length == 2560u || row_length == 4096u);
+#if defined(QMM_RESNORM_VEC4) && !defined(QMM_VEC_OUTGATE)
+  // Coalesced 128-bit uvec4 RMSNorm epilogue for row_length == 2048 or 4096:
+  // each of threads 0..255 loads 1 or 2 uvec4 words (8 or 16 bf16 elements)
+  // once from coherent sum0_v4, keeps the packed bf16 bits in registers across
+  // the reduction barriers (eliminating the second coherent read), loads
+  // norm_weight_v4 once, and writes norm_output_v4 as 128-bit uvec4 stores.
+  // Bit-identical to fast_norm_apple.comp; barriers are workgroup-uniform.
+  if ((row_length == 2048u || row_length == 4096u) &&
+      params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
+    uint nw_base = params.rhs_offset >> 3u;
+    if (row_length == 2048u) {
+      uvec4 sv0 = uvec4(0u);
+      if (lane < 256u) {
+        sv0 = sum0_v4.values[lane];
+        float a0 = uintBitsToFloat((sv0.x & 0xFFFFu) << 16u);
+        float a1 = uintBitsToFloat(sv0.x & 0xFFFF0000u);
+        float a2 = uintBitsToFloat((sv0.y & 0xFFFFu) << 16u);
+        float a3 = uintBitsToFloat(sv0.y & 0xFFFF0000u);
+        float a4 = uintBitsToFloat((sv0.z & 0xFFFFu) << 16u);
+        float a5 = uintBitsToFloat(sv0.z & 0xFFFF0000u);
+        float a6 = uintBitsToFloat((sv0.w & 0xFFFFu) << 16u);
+        float a7 = uintBitsToFloat(sv0.w & 0xFFFF0000u);
+        reg_sq += a0 * a0; reg_sq += a1 * a1; reg_sq += a2 * a2; reg_sq += a3 * a3;
+        reg_sq += a4 * a4; reg_sq += a5 * a5; reg_sq += a6 * a6; reg_sq += a7 * a7;
+        float sub_partial = subgroupAdd(reg_sq);
+        if (sub_lane == 0u) {
+          s_resnorm_partial[sub_id] = sub_partial;
+        }
+      }
+      barrier();
+      if (sub_id == 0u) {
+        float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+        float total_sq = subgroupAdd(v);
+        if (sub_lane == 0u) {
+          s_resnorm_partial[0] = total_sq;
+        }
+      }
+      barrier();
+      if (lane < 256u) {
+        float mean_square = s_resnorm_partial[0] / float(row_length);
+        float norm = inversesqrt(mean_square + eps);
+        uvec4 wv0 = norm_weight_v4.values[nw_base + lane];
+        #define RN_PACK_PAIR(sv_w, wv_w, out_u) { \
+          precise float _nw0 = norm * uintBitsToFloat(((wv_w) & 0xFFFFu) << 16u); \
+          precise float _nw1 = norm * uintBitsToFloat((wv_w) & 0xFFFF0000u); \
+          precise float _r0 = uintBitsToFloat(((sv_w) & 0xFFFFu) << 16u) * _nw0; \
+          precise float _r1 = uintBitsToFloat((sv_w) & 0xFFFF0000u) * _nw1; \
+          (out_u) = uint(STORE_VALUE(_r0)) | (uint(STORE_VALUE(_r1)) << 16u); \
+        }
+        uvec4 o0;
+        RN_PACK_PAIR(sv0.x, wv0.x, o0.x)
+        RN_PACK_PAIR(sv0.y, wv0.y, o0.y)
+        RN_PACK_PAIR(sv0.z, wv0.z, o0.z)
+        RN_PACK_PAIR(sv0.w, wv0.w, o0.w)
+        #undef RN_PACK_PAIR
+        norm_output_v4.values[lane] = o0;
+      }
+      return;
+    } else {
+      uvec4 sv0 = uvec4(0u);
+      uvec4 sv1 = uvec4(0u);
+      uint vidx = lane * 2u;
+      if (lane < 256u) {
+        sv0 = sum0_v4.values[vidx];
+        sv1 = sum0_v4.values[vidx + 1u];
+        {
+          float a0 = uintBitsToFloat((sv0.x & 0xFFFFu) << 16u);
+          float a1 = uintBitsToFloat(sv0.x & 0xFFFF0000u);
+          float a2 = uintBitsToFloat((sv0.y & 0xFFFFu) << 16u);
+          float a3 = uintBitsToFloat(sv0.y & 0xFFFF0000u);
+          float a4 = uintBitsToFloat((sv0.z & 0xFFFFu) << 16u);
+          float a5 = uintBitsToFloat(sv0.z & 0xFFFF0000u);
+          float a6 = uintBitsToFloat((sv0.w & 0xFFFFu) << 16u);
+          float a7 = uintBitsToFloat(sv0.w & 0xFFFF0000u);
+          reg_sq += a0 * a0; reg_sq += a1 * a1; reg_sq += a2 * a2; reg_sq += a3 * a3;
+          reg_sq += a4 * a4; reg_sq += a5 * a5; reg_sq += a6 * a6; reg_sq += a7 * a7;
+        }
+        {
+          float a0 = uintBitsToFloat((sv1.x & 0xFFFFu) << 16u);
+          float a1 = uintBitsToFloat(sv1.x & 0xFFFF0000u);
+          float a2 = uintBitsToFloat((sv1.y & 0xFFFFu) << 16u);
+          float a3 = uintBitsToFloat(sv1.y & 0xFFFF0000u);
+          float a4 = uintBitsToFloat((sv1.z & 0xFFFFu) << 16u);
+          float a5 = uintBitsToFloat(sv1.z & 0xFFFF0000u);
+          float a6 = uintBitsToFloat((sv1.w & 0xFFFFu) << 16u);
+          float a7 = uintBitsToFloat(sv1.w & 0xFFFF0000u);
+          reg_sq += a0 * a0; reg_sq += a1 * a1; reg_sq += a2 * a2; reg_sq += a3 * a3;
+          reg_sq += a4 * a4; reg_sq += a5 * a5; reg_sq += a6 * a6; reg_sq += a7 * a7;
+        }
+        float sub_partial = subgroupAdd(reg_sq);
+        if (sub_lane == 0u) {
+          s_resnorm_partial[sub_id] = sub_partial;
+        }
+      }
+      barrier();
+      if (sub_id == 0u) {
+        float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+        float total_sq = subgroupAdd(v);
+        if (sub_lane == 0u) {
+          s_resnorm_partial[0] = total_sq;
+        }
+      }
+      barrier();
+      if (lane < 256u) {
+        float mean_square = s_resnorm_partial[0] / float(row_length);
+        float norm = inversesqrt(mean_square + eps);
+        uvec4 wv0 = norm_weight_v4.values[nw_base + vidx];
+        uvec4 wv1 = norm_weight_v4.values[nw_base + vidx + 1u];
+        #define RN4_PACK_PAIR(sv_w, wv_w, out_u) { \
+          precise float _nw0 = norm * uintBitsToFloat(((wv_w) & 0xFFFFu) << 16u); \
+          precise float _nw1 = norm * uintBitsToFloat((wv_w) & 0xFFFF0000u); \
+          precise float _r0 = uintBitsToFloat(((sv_w) & 0xFFFFu) << 16u) * _nw0; \
+          precise float _r1 = uintBitsToFloat((sv_w) & 0xFFFF0000u) * _nw1; \
+          (out_u) = uint(STORE_VALUE(_r0)) | (uint(STORE_VALUE(_r1)) << 16u); \
+        }
+        uvec4 o0, o1;
+        RN4_PACK_PAIR(sv0.x, wv0.x, o0.x)
+        RN4_PACK_PAIR(sv0.y, wv0.y, o0.y)
+        RN4_PACK_PAIR(sv0.z, wv0.z, o0.z)
+        RN4_PACK_PAIR(sv0.w, wv0.w, o0.w)
+        RN4_PACK_PAIR(sv1.x, wv1.x, o1.x)
+        RN4_PACK_PAIR(sv1.y, wv1.y, o1.y)
+        RN4_PACK_PAIR(sv1.z, wv1.z, o1.z)
+        RN4_PACK_PAIR(sv1.w, wv1.w, o1.w)
+        #undef RN4_PACK_PAIR
+        norm_output_v4.values[vidx] = o0;
+        norm_output_v4.values[vidx + 1u] = o1;
+      }
+      return;
+    }
+  }
+#endif
   if (lane < 256u) {
     if (reg_path) {
       uint base = lane * n_reads;

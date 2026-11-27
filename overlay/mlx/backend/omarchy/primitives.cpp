@@ -11043,9 +11043,40 @@ bool dispatch_quantized_gemv_group(
   ComputeParams params;
   uint32_t total_groups = 0;
   const auto& geom = qmm_geometry();
+  const std::string& qmm_dev_name =
+      encoder.device().capabilities().device_name;
   const bool dedicated_swiglu_active = swiglu_out && !token_route &&
       outgate == nullptr && dtype == bfloat16 && subgroup_ready &&
       geom.dedicated_swiglu && members.size() == 2;
+  ComputeKernel swiglu_kernel = geom.swiglu;
+  uint32_t swiglu_cols = geom.swiglu_columns;
+  if (dedicated_swiglu_active) {
+    const char* sw_r1_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_R1");
+    const bool sw_r1_on = (sw_r1_env != nullptr && sw_r1_env[0] != '\0')
+        ? (std::strcmp(sw_r1_env, "0") != 0)
+        : omarchy::qmm_swiglu_r1_default(qmm_dev_name);
+    if (sw_r1_on) {
+      swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
+      swiglu_cols = 8u;
+    }
+  }
+  ComputeKernel resnorm_kernel = geom.resnorm;
+  uint32_t resnorm_cols = geom.resnorm_columns;
+  bool resnorm_vec4_active = false;
+  if (res_norm_active && !token_route && outgate == nullptr &&
+      encoder.device().compute().binding_limit() >= 13u &&
+      encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
+      encoder.device().capabilities().max_compute_work_group_size[0] >= 512u) {
+    const char* rn_vec4_env = omarchy::env_str("MLX_OMARCHY_RESNORM_VEC4");
+    const bool rn_vec4_on = (rn_vec4_env != nullptr && rn_vec4_env[0] != '\0')
+        ? (std::strcmp(rn_vec4_env, "0") != 0)
+        : omarchy::qmm_resnorm_vec4_default(qmm_dev_name);
+    if (rn_vec4_on) {
+      resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
+      resnorm_cols = 32u;
+      resnorm_vec4_active = true;
+    }
+  }
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
   // resnorm epilogue kernels.
@@ -11053,9 +11084,9 @@ bool dispatch_quantized_gemv_group(
       ? (token_route
              ? 8u
              : (outgate != nullptr ? geom.outgate_resnorm_columns
-                                   : geom.resnorm_columns))
+                                   : resnorm_cols))
       : dedicated_swiglu_active
-      ? geom.swiglu_columns
+      ? swiglu_cols
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
              ? geom.columns
@@ -11618,6 +11649,28 @@ bool dispatch_quantized_gemv_group(
           total_groups,
           1u,
           1u);
+    } else if (resnorm_vec4_active) {
+      std::array<ComputeBinding, 13> rn_bindings{
+          binding(x),
+          binding(members[0].node.inputs()[1]),
+          binding(members[0].node.inputs()[2]),
+          binding(members[0].node.inputs()[3]),
+          binding(members[0].node),
+          binding(*members[0].addend),
+          binding(*members[0].epilogue),
+          binding(res_norm->weight),
+          binding(res_norm->out),
+          encoder.resnorm_ticket_binding(),
+          binding(*members[0].epilogue),
+          binding(res_norm->weight),
+          binding(res_norm->out)};
+      encoder.dispatch_compute(
+          resnorm_kernel,
+          rn_bindings,
+          params,
+          total_groups,
+          1u,
+          1u);
     } else {
       std::array<ComputeBinding, 10> rn_bindings{
           binding(x),
@@ -11654,7 +11707,7 @@ bool dispatch_quantized_gemv_group(
         binding(members[1].node.inputs()[3]),
         binding(*swiglu_out)};
     encoder.dispatch_compute(
-        geom.swiglu,
+        swiglu_kernel,
         sw_bindings,
         params,
         total_groups,
