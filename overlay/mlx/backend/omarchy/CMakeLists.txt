@@ -387,6 +387,10 @@ omarchy_shader(qmm_vec_q4_word_subgroup_bf16_g128 shaders/qmm_vec.comp -DUSE_BF1
 # Decode column-geometry variants (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>): same per-column chain, other columns per workgroup and threads per workgroup.
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16)
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s16w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s32w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r4s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=4 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r4s16w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=4 -DSLOTS_PER_GROUP=16 -DQMM_W2=1)
 # Decode column-geometry variants (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>): same per-column chain, other columns per workgroup and threads per workgroup.
 # Batch-shared decode GEMV (default on, MLX_OMARCHY_QMV_BATCH=0 disables): up to four x rows
 # against one 2D weight, weight words read once per block.
@@ -431,14 +435,18 @@ omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16kcont shaders/qmm_vec.comp -D
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16kconts16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_KCONT=1 -DQMM_LANES=16)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s4w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_VEC_NO_SWIGLU=1)
+omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s32w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_W2=1 -DQMM_VEC_NO_SWIGLU=1)
 omarchy_shader(qmm_vec_q4_swiglu_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_swiglu_bf16_r1s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_multi_outgate_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_OUTGATE=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_RESNORM=1 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_resnorm_vec4_bf16_r2s16w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_resnorm_vec4_bf16_r2s32w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_outgate_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_OUTGATE=1 -DQMM_VEC_RESNORM=1)
 omarchy_shader(qmm_vec_q4_outgate_resnorm_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_OUTGATE=1 -DQMM_VEC_RESNORM=1 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_outgate_resnorm_vec4_bf16_r2s16w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_OUTGATE=1 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_outgate_resnorm_vec4_bf16_r2s32w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_VEC_OUTGATE=1 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1)
 # Multi-token (verify / small-batch) variants: the multi column with the
 # token dimension inside the k walk; params.matrix_m carries the live
 # token count 1..M_TOKENS. Per-row bit-identical to the single-token

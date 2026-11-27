@@ -1356,6 +1356,14 @@ enum class ComputeKernel : uint16_t {
   // Appended to keep profile kernel ids stable.
   QmmVecQ4SwigluBF16R1S8W2,
   QmmVecQ4ResNormVec4BF16R2S16W2,
+  QmmVecQ4ResNormVec4BF16R2S32W2,
+  QmmVecQ4OutgateResNormVec4BF16R2S16W2,
+  QmmVecQ4OutgateResNormVec4BF16R2S32W2,
+  QmmVecQ4WordSubgroupBF16R2S16W2,
+  QmmVecQ4WordSubgroupBF16R2S32W2,
+  QmmVecQ4WordSubgroupBF16R4S8W2,
+  QmmVecQ4WordSubgroupBF16R4S16W2,
+  QmmVecQ4MultiSubgroupBF16R2S32W2,
   Count,
 };
 

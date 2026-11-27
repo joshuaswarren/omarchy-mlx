@@ -11063,18 +11063,68 @@ bool dispatch_quantized_gemv_group(
   ComputeKernel resnorm_kernel = geom.resnorm;
   uint32_t resnorm_cols = geom.resnorm_columns;
   bool resnorm_vec4_active = false;
+  ComputeKernel outgate_resnorm_kernel = geom.outgate_resnorm;
+  uint32_t outgate_resnorm_cols = geom.outgate_resnorm_columns;
+  bool outgate_resnorm_vec4_active = false;
   if (res_norm_active && !token_route && outgate == nullptr &&
       encoder.device().compute().binding_limit() >= 13u &&
       encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
       encoder.device().capabilities().max_compute_work_group_size[0] >= 512u) {
     const char* rn_vec4_env = omarchy::env_str("MLX_OMARCHY_RESNORM_VEC4");
-    const bool rn_vec4_on = (rn_vec4_env != nullptr && rn_vec4_env[0] != '\0')
-        ? (std::strcmp(rn_vec4_env, "0") != 0)
-        : omarchy::qmm_resnorm_vec4_default(qmm_dev_name);
-    if (rn_vec4_on) {
-      resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
-      resnorm_cols = 32u;
+    const bool rn_vec4_set = rn_vec4_env != nullptr && rn_vec4_env[0] != '\0';
+    if (rn_vec4_set && std::strcmp(rn_vec4_env, "r2s32w2") == 0 &&
+        encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
+        encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
+      resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2;
+      resnorm_cols = 64u;
       resnorm_vec4_active = true;
+    } else {
+      const bool rn_vec4_on = rn_vec4_set
+          ? (std::strcmp(rn_vec4_env, "0") != 0)
+          : omarchy::qmm_resnorm_vec4_default(qmm_dev_name);
+      if (rn_vec4_on) {
+        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
+        resnorm_cols = 32u;
+        resnorm_vec4_active = true;
+      }
+    }
+  }
+  if (res_norm_active && !token_route && outgate != nullptr &&
+      encoder.device().compute().binding_limit() >= 16u) {
+    const char* og_rn = omarchy::env_str("MLX_OMARCHY_OUTGATE_RESNORM_VEC4");
+    if (og_rn != nullptr && og_rn[0] != '\0') {
+      if (std::strcmp(og_rn, "r2s16w2") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 512u) {
+        outgate_resnorm_kernel = ComputeKernel::QmmVecQ4OutgateResNormVec4BF16R2S16W2;
+        outgate_resnorm_cols = 32u;
+        outgate_resnorm_vec4_active = true;
+      } else if (std::strcmp(og_rn, "r2s32w2") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
+        outgate_resnorm_kernel = ComputeKernel::QmmVecQ4OutgateResNormVec4BF16R2S32W2;
+        outgate_resnorm_cols = 64u;
+        outgate_resnorm_vec4_active = true;
+      }
+    }
+  }
+  ComputeKernel multi_bf16_kernel = geom.multi;
+  uint32_t multi_cols = geom.columns;
+  if (!res_norm_active && !dedicated_swiglu_active && !token_route &&
+      outgate == nullptr && dtype == bfloat16 && subgroup_ready) {
+    const char* mgeom = omarchy::env_str("MLX_OMARCHY_MULTI_GEOM");
+    if (mgeom != nullptr && mgeom[0] != '\0') {
+      if (std::strcmp(mgeom, "r2s16w2") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 512u) {
+        multi_bf16_kernel = ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2;
+        multi_cols = 32u;
+      } else if (std::strcmp(mgeom, "r2s32w2") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
+        multi_bf16_kernel = ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S32W2;
+        multi_cols = 64u;
+      }
     }
   }
   // Columns per workgroup of the kernel selected below: the geometry applies
@@ -11083,13 +11133,13 @@ bool dispatch_quantized_gemv_group(
   const uint32_t group_columns = res_norm_active
       ? (token_route
              ? 8u
-             : (outgate != nullptr ? geom.outgate_resnorm_columns
+             : (outgate != nullptr ? outgate_resnorm_cols
                                    : resnorm_cols))
       : dedicated_swiglu_active
       ? swiglu_cols
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
-             ? geom.columns
+             ? multi_cols
              : 8u);
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
@@ -11598,29 +11648,59 @@ bool dispatch_quantized_gemv_group(
     params.lhs_size = static_cast<uint32_t>(res_norm->weight.size());
     params.rhs_offset = static_cast<uint32_t>(
         res_norm->weight.offset() / res_norm->weight.itemsize());
+    if (omarchy::env_flag("MLX_OMARCHY_RESNORM_SKIP_OUT0")) {
+      params.flags |= 1u;
+    }
     if (outgate != nullptr) {
       params.flags |= 131072u;
-      std::array<ComputeBinding, 13> rn_bindings{
-          binding(outgate->x),
-          binding(members[0].node.inputs()[1]),
-          binding(members[0].node.inputs()[2]),
-          binding(members[0].node.inputs()[3]),
-          binding(members[0].node),
-          binding(*members[0].addend),
-          binding(*members[0].epilogue),
-          binding(res_norm->weight),
-          binding(res_norm->out),
-          encoder.resnorm_ticket_binding(),
-          binding(outgate->out),
-          binding(outgate->gate),
-          binding(outgate->x)};
-      encoder.dispatch_compute(
-          geom.outgate_resnorm,
-          rn_bindings,
-          params,
-          total_groups,
-          1u,
-          1u);
+      if (outgate_resnorm_vec4_active) {
+        std::array<ComputeBinding, 16> rn_bindings{
+            binding(outgate->x),
+            binding(members[0].node.inputs()[1]),
+            binding(members[0].node.inputs()[2]),
+            binding(members[0].node.inputs()[3]),
+            binding(members[0].node),
+            binding(*members[0].addend),
+            binding(*members[0].epilogue),
+            binding(res_norm->weight),
+            binding(res_norm->out),
+            encoder.resnorm_ticket_binding(),
+            binding(outgate->out),
+            binding(outgate->gate),
+            binding(outgate->x),
+            binding(*members[0].epilogue),
+            binding(res_norm->weight),
+            binding(res_norm->out)};
+        encoder.dispatch_compute(
+            outgate_resnorm_kernel,
+            rn_bindings,
+            params,
+            total_groups,
+            1u,
+            1u);
+      } else {
+        std::array<ComputeBinding, 13> rn_bindings{
+            binding(outgate->x),
+            binding(members[0].node.inputs()[1]),
+            binding(members[0].node.inputs()[2]),
+            binding(members[0].node.inputs()[3]),
+            binding(members[0].node),
+            binding(*members[0].addend),
+            binding(*members[0].epilogue),
+            binding(res_norm->weight),
+            binding(res_norm->out),
+            encoder.resnorm_ticket_binding(),
+            binding(outgate->out),
+            binding(outgate->gate),
+            binding(outgate->x)};
+        encoder.dispatch_compute(
+            geom.outgate_resnorm,
+            rn_bindings,
+            params,
+            total_groups,
+            1u,
+            1u);
+      }
     } else if (token_route) {
       // Token column resnorm: the multi binding layout (x + four
       // weight slots, unused slots filler-bound like the plain group
@@ -11772,7 +11852,7 @@ bool dispatch_quantized_gemv_group(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
-            qmm_geometry().multi)
+            multi_bf16_kernel)
       : select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiF32,
@@ -17296,6 +17376,28 @@ void GreedyQuantizedArgmax::eval_gpu(
       if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u)) {
         gemv_kernel = geometry.word;
         gemv_groups = (n + geometry.columns - 1u) / geometry.columns;
+        const char* lm_geom = omarchy::env_str("MLX_OMARCHY_LMHEAD_GEOM");
+        if (lm_geom != nullptr && lm_geom[0] != '\0' && (params.rhs_offset % 2u == 0u)) {
+          if (std::strcmp(lm_geom, "r2s16w2") == 0 &&
+              caps.max_compute_work_group_invocations >= 512u &&
+              caps.max_compute_work_group_size[0] >= 512u) {
+            gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16W2;
+            gemv_groups = (n + 31u) / 32u;
+          } else if (std::strcmp(lm_geom, "r2s32w2") == 0 &&
+              caps.max_compute_work_group_invocations >= 1024u &&
+              caps.max_compute_work_group_size[0] >= 1024u) {
+            gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
+            gemv_groups = (n + 63u) / 64u;
+          } else if (std::strcmp(lm_geom, "r4s8w2") == 0) {
+            gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R4S8W2;
+            gemv_groups = (n + 31u) / 32u;
+          } else if (std::strcmp(lm_geom, "r4s16w2") == 0 &&
+              caps.max_compute_work_group_invocations >= 512u &&
+              caps.max_compute_work_group_size[0] >= 512u) {
+            gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R4S16W2;
+            gemv_groups = (n + 63u) / 64u;
+          }
+        }
       } else {
         gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16;
       }

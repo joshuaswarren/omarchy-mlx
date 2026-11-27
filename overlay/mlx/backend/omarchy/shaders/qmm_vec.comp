@@ -403,20 +403,6 @@ layout(set = 0, binding = 8, std430) writeonly buffer NormOutput {
 layout(set = 0, binding = 9, std430) coherent buffer Ticket {
   uint done;
 } ticket;
-#if defined(QMM_RESNORM_VEC4) && !defined(QMM_VEC_OUTGATE)
-// 128-bit uvec4 aliases (8 bf16 elements/lane) for coalesced RMSNorm epilogue
-// on row_length == 2048 or 4096. Host binds the exact same backing buffers as
-// bindings 6, 7, 8 (sum0, norm_weight, norm_output).
-layout(set = 0, binding = 10, std430) readonly coherent buffer Sum0V4 {
-  uvec4 values[];
-} sum0_v4;
-layout(set = 0, binding = 11, std430) readonly buffer NormWeightV4 {
-  uvec4 values[];
-} norm_weight_v4;
-layout(set = 0, binding = 12, std430) writeonly buffer NormOutputV4 {
-  uvec4 values[];
-} norm_output_v4;
-#endif
 #if defined(QMM_VEC_OUTGATE)
 layout(set = 0, binding = 10, std430) readonly buffer OutgateOut {
   uvec4 values[];
@@ -427,6 +413,25 @@ layout(set = 0, binding = 11, std430) readonly buffer OutgateGate {
 layout(set = 0, binding = 12, std430) writeonly buffer OutgateMul {
   uvec4 values[];
 } outgate_mul;
+#endif
+#if defined(QMM_RESNORM_VEC4)
+#if defined(QMM_VEC_OUTGATE)
+#define RN_VEC4_BASE 13
+#else
+#define RN_VEC4_BASE 10
+#endif
+// 128-bit uvec4 aliases (8 bf16 elements/lane) for coalesced RMSNorm epilogue
+// on row_length == 2048 or 4096. Host binds the exact same backing buffers as
+// bindings 6, 7, 8 (sum0, norm_weight, norm_output).
+layout(set = 0, binding = RN_VEC4_BASE + 0, std430) readonly coherent buffer Sum0V4 {
+  uvec4 values[];
+} sum0_v4;
+layout(set = 0, binding = RN_VEC4_BASE + 1, std430) readonly buffer NormWeightV4 {
+  uvec4 values[];
+} norm_weight_v4;
+layout(set = 0, binding = RN_VEC4_BASE + 2, std430) writeonly buffer NormOutputV4 {
+  uvec4 values[];
+} norm_output_v4;
 #endif
 shared uint s_resnorm_is_last;
 shared float s_resnorm_partial[8u];
@@ -2134,7 +2139,9 @@ void main() {
       uint col = column + r;
       if (col < n) {
         float rounded = ROUND_STORAGE(total[r]);
-        output0.values[col] = STORE_VALUE(rounded);
+        if ((params.flags & 1u) == 0u) {
+          output0.values[col] = STORE_VALUE(rounded);
+        }
         sum0.values[col] =
             STORE_VALUE(rounded + LOAD_VALUE(addend0.values[col]));
       }
@@ -2168,7 +2175,7 @@ void main() {
   uint n_reads = row_length / 256u;
   bool reg_path =
       (row_length == 2048u || row_length == 2560u || row_length == 4096u);
-#if defined(QMM_RESNORM_VEC4) && !defined(QMM_VEC_OUTGATE)
+#if defined(QMM_RESNORM_VEC4)
   // Coalesced 128-bit uvec4 RMSNorm epilogue for row_length == 2048 or 4096:
   // each of threads 0..255 loads 1 or 2 uvec4 words (8 or 16 bf16 elements)
   // once from coherent sum0_v4, keeps the packed bf16 bits in registers across
