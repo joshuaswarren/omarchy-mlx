@@ -184,6 +184,16 @@ def _mean(a, dim=None, keepdim=False, **k):
 def _sum(a, dim=None, keepdim=False, **k):
     return mx.sum(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim)
 
+_SELU_SCALE = 1.0507009873554804934193349852946
+_SELU_ALPHA = 1.6732632423543772848170429916717
+
+
+def _elu(a, alpha=1.0, scale=1.0, input_scale=1.0, inplace=False):
+    # aten.elu: scale*x for x>0, scale*alpha*(exp(x*input_scale)-1) for x<=0.
+    neg = alpha * mx.expm1(mx.minimum(a, 0.0) * input_scale)
+    return scale * (mx.maximum(a, 0.0) + neg)
+
+
 def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False):
     kw = {}
     # mlx 0.32's fast binding requires scale explicitly (no default).
@@ -325,6 +335,9 @@ _FUNC_SPECS = {
     "gelu": lambda a, approximate="none": a * mx.sigmoid(1.702 * a) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0))),
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
+    "elu": _elu,
+    "selu": lambda a, inplace=False: _SELU_SCALE * _elu(a, alpha=_SELU_ALPHA),
+    "celu": lambda a, alpha=1.0, inplace=False: _elu(a, alpha=alpha, input_scale=1.0 / alpha),
     "scaled_dot_product_attention": _sdpa,
     "eq": lambda a, b: mx.equal(_mx(a), _mx(b)),
     "ne": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
