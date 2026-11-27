@@ -39,7 +39,7 @@
 +            dev_name = str((dev_info() or {}).get("device_name", "")) if callable(dev_info) else ""
 +        except Exception:
 +            dev_name = ""
-+    word_route = gw == "1" or (gw != "0" and "G14C" in dev_name)
++    word_route = gw == "1" or (gw != "0" and ("G14C" in dev_name or "G13G" in dev_name))
 +    high = getattr(emb, "_greedy_high_bits", None)
 +    if high is None:
 +        # The kernel's rounding proof assumes finite scales/biases below

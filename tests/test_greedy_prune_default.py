@@ -5,10 +5,12 @@
 import ast
 import os
 import pathlib
+import re
 import types
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
+DEVICE_H = REPO / "overlay" / "mlx" / "backend" / "omarchy" / "device.h"
 PATCH_PATHS = (
     REPO / "patches" / "mlx-lm-greedy-prune.patch",
     REPO / "patches" / "mlx-lm-0.32" / "mlx-lm-greedy-prune.patch",
@@ -140,7 +142,7 @@ class GreedyPruneDefaultTests(unittest.TestCase):
                 self.assertIsNotNone(self._eval_greedy_head(src, None, None))
                 self.assertIsNotNone(self._eval_greedy_head(src, raises, None))
 
-    def test_031_word_route_skips_k2048_token_sync_on_g14c(self):
+    def test_031_word_route_skips_k2048_token_sync_on_word_default_parts(self):
         src = _extract_greedy_head_source(PATCH_PATHS[0])
         sentinel_syncs = []
 
@@ -235,10 +237,31 @@ class GreedyPruneDefaultTests(unittest.TestCase):
         self.assertEqual(run_case("Apple M2 Max (G14C B1)", None), 0)
         # Explicit MLX_OMARCHY_GREEDY_WORD=0 restores the staged route and its sync.
         self.assertEqual(run_case("Apple M2 Max (G14C B1)", "0"), 1)
+        # G13G default uses the 3-dispatch word route: no per-token int(token) sync.
+        self.assertEqual(run_case("Apple M1 (G13G B1)", None), 0)
+        # Explicit MLX_OMARCHY_GREEDY_WORD=0 restores the staged route and its sync.
+        self.assertEqual(run_case("Apple M1 (G13G B1)", "0"), 1)
         # G13C default stays on the staged K=2048 route and keeps its sync.
         self.assertEqual(run_case("Apple M1 Max (G13C C0)", None), 1)
         # Explicit MLX_OMARCHY_GREEDY_WORD=1 skips the sync on any chip.
         self.assertEqual(run_case("Apple M1 Max (G13C C0)", "1"), 0)
+
+        # Guard against C++/Python drift: every chip token listed in
+        # greedy_word_over_staged_part() in device.h must skip the int(token)
+        # sync in patches/mlx-lm-greedy-prune.patch by default.
+        device_h = DEVICE_H.read_text(encoding="utf-8")
+        m = re.search(
+            r"greedy_word_over_staged_part\s*\([^)]*\)\s*\{(.*?)\}",
+            device_h,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(m, "greedy_word_over_staged_part not found in device.h")
+        cpp_chips = re.findall(r'device_name\.find\("([^"]+)"\)', m.group(1))
+        self.assertTrue(cpp_chips, "no chip names parsed from greedy_word_over_staged_part")
+        for chip in cpp_chips:
+            with self.subTest(cpp_chip=chip):
+                self.assertEqual(run_case(f"Apple Silicon ({chip} B1)", None), 0)
+                self.assertEqual(run_case(f"Apple Silicon ({chip} B1)", "0"), 1)
 
 
 if __name__ == "__main__":
