@@ -386,6 +386,9 @@ layout(set = 0, binding = 3, std430) readonly buffer Biases0 {
   STORAGE_TYPE values[];
 } biases0;
 #if defined(QMM_RESNORM_PACK32)
+#if !defined(QMM_FAST_ONLY) || !defined(QMM_RESNORM_VEC4)
+#error "QMM_RESNORM_PACK32 requires QMM_FAST_ONLY and QMM_RESNORM_VEC4"
+#endif
 layout(set = 0, binding = 4, std430) writeonly buffer Output0U32 {
   uint values[];
 } output0_u32;
@@ -2270,7 +2273,9 @@ void main() {
   }
   if (lane_in_slot == 0u) {
 #if defined(QMM_RESNORM_PACK32) && (ROWS_PER_SLOT == 2)
-    if (column < n) {
+    // Host guarantees n in {2048, 4096} (even); checking column + 1u < n
+    // keeps the packed 2-bf16 store strictly in-bounds even if odd n arrived.
+    if (column + 1u < n) {
       uint c2 = column >> 1u;
       uint a01 = addend0_u32.values[c2];
       float a0 = uintBitsToFloat((a01 & 0xFFFFu) << 16u);

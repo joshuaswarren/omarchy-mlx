@@ -11813,7 +11813,8 @@ bool dispatch_quantized_gemv_group(
           params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u &&
           (members[0].node.offset() & 3u) == 0u &&
           (members[0].addend->offset() & 3u) == 0u &&
-          (members[0].epilogue->offset() & 3u) == 0u &&
+          (members[0].epilogue->offset() & 15u) == 0u &&
+          (res_norm->out.offset() & 15u) == 0u &&
           omarchy::qmm_g14c_fast_only_default_part(
               encoder.device().capabilities().device_name)) {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Fast;
@@ -11978,6 +11979,8 @@ bool dispatch_quantized_gemv_group(
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
             [&]() {
+              // R2S16W2UpfrontFast is controlled directly by MLX_OMARCHY_MULTI_R2S16
+              // (independently of MLX_OMARCHY_Q4_UPFRONT for R2S8W2).
               if (multi_r2s16_active) {
                 return ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast;
               }
