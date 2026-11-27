@@ -120,4 +120,33 @@ CoopmatShape qmm_prefill_coopmat16_xe_shape();
 // listing only the fp32 shape keeps the fp32 route.
 CoopmatShape qmm_prefill_coopmat16_bf16_shape();
 
+// The 16x16x16 subgroup shape the RDNA/RADV causal flash prefill variant
+// (shaders/sdpa_prefill_flash_causal_coopmat16.comp) emits: bf16 A and B
+// operands with an fp32 accumulator and result, non-saturating. Same
+// advertised shape the qmm 16x16x16 route needs; a separate function so
+// each call site names the kernel family it feeds.
+CoopmatShape sdpa_causal_flash_coopmat16_bf16_shape();
+
+// Dispatch decision for that causal flash route.
+// MLX_OMARCHY_SDPA_CAUSAL_FLASH semantics: "0" kills the route, "1"
+// forces it past the q_len >= 64 default floor, unset defaults on
+// wherever |shape_advertised| holds. Capability terms are mandatory
+// under force-on, mirroring the 8x8x8 arm where env=1 bypasses only the
+// device-name heuristic and never a hardware requirement: a forced run
+// on a device without the shape still falls back, and |full_query_tiles|
+// (q_len % 16 == 0 at the call site) is mandatory because the shader
+// backs the last workgroup up a tile and overlapping stores are not
+// synchronized. |subgroup_shuffle| (VK_SUBGROUP_FEATURE_SHUFFLE_BIT in
+// supportedOperations) and |vulkan_memory_model| (the Vulkan 1.2 feature
+// the shader's OpCapability VulkanMemoryModel needs enabled) are the
+// same kind of mandatory hardware term: the generated module and the
+// device feature chain must agree, force-on or not.
+bool sdpa_causal_flash_coopmat16_enabled(
+    const char* env,
+    bool shape_advertised,
+    int q_len,
+    bool full_query_tiles,
+    bool subgroup_shuffle,
+    bool vulkan_memory_model);
+
 } // namespace mlx::core::omarchy

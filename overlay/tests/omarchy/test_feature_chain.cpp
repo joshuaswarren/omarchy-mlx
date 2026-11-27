@@ -259,7 +259,8 @@ TEST_CASE("VkDeviceCreateInfo requests only the audited feature set") {
   CHECK(
       TRUE_FIELDS(
           cap_f12, samplerMirrorClampToEdge, subgroupBroadcastDynamicId) ==
-      (cap_f12.timelineSemaphore ? 1 : 0) + (cap_f12.shaderFloat16 ? 1 : 0));
+      (cap_f12.timelineSemaphore ? 1 : 0) + (cap_f12.shaderFloat16 ? 1 : 0) +
+          (cap_f12.vulkanMemoryModel ? 1 : 0));
   CHECK(
       TRUE_FIELDS(cap_f13, robustImageAccess, maintenance4) ==
       (cap_f13.subgroupSizeControl ? 1 : 0));

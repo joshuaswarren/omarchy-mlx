@@ -9929,7 +9929,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         x.ndim() >= 2 && x.shape(-2) > 1 &&
         (params.matrix_k % 64u) == 0u &&
         (params.matrix_m % 16u) == 0u &&
-        std::getenv("MLX_OMARCHY_NO_COOPMAT16") == nullptr) {
+        omarchy::env_str("MLX_OMARCHY_NO_COOPMAT16") == nullptr) {
       const auto& rcaps = encoder.device().capabilities();
       const uint64_t out_align = std::max<uint64_t>(
           16ull, rcaps.min_storage_buffer_offset_alignment);
@@ -20467,6 +20467,109 @@ void ScaledDotProductAttention::eval_gpu(
           (static_cast<uint32_t>(q_len) + kCausalFlashWgRows - 1u) /
               kCausalFlashWgRows,
           cf_grid_y,
+          static_cast<uint32_t>(batch));
+      return;
+    }
+  }
+  // 16x16x16 twin for parts whose driver advertises only the WMMA-shaped
+  // bf16 x bf16 -> f32 subgroup shape (RADV RDNA3+; kernels
+  // SdpaCausalFlashCoopmat16BF16). Same contract as the 8x8x8 route with
+  // k_len % 16 == 0 (16-key matrix blocks), q_len % 16 == 0 (the shader
+  // backs the last workgroup up a full tile, so ragged query tails would
+  // overlap stores), and a 64-lane subgroup. Default ON wherever the
+  // exact shape is advertised; the same
+  // MLX_OMARCHY_SDPA_CAUSAL_FLASH env kills (=0) or forces (=1) it.
+  {
+    const char* cf16_env = omarchy::env_str("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
+    const auto& cf16_caps = encoder.device().capabilities();
+    const bool cf16_shape = omarchy::cooperative_matrix_advertises(
+        cf16_caps.cooperative_matrix_shapes,
+        omarchy::sdpa_causal_flash_coopmat16_bf16_shape());
+    const bool cf16_on = omarchy::sdpa_causal_flash_coopmat16_enabled(
+        cf16_env, cf16_shape, q_len, q_len % 16 == 0,
+        (cf16_caps.subgroup_operations &
+         VK_SUBGROUP_FEATURE_SHUFFLE_BIT) != 0u,
+        cf16_caps.vulkan_memory_model);
+    // One 64-lane subgroup per workgroup: admit when wave64 is native and
+    // unpinned-or-64-pinned, or when a requiredSubgroupSize=64 pin is legal.
+    const bool cf16_wave64 =
+        (cf16_caps.subgroup_size_64_admitted ||
+         (cf16_caps.subgroup_size == 64u &&
+          (cf16_caps.required_subgroup_size == 0u ||
+           cf16_caps.required_subgroup_size == 64u))) &&
+        cf16_caps.max_compute_work_group_invocations >= 64u &&
+        cf16_caps.max_compute_work_group_size[0] >= 64u;
+    if (cf16_on && cf16_wave64 &&
+        q_len >= 16 &&
+        cf16_caps.max_compute_shared_memory_size >= 6144u &&
+        inputs.size() == 3 && do_causal_ && !has_sinks_ &&
+        !output_logsumexp_ && k_len >= q_len &&
+        k_len % 16 == 0 && q.dtype() == bfloat16 &&
+        k.dtype() == bfloat16 && v.dtype() == bfloat16 &&
+        out.dtype() == bfloat16 && head_dim == 128 && v_dim == 128 &&
+        q.strides()[3] == 1 && k.strides()[3] == 1 &&
+        v.strides()[3] == 1 && out.strides()[3] == 1 &&
+        out.strides()[2] == v_dim && q.strides()[0] % 8 == 0 &&
+        q.strides()[1] % 8 == 0 && q.strides()[2] % 8 == 0 &&
+        k.strides()[0] % 8 == 0 && k.strides()[1] % 8 == 0 &&
+        k.strides()[2] % 8 == 0 && v.strides()[0] % 8 == 0 &&
+        v.strides()[1] % 8 == 0 && v.strides()[2] % 8 == 0 &&
+        checked_item_offset(q, q.size(), tag, out) % 8 == 0 &&
+        checked_item_offset(k, k.size(), tag, out) % 8 == 0 &&
+        checked_item_offset(v, v.size(), tag, out) % 8 == 0 &&
+        checked_item_offset(out, out.size(), tag, out) % 8 == 0 &&
+        static_cast<uint64_t>(batch) * heads * q_len * 128 < (1ull << 31) &&
+        static_cast<uint64_t>(k.shape(0)) * k.strides()[0] < (1ull << 31) &&
+        static_cast<uint64_t>(v.shape(0)) * v.strides()[0] < (1ull << 31) &&
+        static_cast<uint64_t>(q.shape(0)) * q.strides()[0] < (1ull << 31)) {
+      const auto& hw = encoder.device().hardware_capabilities();
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          cf16_caps,
+          true,
+          "SdpaCausalFlashCoopmat16BF16",
+          "cooperative_matrix_bf16_16x16x16_wave64",
+          omarchy::cooperative_matrix_advertises(
+              hw.cooperative_matrix_shapes,
+              omarchy::sdpa_causal_flash_coopmat16_bf16_shape()) &&
+          (hw.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_BIT) != 0u &&
+          hw.vulkan_memory_model &&
+          ((hw.subgroup_size_64_admitted ||
+            (hw.subgroup_size == 64u &&
+             (hw.required_subgroup_size == 0u ||
+              hw.required_subgroup_size == 64u))) &&
+           hw.max_compute_work_group_invocations >= 64u &&
+           hw.max_compute_work_group_size[0] >= 64u));
+      constexpr uint32_t kCausalFlash16WgRows = 16u;
+      out.set_data(allocate_omarchy(out.nbytes()));
+      omarchy::ComputeParams params;
+      params.matrix_m = checked_u32(q_len, tag, out);
+      params.matrix_n = checked_u32(k_len, tag, out);
+      params.alpha = scale_;
+      params.rhs_gap = checked_u32(repeats, tag, out);
+      params.lhs_offset = checked_item_offset(q, q.size(), tag, out);
+      params.rhs_offset = checked_item_offset(k, k.size(), tag, out);
+      params.aux_offset = checked_item_offset(v, v.size(), tag, out);
+      params.output_offset = checked_item_offset(out, out.size(), tag, out);
+      params.q_rowstride = checked_u32(q.strides()[2], tag, out);
+      params.k_rowstride = checked_u32(k.strides()[2], tag, out);
+      params.v_rowstride = checked_u32(v.strides()[2], tag, out);
+      params.o_rowstride = checked_u32(out.strides()[2], tag, out);
+      params.q_headstride = checked_u32(q.strides()[1], tag, out);
+      params.k_headstride = checked_u32(k.strides()[1], tag, out);
+      params.v_headstride = checked_u32(v.strides()[1], tag, out);
+      params.q_batchstride = checked_u32(q.strides()[0], tag, out);
+      params.k_batchstride = checked_u32(k.strides()[0], tag, out);
+      params.v_batchstride = checked_u32(v.strides()[0], tag, out);
+      std::array<omarchy::ComputeBinding, 4> cf16_bindings{
+          binding(q), binding(k), binding(v), binding(out)};
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::SdpaCausalFlashCoopmat16BF16,
+          cf16_bindings,
+          params,
+          (static_cast<uint32_t>(q_len) + kCausalFlash16WgRows - 1u) /
+              kCausalFlash16WgRows,
+          static_cast<uint32_t>(heads),
           static_cast<uint32_t>(batch));
       return;
     }

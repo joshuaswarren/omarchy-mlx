@@ -792,6 +792,7 @@
 #include "sdpa_prefill_flash_causal_coopmat_bf16.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2.h"
+#include "sdpa_prefill_flash_causal_coopmat16_bf16.h"
 #include "qmm_intel_bf16.h"
 #include "matmul_bf16_coopmat_xe16.h"
 #include "qmm_coopmat16_xe.h"
@@ -2275,6 +2276,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_coopmat16_xe, qmm_coopmat16_xe_size};
     case ComputeKernel::QmmPrefillCoopmatBF16x16:
       return {qmm_coopmat16_bf16, qmm_coopmat16_bf16_size};
+    case ComputeKernel::SdpaCausalFlashCoopmat16BF16:
+      return {
+          sdpa_prefill_flash_causal_coopmat16_bf16,
+          sdpa_prefill_flash_causal_coopmat16_bf16_size};
 #else
     case ComputeKernel::MatmulDirectBF16Nn:
     case ComputeKernel::MatmulDirectBF16Nt:
@@ -2293,6 +2298,7 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::MatmulBF16CoopmatXe16:
     case ComputeKernel::QmmPrefillCoopmat16XeBF16:
     case ComputeKernel::QmmPrefillCoopmatBF16x16:
+    case ComputeKernel::SdpaCausalFlashCoopmat16BF16:
       break;
 #endif
     case ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16:
@@ -2800,7 +2806,8 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
         nullptr,
         pin);
   }
-  if (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16) {
+  if (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16 ||
+      kernel == ComputeKernel::SdpaCausalFlashCoopmat16BF16) {
     // Same fail-closed rule as the 16-lane build, one wave up: the kernel
     // launches one 64-lane subgroup per workgroup. Pin 64 when the device
     // legally accepts it; unpinned is correct only when wave64 is both
@@ -2817,9 +2824,13 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
     if (subgroup_size_ != 64u ||
         (required_subgroup_size_ != 0u && required_subgroup_size_ != 64u)) {
       throw std::runtime_error(
-          "[omarchy] QmmPrefillCoopmatBF16x16 runs one 64-lane subgroup per"
-          " workgroup, and this device can neither run that unpinned nor"
-          " legally pin requiredSubgroupSize = 64.");
+          std::string("[omarchy] ") +
+          (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16
+               ? "QmmPrefillCoopmatBF16x16"
+               : "SdpaCausalFlashCoopmat16BF16") +
+          " runs one 64-lane subgroup per workgroup, and this device can"
+          " neither run that unpinned nor legally pin"
+          " requiredSubgroupSize = 64.");
     }
   }
   return create_pipeline(
