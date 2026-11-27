@@ -18,11 +18,11 @@ src/silero_vad/data/silero_vad.onnx). The `--vad silero` flag is the
 download approval, matching the wake-model pair flow.
 """
 
-import hashlib
-import urllib.request
 from pathlib import Path
 
 import numpy as np
+
+from .wake_word import fetch_pinned_file, pinned_file_ok
 
 SAMPLE_RATE = 16_000
 FRAME = 512  # samples per silero frame (32 ms)
@@ -50,37 +50,21 @@ def prepare(home, fetch=None, digest: str = MODEL_SHA256) -> Path:
     directory = Path(home) / "vad"
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "silero_vad.onnx"
-    if path.exists() and _sha256(path) == digest:
-        return path
-    if fetch is not None:
-        data = fetch(MODEL_URL)
-    else:
-        with urllib.request.urlopen(MODEL_URL, timeout=120) as response:
-            if response.status != 200:
-                raise VadModelError(f"{MODEL_URL} returned HTTP {response.status}")
-            data = response.read()
-    staging = path.with_name(path.name + ".part")
-    staging.write_bytes(data)
-    if _sha256(staging) != digest:
-        staging.unlink()
-        raise VadModelError(
-            "silero_vad.onnx does not match the pinned SHA-256; refusing to use it")
-    staging.replace(path)
+    fetch_pinned_file(path, MODEL_URL, digest, VadModelError, fetch)
     return path
 
 
 def prepared(home) -> Path | None:
-    """The staged model's path when present and sha-valid, else None."""
+    """The staged model's path when it is a sha-valid regular file, else None.
+
+    Never raises and never blocks: a symlink, FIFO, directory, oversized or
+    unreadable file reads as not prepared.
+    """
     path = Path(home) / "vad" / "silero_vad.onnx"
-    return path if path.exists() and _sha256(path) == MODEL_SHA256 else None
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    try:
+        return path if pinned_file_ok(path, MODEL_SHA256, VadModelError) else None
+    except (VadModelError, ValueError):
+        return None
 
 
 class SileroVad:

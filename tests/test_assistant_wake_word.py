@@ -11,14 +11,20 @@ below runs only where the pinned files already exist.
 """
 
 import hashlib
+import http.server
 import importlib.util
 import os
+import shutil
+import socket
+import stat
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "serve"))
@@ -198,6 +204,372 @@ class PrepareTests(unittest.TestCase):
             self.assertEqual(leftovers, [])
         finally:
             wake_word.MODEL_FILES = saved
+
+
+def bounded(call, seconds=5.0):
+    """Run call() on a daemon thread; fail instead of hanging the suite."""
+    box = {}
+
+    def run():
+        try:
+            box["value"] = call()
+        except BaseException as exc:  # re-raised in the test thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise AssertionError(f"call still blocked after {seconds} s")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+class FakeResponse:
+    """A finite urlopen() stand-in that counts the bytes handed out."""
+
+    def __init__(self, data, status=200, fail_after=None):
+        self.data = data
+        self.status = status
+        self.fail_after = fail_after  # exception raised once this many bytes went out
+        self.served = 0
+        self.unbounded_reads = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            self.unbounded_reads += 1
+            n = len(self.data)
+        if self.fail_after is not None and self.served >= self.fail_after[0]:
+            raise self.fail_after[1]
+        block = self.data[self.served:self.served + n]
+        self.served += len(block)
+        return block
+
+
+class PinnedFileTests(unittest.TestCase):
+    """fetch_pinned_file / pinned_file_ok: the model trust boundary the wake
+    word and the VAD share. Every source here is finite."""
+
+    DATA = b"pinned-model-bytes" * 8
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="wake-pin-"))
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.path = self.dir / "model.onnx"
+        self.digest = hashlib.sha256(self.DATA).hexdigest()
+        self.fetched = []
+
+    def fetch(self, data=None):
+        def fetch(url):
+            self.fetched.append(url)
+            return self.DATA if data is None else data
+        return fetch
+
+    def stage(self, **kwargs):
+        return bounded(lambda: wake_word.fetch_pinned_file(
+            self.path, "https://example.invalid/model.onnx", self.digest,
+            wake_word.WakeModelError, **kwargs))
+
+    def names(self):
+        return sorted(p.name for p in self.dir.iterdir())
+
+    def cap(self, limit):
+        return mock.patch.object(wake_word, "MAX_MODEL_BYTES", limit)
+
+    def urlopen(self, response):
+        return mock.patch.object(wake_word, "_open", lambda url: response)
+
+    # staging
+
+    def test_download_lands_readable_with_no_temp_left(self):
+        for mask, expected in ((0o077, 0o600), (0o022, 0o644)):
+            with self.subTest(umask=oct(mask)):
+                self.clear()
+                old = os.umask(mask)
+                try:
+                    self.stage(fetch=self.fetch())
+                finally:
+                    os.umask(old)
+                self.assertEqual(self.path.read_bytes(), self.DATA)
+                self.assertEqual(self.names(), ["model.onnx"])
+                self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), expected)
+
+    def test_old_part_symlink_is_never_followed(self):
+        victim = Path(tempfile.mkdtemp(prefix="wake-victim-")) / "victim"
+        self.addCleanup(shutil.rmtree, victim.parent, ignore_errors=True)
+        victim.write_bytes(b"keep me")
+        os.symlink(victim, self.dir / "model.onnx.part")
+        self.stage(fetch=self.fetch())
+        self.assertEqual(victim.read_bytes(), b"keep me")
+        self.assertTrue((self.dir / "model.onnx.part").is_symlink())
+        self.assertEqual(self.path.read_bytes(), self.DATA)
+        self.assertEqual(self.names(), ["model.onnx", "model.onnx.part"])
+
+    def test_hash_mismatch_removes_the_temp_file(self):
+        with self.assertRaises(wake_word.WakeModelError):
+            self.stage(fetch=self.fetch(b"not the model"))
+        self.assertEqual(self.names(), [])
+
+    def test_cleanup_unlink_error_does_not_hide_hash_mismatch(self):
+        with mock.patch.object(
+                wake_word.os, "unlink", side_effect=PermissionError("denied")) as unlink:
+            with self.assertRaisesRegex(wake_word.WakeModelError, "SHA-256"):
+                self.stage(fetch=self.fetch(b"not the model"))
+        unlink.assert_called_once()
+
+    def test_failed_or_interrupted_download_removes_the_temp_file(self):
+        for exc in (ConnectionResetError("reset"), KeyboardInterrupt()):
+            response = FakeResponse(self.DATA, fail_after=(16, exc))
+            with self.subTest(exc=type(exc).__name__), self.urlopen(response):
+                with self.assertRaises(type(exc)):
+                    self.stage()
+                self.assertGreater(response.served, 0)
+                self.assertEqual(self.names(), [])
+
+    def test_a_non_200_answer_is_refused_before_any_read(self):
+        response = FakeResponse(self.DATA, status=203)
+        with self.urlopen(response):
+            with self.assertRaises(wake_word.WakeModelError):
+                self.stage()
+        self.assertEqual(response.served, 0)
+        self.assertEqual(self.names(), [])
+
+    def test_concurrent_downloads_both_finish_cleanly(self):
+        gate = threading.Barrier(2, timeout=5)
+        data = self.DATA
+
+        class OverlappingResponse(FakeResponse):
+            def read(self, n=-1):
+                if not self.served:
+                    gate.wait()  # both calls hold open temp files together
+                return super().read(n)
+
+        errors = []
+
+        def run():
+            try:
+                wake_word.fetch_pinned_file(
+                    self.path, "u", self.digest, wake_word.WakeModelError)
+            except BaseException as exc:
+                errors.append(exc)
+
+        with mock.patch.object(wake_word, "_open",
+                               lambda url: OverlappingResponse(data)):
+            workers = [threading.Thread(target=run, daemon=True) for _ in range(2)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(10)
+        for worker in workers:
+            self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(self.path.read_bytes(), self.DATA)
+        self.assertEqual(self.names(), ["model.onnx"])
+
+    # size ceiling
+
+    def test_download_reads_one_byte_past_the_cap_then_refuses(self):
+        response = FakeResponse(b"z" * 10_000)
+        with self.cap(1000), self.urlopen(response):
+            with self.assertRaises(wake_word.WakeModelError):
+                self.stage()
+        self.assertEqual(response.served, 1001)
+        self.assertEqual(response.unbounded_reads, 0)
+        self.assertEqual(self.names(), [])
+
+    def test_fetched_bytes_past_the_cap_are_refused(self):
+        with self.cap(len(self.DATA) - 1):
+            with self.assertRaises(wake_word.WakeModelError):
+                self.stage(fetch=self.fetch())
+        self.assertEqual(self.names(), [])
+
+    def test_a_file_exactly_at_the_cap_is_accepted_and_reused(self):
+        response = FakeResponse(self.DATA)
+        with self.cap(len(self.DATA)), self.urlopen(response):
+            self.stage()
+            self.assertEqual(self.path.read_bytes(), self.DATA)
+            self.stage(fetch=lambda url: self.fail("verified file refetched"))
+
+    def test_an_oversized_cached_file_is_refetched(self):
+        with open(self.path, "wb") as handle:  # sparse: no bytes on disk
+            handle.truncate(wake_word.MAX_MODEL_BYTES + 1)
+        self.assertFalse(wake_word.pinned_file_ok(
+            self.path, self.digest, wake_word.WakeModelError))
+        self.stage(fetch=self.fetch())
+        self.assertEqual(len(self.fetched), 1)
+        self.assertEqual(self.path.read_bytes(), self.DATA)
+
+    def test_a_corrupt_cached_file_is_refetched(self):
+        self.path.write_bytes(b"half a model")
+        self.stage(fetch=self.fetch())
+        self.assertEqual(len(self.fetched), 1)
+        self.assertEqual(self.path.read_bytes(), self.DATA)
+
+    def test_a_verified_cached_file_is_not_fetched(self):
+        self.path.write_bytes(self.DATA)
+        self.stage(fetch=self.fetch())
+        self.assertEqual(self.fetched, [])
+
+    # cached path that is not a regular file
+
+    def special_paths(self):
+        """(label, make) pairs; make() turns self.path into that kind."""
+        good_dir = Path(tempfile.mkdtemp(prefix="wake-good-"))
+        self.addCleanup(shutil.rmtree, good_dir, ignore_errors=True)
+        good = good_dir / "model.onnx"
+        good.write_bytes(self.DATA)
+
+        def fifo_with_writer():
+            os.mkfifo(self.path)
+            fd = os.open(self.path, os.O_RDWR | os.O_NONBLOCK)
+            os.write(fd, b"x" * 64)
+            self.addCleanup(os.close, fd)
+
+        def unix_socket():
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.addCleanup(sock.close)
+            try:
+                sock.bind(str(self.path))
+            except OSError as exc:
+                self.skipTest(f"cannot bind a unix socket here: {exc}")
+
+        return [
+            ("symlink to the right bytes", lambda: os.symlink(good, self.path)),
+            ("symlink to /dev/null", lambda: os.symlink("/dev/null", self.path)),
+            ("dangling symlink", lambda: os.symlink(self.dir / "gone", self.path)),
+            ("fifo without a writer", lambda: os.mkfifo(self.path)),
+            ("fifo with a writer", fifo_with_writer),
+            ("directory", lambda: self.path.mkdir()),
+            ("unix socket", unix_socket),
+        ]
+
+    def clear(self):
+        if self.path.is_dir() and not self.path.is_symlink():
+            self.path.rmdir()
+        elif os.path.lexists(self.path):
+            self.path.unlink()
+
+    def test_non_regular_cached_paths_are_refused_without_a_fetch(self):
+        for label, make in self.special_paths():
+            with self.subTest(label):
+                self.clear()
+                make()
+                before = os.lstat(self.path)
+                with self.assertRaises(wake_word.WakeModelError):
+                    self.stage(fetch=self.fetch())
+                self.assertEqual(self.fetched, [])
+                after = os.lstat(self.path)
+                self.assertEqual((before.st_ino, stat.S_IFMT(before.st_mode)),
+                                 (after.st_ino, stat.S_IFMT(after.st_mode)))
+                self.assertEqual(sorted(p.name for p in self.dir.iterdir()
+                                        if p.name != "model.onnx"), [])
+
+    def test_an_unreadable_cached_file_is_refused(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads mode 000 files")
+        self.path.write_bytes(self.DATA)
+        self.path.chmod(0)
+        self.addCleanup(self.path.chmod, 0o600)
+        with self.assertRaises(wake_word.WakeModelError):
+            self.stage(fetch=self.fetch())
+        self.assertEqual(self.fetched, [])
+
+    def test_prepare_refuses_a_symlinked_model_file(self):
+        directory = wake_word.model_dir(self.dir)
+        directory.mkdir(parents=True)
+        os.symlink("/dev/null", directory / "melspectrogram.onnx")
+        with self.assertRaises(wake_word.WakeModelError):
+            bounded(lambda: wake_word.prepare(self.dir, fetch=self.fetch()))
+        self.assertEqual(self.fetched, [])
+
+
+class PinnedDownloadHttpTests(unittest.TestCase):
+    """The real urlopen path against a loopback server: GitHub release
+    assets answer 302 to a CDN, so the bounded reader must follow it."""
+
+    BODY = b"onnx" * 500
+
+    def setUp(self):
+        body = self.BODY
+        redirect_state = {"sent": 0}
+        redirect_done = threading.Event()
+        self.redirect_state = redirect_state
+        self.redirect_done = redirect_done
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                if self.path == "/release/model.onnx":
+                    self.send_response(302)
+                    self.send_header("Location", "/cdn/model.onnx")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if self.path == "/huge-redirect/model.onnx":
+                    total = 64 << 20
+                    chunk = b"\x00" * (64 << 10)
+                    self.send_response(302)
+                    self.send_header("Location", "/cdn/model.onnx")
+                    self.send_header("Content-Length", str(total))
+                    self.end_headers()
+                    sent = 0
+                    try:
+                        while sent < total:
+                            self.wfile.write(chunk)
+                            sent += len(chunk)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    finally:
+                        redirect_state["sent"] = sent
+                        redirect_done.set()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        proxy = mock.patch.dict(os.environ, {"no_proxy": "*", "NO_PROXY": "*"})
+        proxy.start()
+        self.addCleanup(proxy.stop)
+        self.dir = Path(tempfile.mkdtemp(prefix="wake-http-"))
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.url = f"http://127.0.0.1:{self.server.server_port}/release/model.onnx"
+
+    def fetch(self, url=None):
+        return bounded(lambda: wake_word.fetch_pinned_file(
+            self.dir / "model.onnx", url or self.url,
+            hashlib.sha256(self.BODY).hexdigest(), wake_word.WakeModelError),
+            seconds=30)
+
+    def test_redirected_download_is_followed_and_verified(self):
+        self.fetch()
+        self.assertEqual((self.dir / "model.onnx").read_bytes(), self.BODY)
+
+    def test_redirected_download_past_the_cap_is_refused(self):
+        with mock.patch.object(wake_word, "MAX_MODEL_BYTES", len(self.BODY) - 1):
+            with self.assertRaises(wake_word.WakeModelError):
+                self.fetch()
+        self.assertEqual(list(self.dir.iterdir()), [])
+
+    def test_redirect_body_is_not_drained(self):
+        url = f"http://127.0.0.1:{self.server.server_port}/huge-redirect/model.onnx"
+        self.fetch(url)
+        self.assertEqual((self.dir / "model.onnx").read_bytes(), self.BODY)
+        self.assertTrue(self.redirect_done.wait(30), "redirect handler did not finish")
+        self.assertLess(self.redirect_state["sent"], 32 << 20)
 
 
 class WakeStateTests(unittest.TestCase):
