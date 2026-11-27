@@ -521,3 +521,88 @@ TEST_CASE("coalesced GDN Sg32 f32 A_log GQA 3-in-1 fusion policy, accuracy, and 
   CHECK(array_equal(on.out[1], off.out[1], s).item<bool>());
   CHECK(array_equal(on.out[2], off.out[2], s).item<bool>());
 }
+
+TEST_CASE("coalesced GDN Sg32 fused in_proj_a/b Q4 GEMV bit-exactness and dispatch count") {
+  if (!have_gpu()) return;
+  Stream s = gpu_stream();
+  auto run_case = [&](int hk, int hv, int k_dim, bool f32_a_log) {
+    Inputs in = make_inputs(211u + static_cast<uint32_t>(hv), 0.15f, s, hk, hv);
+    if (f32_a_log) {
+      in.a_log = pattern({hv}, 223u, 0.5f, 1.0f);
+      eval({in.a_log});
+    }
+    array x = astype(pattern({1, 1, k_dim}, 231u, 0.25f, 0.0f), bfloat16, s);
+    auto make_q4 = [&](int out_n, uint32_t seed) {
+      array wf = astype(pattern({out_n, k_dim}, seed, 0.2f, 0.0f), bfloat16, s);
+      auto q = quantize(wf, 64, 4, "affine", std::nullopt, s);
+      eval(std::vector<array>{q[0], q[1], q[2]});
+      return q;
+    };
+    auto qa = make_q4(hv, 241u);
+    auto qb = make_q4(hv, 251u);
+    auto qz = make_q4(hv * 128, 261u);
+    auto qqkv = make_q4((2 * hk + hv) * 128, 271u);
+    eval(std::vector<array>{x});
+
+    auto exec_mode = [&](const char* ab_mode, const char* fg_mode) {
+      setenv("MLX_OMARCHY_GDN_COALESCED", "1", 1);
+      setenv("MLX_OMARCHY_GDN_FUSE_AB", ab_mode, 1);
+      if (fg_mode != nullptr) {
+        setenv("MLX_OMARCHY_FUSED_GEMV", fg_mode, 1);
+      } else {
+        unsetenv("MLX_OMARCHY_FUSED_GEMV");
+      }
+      const uint64_t before = compute_dispatches();
+      array z = quantized_matmul(x, qz[0], qz[1], qz[2], true, 64, 4, "affine", s);
+      array a = quantized_matmul(x, qa[0], qa[1], qa[2], true, 64, 4, "affine", s);
+      array b = quantized_matmul(x, qb[0], qb[1], qb[2], true, 64, 4, "affine", s);
+      array qkv = quantized_matmul(x, qqkv[0], qqkv[1], qqkv[2], true, 64, 4, "affine", s);
+      auto outs = fast::gdn_conv_delta_update(
+          in.conv_state,
+          qkv,
+          in.weight,
+          a,
+          b,
+          in.a_log,
+          in.dt_bias,
+          in.delta_state,
+          hk * D,
+          INV * INV,
+          INV,
+          EPS,
+          std::optional<array>(reshape(z, {1, 1, hv, D}, s)),
+          std::optional<array>(in.norm_w),
+          EPS,
+          s);
+      eval(outs);
+      const uint64_t used = compute_dispatches() - before;
+      unsetenv("MLX_OMARCHY_FUSED_GEMV");
+      unsetenv("MLX_OMARCHY_GDN_FUSE_AB");
+      unsetenv("MLX_OMARCHY_GDN_COALESCED");
+      return Run{outs, used};
+    };
+
+    exec_mode("0", "0");
+    Run r0 = exec_mode("0", "0");
+    exec_mode("1", "0");
+    Run r1 = exec_mode("1", "0");
+    exec_mode("2", nullptr);
+    Run r2 = exec_mode("2", nullptr);
+    std::cout << "[gdn_fuse_ab] hk=" << hk << " hv=" << hv << " K=" << k_dim
+              << " f32a=" << f32_a_log << " dispatches: mode0=" << r0.dispatches
+              << " mode1=" << r1.dispatches << " mode2=" << r2.dispatches << "\n";
+    CHECK_EQ(r0.dispatches, 5u);
+    CHECK_EQ(r1.dispatches, 3u);
+    CHECK_EQ(r2.dispatches, 2u);
+    for (int i = 0; i < 3; ++i) {
+      CHECK_MESSAGE(
+          array_equal(r1.out[i], r0.out[i], s).item<bool>(),
+          "mode1 out[", i, "] mismatch for hk=", hk, " hv=", hv);
+      CHECK_MESSAGE(
+          array_equal(r2.out[i], r0.out[i], s).item<bool>(),
+          "mode2 out[", i, "] mismatch for hk=", hk, " hv=", hv);
+    }
+  };
+  run_case(16, 16, 2048, false);
+  run_case(16, 32, 4096, true);
+}

@@ -390,6 +390,22 @@ bool sdpa_outgate_enabled(const CapabilityReport& caps);
 const SdpaOutgatePlan* find_sdpa_outgate(const array& out);
 void commit_sdpa_outgate(const array& out);
 
+// Fused in_proj_a / in_proj_b Q4 GEMV into GdnConvDeltaUpdate:
+// MLX_OMARCHY_GDN_FUSE_AB=1 fuses a/b into GatedDeltaDecodeConvNormAbBF16Sg32
+// keeping z/qkv separate; =2 also allows z+qkv to pair-fuse as a 2-output GEMV.
+struct GdnAbPlan {
+  array x;
+  array wa;
+  array sa;
+  array ba;
+  array wb;
+  array sb;
+  array bb;
+};
+const GdnAbPlan* find_gdn_ab_plan(std::uintptr_t gdn_out_id);
+void commit_gdn_ab_plan(std::uintptr_t gdn_out_id);
+void abort_gdn_ab_plan(std::uintptr_t gdn_out_id, const Stream& stream);
+
 class Device;
 struct CapabilityReport;
 

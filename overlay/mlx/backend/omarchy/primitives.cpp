@@ -18065,6 +18065,42 @@ void GdnConvDeltaUpdate::eval_gpu(
       (a_log_f32 ? gdn_coal_sg32_ok
                  : (equal_heads ? decode_tile == false : true)) &&
       encoder.device().compute().binding_limit() >= (with_norm ? 13u : 11u);
+  const omarchy::GdnAbPlan* ab_plan =
+      omarchy::find_gdn_ab_plan(outputs.at(0).id());
+  bool ab_ready = false;
+  uint32_t ab_x_offset = 0u;
+  uint32_t ab_x_k = 0u;
+  if (ab_plan != nullptr && supported && gdn_coal_sg32_ok &&
+      encoder.device().compute().binding_limit() >= 18u &&
+      (h0_offset % 4u) == 0u &&
+      ab_plan->x.data_shared_ptr() != nullptr &&
+      ab_plan->wa.data_shared_ptr() != nullptr &&
+      ab_plan->sa.data_shared_ptr() != nullptr &&
+      ab_plan->ba.data_shared_ptr() != nullptr &&
+      ab_plan->wb.data_shared_ptr() != nullptr &&
+      ab_plan->sb.data_shared_ptr() != nullptr &&
+      ab_plan->bb.data_shared_ptr() != nullptr &&
+      ab_plan->x.flags().row_contiguous &&
+      ab_plan->wa.flags().row_contiguous &&
+      ab_plan->sa.flags().row_contiguous &&
+      ab_plan->ba.flags().row_contiguous &&
+      ab_plan->wb.flags().row_contiguous &&
+      ab_plan->sb.flags().row_contiguous &&
+      ab_plan->bb.flags().row_contiguous &&
+      ab_plan->wa.shape(0) == Hv && ab_plan->wb.shape(0) == Hv &&
+      ab_plan->wa.offset() == 0 && ab_plan->sa.offset() == 0 &&
+      ab_plan->ba.offset() == 0 && ab_plan->wb.offset() == 0 &&
+      ab_plan->sb.offset() == 0 && ab_plan->bb.offset() == 0) {
+    ab_x_offset = checked_item_offset(
+        ab_plan->x, ab_plan->x.size(), tag, outputs.at(0));
+    ab_x_k = static_cast<uint32_t>(ab_plan->x.shape(-1));
+    if ((ab_x_offset % 8u) == 0u && ab_x_k >= 64u && (ab_x_k % 64u) == 0u) {
+      ab_ready = true;
+    }
+  }
+  if (ab_plan != nullptr && !ab_ready) {
+    omarchy::abort_gdn_ab_plan(outputs.at(0).id(), s);
+  }
   if (!supported) {
     auto result = fallback_(inputs);
     settle(result);
@@ -18116,8 +18152,6 @@ void GdnConvDeltaUpdate::eval_gpu(
   // Raw gates (flag bit 8): a, b, A_log, dt_bias as in the unfused dispatch; A_log and dt_bias are
   // per model head, so the shader reads head % Hv (in_strides[2]); in_strides[3] = 0 means equal heads,
   // otherwise it carries Hk and the conv prologue reads q/k channels by the key-head index.
-  params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
-  params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
   params.in_strides[0] = checked_item_offset(A_log, A_log.size(), tag, out);
   if (a_log_f32) {
     params.in_strides[0] *= 2u;
@@ -18139,6 +18173,50 @@ void GdnConvDeltaUpdate::eval_gpu(
     params.output_size = checked_item_offset(norm_weight, norm_weight.size(), tag, out);
     params.alpha = norm_eps();
   }
+  if (ab_ready && (params.shape[2] % 4u) == 0u) {
+    params.shape[0] = ab_x_k;
+    params.aux_offset = ab_x_offset;
+    encoder.add_temporary(ab_plan->x);
+    encoder.add_temporary(ab_plan->wa);
+    encoder.add_temporary(ab_plan->sa);
+    encoder.add_temporary(ab_plan->ba);
+    encoder.add_temporary(ab_plan->wb);
+    encoder.add_temporary(ab_plan->sb);
+    encoder.add_temporary(ab_plan->bb);
+    omarchy::commit_gdn_ab_plan(outputs.at(0).id());
+    std::array<omarchy::ComputeBinding, 18> ab_bindings{
+        binding(in_state),
+        binding(in_x),
+        binding(in_w),
+        binding(ab_plan->x),
+        binding(ab_plan->wa),
+        binding(h0),
+        binding(out),
+        binding(hf),
+        binding(A_log),
+        binding(dt_bias),
+        binding(conv_state_out),
+        binding(norm_gate),
+        binding(norm_weight),
+        binding(ab_plan->sa),
+        binding(ab_plan->ba),
+        binding(ab_plan->wb),
+        binding(ab_plan->sb),
+        binding(ab_plan->bb)};
+    encoder.dispatch_compute(
+        omarchy::ComputeKernel::GatedDeltaDecodeConvNormAbBF16Sg32,
+        ab_bindings,
+        params,
+        params.matrix_k,
+        1u,
+        1u);
+    return;
+  }
+  if (ab_ready) {
+    omarchy::abort_gdn_ab_plan(outputs.at(0).id(), s);
+  }
+  params.aux_offset = checked_item_offset(b_in, b_in.size(), tag, out);
+  params.shape[0] = checked_item_offset(a_in, a_in.size(), tag, out);
   std::array<omarchy::ComputeBinding, 13> bindings{
       binding(in_state),
       binding(in_x),

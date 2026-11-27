@@ -902,6 +902,20 @@ struct SdpaOnlineRopePlan {
       State::pending};
 };
 
+struct GdnAbFold {
+  GdnAbPlan plan;
+  array a_node;
+  array b_node;
+  std::shared_ptr<Primitive> a_prim;
+  std::shared_ptr<Primitive> b_prim;
+  std::vector<array> a_inputs;
+  std::vector<array> b_inputs;
+  bool a_skipped{false};
+  bool b_skipped{false};
+  bool done{false};
+  bool failed{false};
+};
+
 struct EagerFusionState {
   std::unordered_map<std::uintptr_t, EagerRole> roles;
   std::unordered_map<std::uintptr_t, FusedChain> chains;
@@ -915,6 +929,9 @@ struct EagerFusionState {
   std::vector<SdpaOutgateFold> sdpa_outgate_folds;
   std::unordered_map<std::uintptr_t, size_t> sdpa_outgate_plans;
   std::unordered_map<std::uintptr_t, size_t> sdpa_outgate_skip_roles;
+  std::vector<GdnAbFold> gdn_ab_folds;
+  std::unordered_map<std::uintptr_t, size_t> gdn_ab_plans;
+  std::unordered_map<std::uintptr_t, size_t> gdn_ab_skip_roles;
   std::vector<SdpaOnlineRopePlan> sdpa_online_rope_plans;
   std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_skip_roles;
   std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_su_roles;
@@ -970,6 +987,9 @@ struct EagerFusionState {
     sdpa_outgate_folds.clear();
     sdpa_outgate_plans.clear();
     sdpa_outgate_skip_roles.clear();
+    gdn_ab_folds.clear();
+    gdn_ab_plans.clear();
+    gdn_ab_skip_roles.clear();
     sdpa_online_rope_plans.clear();
     sdpa_online_rope_skip_roles.clear();
     sdpa_online_rope_su_roles.clear();
@@ -1685,6 +1705,99 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     ++i;
   }
 
+  // Fused in_proj_a / in_proj_b Q4 GEMV into GdnConvDeltaUpdate:
+  // MLX_OMARCHY_GDN_FUSE_AB=1 plans after GEMV grouping (keeping z and qkv
+  // separate); =2 plans before GEMV grouping (claiming a and b so [z, qkv]
+  // pair-fuse into a 2-output Multi GEMV).
+  const char* gdn_ab_env = omarchy::env_str("MLX_OMARCHY_GDN_FUSE_AB");
+  const int gdn_ab_mode = (gdn_ab_env != nullptr && gdn_ab_env[0] != '\0')
+      ? (gdn_ab_env[0] == '2' ? 2 : (gdn_ab_env[0] != '0' ? 1 : 0))
+      : 0;
+  auto plan_gdn_ab_folds = [&]() {
+    if (gdn_ab_mode == 0) {
+      return;
+    }
+    for (const auto& node : tape) {
+      if (!is_op(&node, typeid(fast::GdnConvDeltaUpdate)) ||
+          node.inputs().size() != 10) {
+        continue;
+      }
+      const array* a_node = lookup(node.inputs()[3]);
+      const array* b_node = lookup(node.inputs()[4]);
+      if (a_node == nullptr || b_node == nullptr ||
+          a_node->id() == b_node->id() ||
+          !is_op(a_node, typeid(QuantizedMatmul)) ||
+          !is_op(b_node, typeid(QuantizedMatmul)) ||
+          claimed.count(a_node->id()) || claimed.count(b_node->id()) ||
+          uses[a_node->id()] != 1 || uses[b_node->id()] != 1 ||
+          a_node->inputs().size() != 4 || b_node->inputs().size() != 4 ||
+          a_node->primitive().stream() != node.primitive().stream() ||
+          b_node->primitive().stream() != node.primitive().stream() ||
+          a_node->dtype() != bfloat16 || b_node->dtype() != bfloat16 ||
+          a_node->inputs()[0].id() != b_node->inputs()[0].id() ||
+          lookup(a_node->inputs()[1]) || lookup(a_node->inputs()[2]) ||
+          lookup(a_node->inputs()[3]) || lookup(b_node->inputs()[1]) ||
+          lookup(b_node->inputs()[2]) || lookup(b_node->inputs()[3])) {
+        continue;
+      }
+      auto [gs_a, bits_a, mode_a, tr_a] =
+          static_cast<const QuantizedMatmul&>(a_node->primitive()).state();
+      auto [gs_b, bits_b, mode_b, tr_b] =
+          static_cast<const QuantizedMatmul&>(b_node->primitive()).state();
+      if (mode_a != QuantizationMode::Affine || !tr_a || bits_a != 4 ||
+          gs_a != 64 || mode_b != QuantizationMode::Affine || !tr_b ||
+          bits_b != 4 || gs_b != 64) {
+        continue;
+      }
+      const array& x = a_node->inputs()[0];
+      const array& wa = a_node->inputs()[1];
+      const array& wb = b_node->inputs()[1];
+      if (x.dtype() != bfloat16 || x.ndim() < 2 ||
+          x.size() != static_cast<size_t>(x.shape(-1)) ||
+          x.shape(-1) < 64 || (x.shape(-1) % 64) != 0 ||
+          wa.ndim() != 2 || wb.ndim() != 2 ||
+          wa.shape(0) != wb.shape(0) ||
+          a_node->ndim() != 3 || b_node->ndim() != 3 ||
+          a_node->shape(0) != 1 || a_node->shape(1) != 1 ||
+          b_node->shape(0) != 1 || b_node->shape(1) != 1 ||
+          a_node->shape(2) != wa.shape(0) ||
+          b_node->shape(2) != wb.shape(0)) {
+        continue;
+      }
+      const size_t idx = state->gdn_ab_folds.size();
+      state->gdn_ab_folds.push_back(GdnAbFold{
+          GdnAbPlan{
+              x,
+              wa,
+              a_node->inputs()[2],
+              a_node->inputs()[3],
+              wb,
+              b_node->inputs()[2],
+              b_node->inputs()[3]},
+          *a_node,
+          *b_node,
+          a_node->primitive_ptr(),
+          b_node->primitive_ptr(),
+          a_node->inputs(),
+          b_node->inputs(),
+          false,
+          false,
+          false,
+          false});
+      state->gdn_ab_plans.emplace(node.id(), idx);
+      for (const auto& sib : node.siblings()) {
+        state->gdn_ab_plans.emplace(sib.id(), idx);
+      }
+      state->gdn_ab_skip_roles.emplace(a_node->id(), idx);
+      state->gdn_ab_skip_roles.emplace(b_node->id(), idx);
+      claimed.put_if_absent(a_node->id(), 1);
+      claimed.put_if_absent(b_node->id(), 1);
+    }
+  };
+  if (gdn_ab_mode == 2) {
+    plan_gdn_ab_folds();
+  }
+
   // Decode GEMV groups (per node: MLX_OMARCHY_FUSED_GEMV for the device
   // that executes the node; the trio plan below does not depend on it). Candidates: affine transposed 4-bit/group-64
   // QuantizedMatmul nodes whose x is a single row and whose weight,
@@ -1889,6 +2002,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
       state->gemv_groups.push_back(std::move(group));
     }
+  }
+  if (gdn_ab_mode == 1) {
+    plan_gdn_ab_folds();
   }
   // Out-gate attach validation. A group carrying a plan keeps it only
   // when the gate's only reader is the plan's sigmoid and out's only
@@ -4138,6 +4254,62 @@ void commit_sdpa_outgate(const array& out) {
   }
 }
 
+const GdnAbPlan* find_gdn_ab_plan(std::uintptr_t gdn_out_id) {
+  if (!eager_state) {
+    return nullptr;
+  }
+  auto it = eager_state->gdn_ab_plans.find(gdn_out_id);
+  if (it == eager_state->gdn_ab_plans.end()) {
+    return nullptr;
+  }
+  const auto& fold = eager_state->gdn_ab_folds[it->second];
+  if (fold.done || fold.failed) {
+    return nullptr;
+  }
+  return &fold.plan;
+}
+
+void commit_gdn_ab_plan(std::uintptr_t gdn_out_id) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->gdn_ab_plans.find(gdn_out_id);
+  if (it != eager_state->gdn_ab_plans.end()) {
+    eager_state->gdn_ab_folds[it->second].done = true;
+  }
+}
+
+void abort_gdn_ab_plan(std::uintptr_t gdn_out_id, const Stream& stream) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->gdn_ab_plans.find(gdn_out_id);
+  if (it == eager_state->gdn_ab_plans.end()) {
+    return;
+  }
+  auto& fold = eager_state->gdn_ab_folds[it->second];
+  if (fold.done || fold.failed) {
+    return;
+  }
+  fold.failed = true;
+  auto& encoder = get_command_encoder(stream);
+  auto replay_one = [&](array& node,
+                        const std::shared_ptr<Primitive>& prim,
+                        const std::vector<array>& inputs) {
+    for (const auto& input : inputs) {
+      encoder.add_temporary(input);
+    }
+    std::vector<array> outs{node};
+    prim->eval_gpu(inputs, outs);
+  };
+  if (fold.a_skipped && fold.a_node.data_shared_ptr() == nullptr) {
+    replay_one(fold.a_node, fold.a_prim, fold.a_inputs);
+  }
+  if (fold.b_skipped && fold.b_node.data_shared_ptr() == nullptr) {
+    replay_one(fold.b_node, fold.b_prim, fold.b_inputs);
+  }
+}
+
 void bind_kv_window_storage(KvDirectWindow& window, const Stream& stream) {
   if (window.node.data_shared_ptr() != nullptr) {
     auto& encoder = get_command_encoder(stream);
@@ -4411,6 +4583,18 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (auto skip = eager_state->sdpa_outgate_skip_roles.find(node.id());
       skip != eager_state->sdpa_outgate_skip_roles.end()) {
     return eager_state->sdpa_outgate_folds[skip->second].fired;
+  }
+  if (auto skip = eager_state->gdn_ab_skip_roles.find(node.id());
+      skip != eager_state->gdn_ab_skip_roles.end()) {
+    auto& fold = eager_state->gdn_ab_folds[skip->second];
+    if (!fold.failed) {
+      if (node.id() == fold.a_node.id()) {
+        fold.a_skipped = true;
+      } else if (node.id() == fold.b_node.id()) {
+        fold.b_skipped = true;
+      }
+      return true;
+    }
   }
   if (auto skip = eager_state->prologue_skip_roles.find(node.id());
       skip != nullptr) {
