@@ -1361,6 +1361,10 @@ def _bincount(a, weights=None, minlength=0):
                 if max(abs(lo), abs(hi)) * a.size >= 2 ** 31:
                     return _raise("bincount int64 weights exceed the int32 scatter sum range")
             w = w.astype(mx.int32)
+        elif w.dtype == mx.float64:
+            # the scatter accumulates float32; the f64 -> f32 cast keeps the
+            # fraction (the catch-all int32 cast silently truncated it)
+            w = w.astype(mx.float32)
         elif w.dtype not in (mx.float32, mx.float16, mx.bfloat16, mx.int32, mx.uint32):
             w = w.astype(mx.int32)
     out = mx.zeros((n,), dtype=w.dtype)

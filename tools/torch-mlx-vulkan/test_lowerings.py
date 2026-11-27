@@ -103,6 +103,11 @@ def test_bincount():
     x32 = rng.randint(0, 5, size=(33,)).astype(np.int32)
     out = mlx_vulkan._bincount(mx.array(x32))
     assert np.array_equal(_np(out), torch.tensor(x32).bincount().numpy())
+    # float64 weights keep the fraction (accumulated in f32, f64 out)
+    w64 = rng.randn(64).astype(np.float64)
+    out = mlx_vulkan._bincount(mx.array(idx), weights=mx.array(w64))
+    assert _np(out).dtype == np.float64
+    assert np.allclose(_np(out), t.bincount(torch.tensor(w64)).numpy(), atol=1e-6)
     wi = rng.randint(-9, 10, size=(64,)).astype(np.int64)
     out = mlx_vulkan._bincount(mx.array(idx), weights=mx.array(wi))
     assert _np(out).dtype == np.int64
