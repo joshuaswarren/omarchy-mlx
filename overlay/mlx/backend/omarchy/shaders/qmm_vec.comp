@@ -1007,6 +1007,52 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   } \
 }
 #elif defined(QMM_W2) && !defined(QMM_KCONT) && QGROUP == 64 && QMM_LANES == 32
+#if defined(QMM_Q4_MIDSB)
+// G13C-gated ResNormVec fast-tile body: hoist xa/xb together and issue
+// scale/bias loads between xa and xb so xb's 16 FMAs hide scale/bias latency.
+// Bit-identical (0 ULP) to the default low-reg body.
+#define Q4_ROWS_LOWREG_BODY(S, B) \
+      uvec4 xa = OUTGATE_XQUAD(xp); \
+      uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
+      xp += 64u; \
+      Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
+      Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
+      float scale_r[ROWS_PER_SLOT]; \
+      float bias_r[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        uint spr = sp[r]; \
+        sp[r] = spr + 8u; \
+        scale_r[r] = LOAD_VALUE(S.values[spr]); \
+        bias_r[r] = LOAD_VALUE(B.values[spr + sb_delta]); \
+      } \
+      Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
+      Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        precise float bias_term = input_sum * bias_r[r]; \
+        acc[r] += fma(scale_r[r], dot[r], bias_term); \
+      }
+#else
+#define Q4_ROWS_LOWREG_BODY(S, B) \
+      { \
+        uvec4 xa = OUTGATE_XQUAD(xp); \
+        Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
+        Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
+      } \
+      { \
+        uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
+        xp += 64u; \
+        Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
+        Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
+      } \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        uint spr = sp[r]; \
+        sp[r] = spr + 8u; \
+        float scale_r = LOAD_VALUE(S.values[spr]); \
+        float bias_r = LOAD_VALUE(B.values[spr + sb_delta]); \
+        precise float bias_term = input_sum * bias_r; \
+        acc[r] += fma(scale_r, dot[r], bias_term); \
+      }
+#endif
 #if defined(QMM_FAST_ONLY)
 // Host guarantees K % 512 == 0, N % 8 == 0, and even w_base; trimming the
 // unreachable slow-path loop cuts SPIR-V CFG size and AGX register pressure.
@@ -1168,25 +1214,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
         wv[r] = W.values[wp[r]]; \
         wp[r] += 32u; \
       } \
-      { \
-        uvec4 xa = OUTGATE_XQUAD(xp); \
-        Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
-        Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
-      } \
-      { \
-        uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
-        xp += 64u; \
-        Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
-        Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
-      } \
-      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        uint spr = sp[r]; \
-        sp[r] = spr + 8u; \
-        float scale_r = LOAD_VALUE(S.values[spr]); \
-        float bias_r = LOAD_VALUE(B.values[spr + sb_delta]); \
-        precise float bias_term = input_sum * bias_r; \
-        acc[r] += fma(scale_r, dot[r], bias_term); \
-      } \
+      Q4_ROWS_LOWREG_BODY(S, B) \
     } \
   } else { \
     Q4_ROWS_W2_FALLBACK(W, S, B) \
