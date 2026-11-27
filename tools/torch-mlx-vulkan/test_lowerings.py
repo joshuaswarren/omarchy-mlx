@@ -2566,6 +2566,44 @@ def test_cosine_similarity():
     print("test_cosine_similarity PASS")
 
 
+def test_glu():
+    # PT-AL-d: aten.glu.default (GDN gate, Conformer).
+    # aten.glu(input, dim=-1): the input halves along dim; a * sigmoid(b).
+    x2 = torch.randn(3, 8)
+    x3 = torch.randn(2, 6, 4)
+    x1 = torch.randn(10)
+    F = torch.nn.functional
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        cases = [
+            (torch.ops.aten.glu.default, (x2.to(dtype),), {},
+             F.glu(x2.to(dtype)), "glu"),
+            (torch.ops.aten.glu.default, (x3.to(dtype),), {"dim": 0},
+             F.glu(x3.to(dtype), dim=0), "glu"),
+            (torch.ops.aten.glu.default, (x3.to(dtype),), {"dim": 1},
+             F.glu(x3.to(dtype), dim=1), "glu"),
+            (torch.ops.aten.glu.default, (x1.to(dtype),), {},
+             F.glu(x1.to(dtype)), "glu"),
+            (F.glu, (x2.to(dtype),), {},
+             F.glu(x2.to(dtype)), "glu"),
+            (F.glu, (x3.to(dtype),), {"dim": -2},
+             F.glu(x3.to(dtype), dim=-2), "glu"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert any(name in s for s in stats["mlx"]), (stats, str(target))
+            got = out.float().numpy()
+            assert np.allclose(got, ref.float().numpy(), atol=tol), \
+                (str(target), kw, dtype, got, ref.float().numpy())
+    print("test_glu PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2609,6 +2647,7 @@ if __name__ == "__main__":
     test_xlogy_xlog1py()
     test_softplus_mish()
     test_elu_selu_celu()
+    test_glu()
     test_cosine_similarity()
     print("ALL PASS")
 
