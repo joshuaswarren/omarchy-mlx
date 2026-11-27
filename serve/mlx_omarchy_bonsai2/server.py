@@ -17,13 +17,13 @@ prompt cache survives across requests. The endpoint enforces a hard
 context cap of its own (--max-context, default: the pack's
 max_position_embeddings): a prompt plus max_tokens beyond it is a 400.
 
---managed is the admission-control mode: admit + reserve against
-mlx_omarchy_serve.budget BEFORE any weights are touched (weights + KV
-at the served context + workspace via budget.estimate_required),
-transition the reservation to resident only after the load, release on
-exit, and fail closed (exit 3) if any of that cannot be done. Without
---managed the same reservation runs best-effort and never blocks
-standalone serving.
+--managed is the admission-control mode: pin the budget registry home
+once, admit + reserve against mlx_omarchy_serve.budget BEFORE any
+weights are touched (weights + KV at the served context + workspace via
+budget.estimate_required), transition the reservation to resident only
+after the load, release on exit only what was reserved, and fail closed
+(exit 3) if any of that cannot be done. Without --managed the same
+reservation runs best-effort and never blocks standalone serving.
 """
 
 from __future__ import annotations
@@ -149,6 +149,21 @@ def _owner_token(budget) -> str:
         return "pid%d-%s" % (os.getpid(), uuid.uuid4().hex[:12])
 
 
+def _managed_registry_home(budget):
+    """Pin the budget registry home once for --managed runs.
+
+    budget.default_home() raises RuntimeError when MLX_OMARCHY_HOME and HOME
+    are unset and the uid has no passwd entry; fail closed (exit 3) before
+    touching pack metadata or the registry.
+    """
+    try:
+        return budget.default_home()
+    except RuntimeError as exc:
+        _fail_managed(
+            "cannot locate the budget registry: %s (set MLX_OMARCHY_HOME or HOME)" % exc
+        )
+
+
 def _preflight_managed(args, reservation_name):
     """Managed mode: atomic admit+reserve BEFORE any weights are touched.
 
@@ -170,18 +185,26 @@ def _preflight_managed(args, reservation_name):
             "(separate admit + set_reservation races other tenants)"
         )
     try:
+        home = _managed_registry_home(budget)
+        args.registry_home = home
         facts = pack_footprint(args.model)
         max_context = args.max_context or facts["max_position_embeddings"]
         total = _footprint_total(
             budget, facts["total_header_bytes"], facts["kv_bytes_per_token"], max_context
         )
-        admission = atomic(
-            reservation_name,
-            total,
-            note="bonsai2",
-            owner=args.owner,
-            state="pending",
-        )
+        args.reserved = True
+        try:
+            admission = atomic(
+                reservation_name,
+                total,
+                note="bonsai2",
+                owner=args.owner,
+                home=home,
+                state="pending",
+            )
+        except Exception:
+            args.reserved = False
+            raise
         if not admission.fits:  # defensive: refusals raise BudgetError
             _fail_managed("admission refused: %s" % "; ".join(admission.lines))
         return total
@@ -203,12 +226,14 @@ def _register_reservation(args, state):
     )
     floor = state.info["resident_bytes"]
     if not args.managed:
+        args.reserved = True
         try:
             budget.set_reservation(
                 state.reservation_name, total, note="bonsai2",
                 owner=state.owner, state="pending",
             )
         except Exception as exc:  # budget absent/broken must not block standalone serving
+            args.reserved = False
             print("bonsai2: memory reservation skipped (%s)" % exc, file=sys.stderr)
             return False
     if args.managed:
@@ -217,6 +242,7 @@ def _register_reservation(args, state):
         try:
             budget.set_reservation_state(
                 state.reservation_name, "resident",
+                home=args.registry_home,
                 owner=state.owner, resident_floor_bytes=floor,
             )
         except Exception as exc:
@@ -239,14 +265,17 @@ def _register_reservation(args, state):
         return False
 
 
-def _release_reservation(reservation_name: str, owner: str | None = None):
+def _release_reservation(
+    reservation_name: str, owner: str | None = None, home: Path | None = None
+):
     """Clear the per-process reservation.
 
     The owner token is REQUIRED for any owned managed reservation: the
     budget API refuses to clear a reservation held by another holder
     ("owned by another holder"), so a release without the matching token
     raises BudgetError and the entry stays on disk. Managed-mode call
-    sites always pass owner=getattr(args, "owner", None); the unowned
+    sites always pass owner=getattr(args, "owner", None) and the registry
+    home pinned at admission (home=args.registry_home); the unowned
     legacy path (no --managed) is preserved for backward compatibility
     but a failed clear is logged, not silently swallowed -- a dead owner
     entry is the bug this helper exists to prevent."""
@@ -254,7 +283,7 @@ def _release_reservation(reservation_name: str, owner: str | None = None):
     if budget is None:
         return
     try:
-        budget.clear_reservation(reservation_name, owner=owner)
+        budget.clear_reservation(reservation_name, owner=owner, home=home)
     except Exception as exc:
         print(
             "bonsai2: reservation release for %r raised %s; the entry may need "
@@ -668,6 +697,8 @@ def serve_main(argv):
         sys.exit(2)
     args.reservation_name = _reservation_name(args.model_id)
     args.owner = _owner_token(_budget_module())
+    args.registry_home = None
+    args.reserved = False
     # Env-gated ids-probe hook (bench-only, default OFF). Imported only when
     # the env var is set: install.sh does not ship ids_probe.py. Mirrors the
     # contract in serve.mlx_omarchy_serve._mlxlm_server.
@@ -735,14 +766,20 @@ def serve_main(argv):
             httpd.shutdown()
         if httpd is not None:
             httpd.server_close()
-        try:
-            _release_reservation(args.reservation_name, owner=getattr(args, "owner", None))
-        except Exception as release_exc:
-            print(
-                "bonsai2: reservation release raised %s; entry may need manual cleanup via "
-                "budget.clear_reservation(name, owner=%r)" % (release_exc, getattr(args, "owner", None)),
-                file=sys.stderr,
-            )
+        if args.reserved:
+            try:
+                _release_reservation(
+                    args.reservation_name,
+                    owner=getattr(args, "owner", None),
+                    home=args.registry_home,
+                )
+            except Exception as release_exc:
+                print(
+                    "bonsai2: reservation release raised %s; entry may need manual cleanup via "
+                    "budget.clear_reservation(name, owner=%r)"
+                    % (release_exc, getattr(args, "owner", None)),
+                    file=sys.stderr,
+                )
 
 
 if __name__ == "__main__":
