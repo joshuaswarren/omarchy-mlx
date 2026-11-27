@@ -140,8 +140,9 @@ int scenario(const std::string& name, const std::string& out) {
     eval(oa, ob);
     outs.push_back(oa);
     outs.push_back(ob);
-  } else if (name == "resnorm2048" || name == "resnorm4096") {
-    const int n = (name == "resnorm2048") ? 2048 : 4096;
+  } else if (name == "resnorm2048" || name == "resnorm4096" ||
+             name == "resnorm2048_liveqmm") {
+    const int n = (name == "resnorm4096") ? 4096 : 2048;
     const int k = 2048;
     auto x = make_x(k, rng);
     auto w = make_lin(n, k, rng);
@@ -149,9 +150,15 @@ int scenario(const std::string& name, const std::string& out) {
     auto nw = make_x(n, rng);
     nw = reshape(nw, Shape{n});
     eval(x, w.w, w.s, w.b, resid, nw);
-    auto sum = add(qmm(x, w), resid);
+    auto q = qmm(x, w);
+    auto sum = add(q, resid);
     auto normed = fast::rms_norm(sum, nw, 1e-6f);
-    eval(sum, normed);
+    if (name == "resnorm2048_liveqmm") {
+      eval(q, sum, normed);
+      outs.push_back(q);
+    } else {
+      eval(sum, normed);
+    }
     outs.push_back(sum);
     outs.push_back(normed);
   } else if (name == "name") {
@@ -443,6 +450,25 @@ int main(int argc, char** argv) {
       ++failures;
     }
     unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+    unsetenv("MLX_OMARCHY_MULTI_R2S16");
+    if (!mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M1 Max (G13C C0)") ||
+        mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M1 (G13G B1)") ||
+        mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: qmm_g14c_multi_r2s16_default_part part check\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_MULTI_R2S16", "0", 1);
+    if (mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M2 Max (G14C B1)")) {
+      std::cout << "FAIL: qmm_g14c_multi_r2s16_default_part =0 override\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_MULTI_R2S16", "1", 1);
+    if (!mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M1 Max (G13C C0)")) {
+      std::cout << "FAIL: qmm_g14c_multi_r2s16_default_part =1 override\n";
+      ++failures;
+    }
+    unsetenv("MLX_OMARCHY_MULTI_R2S16");
   }
   // Low-register SwiGLU (R1S8W2 and R1S4W2) must be bit-identical to 2x4.
   {
@@ -558,6 +584,7 @@ int main(int argc, char** argv) {
         {"multi_up_fast", "group", "MLX_OMARCHY_Q4_UPFRONT"},
         {"swiglu_r1s4_fast", "swiglu", "MLX_OMARCHY_SWIGLU_R1S4"},
         {"resnorm2048_fast", "resnorm2048", "MLX_OMARCHY_RESNORM_R2S32"},
+        {"resnorm2048_liveqmm_fast", "resnorm2048_liveqmm", "MLX_OMARCHY_RESNORM_R2S32"},
         {"resnorm4096_fast", "resnorm4096", "MLX_OMARCHY_RESNORM_R2S32"},
     };
     for (const auto& c : cases) {
@@ -567,6 +594,7 @@ int main(int argc, char** argv) {
       setenv("MLX_OMARCHY_SWIGLU_R1", "1", 1);
       setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
       setenv("MLX_OMARCHY_RESNORM_VEC4", "1", 1);
+      setenv("MLX_OMARCHY_MULTI_R2S16", "0", 1);
       setenv(c.extra_env, "1", 1);
       setenv("MLX_OMARCHY_G14C_FAST_ONLY", "0", 1);
       int rc1 = run_child(c.scenario, base.c_str());
@@ -574,6 +602,7 @@ int main(int argc, char** argv) {
       int rc2 = run_child(c.scenario, other.c_str());
       unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
       unsetenv(c.extra_env);
+      unsetenv("MLX_OMARCHY_MULTI_R2S16");
       unsetenv("MLX_OMARCHY_RESNORM_VEC4");
       unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
       unsetenv("MLX_OMARCHY_SWIGLU_R1");
@@ -584,6 +613,27 @@ int main(int argc, char** argv) {
         ++failures;
       } else {
         std::cout << "ok: " << c.label << " identical\n";
+      }
+    }
+    // Multi R2S16W2UpfrontFast must be 0-ULP bit-identical to Multi R2S8W2.
+    {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_Q4_UPFRONT", "0", 1);
+      setenv("MLX_OMARCHY_MULTI_R2S16", "0", 1);
+      int rc1 = run_child("group", base.c_str());
+      setenv("MLX_OMARCHY_MULTI_R2S16", "1", 1);
+      int rc2 = run_child("group", other.c_str());
+      unsetenv("MLX_OMARCHY_MULTI_R2S16");
+      unsetenv("MLX_OMARCHY_Q4_UPFRONT");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: multi_r2s16_up_fast differed from R2S8W2 (rc "
+                  << rc1 << "/" << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: multi_r2s16_up_fast identical\n";
       }
     }
   }

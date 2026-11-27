@@ -11204,6 +11204,25 @@ bool dispatch_quantized_gemv_group(
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
   // resnorm epilogue kernels.
+  bool multi_r2s16_active = false;
+  if (!res_norm_active && !dedicated_swiglu_active && !swiglu_out &&
+      !token_route && outgate == nullptr && dtype == bfloat16 &&
+      subgroup_ready &&
+      geom.multi == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 &&
+      k % 512 == 0 &&
+      encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
+      encoder.device().capabilities().max_compute_work_group_size[0] >= 512u &&
+      omarchy::qmm_g14c_multi_r2s16_default_part(qmm_dev_name)) {
+    bool all_n8 = true;
+    for (const auto& m : members) {
+      if (m.node.inputs().size() != 4 || m.node.inputs()[1].ndim() != 2 ||
+          (m.node.inputs()[1].shape(0) % 8) != 0) {
+        all_n8 = false;
+        break;
+      }
+    }
+    multi_r2s16_active = all_n8;
+  }
   const uint32_t group_columns = res_norm_active
       ? (token_route
              ? 8u
@@ -11213,7 +11232,7 @@ bool dispatch_quantized_gemv_group(
       ? swiglu_cols
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
-             ? geom.columns
+             ? (multi_r2s16_active ? 32u : geom.columns)
              : 8u);
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
@@ -11792,9 +11811,15 @@ bool dispatch_quantized_gemv_group(
           params.matrix_k % 512u == 0u &&
           (params.shape[0] == 2048u || params.shape[0] == 4096u) &&
           params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u &&
+          (members[0].node.offset() & 3u) == 0u &&
+          (members[0].addend->offset() & 3u) == 0u &&
+          (members[0].epilogue->offset() & 3u) == 0u &&
           omarchy::qmm_g14c_fast_only_default_part(
               encoder.device().capabilities().device_name)) {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Fast;
+        if (res_norm->dead_qmm_out) {
+          params.flags |= 0x1000000u;
+        }
       }
       encoder.dispatch_compute(
           resnorm_kernel,
@@ -11953,6 +11978,9 @@ bool dispatch_quantized_gemv_group(
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
             [&]() {
+              if (multi_r2s16_active) {
+                return ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast;
+              }
               auto mk = qmm_geometry().multi;
               if (mk == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2) {
                 const char* up_env = omarchy::env_str("MLX_OMARCHY_Q4_UPFRONT");
