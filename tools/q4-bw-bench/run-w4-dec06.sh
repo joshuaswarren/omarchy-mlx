@@ -3,6 +3,9 @@
 # QMM_W4 uvec4-load arm of the same shader, real GPU, bit-exactness compare
 # plus GB/s. Two legs for repeatability. Runs under gpu-turn; every dispatch
 # inside the bench is ms-scale.
+# Expects beside qmm_vec.comp in the same dir: omarchy_half.h and the bench's
+# probe shaders (peak_read, peak_copy, alu_fma, q4_pattern), plus the fixed
+# bench binary (candidate rides the base build) at /tmp/q4-bw-bench-w4.
 set -euo pipefail
 cd /tmp
 SH=/tmp/qmm_vec.comp
