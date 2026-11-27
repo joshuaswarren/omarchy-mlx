@@ -241,6 +241,7 @@ static bool have_tool(const char* tool) {
 // Compile src with the given defines into out_spv, matching the repo's
 // omarchy_shader (glslc preferred; vulkan1.3 target required for the
 // subgroup extensions).
+static std::string g_inc_flags;
 static int compile_shader(const char* src, const char* defines,
     const char* out_spv) {
   // glslc preferred (repo rule where present), but a broken glslc shim
@@ -251,6 +252,7 @@ static int compile_shader(const char* src, const char* defines,
   for (const char* front_try : {front,
            "glslangValidator -V --target-env vulkan1.3 "}) {
     std::string cmd = front_try;
+    cmd += g_inc_flags;
     cmd += defines;
     cmd += " ";
     cmd += src;
@@ -413,6 +415,11 @@ static std::string g_cand_src;
 static uint32_t g_cand_columns = 8u;
 // --cand-def "-DX=1 ...": extra compile defines for the candidate only.
 static std::string g_cand_defs;
+// --base-src PATH / --base-defs "...": compile the base side from another
+// source/defines (e.g. the production shader with the shipped kernel's exact
+// build defines) instead of the vendored qmm_vec_base.comp copy.
+static std::string g_base_src;
+static std::string g_base_defs;
 // --grid-cap N: dispatch at most N workgroups per candidate GEMV (gap mode);
 // params.count keeps the logical group count for grid-stride shaders.
 static uint32_t g_grid_cap = 0u;
@@ -1020,8 +1027,13 @@ static void run_gap_mode(const DeviceCtx& ctx, bool quick) {
   const char* q4_defines = g_gap_bf16
       ? "-DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1"
       : "-DUSE_FP16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1";
-  if (compile_shader("tools/q4-bw-bench/shaders/qmm_vec_base.comp",
-          q4_defines, "/tmp/q4gap_base.spv") != 0)
+  const char* base_src = g_base_src.empty()
+      ? "tools/q4-bw-bench/shaders/qmm_vec_base.comp"
+      : g_base_src.c_str();
+  std::string base_defs = g_base_defs.empty() ? std::string(q4_defines)
+                                              : g_base_defs;
+  if (compile_shader(base_src, base_defs.c_str(),
+          "/tmp/q4gap_base.spv") != 0)
     die("compile gap base");
   Side side;
   side.tag = "base";
@@ -1793,6 +1805,13 @@ int main(int argc, char** argv) {
       g_grid_cap = (uint32_t)std::atoi(argv[++i]);
     if (std::string(argv[i]) == "--cand-def" && i + 1 < argc)
       g_cand_defs = std::string(" ") + argv[++i];
+    if (std::string(argv[i]) == "--base-src" && i + 1 < argc)
+      g_base_src = argv[++i];
+    if (std::string(argv[i]) == "--base-defs" && i + 1 < argc)
+      g_base_defs = std::string(" ") + argv[++i];
+    if ((std::string(argv[i]) == "--inc" || std::string(argv[i]) == "-I") &&
+        i + 1 < argc)
+      g_inc_flags = std::string(" -I") + argv[++i] + " ";
     if (std::string(argv[i]) == "--cand" && i + 1 < argc) {
       g_cand_src = argv[++i];
       size_t colon = g_cand_src.rfind(':');
