@@ -17,48 +17,40 @@ Every tracked byte is API-derived, so unchanged data means no commit.
 """
 
 import argparse
+import contextlib
 import hashlib
+import http.client
 import json
 import os
 import re
+import secrets
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-import sys
-import urllib.error
-import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import query_community_data as q  # noqa: E402
 
-MAX_JSONL_BYTES = 32 * 1024 * 1024
+MAX_JSONL_BYTES = q.MAX_JSONL_BYTES
 MAX_INDEX_BYTES = 4 * 1024 * 1024
 FETCH_TIMEOUT = 60
-
-
-def fetch(url):
-    request = urllib.request.Request(url, headers={"User-Agent": q.USER_AGENT})
-    with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT) as response:
-        return response.read()
 
 
 def fetch_jsonl_capped(url, max_bytes):
     """latest.jsonl trimmed to whole lines within max_bytes.
 
     Returns (data, truncated). A partial trailing line is dropped, so
-    the file always holds complete records.
+    the file always holds complete records. A status other than 200 or
+    a body cut short raises q.DatasetError.
     """
     request = urllib.request.Request(url, headers={"User-Agent": q.USER_AGENT})
-    with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT) as response:
-        data = b""
-        while len(data) <= max_bytes:
-            block = response.read(1 << 16)
-            if not block:
-                return data, False
-            data += block
+    with q.urlopen(request, timeout=FETCH_TIMEOUT) as response:
+        data = q.read_response(response, max_bytes, truncate=True)
+    if len(data) <= max_bytes:
+        return data, False
     data = data[:max_bytes]
     cut = data.rfind(b"\n")
     if cut == -1:
@@ -83,16 +75,14 @@ def fetch_index(base):
     try:
         request = urllib.request.Request(
             url, headers={"User-Agent": q.USER_AGENT})
-        with urllib.request.urlopen(request,
-                                    timeout=FETCH_TIMEOUT) as response:
-            length = response.headers.get("Content-Length")
-            if length and int(length) > MAX_INDEX_BYTES:
-                return None
-            body = response.read(MAX_INDEX_BYTES + 1)
-        if len(body) > MAX_INDEX_BYTES:
-            return None
+        with q.urlopen(request, timeout=FETCH_TIMEOUT) as response:
+            body = q.read_response(response, MAX_INDEX_BYTES)
         index = json.loads(body.decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError, RecursionError):
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        return None
+    except (urllib.error.URLError, OSError, ValueError, RecursionError,
+            http.client.HTTPException, q.DatasetError):
         return None
     if not isinstance(index, dict):
         return None
@@ -137,7 +127,35 @@ def has_archive(record):
     return q.record_kind(record) not in ("quick", "mlx-omarchy-quick")
 
 
-def write_summary(path, base, records, index):
+def write_files(out_dir, files):
+    """Write each {name: bytes} into out_dir, renaming in dict order.
+
+    Every file is written in full to a fresh hidden file before any is
+    renamed over its name, so a failed write changes none of them, and a
+    symlink at a name is replaced, never followed. A failed rename (a
+    name that is now a directory, a disk gone read-only) leaves the
+    names before it replaced, so callers put the file that marks a
+    snapshot complete last.
+    """
+    staged = []
+    try:
+        for name, data in files.items():
+            tmp = out_dir / f".{name}.{secrets.token_hex(8)}.part"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666)
+            staged.append(tmp)
+            with open(fd, "wb") as out:
+                out.write(data)
+        for tmp, name in zip(staged, files):
+            os.replace(tmp, out_dir / name)
+    except BaseException:
+        for tmp in staged:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+        raise
+
+
+def summary_bytes(base, records, index):
     lines = [
         "# Community hardware data snapshot",
         "",
@@ -188,7 +206,11 @@ def write_summary(path, base, records, index):
         "",
     ]
     # errors="replace": a JSON string may hold a lone surrogate.
-    path.write_text("\n".join(lines), encoding="utf-8", errors="replace")
+    return "\n".join(lines).encode("utf-8", "replace")
+
+
+def write_summary(path, base, records, index):
+    write_files(path.parent, {path.name: summary_bytes(base, records, index)})
 
 
 def build_snapshot(base, out_dir):
@@ -206,11 +228,13 @@ def build_snapshot(base, out_dir):
         "truncated": truncated,
         "source": base,
     }
-    (out_dir / "latest.jsonl").write_bytes(jsonl)
-    (out_dir / "index.json").write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8")
-    write_summary(out_dir / "SUMMARY.md", base, records, index)
+    # latest.jsonl last: the workflow commits only when it is non-empty.
+    write_files(out_dir, {
+        "index.json": (json.dumps(payload, indent=2, sort_keys=True)
+                       + "\n").encode("utf-8"),
+        "SUMMARY.md": summary_bytes(base, records, index),
+        "latest.jsonl": jsonl,
+    })
     print(json.dumps({"status": "mirrored", **payload}))
 
 
@@ -223,8 +247,10 @@ def main(argv=None):
     base = args.base_url.rstrip("/")
     try:
         build_snapshot(base, Path(args.out_dir))
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError,
-            ValueError) as exc:
+    except (urllib.error.URLError, OSError, ValueError,
+            http.client.HTTPException, q.DatasetError) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            exc.close()
         print(f"community-data mirror: endpoint unavailable, skipping "
               f"({exc})", file=sys.stderr)
         return 0

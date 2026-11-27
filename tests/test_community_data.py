@@ -10,6 +10,8 @@ import importlib.util
 import io
 import json
 import os
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1126,6 +1128,421 @@ class RemoteShowTests(unittest.TestCase):
         self.assertIn("invalid JSON", err)
         self.assertNotIn("Traceback", err)
         self.assertEqual(calls, [self.RESULTS_URL + SHA_DEEP_M1])
+
+
+class Hung(BaseException):
+    """Raised by the watchdog; a BaseException, so no handler swallows it."""
+
+
+@contextlib.contextmanager
+def watchdog(seconds=5):
+    def fire(signum, frame):
+        raise Hung(f"blocked for {seconds} s")
+    previous = signal.signal(signal.SIGALRM, fire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def sparse(path, size):
+    with open(path, "wb") as stream:
+        stream.truncate(size)
+
+
+class ReadCappedTests(unittest.TestCase):
+    def test_short_reads_are_joined_and_never_pass_cap_plus_one(self):
+        asked = []
+
+        def chunky(data):
+            stream = io.BytesIO(data)
+
+            def read(n):
+                asked.append(n)
+                return stream.read(min(n, 3))
+            return read
+
+        self.assertEqual(query.read_capped(chunky(b"abcdefghij"), 10),
+                         b"abcdefghij")
+        asked.clear()
+        self.assertEqual(query.read_capped(chunky(b"x" * 100), 10),
+                         b"x" * 11)
+        self.assertEqual(asked, [11, 8, 5, 2])
+        # Reads that land exactly on the cap still take one more byte.
+        self.assertEqual(query.read_capped(chunky(b"x" * 100), 9), b"x" * 10)
+        self.assertEqual(query.read_capped(lambda n: None, 10), b"")
+
+
+class LocalSnapshotBoundsTests(unittest.TestCase):
+    """latest.jsonl is read only as a regular file of at most 32 MiB."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.path = self.dir / "latest.jsonl"
+
+    def list_local(self):
+        return run_cli("--source", "local", "--snapshot", str(self.dir),
+                       "--json", "list")
+
+    def assert_refused(self, rc, out, err, message):
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn(message, err)
+        self.assertNotIn("Traceback", err)
+
+    def test_file_of_exactly_the_cap_loads(self):
+        line = json.dumps(quick_m2_record()).encode("utf-8") + b"\n"
+        with open(self.path, "wb") as stream:
+            stream.write(line)
+            stream.write(b" " * (query.MAX_JSONL_BYTES - len(line) - 1))
+            stream.write(b"\n")
+        self.assertEqual(self.path.stat().st_size, query.MAX_JSONL_BYTES)
+        rc, out, err = self.list_local()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["count"], 1)
+
+    def test_one_byte_over_the_cap_is_refused_unread(self):
+        sparse(self.path, query.MAX_JSONL_BYTES + 1)
+        with mock.patch.object(query, "read_capped",
+                               side_effect=AssertionError("read")):
+            rc, out, err = self.list_local()
+        self.assert_refused(rc, out, err, "is larger than 33554432 bytes")
+
+    def test_the_read_stops_at_cap_plus_one_when_the_size_lies(self):
+        self.path.write_bytes(b"x" * 100)
+        lengths = []
+        real_read_capped, real_fstat = query.read_capped, os.fstat
+
+        def spy(read, max_bytes):
+            data = real_read_capped(read, max_bytes)
+            lengths.append(len(data))
+            return data
+
+        def small_fstat(fd):
+            info = real_fstat(fd)
+            return mock.Mock(st_mode=info.st_mode, st_size=0)
+
+        with mock.patch.object(query, "MAX_JSONL_BYTES", 10), \
+                mock.patch.object(query, "read_capped", spy), \
+                mock.patch.object(query.os, "fstat", small_fstat):
+            rc, out, err = self.list_local()
+        self.assert_refused(rc, out, err, "is larger than 10 bytes")
+        self.assertEqual(lengths, [11])
+
+    def test_fifo_swapped_in_after_the_type_check_is_refused(self):
+        os.mkfifo(self.path)
+        for writer in (False, True):
+            with self.subTest(writer=writer):
+                fd = os.open(self.path, os.O_RDWR) if writer else None
+                try:
+                    with watchdog(), mock.patch.object(
+                            Path, "is_file", return_value=True):
+                        rc, out, err = self.list_local()
+                finally:
+                    if fd is not None:
+                        os.close(fd)
+                self.assert_refused(rc, out, err, "is not a regular file")
+
+    def test_invalid_utf8_is_replaced_not_fatal(self):
+        self.path.write_bytes(snapshot_bytes()
+                              + b'{"kind": "deep", "chip": "M\xff"}\n')
+        rc, out, err = self.list_local()
+        self.assertEqual(rc, 0, err)
+        data = json.loads(out)
+        self.assertEqual((data["count"], data["skipped_malformed"]), (5, 1))
+        self.assertEqual(data["results"][-1]["chip"], "M\ufffd")
+
+    def test_symlink_to_a_regular_file_loads(self):
+        real = self.dir / "real.jsonl"
+        real.write_bytes(snapshot_bytes())
+        self.path.symlink_to(real)
+        rc, out, err = self.list_local()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["count"], 4)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_unreadable_file_is_refused(self):
+        self.path.write_bytes(snapshot_bytes())
+        self.path.chmod(0)
+        self.assert_refused(*self.list_local(), "Permission denied")
+
+    def test_environment_snapshot_over_the_cap_is_refused(self):
+        sparse(self.path, query.MAX_JSONL_BYTES + 1)
+        with mock.patch.dict(os.environ,
+                             {"MLX_OMARCHY_DATA_DIR": str(self.dir)}):
+            rc, out, err = run_cli("--source", "local", "list")
+        self.assert_refused(rc, out, err, "is larger than 33554432 bytes")
+
+
+class GitSnapshotBoundsTests(unittest.TestCase):
+    """The community-data branch rung reads at most 32 MiB too."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name)
+        git = ["git", "-C", str(self.repo), "-c", "user.name=t",
+               "-c", "user.email=t@example.invalid"]
+        for argv in (["init", "-q", "-b", "community-data"],
+                     ["commit", "-q", "--allow-empty", "-m", "empty"]):
+            subprocess.run(git + argv, check=True, capture_output=True)
+        (self.repo / "snapshot").mkdir()
+        (self.repo / "snapshot" / "latest.jsonl").write_bytes(
+            snapshot_bytes())
+        for argv in (["add", "snapshot"], ["commit", "-q", "-m", "snap"]):
+            subprocess.run(git + argv, check=True, capture_output=True)
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("MLX_OMARCHY_DATA_DIR", None)
+
+    def load(self):
+        return query.load_local(mock.Mock(snapshot=None), self.repo)
+
+    def test_branch_snapshot_loads_the_blob_it_checked(self):
+        calls = []
+        real_run = subprocess.run
+
+        def run(argv, *args, **kwargs):
+            calls.append(argv)
+            return real_run(argv, *args, **kwargs)
+
+        with mock.patch.object(query.subprocess, "run", run):
+            records, skipped, source = self.load()
+        self.assertEqual((len(records), skipped), (4, 1))
+        self.assertEqual(source, "git community-data:snapshot/latest.jsonl")
+        oid = subprocess.run(
+            ["git", "-C", str(self.repo), "rev-parse",
+             "community-data:snapshot/latest.jsonl"],
+            check=True, capture_output=True, text=True).stdout.strip()
+        self.assertEqual(calls[-1], ["git", "cat-file", "blob", oid])
+
+    def test_branch_snapshot_over_the_cap_is_refused_unread(self):
+        size = len(snapshot_bytes())
+        calls = []
+        real_run = subprocess.run
+
+        def run(argv, *args, **kwargs):
+            calls.append(argv[:3])
+            return real_run(argv, *args, **kwargs)
+
+        with mock.patch.object(query, "MAX_JSONL_BYTES", size - 1), \
+                mock.patch.object(query.subprocess, "run", run), \
+                self.assertRaises(query.DatasetError) as caught:
+            self.load()
+        self.assertIn(f"larger than {size - 1} bytes", str(caught.exception))
+        self.assertEqual(calls, [["git", "cat-file", "--batch-check"]] * 2)
+        with mock.patch.object(query, "MAX_JSONL_BYTES", size):
+            self.assertEqual(len(self.load()[0]), 4)
+
+    def test_path_that_is_not_a_blob_is_skipped(self):
+        path = self.repo / "snapshot" / "latest.jsonl"
+        self.assertIsNone(query.git_blob(self.repo, "community-data:snapshot"))
+        self.assertIsNone(query.git_blob(self.repo, "community-data:missing"))
+        self.assertEqual(query.git_blob(
+            self.repo, "community-data:snapshot/latest.jsonl"),
+            path.read_bytes())
+
+
+class Loopback:
+    """HTTP server on 127.0.0.1 that sends finite scripted replies.
+
+    routes maps a path to (head, body): head is the status line and
+    headers, with BASE replaced by the server's URL; body is bytes, or
+    an int for that many b"x" bytes. sent[path] counts the body bytes
+    that left the socket before the client hung up.
+    """
+
+    def __init__(self, routes):
+        self.routes, self.sent, self.threads = routes, {}, []
+        self.stopped = threading.Event()
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.listener.settimeout(0.1)
+        self.base = "http://127.0.0.1:%d" % self.listener.getsockname()[1]
+        self.acceptor = threading.Thread(target=self._accept, daemon=True)
+        self.acceptor.start()
+
+    def _accept(self):
+        while not self.stopped.is_set():
+            try:
+                conn, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            thread = threading.Thread(target=self._serve, args=(conn,),
+                                      daemon=True)
+            self.threads.append(thread)
+            thread.start()
+
+    def _serve(self, conn):
+        with conn:
+            conn.settimeout(10)
+            request = b""
+            while b"\r\n\r\n" not in request and len(request) < 65536:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                request += chunk
+            path = request.split(b" ", 2)[1].decode("ascii")
+            head, body = self.routes[path]
+            sent = 0
+            try:
+                conn.sendall(head.replace("BASE", self.base)
+                             .encode("latin-1") + b"\r\n")
+                if isinstance(body, bytes):
+                    conn.sendall(body)
+                    sent = len(body)
+                while isinstance(body, int) and sent < body:
+                    block = min(1 << 16, body - sent)
+                    conn.sendall(b"x" * block)
+                    sent += block
+            except OSError:
+                pass
+            self.sent[path] = sent
+
+    def close(self):
+        self.stopped.set()
+        self.acceptor.join(10)
+        self.listener.close()
+        for thread in self.threads:
+            thread.join(15)
+
+
+BIG = 64 * 1024 * 1024  # finite, and far more than socket buffers hold
+
+
+class FetchUrlBoundsTests(unittest.TestCase):
+    """fetch_url reads at most max_bytes + 1 bytes of one 200 response."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ,
+                                  {"no_proxy": "*", "NO_PROXY": "*"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def serve(self, routes):
+        server = Loopback(routes)
+        self.addCleanup(server.close)
+        return server
+
+    def refused(self, url, message, max_bytes=1024):
+        with self.assertRaises(query.DatasetError) as caught:
+            query.fetch_url(url, timeout=10, max_bytes=max_bytes)
+        self.assertIn(message, str(caught.exception))
+        self.assertIn(url, str(caught.exception))
+
+    def test_body_up_to_the_cap_is_returned(self):
+        server = self.serve({
+            "/full": ("HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n",
+                      b"y" * 1024),
+            "/zeros": ("HTTP/1.1 200 OK\r\nContent-Length: " + "0" * 30
+                       + "5\r\n", b"hello"),
+            "/space": ("HTTP/1.1 200 OK\r\nContent-Length: 5 \t\r\n",
+                       b"hello"),
+        })
+        self.assertEqual(query.fetch_url(server.base + "/full", timeout=10,
+                                         max_bytes=1024), b"y" * 1024)
+        for path in ("/zeros", "/space"):
+            with self.subTest(path=path):
+                self.assertEqual(query.fetch_url(
+                    server.base + path, timeout=10, max_bytes=1024),
+                    b"hello")
+
+    def test_redirect_is_followed_and_its_body_left_unread(self):
+        server = self.serve({
+            "/start": ("HTTP/1.1 302 Found\r\nLocation: BASE/final\r\n"
+                       f"Content-Length: {BIG}\r\n", BIG),
+            "/final": ("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n", b"ok"),
+        })
+        self.assertEqual(query.fetch_url(server.base + "/start", timeout=10),
+                         b"ok")
+        server.close()
+        self.assertLess(server.sent["/start"], BIG // 2)
+
+    def test_content_length_over_the_cap_is_refused_unread(self):
+        server = self.serve({
+            "/big": (f"HTTP/1.1 200 OK\r\nContent-Length: {BIG}\r\n", BIG),
+        })
+        self.refused(server.base + "/big", "larger than 1024 bytes")
+        server.close()
+        self.assertLess(server.sent["/big"], BIG // 2)
+
+    def test_body_over_the_cap_without_a_length_stops_at_the_cap(self):
+        server = self.serve({
+            "/stream": ("HTTP/1.1 200 OK\r\nConnection: close\r\n", BIG),
+        })
+        self.refused(server.base + "/stream", "larger than 1024 bytes")
+        server.close()
+        self.assertLess(server.sent["/stream"], BIG // 2)
+
+    def test_malformed_content_length_is_refused(self):
+        # http.client cannot parse a value past 4,300 digits, even one
+        # that is mostly leading zeros, and would read to the close.
+        routes = {f"/{i}": (f"HTTP/1.1 200 OK\r\nContent-Length: {value}\r\n",
+                            b"hello")
+                  for i, value in enumerate((
+                      "+5", "-5", "5 5", "0x5", "5_0", "\u00b2", "5.0", "",
+                      "1" * 5000, "0" * 5000 + "100",
+                      "5\r\nContent-Length: 5",
+                      "5\r\nContent-Length: 999",
+                      "5\r\nTransfer-Encoding: chunked"))}
+        server = self.serve(routes)
+        for path, (head, _) in routes.items():
+            with self.subTest(head=head):
+                self.refused(server.base + path, "invalid Content-Length")
+
+    def test_body_cut_short_is_refused(self):
+        server = self.serve({
+            "/cut": ("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n", b"y" * 40),
+            "/chunk": ("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n",
+                       b"5\r\nhel"),
+        })
+        self.refused(server.base + "/cut", "ended 60 bytes short")
+        self.refused(server.base + "/chunk", "bad HTTP response")
+
+    def test_malformed_status_or_headers_are_refused(self):
+        server = self.serve({
+            "/garbage": ("GARBAGE\r\n", b""),
+            "/headers": ("HTTP/1.1 200 OK\r\n"
+                         + "X-Pad: 1\r\n" * 150, b""),
+        })
+        self.refused(server.base + "/garbage", "BadStatusLine")
+        self.refused(server.base + "/headers", "more than 100 headers")
+
+    def test_status_other_than_200_is_refused(self):
+        server = self.serve({
+            "/partial": ("HTTP/1.1 206 Partial Content\r\n"
+                         "Content-Length: 5\r\n", b"hello"),
+            "/empty": ("HTTP/1.1 204 No Content\r\n", b""),
+        })
+        self.refused(server.base + "/partial", "HTTP 206")
+        self.refused(server.base + "/empty", "HTTP 204")
+
+    def test_http_error_is_closed(self):
+        url = "https://example.invalid/v1/dataset/latest.jsonl"
+        body = io.BytesIO(b"not found")
+        error = urllib.error.HTTPError(url, 404, "Not Found", {}, body)
+        with mock.patch.object(query, "urlopen", side_effect=error):
+            self.refused(url, "HTTP 404")
+        self.assertTrue(body.closed)
+
+    def test_remote_list_uses_the_32_mib_cap(self):
+        server = self.serve({
+            "/v1/dataset/latest.jsonl": (
+                f"HTTP/1.1 200 OK\r\nContent-Length: {BIG}\r\n", BIG),
+        })
+        rc, out, err = run_cli("--source", "remote", "--base-url",
+                               server.base, "list")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, "")
+        self.assertIn("larger than 33554432 bytes from "
+                      f"{server.base}/v1/dataset/latest.jsonl", err)
+        self.assertNotIn("Traceback", err)
 
 
 if __name__ == "__main__":
