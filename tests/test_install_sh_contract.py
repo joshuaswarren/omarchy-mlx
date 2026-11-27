@@ -1,12 +1,19 @@
 """Installer refusal, uninstall, and ANE-smoke gate in a disposable HOME."""
 
+import hashlib
+import http.server
 import os
 import platform
 import re
+import shlex
+import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -27,6 +34,18 @@ def extract_ane_smoke():
     match = re.search(r"<<'ANE_SMOKE'[^\n]*\n(.*)\nANE_SMOKE", installer_text(), re.S)
     if match is None:
         raise AssertionError("ANE_SMOKE heredoc missing from install.sh")
+    return match.group(1)
+
+
+def extract_vad_staging_defs():
+    text = installer_text()
+    match = re.search(
+        r'^(VAD_PIN_COMMIT="[^"]+"\n.*?^stage_silero_vad\(\) \{\n.*?\n\})\nstage_silero_vad\n',
+        text,
+        re.M | re.S,
+    )
+    if match is None:
+        raise AssertionError("Silero VAD staging block missing from install.sh")
     return match.group(1)
 
 
@@ -691,6 +710,1013 @@ class PipedInstallerTests(unittest.TestCase):
         self.assertNotIn("runs from a checkout", result.stderr)
         self.assertIn("--system requires --vendor DIR and --lock FILE", result.stderr)
         self.assertEqual(result.returncode, 1)
+
+
+class SileroVadStagingTests(unittest.TestCase):
+    """Behavioral tests for install.sh's Silero VAD staging block.
+
+    Every test runs the verbatim bash definitions extracted from install.sh
+    against finite fixtures and a local loopback HTTP server (or a bounded
+    local curl stub). No real network access and no endless inputs.
+    """
+
+    DATA = b"silero-vad-pinned-bytes-" * 64
+    DIGEST = hashlib.sha256(DATA).hexdigest()
+
+    def _start_server(self, routes):
+        hits = []
+        lock = threading.Lock()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                with lock:
+                    hits.append(self.path)
+                spec = routes.get(self.path)
+                if spec is None:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                mode = spec.get("mode", "fixed")
+                status = spec.get("status", 200)
+                body = spec.get("body", b"")
+                headers = spec.get("headers", {})
+                if mode == "fixed":
+                    self.send_response(status)
+                    for k, v in headers.items():
+                        self.send_header(k, v)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    try:
+                        self.wfile.write(body)
+                    except OSError:
+                        pass
+                elif mode == "chunked":
+                    self.send_response(status)
+                    for k, v in headers.items():
+                        self.send_header(k, v)
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    step = spec.get("chunk_size", 4096)
+                    try:
+                        for i in range(0, len(body), step):
+                            chunk = body[i:i + step]
+                            self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                        self.wfile.write(b"0\r\n\r\n")
+                    except OSError:
+                        pass
+                elif mode == "close":
+                    self.protocol_version = "HTTP/1.0"
+                    self.send_response(status)
+                    for k, v in headers.items():
+                        self.send_header(k, v)
+                    self.end_headers()
+                    try:
+                        self.wfile.write(body)
+                    except OSError:
+                        pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        return f"http://127.0.0.1:{port}", hits
+
+    def _run_vad_script(
+        self,
+        prefix,
+        body,
+        *,
+        url=None,
+        sha=None,
+        max_bytes=None,
+        extra_env=None,
+        timeout=20,
+    ):
+        defs = extract_vad_staging_defs()
+        lines = [
+            "set -euo pipefail",
+            'say() { printf "SAY: %s\\n" "$*"; }',
+            f"PREFIX={shlex.quote(str(prefix))}",
+            defs,
+        ]
+        if sha is not None:
+            lines.append(f"VAD_PIN_SHA={shlex.quote(sha)}")
+        if max_bytes is not None:
+            lines.append(f"VAD_MAX_BYTES={int(max_bytes)}")
+        if url is not None:
+            lines.append(f"VAD_URL={shlex.quote(url)}")
+        lines.append(body)
+        script = "\n".join(lines) + "\n"
+        env = {**os.environ, **(extra_env or {})}
+        return subprocess.run(
+            ["bash", "-c", script],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+
+    def _import_wake_word(self):
+        serve_dir = str(ROOT / "serve")
+        if serve_dir not in sys.path:
+            sys.path.insert(0, serve_dir)
+            self.addCleanup(
+                lambda: sys.path.remove(serve_dir) if serve_dir in sys.path else None
+            )
+        from mlx_omarchy_assistant import wake_word
+        return wake_word
+
+    def test_install_sh_syntax_and_cap_match_runtime(self):
+        syntax = subprocess.run(
+            ["bash", "-n", str(INSTALLER)],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        wake_word = self._import_wake_word()
+
+        defs = extract_vad_staging_defs()
+        match = re.search(r"^VAD_MAX_BYTES=(\d+)$", defs, re.M)
+        self.assertIsNotNone(match, "VAD_MAX_BYTES missing from install.sh")
+        self.assertEqual(int(match.group(1)), wake_word.MAX_MODEL_BYTES)
+
+    def test_valid_download_stages_and_rerun_skips_fetch(self):
+        base, hits = self._start_server({"/model": {"body": self.DATA}})
+        wake_word = self._import_wake_word()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / "prefix"
+            res = self._run_vad_script(
+                prefix,
+                "umask 0022\nstage_silero_vad",
+                url=f"{base}/model",
+                sha=self.DIGEST,
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertIn("Silero VAD model staged", res.stdout)
+            model = prefix / "vad" / "silero_vad.onnx"
+            self.assertFalse(model.is_symlink())
+            self.assertTrue(model.is_file())
+            self.assertEqual(model.read_bytes(), self.DATA)
+            self.assertEqual(stat.S_IMODE(model.stat().st_mode), 0o644)
+            self.assertEqual(os.listdir(prefix / "vad"), ["silero_vad.onnx"])
+            self.assertEqual(len(hits), 1)
+
+            self.assertTrue(
+                wake_word.pinned_file_ok(model, self.DIGEST, wake_word.WakeModelError)
+            )
+
+            res2 = self._run_vad_script(
+                prefix,
+                "stage_silero_vad",
+                url=f"{base}/model",
+                sha=self.DIGEST,
+            )
+            self.assertEqual(res2.returncode, 0, res2.stderr)
+            self.assertEqual(res2.stdout, "")
+            self.assertEqual(len(hits), 1, "verified regular file must skip re-download")
+
+            # Respect restrictive umask (0077 -> 0600, matching wake_word._stage).
+            prefix_priv = Path(tmp) / "prefix-priv"
+            res_priv = self._run_vad_script(
+                prefix_priv,
+                "umask 0077\nstage_silero_vad",
+                url=f"{base}/model",
+                sha=self.DIGEST,
+            )
+            self.assertEqual(res_priv.returncode, 0, res_priv.stderr)
+            priv_model = prefix_priv / "vad" / "silero_vad.onnx"
+            self.assertEqual(stat.S_IMODE(priv_model.stat().st_mode), 0o600)
+
+    def test_symlinked_model_even_to_valid_bytes_is_rejected_and_replaced(self):
+        base, hits = self._start_server({"/model": {"body": self.DATA}})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix = root / "prefix"
+            vad_dir = prefix / "vad"
+            vad_dir.mkdir(parents=True)
+            target = root / "target.onnx"
+            target.write_bytes(self.DATA)
+            model = vad_dir / "silero_vad.onnx"
+            os.symlink(target, model)
+
+            check = self._run_vad_script(
+                prefix,
+                'vad_model_ok "$VAD_MODEL"',
+                url=f"{base}/model",
+                sha=self.DIGEST,
+            )
+            self.assertNotEqual(check.returncode, 0, "vad_model_ok must refuse symlinks")
+
+            res = self._run_vad_script(
+                prefix,
+                "stage_silero_vad",
+                url=f"{base}/model",
+                sha=self.DIGEST,
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertIn("Silero VAD model staged", res.stdout)
+            self.assertEqual(len(hits), 1)
+            self.assertFalse(model.is_symlink())
+            self.assertTrue(model.is_file())
+            self.assertEqual(model.read_bytes(), self.DATA)
+            self.assertEqual(target.read_bytes(), self.DATA)
+            # Mutating the original symlink target must not affect staged model.
+            target.write_bytes(b"mutated")
+            self.assertEqual(model.read_bytes(), self.DATA)
+            self.assertEqual(os.listdir(vad_dir), ["silero_vad.onnx"])
+
+    def test_symlink_to_directory_and_dangling_symlink_are_atomically_replaced(self):
+        base, _ = self._start_server({"/model": {"body": self.DATA}})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Symlink pointing at a directory must be replaced, not entered.
+            prefix1 = root / "p1"
+            (prefix1 / "vad").mkdir(parents=True)
+            victim_dir = root / "victim_dir"
+            victim_dir.mkdir()
+            model1 = prefix1 / "vad" / "silero_vad.onnx"
+            os.symlink(victim_dir, model1)
+            res1 = self._run_vad_script(
+                prefix1, "stage_silero_vad", url=f"{base}/model", sha=self.DIGEST
+            )
+            self.assertEqual(res1.returncode, 0, res1.stderr)
+            self.assertIn("Silero VAD model staged", res1.stdout)
+            self.assertFalse(model1.is_symlink())
+            self.assertEqual(model1.read_bytes(), self.DATA)
+            self.assertEqual(os.listdir(victim_dir), [])
+
+            # Dangling symlink must also be atomically replaced.
+            prefix2 = root / "p2"
+            (prefix2 / "vad").mkdir(parents=True)
+            model2 = prefix2 / "vad" / "silero_vad.onnx"
+            os.symlink(root / "does-not-exist", model2)
+            res2 = self._run_vad_script(
+                prefix2, "stage_silero_vad", url=f"{base}/model", sha=self.DIGEST
+            )
+            self.assertEqual(res2.returncode, 0, res2.stderr)
+            self.assertFalse(model2.is_symlink())
+            self.assertEqual(model2.read_bytes(), self.DATA)
+
+    def test_predictable_part_symlink_is_never_followed_or_modified(self):
+        base, _ = self._start_server({
+            "/ok": {"body": self.DATA},
+            "/bad": {"body": b"wrong-bytes"},
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            victim = root / "victim"
+            victim.write_bytes(b"keep me untouched")
+
+            for endpoint, expect_staged in (("/ok", True), ("/bad", False)):
+                with self.subTest(endpoint=endpoint):
+                    prefix = root / f"p-{endpoint.strip('/')}"
+                    vad_dir = prefix / "vad"
+                    vad_dir.mkdir(parents=True)
+                    part_link = vad_dir / "silero_vad.onnx.part"
+                    os.symlink(victim, part_link)
+
+                    res = self._run_vad_script(
+                        prefix,
+                        "stage_silero_vad",
+                        url=f"{base}{endpoint}",
+                        sha=self.DIGEST,
+                    )
+                    self.assertEqual(res.returncode, 0, res.stderr)
+                    self.assertEqual(victim.read_bytes(), b"keep me untouched")
+                    self.assertTrue(part_link.is_symlink())
+                    entries = sorted(os.listdir(vad_dir))
+                    if expect_staged:
+                        self.assertEqual(entries, ["silero_vad.onnx", "silero_vad.onnx.part"])
+                        self.assertEqual((vad_dir / "silero_vad.onnx").read_bytes(), self.DATA)
+                    else:
+                        self.assertEqual(entries, ["silero_vad.onnx.part"])
+
+    def test_fifo_directory_and_oversized_sparse_model_never_hang_or_hash(self):
+        base, hits = self._start_server({"/model": {"body": self.DATA}})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            # 1. FIFO (with no writer AND with a writer carrying valid pinned
+            #    bytes) must not block vad_model_ok, must be refused, and is
+            #    replaced cleanly.
+            p_fifo = root / "p_fifo"
+            (p_fifo / "vad").mkdir(parents=True)
+            fifo_model = p_fifo / "vad" / "silero_vad.onnx"
+            os.mkfifo(fifo_model)
+            check_fifo = self._run_vad_script(
+                p_fifo, 'vad_model_ok "$VAD_MODEL"', sha=self.DIGEST, timeout=5
+            )
+            self.assertNotEqual(check_fifo.returncode, 0)
+            fifo_fd = os.open(fifo_model, os.O_RDWR | os.O_NONBLOCK)
+            try:
+                os.write(fifo_fd, self.DATA)
+                check_fifo_loaded = self._run_vad_script(
+                    p_fifo, 'vad_model_ok "$VAD_MODEL"', sha=self.DIGEST, timeout=5
+                )
+                self.assertNotEqual(
+                    check_fifo_loaded.returncode,
+                    0,
+                    "FIFO carrying valid pinned bytes must still be refused",
+                )
+            finally:
+                os.close(fifo_fd)
+            res_fifo = self._run_vad_script(
+                p_fifo, "stage_silero_vad", url=f"{base}/model", sha=self.DIGEST, timeout=10
+            )
+            self.assertEqual(res_fifo.returncode, 0, res_fifo.stderr)
+            self.assertTrue(fifo_model.is_file() and not stat.S_ISFIFO(os.lstat(fifo_model).st_mode))
+            self.assertEqual(fifo_model.read_bytes(), self.DATA)
+
+            # 1b. Character device (/dev/null) with empty-string SHA-256 must
+            #     still be rejected by the regular-file check.
+            empty_sha = hashlib.sha256(b"").hexdigest()
+            check_devnull = self._run_vad_script(
+                root / "unused", 'vad_model_ok "/dev/null"', sha=empty_sha, timeout=5
+            )
+            self.assertNotEqual(
+                check_devnull.returncode, 0, "/dev/null must be refused even when SHA matches empty"
+            )
+
+            # 2. Real directory at $VAD_MODEL must fail cleanly without fetching or moving inside.
+            hits_before = len(hits)
+            p_dir = root / "p_dir"
+            dir_model = p_dir / "vad" / "silero_vad.onnx"
+            dir_model.mkdir(parents=True)
+            res_dir = self._run_vad_script(
+                p_dir, "stage_silero_vad", url=f"{base}/model", sha=self.DIGEST, timeout=10
+            )
+            self.assertEqual(res_dir.returncode, 0, res_dir.stderr)
+            self.assertIn("Silero VAD model path is a directory", res_dir.stdout)
+            self.assertEqual(len(hits), hits_before, "directory target must not trigger download")
+            self.assertTrue(dir_model.is_dir())
+            self.assertEqual(os.listdir(dir_model), [])
+            self.assertEqual(os.listdir(p_dir / "vad"), ["silero_vad.onnx"])
+
+            # 3. Directory created mid-download (race): mv -Tf refuses and cleans up temp file.
+            p_race = root / "p_race"
+            (p_race / "vad").mkdir(parents=True)
+            payload = root / "race_payload.bin"
+            payload.write_bytes(self.DATA)
+            stub_bin = root / "race_bin"
+            stub_bin.mkdir()
+            stub_curl = stub_bin / "curl"
+            stub_curl.write_text(
+                "#!/usr/bin/env bash\n"
+                f"mkdir -p {shlex.quote(str(p_race / 'vad' / 'silero_vad.onnx'))}\n"
+                f"cat {shlex.quote(str(payload))}\n"
+            )
+            stub_curl.chmod(0o755)
+            res_race = self._run_vad_script(
+                p_race,
+                "stage_silero_vad",
+                url="http://127.0.0.1:1/unused",
+                sha=self.DIGEST,
+                extra_env={"PATH": f"{stub_bin}:{os.environ['PATH']}"},
+                timeout=10,
+            )
+            self.assertEqual(res_race.returncode, 0, res_race.stderr)
+            self.assertIn("Silero VAD model download failed", res_race.stdout)
+            self.assertEqual(os.listdir(p_race / "vad" / "silero_vad.onnx"), [])
+            self.assertEqual(os.listdir(p_race / "vad"), ["silero_vad.onnx"])
+
+            # 4. Huge sparse regular file (1 GiB logical, 0 blocks on disk) is rejected
+            #    instantly via stat size check without hashing.
+            p_sparse = root / "p_sparse"
+            (p_sparse / "vad").mkdir(parents=True)
+            sparse_model = p_sparse / "vad" / "silero_vad.onnx"
+            with open(sparse_model, "wb") as handle:
+                handle.truncate(1 << 30)
+            check_sparse = self._run_vad_script(
+                p_sparse, 'vad_model_ok "$VAD_MODEL"', sha=self.DIGEST, timeout=5
+            )
+            self.assertNotEqual(check_sparse.returncode, 0)
+            res_sparse = self._run_vad_script(
+                p_sparse, "stage_silero_vad", url=f"{base}/model", sha=self.DIGEST, timeout=10
+            )
+            self.assertEqual(res_sparse.returncode, 0, res_sparse.stderr)
+            self.assertEqual(sparse_model.read_bytes(), self.DATA)
+
+    def test_exact_size_boundary_unreadable_and_special_path_characters(self):
+        base, _ = self._start_server({"/model": {"body": self.DATA}})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Prefix with spaces, backslash, leading dash, and an embedded newline.
+            prefix = root / "-odd dir\\line1\nline2 with spaces"
+            res_ok = self._run_vad_script(
+                prefix,
+                "stage_silero_vad",
+                url=f"{base}/model",
+                sha=self.DIGEST,
+                max_bytes=len(self.DATA),
+            )
+            self.assertEqual(res_ok.returncode, 0, res_ok.stderr)
+            self.assertIn("Silero VAD model staged", res_ok.stdout)
+            model = prefix / "vad" / "silero_vad.onnx"
+            self.assertEqual(model.read_bytes(), self.DATA)
+
+            # One byte below the file's size must reject it before hashing.
+            check_over = self._run_vad_script(
+                prefix,
+                'vad_model_ok "$VAD_MODEL"',
+                sha=self.DIGEST,
+                max_bytes=len(self.DATA) - 1,
+            )
+            self.assertNotEqual(check_over.returncode, 0)
+
+            # Relative path beginning with '-' passed directly to vad_model_ok.
+            rel_dir = root / "rel_dash"
+            rel_dir.mkdir()
+            (rel_dir / "-silero_vad.onnx").write_bytes(self.DATA)
+            res_rel = self._run_vad_script(
+                root / "unused",
+                f"cd {shlex.quote(str(rel_dir))}\nvad_model_ok '-silero_vad.onnx'",
+                sha=self.DIGEST,
+                max_bytes=len(self.DATA),
+            )
+            self.assertEqual(res_rel.returncode, 0, res_rel.stderr)
+
+            # Unreadable regular file (non-root) must fail vad_model_ok cleanly
+            # with empty stderr (even if pinned to the empty-string SHA-256)
+            # and be atomically replaced by stage_silero_vad.
+            if os.geteuid() != 0:
+                p_unr = root / "unreadable"
+                (p_unr / "vad").mkdir(parents=True)
+                unr = p_unr / "vad" / "silero_vad.onnx"
+                unr.write_bytes(b"secret")
+                unr.chmod(0)
+                self.addCleanup(lambda: unr.exists() and unr.chmod(0o600))
+                empty_sha = hashlib.sha256(b"").hexdigest()
+                chk_unr = self._run_vad_script(
+                    p_unr,
+                    'vad_model_ok "$VAD_MODEL"',
+                    sha=empty_sha,
+                )
+                self.assertNotEqual(chk_unr.returncode, 0)
+                self.assertEqual(chk_unr.stderr, "")
+                rep_unr = self._run_vad_script(
+                    p_unr,
+                    "stage_silero_vad",
+                    url=f"{base}/model",
+                    sha=self.DIGEST,
+                )
+                self.assertEqual(rep_unr.returncode, 0, rep_unr.stderr)
+                self.assertIn("Silero VAD model staged", rep_unr.stdout)
+                self.assertEqual(unr.read_bytes(), self.DATA)
+
+    def test_oversized_downloads_and_redirects_across_transfer_modes(self):
+        cap = 4096
+        over = b"A" * (cap + 1)
+        over_large = b"B" * (cap + 65536)
+        over_sha = hashlib.sha256(over).hexdigest()
+        base, _ = self._start_server({
+            "/declared": {"mode": "fixed", "body": over},
+            "/chunked": {"mode": "chunked", "body": over_large, "chunk_size": 1024},
+            "/close": {"mode": "close", "body": over},
+            "/redirect-ok": {
+                "mode": "fixed",
+                "status": 302,
+                "headers": {"Location": "/ok"},
+                "body": b"moved",
+            },
+            "/redirect-over-body": {
+                "mode": "fixed",
+                "status": 302,
+                "headers": {"Location": "/ok"},
+                "body": over,
+            },
+            "/redirect-to-declared-over": {
+                "mode": "fixed",
+                "status": 302,
+                "headers": {"Location": "/declared"},
+                "body": b"moved",
+            },
+            "/redirect-to-chunked-over": {
+                "mode": "fixed",
+                "status": 302,
+                "headers": {"Location": "/chunked"},
+                "body": b"moved",
+            },
+            "/ok": {"mode": "fixed", "body": self.DATA},
+        })
+        # Valid 302 redirect to a valid final response must stage cleanly.
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / "p-redir-ok"
+            res_ok = self._run_vad_script(
+                prefix,
+                "stage_silero_vad",
+                url=f"{base}/redirect-ok",
+                sha=self.DIGEST,
+                max_bytes=cap,
+            )
+            self.assertEqual(res_ok.returncode, 0, res_ok.stderr)
+            self.assertIn("Silero VAD model staged", res_ok.stdout)
+            self.assertEqual((prefix / "vad" / "silero_vad.onnx").read_bytes(), self.DATA)
+
+        for endpoint in (
+            "/declared",
+            "/chunked",
+            "/close",
+            "/redirect-over-body",
+            "/redirect-to-declared-over",
+            "/redirect-to-chunked-over",
+        ):
+            with self.subTest(endpoint=endpoint), tempfile.TemporaryDirectory() as tmp:
+                prefix = Path(tmp) / "p"
+                res = self._run_vad_script(
+                    prefix,
+                    "stage_silero_vad",
+                    url=f"{base}{endpoint}",
+                    sha=over_sha if endpoint in ("/declared", "/close", "/redirect-to-declared-over") else self.DIGEST,
+                    max_bytes=cap,
+                )
+                self.assertEqual(res.returncode, 0, res.stderr)
+                self.assertIn("Silero VAD model download failed", res.stdout)
+                self.assertFalse((prefix / "vad" / "silero_vad.onnx").exists())
+                self.assertEqual(os.listdir(prefix / "vad"), [])
+
+        # Also simulate a curl that ignores --max-filesize on unknown-length
+        # bodies: head -c (cap + 1) + vad_model_ok must still cap and refuse
+        # exact cap+1 (even if VAD_PIN_SHA matches the first cap bytes) and cut
+        # off a multi-megabyte finite stream before the writer finishes.
+        cap_prefix_sha = hashlib.sha256(b"Z" * cap).hexdigest()
+        for stream_len, pin_sha, expect_truncated in (
+            (cap + 1, hashlib.sha256(b"Z" * (cap + 1)).hexdigest(), False),
+            (cap + 1, cap_prefix_sha, False),
+            (2 << 20, hashlib.sha256(b"Z" * (2 << 20)).hexdigest(), True),
+        ):
+            with self.subTest(stub_curl_bytes=stream_len, pin=pin_sha[:8]), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                prefix = root / "p"
+                finished_marker = root / "wrote-all"
+                stub_bin = root / "bin"
+                stub_bin.mkdir()
+                stub_curl = stub_bin / "curl"
+                stub_curl.write_text(
+                    "#!/usr/bin/env bash\n"
+                    f"python3 - {stream_len} {shlex.quote(str(finished_marker))} <<'PY'\n"
+                    "import pathlib, sys\n"
+                    "rem = int(sys.argv[1])\n"
+                    "marker = pathlib.Path(sys.argv[2])\n"
+                    'chunk = b"Z" * 4096\n'
+                    "try:\n"
+                    "    while rem > 0:\n"
+                    "        n = min(rem, len(chunk))\n"
+                    "        sys.stdout.buffer.write(chunk[:n])\n"
+                    "        sys.stdout.buffer.flush()\n"
+                    "        rem -= n\n"
+                    '    marker.write_text("done")\n'
+                    "except BrokenPipeError:\n"
+                    "    sys.exit(23)\n"
+                    "PY\n"
+                )
+                stub_curl.chmod(0o755)
+                res = self._run_vad_script(
+                    prefix,
+                    "stage_silero_vad",
+                    url="http://127.0.0.1:1/unused",
+                    sha=pin_sha,
+                    max_bytes=cap,
+                    extra_env={"PATH": f"{stub_bin}:{os.environ['PATH']}"},
+                )
+                self.assertEqual(res.returncode, 0, res.stderr)
+                self.assertIn("Silero VAD model download failed", res.stdout)
+                self.assertFalse((prefix / "vad" / "silero_vad.onnx").exists())
+                self.assertEqual(os.listdir(prefix / "vad"), [])
+                if expect_truncated:
+                    self.assertFalse(
+                        finished_marker.exists(),
+                        "head -c must cut off an unbounded curl stream before it finishes",
+                    )
+
+        # A curl invocation that exits non-zero even after emitting valid bytes
+        # (e.g. truncated/error exit) must fail via the subshell's own pipefail
+        # (even when the caller disabled pipefail) and never stage.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix = root / "p"
+            args_log = root / "curl-args"
+            payload = root / "valid_payload.bin"
+            payload.write_bytes(self.DATA)
+            stub_bin = root / "bin"
+            stub_bin.mkdir()
+            stub_curl = stub_bin / "curl"
+            stub_curl.write_text(
+                "#!/usr/bin/env bash\n"
+                f"printf '%s\\n' \"$@\" > {shlex.quote(str(args_log))}\n"
+                f"cat {shlex.quote(str(payload))}\n"
+                "exit 22\n"
+            )
+            stub_curl.chmod(0o755)
+            res = self._run_vad_script(
+                prefix,
+                "set +o pipefail\nstage_silero_vad",
+                url="http://127.0.0.1:1/unused",
+                sha=self.DIGEST,
+                extra_env={"PATH": f"{stub_bin}:{os.environ['PATH']}"},
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertIn("Silero VAD model download failed", res.stdout)
+            self.assertEqual(os.listdir(prefix / "vad"), [])
+            logged = args_log.read_text().splitlines()
+            self.assertIn("--max-filesize", logged)
+            self.assertIn("--max-time", logged)
+
+    def test_bad_sha_and_misplaced_or_symlinked_vad_dir_fail_cleanly(self):
+        base, hits = self._start_server({
+            "/ok": {"body": self.DATA},
+            "/bad": {"body": b"corrupt payload"},
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            # Absent target + bad sha -> stays absent, no temp files.
+            p1 = root / "p1"
+            res1 = self._run_vad_script(
+                p1, "stage_silero_vad", url=f"{base}/bad", sha=self.DIGEST
+            )
+            self.assertEqual(res1.returncode, 0, res1.stderr)
+            self.assertIn("Silero VAD model download failed", res1.stdout)
+            self.assertEqual(os.listdir(p1 / "vad"), [])
+
+            # Existing valid target + bad server -> untouched, never replaced.
+            p2 = root / "p2"
+            (p2 / "vad").mkdir(parents=True)
+            valid = p2 / "vad" / "silero_vad.onnx"
+            valid.write_bytes(self.DATA)
+            res2 = self._run_vad_script(
+                p2, "stage_silero_vad", url=f"{base}/bad", sha=self.DIGEST
+            )
+            self.assertEqual(res2.returncode, 0, res2.stderr)
+            self.assertEqual(res2.stdout, "")
+            self.assertEqual(valid.read_bytes(), self.DATA)
+            self.assertEqual(os.listdir(p2 / "vad"), ["silero_vad.onnx"])
+
+            # Regular file at $PREFIX/vad -> skips staging cleanly without fetching.
+            hits_before = len(hits)
+            p3 = root / "p3"
+            p3.mkdir()
+            (p3 / "vad").write_bytes(b"not a directory")
+            res3 = self._run_vad_script(
+                p3, "stage_silero_vad", url=f"{base}/ok", sha=self.DIGEST
+            )
+            self.assertEqual(res3.returncode, 0, res3.stderr)
+            self.assertIn("skipping VAD model staging", res3.stdout)
+            self.assertEqual((p3 / "vad").read_bytes(), b"not a directory")
+            self.assertEqual(len(hits), hits_before)
+
+            # Symlinked $PREFIX/vad -> external empty dir: must never stage there.
+            ext_empty = root / "ext_empty"
+            ext_empty.mkdir()
+            p4 = root / "p4"
+            p4.mkdir()
+            os.symlink(ext_empty, p4 / "vad")
+            res4 = self._run_vad_script(
+                p4, "stage_silero_vad", url=f"{base}/ok", sha=self.DIGEST
+            )
+            self.assertEqual(res4.returncode, 0, res4.stderr)
+            self.assertIn("skipping VAD model staging", res4.stdout)
+            self.assertEqual(os.listdir(ext_empty), [])
+            self.assertEqual(len(hits), hits_before)
+
+            # Symlinked $PREFIX/vad -> external dir holding valid silero_vad.onnx:
+            # must be refused (neither accepted as staged nor overwritten).
+            ext_valid = root / "ext_valid"
+            ext_valid.mkdir()
+            (ext_valid / "silero_vad.onnx").write_bytes(self.DATA)
+            p5 = root / "p5"
+            p5.mkdir()
+            os.symlink(ext_valid, p5 / "vad")
+            res5 = self._run_vad_script(
+                p5, "stage_silero_vad", url=f"{base}/ok", sha=self.DIGEST
+            )
+            self.assertEqual(res5.returncode, 0, res5.stderr)
+            self.assertIn("skipping VAD model staging", res5.stdout)
+            self.assertEqual((ext_valid / "silero_vad.onnx").read_bytes(), self.DATA)
+            self.assertEqual(os.listdir(ext_valid), ["silero_vad.onnx"])
+            self.assertEqual(len(hits), hits_before)
+
+            # Symlinked $PREFIX/vad -> regular file and dangling symlink.
+            ext_file = root / "ext_file"
+            ext_file.write_bytes(b"preserve")
+            for label, target in (("file", ext_file), ("dangling", root / "missing_dir")):
+                with self.subTest(vad_dir_symlink=label):
+                    p_sym = root / f"p_sym_{label}"
+                    p_sym.mkdir()
+                    os.symlink(target, p_sym / "vad")
+                    res_sym = self._run_vad_script(
+                        p_sym, "stage_silero_vad", url=f"{base}/ok", sha=self.DIGEST
+                    )
+                    self.assertEqual(res_sym.returncode, 0, res_sym.stderr)
+                    self.assertIn("skipping VAD model staging", res_sym.stdout)
+                    self.assertEqual(ext_file.read_bytes(), b"preserve")
+                    self.assertFalse((root / "missing_dir").exists())
+                    self.assertEqual(len(hits), hits_before)
+
+    def test_preserves_caller_traps_and_cancellation_reaps_download_without_publishing(self):
+        base, _ = self._start_server({"/model": {"body": self.DATA}})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # 1. Parent EXIT trap and custom INT/TERM traps must survive, and
+            #    cancel_silero_vad must not leak into global function scope.
+            p1 = root / "p1"
+            marker = root / "parent trap ran"
+            res = self._run_vad_script(
+                p1,
+                "\n".join([
+                    'trap \'touch "$MARKER_PATH"\' EXIT',
+                    "trap 'echo MYINT' INT",
+                    "trap 'echo MYTERM' TERM",
+                    "stage_silero_vad",
+                    "trap -p INT",
+                    "trap -p TERM",
+                    "if declare -F cancel_silero_vad >/dev/null; then echo LEAKED_HELPER; fi",
+                ]),
+                url=f"{base}/model",
+                sha=self.DIGEST,
+                extra_env={"MARKER_PATH": str(marker)},
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertTrue(marker.exists(), "stage_silero_vad clobbered parent EXIT trap")
+            self.assertIn("echo MYINT", res.stdout)
+            self.assertIn("echo MYTERM", res.stdout)
+            self.assertNotIn("LEAKED_HELPER", res.stdout)
+
+            # 2. SIGINT and SIGTERM delivered to the staging subshell, to the
+            #    parent installer PID alone, or to the process group must
+            #    terminate the download worker (preventing stderr pipe hangs),
+            #    prevent mv from publishing, clean up the hidden temp file, and
+            #    preserve the parent EXIT trap.
+            payload = root / "cancel_payload.bin"
+            payload.write_bytes(self.DATA)
+            defs = extract_vad_staging_defs()
+
+            for target, sig in (
+                ("subshell", signal.SIGINT),
+                ("subshell", signal.SIGTERM),
+                ("parent", signal.SIGTERM),
+                ("parent", signal.SIGINT),
+                ("pg", signal.SIGTERM),
+                ("pg", signal.SIGINT),
+            ):
+                with self.subTest(target=target, sig=sig.name):
+                    case_dir = root / f"cancel_{target}_{sig.name}"
+                    prefix = case_dir / "prefix"
+                    stub_bin = case_dir / "bin"
+                    stub_bin.mkdir(parents=True)
+                    ready = case_dir / "ready"
+                    curl_pid_file = case_dir / "curl-pid"
+                    mv_called = case_dir / "mv-called"
+                    parent_marker = case_dir / "parent-exit"
+
+                    # Wrap mv to detect any publication attempt.
+                    real_mv = shutil.which("mv") or "/usr/bin/mv"
+                    stub_mv = stub_bin / "mv"
+                    stub_mv.write_text(
+                        "#!/usr/bin/env bash\n"
+                        f"touch {shlex.quote(str(mv_called))}\n"
+                        f'exec {shlex.quote(real_mv)} "$@"\n'
+                    )
+                    stub_mv.chmod(0o755)
+
+                    stub_curl = stub_bin / "curl"
+                    if target == "subshell":
+                        # Signal the staging subshell (grandparent of curl via
+                        # the inner download pipeline subshell) and emit valid
+                        # bytes cleanly so only signal handling stops mv.
+                        stub_curl.write_text(
+                            "#!/usr/bin/env bash\n"
+                            f'echo "$$" > {shlex.quote(str(curl_pid_file))}\n'
+                            "sub_pid=$(ps -o ppid= -p \"$PPID\" | tr -d ' ')\n"
+                            f"kill -{sig.name} \"$sub_pid\"\n"
+                            "sleep 30\n"
+                            f"cat {shlex.quote(str(payload))}\n"
+                        )
+                    else:
+                        stub_curl.write_text(
+                            "#!/usr/bin/env bash\n"
+                            f'echo "$$" > {shlex.quote(str(curl_pid_file))}\n'
+                            f"touch {shlex.quote(str(ready))}\n"
+                            "sleep 30\n"
+                            f"cat {shlex.quote(str(payload))}\n"
+                        )
+                    stub_curl.chmod(0o755)
+
+                    script = "\n".join([
+                        "set -euo pipefail",
+                        'say() { printf "SAY: %s\\n" "$*"; }',
+                        'trap \'touch "$MARKER_PATH"\' EXIT',
+                        f"PREFIX={shlex.quote(str(prefix))}",
+                        defs,
+                        f"VAD_PIN_SHA={shlex.quote(self.DIGEST)}",
+                        'VAD_URL="http://127.0.0.1:1/slow"',
+                        "stage_silero_vad",
+                    ]) + "\n"
+                    env = {
+                        **os.environ,
+                        "PATH": f"{stub_bin}:{os.environ['PATH']}",
+                        "MARKER_PATH": str(parent_marker),
+                    }
+                    proc = subprocess.Popen(
+                        ["bash", "-c", script],
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                    )
+                    try:
+                        if target != "subshell":
+                            deadline = time.monotonic() + 5.0
+                            while not ready.exists() and time.monotonic() < deadline:
+                                time.sleep(0.02)
+                            self.assertTrue(ready.exists(), "slow curl stub never started")
+                            if target == "parent":
+                                os.kill(proc.pid, sig)
+                            else:
+                                os.killpg(proc.pid, sig)
+                        # Must exit promptly with stderr=PIPE (no orphan holding pipe open).
+                        stdout, _stderr = proc.communicate(timeout=5)
+                        curl_pid = int(curl_pid_file.read_text().strip())
+                        reap_deadline = time.monotonic() + 1.0
+                        curl_dead = False
+                        while time.monotonic() < reap_deadline:
+                            try:
+                                os.kill(curl_pid, 0)
+                            except ProcessLookupError:
+                                curl_dead = True
+                                break
+                            try:
+                                stat_text = Path(f"/proc/{curl_pid}/stat").read_text()
+                                if stat_text.rsplit(")", 1)[1].split()[0] == "Z":
+                                    curl_dead = True
+                                    break
+                            except OSError:
+                                curl_dead = True
+                                break
+                            time.sleep(0.02)
+                        self.assertTrue(
+                            curl_dead,
+                            f"orphaned curl pid {curl_pid} survived cancellation",
+                        )
+                    finally:
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        if proc.poll() is None:
+                            proc.wait(timeout=5)
+                        if proc.stdout:
+                            proc.stdout.close()
+                        if proc.stderr:
+                            proc.stderr.close()
+
+                    self.assertFalse(mv_called.exists(), "cancelled staging must never reach mv")
+                    self.assertTrue(parent_marker.exists(), "parent EXIT trap must still run")
+                    self.assertEqual(os.listdir(prefix / "vad"), [], "cancelled staging left temp files")
+                    if target == "subshell":
+                        self.assertEqual(proc.returncode, 0)
+                        self.assertIn("Silero VAD model download failed", stdout)
+                    else:
+                        self.assertEqual(proc.returncode, -int(sig))
+
+            # 3. Early staging failure (before download launch) must never kill
+            #    an unrelated caller background job inherited via $!.
+            if os.geteuid() != 0:
+                ro_prefix = root / "ro_prefix"
+                ro_prefix.mkdir()
+                ro_prefix.chmod(0o555)
+                self.addCleanup(lambda: ro_prefix.exists() and ro_prefix.chmod(0o755))
+                res_bg = self._run_vad_script(
+                    ro_prefix,
+                    "\n".join([
+                        "sleep 0.5 &",
+                        "caller_bg=$!",
+                        "stage_silero_vad",
+                        "wait \"$caller_bg\"",
+                        "echo CALLER_BG_RC=$?",
+                    ]),
+                    url=f"{base}/model",
+                    sha=self.DIGEST,
+                )
+                self.assertEqual(res_bg.returncode, 0, res_bg.stderr)
+                self.assertIn("CALLER_BG_RC=0", res_bg.stdout)
+                self.assertIn("Silero VAD model download failed", res_bg.stdout)
+
+            # 4. Cancellation with a returning (non-exiting) caller TERM trap
+            #    must invoke the caller trap, never stage, and never print
+            #    "Silero VAD model staged".
+            ret_dir = root / "ret_trap"
+            ret_prefix = ret_dir / "prefix"
+            ret_bin = ret_dir / "bin"
+            ret_bin.mkdir(parents=True)
+            ret_ready = ret_dir / "ready"
+            ret_curl = ret_bin / "curl"
+            ret_curl.write_text(
+                "#!/usr/bin/env bash\n"
+                f"touch {shlex.quote(str(ret_ready))}\n"
+                "sleep 30\n"
+                f"cat {shlex.quote(str(payload))}\n"
+            )
+            ret_curl.chmod(0o755)
+            ret_script = "\n".join([
+                "set -euo pipefail",
+                'say() { printf "SAY: %s\\n" "$*"; }',
+                "trap 'echo CALLER_TERM_RETURNED' TERM",
+                f"PREFIX={shlex.quote(str(ret_prefix))}",
+                defs,
+                f"VAD_PIN_SHA={shlex.quote(self.DIGEST)}",
+                'VAD_URL="http://127.0.0.1:1/slow"',
+                "stage_silero_vad",
+                "echo AFTER_STAGE",
+            ]) + "\n"
+            ret_proc = subprocess.Popen(
+                ["bash", "-c", ret_script],
+                env={**os.environ, "PATH": f"{ret_bin}:{os.environ['PATH']}"},
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+            try:
+                deadline = time.monotonic() + 5.0
+                while not ret_ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(ret_ready.exists(), "slow curl stub never started")
+                os.kill(ret_proc.pid, signal.SIGTERM)
+                ret_out, ret_err = ret_proc.communicate(timeout=5)
+            finally:
+                try:
+                    os.killpg(ret_proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                if ret_proc.poll() is None:
+                    ret_proc.wait(timeout=5)
+                if ret_proc.stdout:
+                    ret_proc.stdout.close()
+                if ret_proc.stderr:
+                    ret_proc.stderr.close()
+            self.assertEqual(ret_proc.returncode, 0, ret_err)
+            self.assertIn("CALLER_TERM_RETURNED", ret_out)
+            self.assertIn("AFTER_STAGE", ret_out)
+            self.assertNotIn("Silero VAD model staged", ret_out)
+            self.assertEqual(os.listdir(ret_prefix / "vad"), [])
+
+            # 5. A first TERM arriving right before restoring old_int or between
+            #    restoring old_int and old_term must never be dropped, must
+            #    invoke the caller's TERM handler, and must preserve the
+            #    restored INT handler.
+            for label, anchor in (
+                ("before_old_int", '  eval "${old_int:-trap - INT}"'),
+                ("between_restores", '  eval "${old_term:-trap - TERM}"'),
+            ):
+                with self.subTest(restore_boundary=label):
+                    self.assertIn(anchor, defs)
+                    defs_injected = defs.replace(
+                        anchor,
+                        '  kill -TERM "$BASHPID"\n' + anchor,
+                        1,
+                    )
+                    bp = root / f"restore_{label}"
+                    bscript = "\n".join([
+                        "set -euo pipefail",
+                        'say() { printf "SAY: %s\\n" "$*"; }',
+                        "trap 'echo RESTORED_INT_OK' INT",
+                        "trap 'echo RESTORED_TERM_OK' TERM",
+                        f"PREFIX={shlex.quote(str(bp))}",
+                        defs_injected,
+                        f"VAD_PIN_SHA={shlex.quote(self.DIGEST)}",
+                        f"VAD_URL={shlex.quote(f'{base}/model')}",
+                        "stage_silero_vad",
+                        "trap -p INT",
+                        "trap -p TERM",
+                    ]) + "\n"
+                    bres = subprocess.run(
+                        ["bash", "-c", bscript],
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(bres.returncode, 0, bres.stderr)
+                    self.assertIn("RESTORED_TERM_OK", bres.stdout.splitlines())
+                    self.assertNotIn("Silero VAD model staged", bres.stdout)
+                    self.assertIn("echo RESTORED_INT_OK", bres.stdout)
+                    self.assertIn("echo RESTORED_TERM_OK", bres.stdout)
 
 
 if __name__ == "__main__":
