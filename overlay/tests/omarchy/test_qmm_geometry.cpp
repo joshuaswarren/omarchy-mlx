@@ -424,6 +424,25 @@ int main(int argc, char** argv) {
       std::cout << "FAIL: qmm_multi_upfront_default part check\n";
       ++failures;
     }
+    unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+    if (!mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 Max (G13C C0)") ||
+        mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 (G13G B1)") ||
+        mlx::core::omarchy::qmm_g14c_fast_only_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: qmm_g14c_fast_only_default_part part check\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_G14C_FAST_ONLY", "0", 1);
+    if (mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)")) {
+      std::cout << "FAIL: qmm_g14c_fast_only_default_part =0 override\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
+    if (!mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 Max (G13C C0)")) {
+      std::cout << "FAIL: qmm_g14c_fast_only_default_part =1 override\n";
+      ++failures;
+    }
+    unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
   }
   // Low-register SwiGLU (R1S8W2 and R1S4W2) must be bit-identical to 2x4.
   {
@@ -524,6 +543,48 @@ int main(int argc, char** argv) {
       ++failures;
     } else {
       std::cout << "ok: " << name << " ResNormVec4 R2S32W2 identical\n";
+    }
+  }
+  // G14C fast-tile-only upfront variants must be 0-ULP bit-identical to
+  // fallback-carrying upfront variants across Word, Multi, SwiGLU, ResNormVec4.
+  {
+    struct FoCase {
+      const char* label;
+      const char* scenario;
+      const char* extra_env;
+    };
+    const FoCase cases[] = {
+        {"word_r2s4_fast", "single", "MLX_OMARCHY_WORD_R2S4"},
+        {"multi_up_fast", "group", "MLX_OMARCHY_Q4_UPFRONT"},
+        {"swiglu_r1s4_fast", "swiglu", "MLX_OMARCHY_SWIGLU_R1S4"},
+        {"resnorm2048_fast", "resnorm2048", "MLX_OMARCHY_RESNORM_R2S32"},
+        {"resnorm4096_fast", "resnorm4096", "MLX_OMARCHY_RESNORM_R2S32"},
+    };
+    for (const auto& c : cases) {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_SWIGLU_R1", "1", 1);
+      setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_VEC4", "1", 1);
+      setenv(c.extra_env, "1", 1);
+      setenv("MLX_OMARCHY_G14C_FAST_ONLY", "0", 1);
+      int rc1 = run_child(c.scenario, base.c_str());
+      setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
+      int rc2 = run_child(c.scenario, other.c_str());
+      unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+      unsetenv(c.extra_env);
+      unsetenv("MLX_OMARCHY_RESNORM_VEC4");
+      unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+      unsetenv("MLX_OMARCHY_SWIGLU_R1");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: " << c.label << " differed from fallback variant (rc "
+                  << rc1 << "/" << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: " << c.label << " identical\n";
+      }
     }
   }
   std::cout << (failures == 0 ? "GEOM-TEST-PASS" : "GEOM-TEST-FAIL")

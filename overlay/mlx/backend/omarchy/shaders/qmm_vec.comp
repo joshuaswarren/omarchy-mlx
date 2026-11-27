@@ -992,7 +992,78 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   } \
 }
 #elif defined(QMM_W2) && !defined(QMM_KCONT) && QGROUP == 64 && QMM_LANES == 32
+#if defined(QMM_FAST_ONLY)
+// Host guarantees K % 512 == 0, N % 8 == 0, and even w_base; trimming the
+// unreachable slow-path loop cuts SPIR-V CFG size and AGX register pressure.
+#define Q4_ROWS_W2_FALLBACK(W, S, B)
+#else
+#define Q4_ROWS_W2_FALLBACK(W, S, B) \
+    for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
+      precise float dot[ROWS_PER_SLOT]; \
+      precise float input_sum = 0.0; \
+      uint wa[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot[r] = 0.0; \
+        wa[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
+      } \
+      uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+      Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
+      Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
+      Q4_ROWS_FINISH(w, S, B) \
+    }
+#endif
 #ifdef QMM_W2_UPFRONT
+#ifdef QMM_FAST_ONLY
+// Fast-only upfront uvec2 loop for G14C: trims unreachable slow-path CFG and
+// replaces bp[] with uniform sb_delta while keeping all 8 loads in wave 1.
+// Bit-identical to Q4_ROWS.
+#define Q4_ROWS(W, S, B) { \
+  uint row_base[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    row_base[r] = min(column + r, n - 1u); \
+  } \
+  uint pairs_per_row = words_per_row >> 1u; \
+  uint w_base_pair = w_base >> 1u; \
+  uint wp[ROWS_PER_SLOT]; \
+  uint sp[ROWS_PER_SLOT]; \
+  uint sb_delta = b_base - s_base; \
+  uint g0 = lane_in_slot >> 2u; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    wp[r] = w_base_pair + row_base[r] * pairs_per_row + lane_in_slot; \
+    sp[r] = s_base + row_base[r] * groups_per_row + g0; \
+  } \
+  uint xp = (x_row >> 3u) + (lane_in_slot << 1u); \
+  uint iters = pairs_per_row >> 5u; \
+  for (uint wi_ = 0u; wi_ < iters; ++wi_) { \
+    precise float dot[ROWS_PER_SLOT]; \
+    precise float input_sum = 0.0; \
+    uvec2 wv[ROWS_PER_SLOT]; \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      dot[r] = 0.0; \
+      wv[r] = W.values[wp[r]]; \
+      wp[r] += 32u; \
+    } \
+    float scale_r[ROWS_PER_SLOT]; \
+    float bias_r[ROWS_PER_SLOT]; \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      scale_r[r] = LOAD_VALUE(S.values[sp[r]]); \
+      bias_r[r] = LOAD_VALUE(B.values[sp[r] + sb_delta]); \
+      sp[r] += 8u; \
+    } \
+    uvec4 xa = OUTGATE_XQUAD(xp); \
+    uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
+    xp += 64u; \
+    Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
+    Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
+    Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
+    Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      precise float bias_term = input_sum * bias_r[r]; \
+      acc[r] += fma(scale_r[r], dot[r], bias_term); \
+    } \
+  } \
+}
+#else
 // Hoisted uvec2 fast-tile loop with all 8 loads issued upfront (wv, scale,
 // bias, xa, xb before Q4_QUAD_ROWS): preserves 1-wave load coalescing (2 waits)
 // on G14C where register headroom sits well below the 104 half-reg cliff.
@@ -1046,21 +1117,10 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
       } \
     } \
   } else { \
-    for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
-      precise float dot[ROWS_PER_SLOT]; \
-      precise float input_sum = 0.0; \
-      uint wa[ROWS_PER_SLOT]; \
-      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        dot[r] = 0.0; \
-        wa[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
-      } \
-      uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
-      Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
-      Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
-      Q4_ROWS_FINISH(w, S, B) \
-    } \
+    Q4_ROWS_W2_FALLBACK(W, S, B) \
   } \
 }
+#endif
 #else
 // Hoisted uvec2 fast-tile loop with low register footprint: replaces bp[] with
 // uniform sb_delta, splits xa/xb live ranges across the two halves of each
@@ -1117,26 +1177,6 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     Q4_ROWS_W2_FALLBACK(W, S, B) \
   } \
 }
-#if defined(QMM_FAST_ONLY)
-// Host guarantees K % 512 == 0, N % 8 == 0, and even w_base; trimming the
-// unreachable slow-path loop cuts SPIR-V CFG size and AGX register pressure.
-#define Q4_ROWS_W2_FALLBACK(W, S, B)
-#else
-#define Q4_ROWS_W2_FALLBACK(W, S, B) \
-    for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
-      precise float dot[ROWS_PER_SLOT]; \
-      precise float input_sum = 0.0; \
-      uint wa[ROWS_PER_SLOT]; \
-      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        dot[r] = 0.0; \
-        wa[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
-      } \
-      uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
-      Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
-      Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
-      Q4_ROWS_FINISH(w, S, B) \
-    }
-#endif
 #endif
 #else
 #define Q4_ROWS(W, S, B) { \
