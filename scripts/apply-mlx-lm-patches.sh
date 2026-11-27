@@ -418,6 +418,13 @@ fi
 # the patch; it applies cleanly last on both pinned trees (verified 0.31.3
 # wheel and the 94cdcae fork tree).
 apply mlx-lm-server-alias-key.patch
+# In-place per-request LoRA/DoRA adapter switching for mlx_lm.server: keep base
+# weights resident, hold each adapter's low-rank pairs beside them, bind the
+# requested adapter per request without reloading base weights, and restore the
+# original unwrapped base layers for no-adapter requests (bit-identical to
+# unadapted base). Applies to both 0.31.3 and 0.32 series; kill switch
+# MLX_OMARCHY_INPLACE_ADAPTER_SWITCH=0.
+python3 "$ROOT/scripts/patch-mlx-lm-adapter-switch.py" "$VENV"
 # Every step succeeded: record the series and the mlx-lm version it was applied to (mlx-omarchy serve reads this).
 DIST_DIR="$(basename "$(ls -d "$SITE"/mlx_lm-*.dist-info 2>/dev/null | head -n 1)" .dist-info)"
 printf 'series=%s\nmlx_lm=%s\n' "$SERIES" "${DIST_DIR#mlx_lm-}" > "$RECORD_FILE"
