@@ -193,6 +193,33 @@ const SimulationProfile kProfiles[] = {
         1,
     },
     {
+        // RDNA 4 RADV (RX 9070, GFX1201): native wave64 subgroup, no
+        // same-operand 8x8x8 shapes, the 16x16x16 subgroup shapes the
+        // wave64 QMM prefill coopmat16 route emits (fp16 operand plus
+        // the bf16-operand twin where hardware truth enabled the bf16
+        // extension). subgroup_size 64 satisfies the gate's
+        // wave64_capable clause directly; a wave32-native part that
+        // admits pinning 64 would use the subgroup_size_64_admitted
+        // axis instead (DEC-15).
+        "rdna4-radv-coopmat16",
+        "radeonsi-radv",
+        "RDNA 4 RADV (GFX1201/RX 9070): wave64 subgroup, no fp32 8x8x8 "
+        "coopmat, the 16x16x16 fp16/bf16-operand subgroup shapes the "
+        "wave64 QmmPrefillCoopmatBF16x16 route requires, full op mask",
+        64,
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+            VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+            VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT,
+        kAllSubgroupOps,
+        0,
+        0,
+        0,
+        0,
+        -1,
+        "AMD Radeon RX 9070 (RADV GFX1201)",
+        1,
+    },
+    {
         "min-storage-buffer-range",
         "other",
         "Vulkan-minimum storage-buffer binding: maxStorageBufferRange "
@@ -271,6 +298,10 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
   CapabilityReport caps = hw;
   if (profile.subgroup_size >= 0) {
     caps.subgroup_size = static_cast<uint32_t>(profile.subgroup_size);
+  }
+  if (profile.subgroup_size_64_admitted >= 0) {
+    caps.subgroup_size_64_admitted =
+        profile.subgroup_size_64_admitted != 0;
   }
   caps.subgroup_operations =
       (caps.subgroup_operations | profile.subgroup_ops_mask_or) &

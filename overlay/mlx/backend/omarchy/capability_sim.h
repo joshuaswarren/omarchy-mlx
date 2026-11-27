@@ -93,6 +93,13 @@ struct SimulationProfile {
   int cooperative_matrix_f16_16 = -1;
   // Axis max_storage_buffer_range_bytes. 0 = inherit.
   uint64_t max_storage_buffer_range = 0;
+  // Axis subgroup_size_64_admitted: a wave32-native driver whose
+  // VkPhysicalDeviceSubgroupSizeControlProperties allows pinning
+  // requiredSubgroupSize 64 (RDNA-3/4 RADV wave64 style) reports it
+  // here. -1 = inherit, 0/1 = set. The wave64 coopmat16 QMM prefill
+  // gate reads subgroup_size == 64 || subgroup_size_64_admitted, so a
+  // native-64 profile needs no flag and a wave32-pin64 profile sets 1.
+  int subgroup_size_64_admitted = -1;
 };
 
 // The registered profiles, in registry order. docs/new-chip-bringup.md
