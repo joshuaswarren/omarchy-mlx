@@ -440,9 +440,14 @@ TEST_CASE("GdnConvUpdate reads offset-carrying inputs, not flat bindings") {
 }
 
 TEST_CASE("coalesced GDN Sg32 default policy, accuracy, dispatch count, and off-switch") {
-  // Chip default: G14C and G13G equal-head only; other parts and unequal-head GQA stay off.
+  // Chip default: G14C, G17C (matching G14C), and G13G equal-head only; other parts and unequal-head GQA stay off.
   CHECK(omarchy::gdn_conv_coalesced_default("Apple M2 Max (G14C B1)", 16, 16));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M2 Max (G14C B1)", 16, 32));
+  CHECK(omarchy::gdn_conv_coalesced_default("Apple M5 Max (G17C B1)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M5 Max (G17C B1)", 16, 32));
+  CHECK(omarchy::gdn_decode_coalesced_default("Apple M2 Max (G14C B1)", 16, 32));
+  CHECK(omarchy::gdn_decode_coalesced_default("Apple M5 Max (G17C B1)", 16, 32));
+  CHECK_FALSE(omarchy::gdn_decode_coalesced_default("Apple M5 Max (G17C B1)", 16, 16));
   CHECK(omarchy::gdn_conv_coalesced_default("Apple M1 (G13G B1)", 16, 16));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M1 (G13G B1)", 16, 32));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_default("Apple M1 Max (G13C C0)", 16, 16));
@@ -486,6 +491,7 @@ TEST_CASE("coalesced GDN Sg32 default policy, accuracy, dispatch count, and off-
 
 TEST_CASE("coalesced GDN Sg32 f32 A_log GQA 3-in-1 fusion policy, accuracy, and lazy off-switch") {
   CHECK(omarchy::gdn_conv_coalesced_f32a_default("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::gdn_conv_coalesced_f32a_default("Apple M5 Max (G17C B1)"));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default("Apple M6 (G18G B1)"));
@@ -526,6 +532,7 @@ TEST_CASE("coalesced GDN Sg32 f32 A_log GQA 3-in-1 fusion policy, accuracy, and 
 
 TEST_CASE("coalesced GDN Sg32Fast default policy, accuracy, and off-switch") {
   CHECK(omarchy::gdn_conv_sg32_fast_default("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::gdn_conv_sg32_fast_default("Apple M5 Max (G17C B1)"));
   CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M4 Pro (G16S B1)"));

@@ -375,10 +375,10 @@ int main(int argc, char** argv) {
                 << d.count << " max_ulp=" << d.max_ulp << ")\n";
     }
   }
-  // Part-default checks for G14C low-register SwiGLU (R1S8W2) and coalesced
-  // uvec4 ResNorm (R2S16W2).
+  // Part-default checks for G14C / G17C Q4 decode gates.
   {
     if (!mlx::core::omarchy::qmm_swiglu_r1_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_swiglu_r1_default("Apple M5 Max (G17C B1)") ||
         !mlx::core::omarchy::qmm_swiglu_r1_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_swiglu_r1_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_swiglu_r1_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
@@ -386,6 +386,7 @@ int main(int argc, char** argv) {
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_resnorm_vec4_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_resnorm_vec4_default("Apple M5 Max (G17C B1)") ||
         !mlx::core::omarchy::qmm_resnorm_vec4_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_resnorm_vec4_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_resnorm_vec4_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
@@ -393,6 +394,7 @@ int main(int argc, char** argv) {
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_resnorm_r2s32_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_resnorm_r2s32_default("Apple M5 Max (G17C B1)") ||
         mlx::core::omarchy::qmm_resnorm_r2s32_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_resnorm_r2s32_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_resnorm_r2s32_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
@@ -400,6 +402,7 @@ int main(int argc, char** argv) {
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_lm_r2s32_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_lm_r2s32_default("Apple M5 Max (G17C B1)") ||
         !mlx::core::omarchy::qmm_lm_r2s32_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_lm_r2s32_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_lm_r2s32_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
@@ -407,18 +410,21 @@ int main(int argc, char** argv) {
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_swiglu_r1s4_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_swiglu_r1s4_default("Apple M5 Max (G17C B1)") ||
         mlx::core::omarchy::qmm_swiglu_r1s4_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_swiglu_r1s4_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_swiglu_r1s4_default part check\n";
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_word_r2s4_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_word_r2s4_default("Apple M5 Max (G17C B1)") ||
         mlx::core::omarchy::qmm_word_r2s4_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_word_r2s4_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_word_r2s4_default part check\n";
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_multi_upfront_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_multi_upfront_default("Apple M5 Max (G17C B1)") ||
         mlx::core::omarchy::qmm_multi_upfront_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_multi_upfront_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_multi_upfront_default part check\n";
@@ -426,6 +432,7 @@ int main(int argc, char** argv) {
     }
     unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
     if (!mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M5 Max (G17C B1)") ||
         mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_g14c_fast_only_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
@@ -433,7 +440,8 @@ int main(int argc, char** argv) {
       ++failures;
     }
     setenv("MLX_OMARCHY_G14C_FAST_ONLY", "0", 1);
-    if (mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)")) {
+    if (mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M5 Max (G17C B1)")) {
       std::cout << "FAIL: qmm_g14c_fast_only_default_part =0 override\n";
       ++failures;
     }

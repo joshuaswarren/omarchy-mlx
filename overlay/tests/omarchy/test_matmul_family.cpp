@@ -6665,6 +6665,7 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
   // still keeps it on the 32-row tile and the kernel is the same
   // either way - the flags only bind when a 64-row grid wins.
   for (const std::string& keep32 : {g17c}) {
+    CHECK(mlx::core::omarchy::apple_gpu_cores(keep32) == 40u);
     rows = coopmat_tile_rows(128u, 64u, named_caps(keep32), allow64);
     sg4 = qmm_coopmat_sg4_requested(named_caps(keep32));
     step_k = qmm_coopmat_stepk_requested(named_caps(keep32), rows, sg4);

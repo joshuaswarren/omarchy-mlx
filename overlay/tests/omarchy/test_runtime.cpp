@@ -906,8 +906,8 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 15000);
   CHECK(omarchy::calibrated_batch_work("Apple M4 (G16G B1)") == 0);
 
-  // The G17C row (M5 Max) takes 100000 (initial value matching G14C pending calibration on M5).
-  CHECK(omarchy::calibrated_batch_work("Apple M5 Max (G17C B1)") == 100000);
+  // The G17C row (M5 Max) takes 200000 (matching G14C pending calibration on M5).
+  CHECK(omarchy::calibrated_batch_work("Apple M5 Max (G17C B1)") == 200000);
 
   // The RTX 5060 Ti row (discrete NVIDIA card on Thunderbolt, opt-in VRAM
   // activations) takes 40000: one command buffer per Qwen3-4B decode token.
@@ -929,14 +929,14 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // shipped cap on that board without a receipt saying why. G13C sits at
   // 80000 (receipts/2026-11-26-g13c-batch-work-80000.md);
   // G14C sits at 200000 (receipts/2026-11-24-g14c-batch-work-200000);
-  // G17C keeps the 100000 placeholder pending M5 calibration; G18G is
+  // G17C matches G14C's 200000 ceiling pending M5 calibration; G18G is
   // uncapped (headless, receipts/2026-11-23-g621-batch-budget-submits) —
   // naming its ceiling here also repairs the stale bound the row introduced.
   for (const auto& row : omarchy::kBatchWorkCalibration) {
     if (row.budget > 0) {
       CHECK(row.budget <= (row.board == "G13C"   ? 80000
                            : row.board == "G14C" ? 200000
-                           : row.board == "G17C" ? 100000
+                           : row.board == "G17C" ? 200000
                            : row.board == "G18G" ? UINT64_MAX
                                                  : 40000));
     }

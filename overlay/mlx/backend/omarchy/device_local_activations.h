@@ -142,12 +142,13 @@ inline bool select_qmm_wide_2x16(
     const QmmWideCaps& caps,
     bool vram_activations_enabled) {
   // No-gating default (2026-11-25): the 2x16 geometry selects by the
-  // 512-thread 32-wide-subgroup probe on every part. G13G/G13C/G14C keep
-  // their measured 2x8w2 route; a discrete part still needs VRAM
-  // activations. Any other part that meets the probe gets 2x16.
+  // 512-thread 32-wide-subgroup probe on every part. G13G/G13C/G14C/G17C keep
+  // their 2x8w2 route; a discrete part still needs VRAM activations. Any other
+  // part that meets the probe gets 2x16.
   if (device_name.find("G13G") != std::string_view::npos ||
       device_name.find("G13C") != std::string_view::npos ||
-      device_name.find("G14C") != std::string_view::npos) {
+      device_name.find("G14C") != std::string_view::npos ||
+      device_name.find("G17C") != std::string_view::npos) {
     return false;
   }
   if (physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
@@ -170,14 +171,16 @@ inline bool supports_qmm_2x8w2(const QmmWideCaps& caps) {
       caps.max_workgroup_size_x >= 256u;
 }
 
-// G13G (13-inch M1), G13C (16-inch M1 Max), and G14C (14-inch M2 Max) default
-// Qmm decode geometry: 2x8w2 (2 rows/slot x 8 slots = 256 threads/WG,
-// 16 cols/WG, hoisted uvec2 loads across Word, Multi, 1-pass interleaved
-// SwiGLU, ResNorm, and OutgateResNorm).
+// G13G (13-inch M1), G13C (16-inch M1 Max), G14C (14-inch M2 Max), and
+// G17C (M5 Max, matching G14C pending M5 5-pair ABBA) default Qmm decode
+// geometry: 2x8w2 (2 rows/slot x 8 slots = 256 threads/WG, 16 cols/WG,
+// hoisted uvec2 loads across Word, Multi, 1-pass interleaved SwiGLU, ResNorm,
+// and OutgateResNorm).
 inline bool select_qmm_apple_2x8w2(std::string_view device_name) {
   return device_name.find("G13G") != std::string_view::npos ||
       device_name.find("G13C") != std::string_view::npos ||
-      device_name.find("G14C") != std::string_view::npos;
+      device_name.find("G14C") != std::string_view::npos ||
+      device_name.find("G17C") != std::string_view::npos;
 }
 
 // Default 2x8w2 selection when MLX_OMARCHY_QMM_GEOM is unset. The capability

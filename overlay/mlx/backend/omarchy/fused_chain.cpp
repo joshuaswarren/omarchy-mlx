@@ -3797,7 +3797,8 @@ EagerFusionScope::~EagerFusionScope() {
 bool outgate_fold_default_for_device(const std::string& device_name) {
   bool g13 = device_name.find("G13") != std::string::npos;
   bool g14c = device_name.find("G14C") != std::string::npos;
-  return !g13 && !g14c;
+  bool g17c = device_name.find("G17C") != std::string::npos;
+  return !g13 && !g14c && !g17c;
 }
 
 bool outgate_fold_enabled() {
@@ -3831,6 +3832,7 @@ bool qmm_residual_norm_enabled(
   if (norm_cols == 2560) {
     return caps.device_name.find("G13C") != std::string::npos ||
         caps.device_name.find("G14C") != std::string::npos ||
+        caps.device_name.find("G17C") != std::string::npos ||
         !caps.unified_memory;
   }
   return norm_cols == 256 || norm_cols == 2048 || norm_cols == 4096;

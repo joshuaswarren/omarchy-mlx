@@ -2046,6 +2046,7 @@ TEST_CASE("token-multi q4 gemv kill switch restores the single-row fence") {
 TEST_CASE("fused gemv default: the part rule") {
   CHECK(omarchy::fused_gemv_off_default_part("Apple M4 (G16G B1)"));
   CHECK(omarchy::fused_gemv_off_default_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::fused_gemv_off_default_part("Apple M5 Max (G17C B1)"));
   CHECK_FALSE(omarchy::fused_gemv_off_default_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::fused_gemv_off_default_part("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::fused_gemv_off_default_part(""));
@@ -2053,6 +2054,7 @@ TEST_CASE("fused gemv default: the part rule") {
 
 TEST_CASE("gemv epilogue-only route: the part rule") {
   CHECK(omarchy::gemv_epilogue_only_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::gemv_epilogue_only_part("Apple M5 Max (G17C B1)"));
   CHECK(omarchy::gemv_epilogue_only_part("Apple M4 (G16G B1)"));
   CHECK_FALSE(omarchy::gemv_epilogue_only_part("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::gemv_epilogue_only_part("Apple M1 (G13G B1)"));
@@ -2061,6 +2063,7 @@ TEST_CASE("gemv epilogue-only route: the part rule") {
 
 TEST_CASE("gemv balanced QKV route: part and width guards") {
   CHECK(omarchy::gemv_balanced_qkv_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::gemv_balanced_qkv_part("Apple M5 Max (G17C B1)"));
   CHECK_FALSE(omarchy::gemv_balanced_qkv_part("Apple M4 (G16G B1)"));
   CHECK_FALSE(omarchy::gemv_balanced_qkv_part("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::gemv_balanced_qkv_part(""));
@@ -2208,6 +2211,7 @@ TEST_CASE("greedy prune default: the part rule and overrides") {
 
 TEST_CASE("greedy word over staged default: the part rule and overrides") {
   CHECK(omarchy::greedy_word_over_staged_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::greedy_word_over_staged_part("Apple M5 Max (G17C B1)"));
   CHECK(omarchy::greedy_word_over_staged_part("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M4 (G16G B1)"));
@@ -2672,6 +2676,7 @@ TEST_CASE("outgate fold default: G13 and G14C default off, env overrides") {
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 (G13G B1)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M1 Pro (G13S C0)"));
   CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M2 Max (G14C B1)"));
+  CHECK_FALSE(omarchy::outgate_fold_default_for_device("Apple M5 Max (G17C B1)"));
   CHECK(omarchy::outgate_fold_default_for_device(
       "llvmpipe (LLVM 19.1.7, 256 bits)"));
 
@@ -2681,6 +2686,33 @@ TEST_CASE("outgate fold default: G13 and G14C default off, env overrides") {
   setenv("MLX_OMARCHY_OUTGATE_FOLD", "1", 1);
   omarchy::env_note_eval();
   CHECK(omarchy::outgate_fold_enabled());
+}
+
+TEST_CASE("qmm residual norm 2560 allowlist includes G17C like G14C and honors override") {
+  struct EnvReset {
+    ~EnvReset() {
+      unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+      omarchy::env_note_eval();
+    }
+  } env_reset;
+
+  omarchy::CapabilityReport g17c_caps{};
+  g17c_caps.device_name = "Apple M5 Max (G17C B1)";
+  g17c_caps.unified_memory = true;
+  g17c_caps.subgroup_size = 32;
+  g17c_caps.subgroup_operations = VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+  g17c_caps.max_compute_work_group_invocations = 1024;
+  g17c_caps.max_compute_work_group_size[0] = 1024;
+
+  unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+  omarchy::env_note_eval();
+  CHECK(omarchy::qmm_residual_norm_enabled(g17c_caps, 2560, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(g17c_caps, 2048, false));
+  CHECK(omarchy::qmm_residual_norm_enabled(g17c_caps, 4096, false));
+
+  setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "0", 1);
+  omarchy::env_note_eval();
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(g17c_caps, 2560, false));
 }
 
 // FUSE-4 dual-write projection GEMV (MLX_OMARCHY_QMM_DUAL_OUT): member
@@ -3356,6 +3388,13 @@ TEST_CASE("sdpa online rope norm: bit-exact output and k_cache with two fewer di
   CHECK(omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 4096u, 256, true));
   CHECK(!omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 4097u, 256, true));
   CHECK(!omarchy::sdpa_online_rope_default("Apple M2 Max (G14C B1)", 512u, 256, false));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M5 Max (G17C B1)", 512u, 128, false));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M5 Max (G17C B1)", 1024u, 128, false));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M5 Max (G17C B1)", 1025u, 128, false));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M5 Max (G17C B1)", 512u, 256, true));
+  CHECK(omarchy::sdpa_online_rope_default("Apple M5 Max (G17C B1)", 4096u, 256, true));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M5 Max (G17C B1)", 4097u, 256, true));
+  CHECK(!omarchy::sdpa_online_rope_default("Apple M5 Max (G17C B1)", 512u, 256, false));
   CHECK(omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 512u, 128, false));
   CHECK(omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 2304u, 128, false));
   CHECK(!omarchy::sdpa_online_rope_default("Apple M1 (G13G B1)", 2305u, 128, false));
@@ -3367,11 +3406,16 @@ TEST_CASE("sdpa online rope norm: bit-exact output and k_cache with two fewer di
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 8u, 127u), 1u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 16u, 512u), 2u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M2 Max (G14C B1)", 16u, 63u), 1u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M5 Max (G17C B1)", 8u, 512u), 4u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M5 Max (G17C B1)", 8u, 127u), 1u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M5 Max (G17C B1)", 16u, 512u), 2u);
+  CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M5 Max (G17C B1)", 16u, 63u), 1u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 (G13G B1)", 8u, 512u), 2u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 (G13G B1)", 8u, 127u), 1u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 (G13G B1)", 16u, 512u), 1u);
   CHECK_EQ(omarchy::sdpa_online_rope_split_default("Apple M1 Max (G13C C0)", 8u, 512u), 1u);
   CHECK(omarchy::sdpa_outgate_default("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::sdpa_outgate_default("Apple M5 Max (G17C B1)"));
   CHECK(omarchy::sdpa_outgate_default("Apple M1 (G13G B1)"));
   CHECK(!omarchy::sdpa_outgate_default("Apple M1 Max (G13C C0)"));
   CHECK(!omarchy::sdpa_outgate_default("Apple M4 (G16G B1)"));

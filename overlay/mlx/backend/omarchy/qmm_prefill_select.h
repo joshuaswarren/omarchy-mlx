@@ -65,8 +65,8 @@ inline uint32_t apple_gpu_cores(const std::string& device_name) {
     return 20u;
   }
   if (device_name.find("G17C") != std::string::npos) {
-    // M5 Max: initial value matching G14C (same Max class) pending calibration on M5
-    return 38u;
+    // M5 Max (K114c / T6050): 40-core GPU (override MLX_OMARCHY_GPU_CORES).
+    return 40u;
   }
   return 0u;
 }
@@ -365,7 +365,8 @@ inline uint32_t coopmat_tile_rows(
     uint32_t m_groups_64 = (matrix_m + 63u) / 64u;
     const bool max_class_sg4 =
         device_name.find("G13C") != std::string::npos ||
-        device_name.find("G14C") != std::string::npos;
+        device_name.find("G14C") != std::string::npos ||
+        device_name.find("G17C") != std::string::npos;
     uint32_t r64_per_core = (per_core != 0u && max_class_sg4)
         ? std::min(per_core, 4u)
         : per_core;

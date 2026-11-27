@@ -141,6 +141,9 @@ int main() {
       select_qmm_2x8w2("Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false),
       "Apple G14C C0 selects 2x8w2");
   fails += check(
+      select_qmm_2x8w2("Apple M5 Max (G17C B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false),
+      "Apple G17C B1 selects 2x8w2");
+  fails += check(
       !select_qmm_2x8w2("Apple M2 (G14G B0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false),
       "Apple G14G does not select 2x8w2");
   fails += check(
@@ -170,6 +173,9 @@ int main() {
   fails += check(
       !select_qmm_wide_2x16("Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, true),
       "Apple G14C does not select 2x16 even when opt-in env is set");
+  fails += check(
+      !select_qmm_wide_2x16("Apple M5 Max (G17C B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, true),
+      "Apple G17C does not select 2x16 even when opt-in env is set");
 
   // 3b. Default QMM geometry selection pins bit-identical routes only:
   // 2x16kcont and 2x16kcs16 are excluded from every default path.
@@ -191,6 +197,7 @@ int main() {
         {"Apple G13G", "Apple M1 (G13G B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x8w2"},
         {"Apple G13C", "Apple M1 Max (G13C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x8w2"},
         {"Apple G14C", "Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x8w2"},
+        {"Apple G17C", "Apple M5 Max (G17C B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x8w2"},
         {"Apple G18G", "Apple M6 (G18G B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x16"},
         {"llvmpipe", "llvmpipe (LLVM 19.1.7, 256 bits)", VK_PHYSICAL_DEVICE_TYPE_CPU, rtx_caps, false, "2x16"},
         {"narrow wg", "Apple M6 (G18G B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, narrow_wg, false, "2x4"},
