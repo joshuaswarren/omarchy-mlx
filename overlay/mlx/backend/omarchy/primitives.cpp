@@ -17495,6 +17495,81 @@ void GreedyQuantizedArgmax::eval_gpu(
       encoder.add_temporary(a);
       return a;
     };
+    // Env-gated fused lm_head R2S32W2 + GreedyWord P1 (2-dispatch: skips
+    // logits DRAM round-trip and op=1 dispatch).
+    const char* fused_lm_env =
+        omarchy::env_str("MLX_OMARCHY_LM_GREEDY_FUSED");
+    if (fused_lm_env != nullptr && fused_lm_env[0] != '\0' &&
+        std::strcmp(fused_lm_env, "0") != 0 && subgroup_ready) {
+      const uint32_t w_off =
+          checked_item_offset(w_d, w_d.size(), tag, token);
+      const auto& caps = encoder.device().capabilities();
+      constexpr VkSubgroupFeatureFlags kGp1SgOps =
+          VK_SUBGROUP_FEATURE_BASIC_BIT |
+          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+          VK_SUBGROUP_FEATURE_VOTE_BIT |
+          VK_SUBGROUP_FEATURE_BALLOT_BIT;
+      if ((w_off % 2u == 0u) &&
+          (caps.subgroup_operations & kGp1SgOps) == kGp1SgOps &&
+          caps.max_compute_work_group_invocations >= 1024u &&
+          caps.max_compute_work_group_size[0] >= 1024u &&
+          encoder.device().compute().binding_limit() >= 11u) {
+        uint32_t num_wgs = (n + 63u) / 64u;
+        uint32_t cand_cap = n;
+        array wg_partials = scratch(float32, static_cast<int>(num_wgs) * 2);
+        array wg_partial_ext = scratch(uint32, static_cast<int>(num_wgs) * 2);
+        array candidates = scratch(uint32, static_cast<int>(cand_cap) * 2);
+        array gstate = scratch(uint32, 4);
+        encoder.fill_buffer(binding(gstate).buffer, 0u, gstate.nbytes(), 0);
+        omarchy::ComputeParams gp_params;
+        gp_params.matrix_n = n;
+        gp_params.matrix_k = static_cast<uint32_t>(x.shape(-1));
+        gp_params.output_size = cand_cap;
+        gp_params.lhs_offset = checked_item_offset(x_d, x_d.size(), tag, token);
+        gp_params.rhs_offset = w_off;
+        gp_params.aux_offset =
+            checked_item_offset(scales_d, scales_d.size(), tag, token);
+        gp_params.aux_size =
+            checked_item_offset(biases_d, biases_d.size(), tag, token);
+        std::array<omarchy::ComputeBinding, 8> p1_bindings{
+            binding(x_d),
+            binding(w_d),
+            binding(scales_d),
+            binding(biases_d),
+            binding(wg_partials),
+            binding(wg_partial_ext),
+            binding(candidates),
+            binding(gstate)};
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1,
+            p1_bindings,
+            gp_params,
+            num_wgs,
+            1u,
+            1u);
+        std::array<omarchy::ComputeBinding, 11> p2_bindings{
+            binding(x_d),
+            binding(w_d),
+            binding(scales_d),
+            binding(biases_d),
+            binding(wg_partials),
+            binding(wg_partial_ext),
+            binding(candidates),
+            binding(gstate),
+            binding(token),
+            binding(stats),
+            binding(gstate)};
+        gp_params.operation = 3u;
+        encoder.dispatch_compute(
+            omarchy::ComputeKernel::QmmVecGreedyWordBF16,
+            p2_bindings,
+            gp_params,
+            1u,
+            1u,
+            1u);
+        return;
+      }
+    }
     uint32_t chunks = (n + 4095u) / 4096u;
     // Candidate capacity equals the row count: candidates are emitted
     // per row, so the counter can never reach the cap and the 0xFFFFFFFF
@@ -18362,8 +18437,15 @@ void GdnConvDeltaUpdate::eval_gpu(
         binding(ba_fold->s_b),
         binding(ba_fold->b_b)};
     omarchy::commit_gdn_inproj_ba_fold(outputs.at(0));
+    const char* sg32_fast_env = omarchy::env_str("MLX_OMARCHY_GDN_SG32_FAST");
+    const bool sg32_fast = (sg32_fast_env != nullptr && sg32_fast_env[0] != '\0')
+        ? (std::strcmp(sg32_fast_env, "0") != 0)
+        : omarchy::gdn_conv_sg32_fast_default(device_name);
+    const auto ba_kernel = sg32_fast
+        ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32Fast
+        : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32;
     encoder.dispatch_compute(
-        omarchy::ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32,
+        ba_kernel,
         ba_bindings,
         params,
         static_cast<uint32_t>(B * Hv),
@@ -19507,9 +19589,19 @@ void ScaledDotProductAttention::eval_gpu(
                 binding(*og->gate),
                 binding(split_scratch),
                 encoder.resnorm_ticket_binding()};
+            const char* hd256_fast_env =
+                omarchy::env_str("MLX_OMARCHY_SDPA_HD256_FAST");
+            const bool hd256_fast =
+                hd256_fast_env != nullptr && hd256_fast_env[0] != '\0' &&
+                std::strcmp(hd256_fast_env, "0") != 0 &&
+                (rot_half & 1u) == 0u;
+            const auto split_kernel = hd256_fast
+                ? omarchy::ComputeKernel::
+                      SdpaDecodeOnlineRopeOutgateSg32BF16Hd256SplitFast
+                : omarchy::ComputeKernel::
+                      SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split;
             encoder.dispatch_compute(
-                omarchy::ComputeKernel::
-                    SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split,
+                split_kernel,
                 rb_og_split,
                 rp,
                 rp.matrix_m * split_k);
@@ -19518,8 +19610,18 @@ void ScaledDotProductAttention::eval_gpu(
                 !is_hd256 &&
                 omarchy::sdpa_g13c_fast_default_part(
                     encoder.device().capabilities().device_name);
+            const char* hd256_fast_env =
+                omarchy::env_str("MLX_OMARCHY_SDPA_HD256_FAST");
+            const bool hd256_fast = is_hd256 &&
+                hd256_fast_env != nullptr && hd256_fast_env[0] != '\0' &&
+                std::strcmp(hd256_fast_env, "0") != 0 &&
+                (rot_half & 1u) == 0u;
             const auto og_kernel = is_hd256
-                ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256
+                ? (hd256_fast
+                       ? omarchy::ComputeKernel::
+                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast
+                       : omarchy::ComputeKernel::
+                             SdpaDecodeOnlineRopeOutgateSg32BF16Hd256)
                 : (sdpa_g13c
                        ? omarchy::ComputeKernel::
                              SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C
@@ -19547,8 +19649,18 @@ void ScaledDotProductAttention::eval_gpu(
               !is_hd256 &&
               omarchy::sdpa_g13c_fast_default_part(
                   encoder.device().capabilities().device_name);
+          const char* hd256_fast_env =
+              omarchy::env_str("MLX_OMARCHY_SDPA_HD256_FAST");
+          const bool hd256_fast = is_hd256 &&
+              hd256_fast_env != nullptr && hd256_fast_env[0] != '\0' &&
+              std::strcmp(hd256_fast_env, "0") != 0 &&
+              (rot_half & 1u) == 0u;
           const auto kernel = is_hd256
-              ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256
+              ? (hd256_fast
+                     ? omarchy::ComputeKernel::
+                           SdpaDecodeOnlineRopeSg32BF16Hd256Fast
+                     : omarchy::ComputeKernel::
+                           SdpaDecodeOnlineRopeSg32BF16Hd256)
               : (sdpa_g13c
                      ? omarchy::ComputeKernel::
                            SdpaDecodeOnlineRopeSg32BF16Hd128G13C

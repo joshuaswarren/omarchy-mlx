@@ -795,6 +795,12 @@ struct PrologueFold {
   int64_t words_per_row = 0;
   int64_t groups_per_row = 0;
   int64_t nrows = 0;
+  // Optional fused downstream fast::RMSNorm (MLX_OMARCHY_PROLOGUE_NORM=1):
+  // writes both embed_out (quant) and norm_out in one 256-thread dispatch.
+  std::optional<array> norm_out;
+  std::optional<array> norm_weight;
+  float norm_eps = 0.0f;
+  bool norm_done = false;
   enum class State : uint8_t { pending, done, failed } state{State::pending};
 };
 
@@ -946,6 +952,7 @@ struct EagerFusionState {
   std::vector<RopeNormFold> rope_norms;
   TapeIndex<size_t> prologue_skip_roles;
   TapeIndex<size_t> prologue_fold_roles;
+  TapeIndex<size_t> prologue_norm_skip_roles;
   std::vector<PrologueFold> prologue_folds;
   TapeIndex<size_t> gdn_ba_skip_roles;
   TapeIndex<size_t> gdn_ba_roles;
@@ -964,6 +971,7 @@ struct EagerFusionState {
     rope_norm_roles.prepare(tape_size);
     prologue_skip_roles.prepare(tape_size);
     prologue_fold_roles.prepare(tape_size);
+    prologue_norm_skip_roles.prepare(tape_size);
     gdn_ba_skip_roles.prepare(tape_size);
     gdn_ba_roles.prepare(tape_size);
   }
@@ -3718,7 +3726,57 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         words_per_row,
         groups_per_row,
         nrows,
+        std::nullopt,
+        std::nullopt,
+        0.0f,
+        false,
         PrologueFold::State::pending});
+    // Optional fused embedding GatherDequantBF16 + FastRmsNormAppleBF16
+    // (MLX_OMARCHY_PROLOGUE_NORM=1): kills 1 serial CDM barrier + 1-WG gather.
+    if (omarchy::env_set("MLX_OMARCHY_PROLOGUE_NORM") &&
+        node.dtype() == bfloat16 && nrows == 1 && bits == 4 &&
+        group_size == 64 &&
+        (elems_per_row == 2048 || elems_per_row == 2560 ||
+         elems_per_row == 4096)) {
+      for (const auto& cand : tape) {
+        if (!is_op(&cand, typeid(fast::RMSNorm)) || cand.inputs().size() != 2 ||
+            claimed.count(cand.id()) || cand.dtype() != bfloat16 ||
+            cand.primitive().stream() != node.primitive().stream() ||
+            lookup(cand.inputs()[1]) != nullptr ||
+            cand.size() != node.size()) {
+          continue;
+        }
+        const array* cin = &cand.inputs()[0];
+        bool match_in = (cin->id() == node.id());
+        if (!match_in) {
+          const array* v = lookup(*cin);
+          if (v != nullptr &&
+              (is_op(v, typeid(Reshape)) || is_op(v, typeid(Squeeze)) ||
+               is_op(v, typeid(ExpandDims))) &&
+              v->inputs().size() == 1 && v->inputs()[0].id() == node.id()) {
+            match_in = true;
+          }
+        }
+        if (!match_in) {
+          continue;
+        }
+        const array& nw = cand.inputs()[1];
+        if (nw.dtype() != bfloat16 ||
+            (nw.size() != static_cast<size_t>(elems_per_row) &&
+             nw.size() != 1u)) {
+          continue;
+        }
+        const float eps =
+            static_cast<const fast::RMSNorm&>(cand.primitive()).state().second;
+        auto& pf = state->prologue_folds[index];
+        pf.norm_out = cand;
+        pf.norm_weight = nw;
+        pf.norm_eps = eps;
+        state->prologue_norm_skip_roles.put_if_absent(cand.id(), index);
+        claimed.put_if_absent(cand.id(), 1);
+        break;
+      }
+    }
   }
   if (fold_timing) {
     const double plan_us =
@@ -4535,7 +4593,7 @@ bool dispatch_rope_norm_fold(
 // dequantize run normally.
 bool dispatch_prologue_fold(
     array& node,
-    const PrologueFold& fold,
+    PrologueFold& fold,
     const Stream& stream) {
   const array& ids = fold.ids;
   const array& w = fold.w;
@@ -4573,6 +4631,57 @@ bool dispatch_prologue_fold(
   encoder.add_temporary(w);
   encoder.add_temporary(scales);
   encoder.add_temporary(biases);
+  // Fused GatherDequantBF16 + FastRmsNormAppleBF16 path (1 WG, 256 threads).
+  if (fold.norm_out && fold.norm_weight &&
+      fold.norm_weight->data_shared_ptr() != nullptr &&
+      fold.norm_weight->flags().row_contiguous &&
+      fold.norm_weight->offset() % fold.norm_weight->itemsize() == 0 &&
+      fold.norm_out->size() == node.size()) {
+    const auto& caps = encoder.device().capabilities();
+    constexpr VkSubgroupFeatureFlags kPnSgOps =
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+    if (caps.subgroup_size == 32u &&
+        (caps.subgroup_operations & kPnSgOps) == kPnSgOps &&
+        caps.max_compute_work_group_invocations >= 256u &&
+        caps.max_compute_work_group_size[0] >= 256u) {
+      array& norm_out = *fold.norm_out;
+      const array& nw = *fold.norm_weight;
+      norm_out.set_data(allocator().malloc(norm_out.nbytes()));
+      encoder.add_temporary(nw);
+      ComputeParams params;
+      params.count = static_cast<uint32_t>(fold.words_per_row);
+      params.operation = static_cast<uint32_t>(fold.bits);
+      params.lhs_size = static_cast<uint32_t>(nw.size());
+      params.rhs_size = static_cast<uint32_t>(nw.offset() / nw.itemsize());
+      params.reduce_size = static_cast<uint32_t>(node.size());
+      params.output_size = static_cast<uint32_t>(fold.group_size);
+      params.lhs_offset = static_cast<uint32_t>(w.offset() / w.itemsize());
+      params.rhs_offset =
+          static_cast<uint32_t>(scales.offset() / scales.itemsize());
+      params.output_offset = 0u;
+      params.aux_size = 0u;
+      params.aux_offset =
+          static_cast<uint32_t>(biases.offset() / biases.itemsize());
+      params.matrix_m = static_cast<uint32_t>(w.shape(0));
+      params.matrix_n = static_cast<uint32_t>(fold.words_per_row);
+      params.matrix_k = static_cast<uint32_t>(fold.groups_per_row);
+      params.flags = ids.dtype() == uint32 ? 1u : 0u;
+      params.alpha = fold.norm_eps;
+      params.dims = static_cast<uint32_t>(ids.offset() / ids.itemsize());
+      std::array<ComputeBinding, 7> bindings{
+          binding(ids),
+          binding(w),
+          binding(scales),
+          binding(biases),
+          binding(node),
+          binding(nw),
+          binding(norm_out)};
+      encoder.dispatch_compute(
+          ComputeKernel::GatherDequantNormBF16, bindings, params, 1u, 1u, 1u);
+      fold.norm_done = true;
+      return true;
+    }
+  }
   ComputeParams params;
   params.count = static_cast<uint32_t>(fold.nrows * fold.words_per_row);
   params.operation = static_cast<uint32_t>(fold.bits);
@@ -4645,6 +4754,10 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (auto skip = eager_state->sdpa_outgate_skip_roles.find(node.id());
       skip != eager_state->sdpa_outgate_skip_roles.end()) {
     return eager_state->sdpa_outgate_folds[skip->second].fired;
+  }
+  if (auto skip = eager_state->prologue_norm_skip_roles.find(node.id());
+      skip != nullptr) {
+    return eager_state->prologue_folds[*skip].norm_done;
   }
   if (auto skip = eager_state->prologue_skip_roles.find(node.id());
       skip != nullptr) {

@@ -1427,6 +1427,14 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast,
   QmmVecQ4SwigluBF16R1S4W2Fast,
   QmmVecQ4ResNormVec4BF16R2S32W2Fast,
+  // Track J: combined BA fold + Sg32Fast, HD=256 #1059-style fast SDPA,
+  // fused lm_head R2S32W2 + GreedyWord P1, and fused GatherDequant + RmsNorm.
+  GatedDeltaDecodeConvNormBaBF16Sg32Fast,
+  SdpaDecodeOnlineRopeSg32BF16Hd256Fast,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256SplitFast,
+  QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1,
+  GatherDequantNormBF16,
   Count,
 };
 
