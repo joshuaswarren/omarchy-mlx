@@ -11782,24 +11782,54 @@ bool dispatch_quantized_gemv_group(
           1u,
           1u);
     } else {
-      std::array<ComputeBinding, 10> rn_bindings{
-          binding(x),
-          binding(members[0].node.inputs()[1]),
-          binding(members[0].node.inputs()[2]),
-          binding(members[0].node.inputs()[3]),
-          binding(members[0].node),
-          binding(*members[0].addend),
-          binding(*members[0].epilogue),
-          binding(res_norm->weight),
-          binding(res_norm->out),
-          encoder.resnorm_ticket_binding()};
-      encoder.dispatch_compute(
-          geom.resnorm,
-          rn_bindings,
-          params,
-          total_groups,
-          1u,
-          1u);
+      const bool resnorm_vec =
+          geom.resnorm == ComputeKernel::QmmVecQ4ResNormBF16R2S8W2 &&
+          encoder.device().compute().binding_limit() >= 12u &&
+          (params.shape[0] == 2048u || params.shape[0] == 2560u ||
+           params.shape[0] == 4096u) &&
+          omarchy::resnorm_vec_default_part(
+              encoder.device().capabilities().device_name);
+      if (resnorm_vec) {
+        std::array<ComputeBinding, 12> rn_bindings{
+            binding(x),
+            binding(members[0].node.inputs()[1]),
+            binding(members[0].node.inputs()[2]),
+            binding(members[0].node.inputs()[3]),
+            binding(members[0].node),
+            binding(*members[0].addend),
+            binding(*members[0].epilogue),
+            binding(res_norm->weight),
+            binding(res_norm->out),
+            encoder.resnorm_ticket_binding(),
+            binding(*members[0].epilogue),
+            binding(res_norm->out)};
+        encoder.dispatch_compute(
+            ComputeKernel::QmmVecQ4ResNormBF16R2S8W2Vec,
+            rn_bindings,
+            params,
+            total_groups,
+            1u,
+            1u);
+      } else {
+        std::array<ComputeBinding, 10> rn_bindings{
+            binding(x),
+            binding(members[0].node.inputs()[1]),
+            binding(members[0].node.inputs()[2]),
+            binding(members[0].node.inputs()[3]),
+            binding(members[0].node),
+            binding(*members[0].addend),
+            binding(*members[0].epilogue),
+            binding(res_norm->weight),
+            binding(res_norm->out),
+            encoder.resnorm_ticket_binding()};
+        encoder.dispatch_compute(
+            geom.resnorm,
+            rn_bindings,
+            params,
+            total_groups,
+            1u,
+            1u);
+      }
     }
     if (res_norm_done) {
       *res_norm_done = true;

@@ -1385,6 +1385,11 @@ enum class ComputeKernel : uint16_t {
   // kernel ids stable).
   QmmVecQ4WordSubgroupBF16R2S4W2,
   QmmVecQ4SwigluBF16R1S4W2,
+  // Cooperative 128-bit uvec4 coherent-L2 -> shmem load + packed 32-bit
+  // output store in the last-WG R2S8W2 ResNorm epilogue (zero extra QMV regs,
+  // bit-identical to QmmVecQ4ResNormBF16R2S8W2). Appended to keep profile ids
+  // stable.
+  QmmVecQ4ResNormBF16R2S8W2Vec,
   Count,
 };
 

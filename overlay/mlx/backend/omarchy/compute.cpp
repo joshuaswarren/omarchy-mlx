@@ -333,6 +333,7 @@
 #include "qmm_vec_q4_resnorm_bf16_r2s8w2.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s16w2.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2.h"
+#include "qmm_vec_q4_resnorm_bf16_r2s8w2_vec.h"
 #include "qmm_vec_q4_outgate_resnorm_bf16.h"
 #include "qmm_vec_q4_outgate_resnorm_bf16_r2s8w2.h"
 #include "qmm_vec_q4_multi_token4_subgroup_bf16.h"
@@ -2488,6 +2489,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::QmmVecQ4ResNormBF16R2S8W2:
       return {
           qmm_vec_q4_resnorm_bf16_r2s8w2, qmm_vec_q4_resnorm_bf16_r2s8w2_size};
+    case ComputeKernel::QmmVecQ4ResNormBF16R2S8W2Vec:
+      return {
+          qmm_vec_q4_resnorm_bf16_r2s8w2_vec,
+          qmm_vec_q4_resnorm_bf16_r2s8w2_vec_size};
     case ComputeKernel::QmmVecQ4OutgateResNormBF16R2S8W2:
       return {
           qmm_vec_q4_outgate_resnorm_bf16_r2s8w2,
