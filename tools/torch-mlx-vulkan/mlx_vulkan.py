@@ -338,7 +338,7 @@ def _refused_nodes(nodes, strided):
                 stack.append(a)
     return refused
 
-def _slice(a, dim, start, end, step=1):
+def _slice(a, dim=0, start=None, end=None, step=1):
     dim = dim % a.ndim
     n = a.shape[dim]
     # aten clamps out-of-range bounds; mlx requires int32. None = open bound.
@@ -1828,6 +1828,26 @@ def _gn_native(a, w, b, N, C, HxW, group, eps):
     return out, mu.reshape(N, group), rstd.reshape(N, group)
 
 
+def _xlogy(a, b):
+    # aten.xlogy(self, other): NaN in either operand -> NaN first (the aten
+    # kernel checks isnan before the zero rule), then self == 0 -> 0, which
+    # also masks the NaN that self * log(other) produces for other <= 0.
+    # The wheel has no fused xlogy; build the mask with where.
+    a, b = _mx(a), _mx(b)
+    r = a * mx.log(b)
+    nan = mx.array(float("nan"), dtype=r.dtype)
+    return _ar(mx.where(mx.equal(a, 0), mx.where(mx.isnan(b), nan, mx.zeros_like(r)), r))
+
+
+def _xlog1py(a, b):
+    # aten.xlog1py(self, other): self * log1p(other) with the same NaN-first,
+    # then self==0 mask (KL-divergence / custom-loss graphs use both forms).
+    a, b = _mx(a), _mx(b)
+    r = a * mx.log1p(b)
+    nan = mx.array(float("nan"), dtype=r.dtype)
+    return _ar(mx.where(mx.equal(a, 0), mx.where(mx.isnan(b), nan, mx.zeros_like(r)), r))
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -1966,6 +1986,9 @@ _FUNC_SPECS = {
     "gt": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "lt": lambda a, b: mx.less(_mx(a), _mx(b)),
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
+    "xlogy": _xlogy, "xlog1py": _xlog1py,
+    # aten registers torch.special.xlog1py as special_xlog1py
+    "special_xlog1py": _xlog1py,
     "sinh": _sinh, "cosh": _cosh,
     "asinh": _asinh, "acosh": _acosh, "atanh": mx.atanh,
     "acos": mx.acos, "asin": mx.asin, "atan": mx.atan, "atan2": _atan2,
@@ -2161,7 +2184,7 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "threshold_backward", "native_batch_norm_backward",
                  "Float",
                  "add", "sub", "mul", "div", "truediv", "true_divide",
-                 "remainder", "relu", "relu_"}
+                 "remainder", "xlogy", "special_xlog1py", "relu", "relu_"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
