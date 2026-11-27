@@ -1505,15 +1505,21 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // consumer_of[input] = last tape node reading input; paired with the
   // uses count it is the single-consumer map without a second tape pass.
   static thread_local TapeIndex<const array*> consumer_of;
+  static thread_local TapeIndex<std::array<std::uintptr_t, 2>> first_two_readers;
   static thread_local TapeIndex<char> claimed;
   nodes.prepare(tape.size());
   uses.prepare(tape.size() * 2);
   consumer_of.prepare(tape.size() * 2);
+  first_two_readers.prepare(tape.size() * 2);
   claimed.prepare(tape.size());
   for (const auto& node : tape) {
     nodes.put_if_absent(node.id(), &node);
     for (const auto& input : node.inputs()) {
-      ++uses[input.id()];
+      size_t& u = uses[input.id()];
+      if (u < 2) {
+        first_two_readers[input.id()][u] = node.id();
+      }
+      ++u;
       consumer_of[input.id()] = &node;
     }
   }
@@ -1958,27 +1964,30 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         state->gemv_groups.size());
   }
   if (!swiglu_plans.empty()) {
-    // Readers of a leaf, collected on demand only for the ~2 ids per
-    // plan: a whole-tape consumer map costs a node+vector allocation per
-    // distinct input every eval to answer a handful of checks.
-    auto only_readers = [&](std::uintptr_t leaf,
-                            std::vector<std::uintptr_t> want) {
+    // O(1) reader verification using first_two_readers recorded during the
+    // initial tape pass (eliminates the prior O(G * P * N) full-tape scans).
+    auto only_one_reader = [&](std::uintptr_t leaf, std::uintptr_t want) {
       auto* count = uses.find(leaf);
-      if (count == nullptr || *count != want.size()) {
+      if (count == nullptr || *count != 1) {
         return false;
       }
-      std::vector<std::uintptr_t> got;
-      for (const auto& node : tape) {
-        for (const auto& input : node.inputs()) {
-          if (input.id() == leaf) {
-            got.push_back(node.id());
-          }
-        }
-      }
-      std::sort(got.begin(), got.end());
-      std::sort(want.begin(), want.end());
-      return got == want;
+      auto* readers = first_two_readers.find(leaf);
+      return readers != nullptr && (*readers)[0] == want;
     };
+    auto only_two_readers =
+        [&](std::uintptr_t leaf, std::uintptr_t w0, std::uintptr_t w1) {
+          auto* count = uses.find(leaf);
+          if (count == nullptr || *count != 2) {
+            return false;
+          }
+          auto* readers = first_two_readers.find(leaf);
+          if (readers == nullptr) {
+            return false;
+          }
+          const std::uintptr_t r0 = (*readers)[0];
+          const std::uintptr_t r1 = (*readers)[1];
+          return (r0 == w0 && r1 == w1) || (r0 == w1 && r1 == w0);
+        };
     const bool swiglu_trace =
         std::getenv("MLX_OMARCHY_SWIGLU_TRACE") != nullptr;
     for (size_t gi = 0; gi < state->gemv_groups.size(); ++gi) {
@@ -2018,10 +2027,13 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         // plain multi-weight path.
         bool straight = plan.gate_id == gate_id && plan.up_id == up_id;
         bool swapped = plan.gate_id == up_id && plan.up_id == gate_id;
-        bool gate_ok =
-            only_readers(plan.gate_id, {plan.sigmoid_id, plan.inner_id});
-        bool up_ok = only_readers(plan.up_id, {plan.out.id()});
-        if (swiglu_trace && (straight || swapped)) {
+        if (!straight && !swapped) {
+          continue;
+        }
+        bool gate_ok = only_two_readers(
+            plan.gate_id, plan.sigmoid_id, plan.inner_id);
+        bool up_ok = only_one_reader(plan.up_id, plan.out.id());
+        if (swiglu_trace) {
           std::fprintf(
               stderr,
               "[swiglu-attach] group %zu id-match straight=%d swapped=%d "
@@ -2032,7 +2044,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
               static_cast<int>(gate_ok),
               static_cast<int>(up_ok));
         }
-        if ((!straight && !swapped) || !gate_ok || !up_ok) {
+        if (!gate_ok || !up_ok) {
           continue;
         }
         if (swapped) {
