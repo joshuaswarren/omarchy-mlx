@@ -865,6 +865,11 @@ struct SdpaTransposeFold {
   bool fired{false};
 };
 
+struct SdpaOutgateFold {
+  SdpaOutgatePlan plan;
+  bool fired{false};
+};
+
 struct SdpaOnlineRopePlan {
   array q_rope;
   array k_rope;
@@ -907,6 +912,9 @@ struct EagerFusionState {
   // attention out array id -> fold index; reshape/view ids -> fold index
   std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_plans;
   std::unordered_map<std::uintptr_t, size_t> sdpa_transpose_skip_roles;
+  std::vector<SdpaOutgateFold> sdpa_outgate_folds;
+  std::unordered_map<std::uintptr_t, size_t> sdpa_outgate_plans;
+  std::unordered_map<std::uintptr_t, size_t> sdpa_outgate_skip_roles;
   std::vector<SdpaOnlineRopePlan> sdpa_online_rope_plans;
   std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_skip_roles;
   std::unordered_map<std::uintptr_t, size_t> sdpa_online_rope_su_roles;
@@ -959,6 +967,9 @@ struct EagerFusionState {
     sdpa_transpose_folds.clear();
     sdpa_transpose_plans.clear();
     sdpa_transpose_skip_roles.clear();
+    sdpa_outgate_folds.clear();
+    sdpa_outgate_plans.clear();
+    sdpa_outgate_skip_roles.clear();
     sdpa_online_rope_plans.clear();
     sdpa_online_rope_skip_roles.clear();
     sdpa_online_rope_su_roles.clear();
@@ -1607,6 +1618,10 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
   // group actually adopts the plan; otherwise every node evaluates
   // ordinarily.
   std::unordered_map<std::uintptr_t, OutgatePlan> outgate_plans;
+  const char* outgate_raw = omarchy::env_str("MLX_OMARCHY_OUTGATE_FOLD");
+  const bool outgate_explicit_on =
+      outgate_raw != nullptr && outgate_raw[0] != '\0' &&
+      !(outgate_raw[0] == '0' && outgate_raw[1] == '\0');
   const bool outgate_on = outgate_fold_enabled();
   for (const auto& tail : tape) {
     if (!outgate_on || !is_op(&tail, typeid(Multiply)) ||
@@ -1614,6 +1629,12 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         claimed.count(tail.id()) || uses[tail.id()] != 1 ||
         tail.dtype() == float32) {
       continue;
+    }
+    if (!outgate_explicit_on) {
+      if (const Device* td = stream_device(tail);
+          td != nullptr && sdpa_outgate_enabled(td->capabilities())) {
+        continue;
+      }
     }
     const array* left = lookup(tail.inputs()[0]);
     const array* right = lookup(tail.inputs()[1]);
@@ -2519,6 +2540,191 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       }
     }
   }
+  // Decode SDPA out-gate epilogue fold (MLX_OMARCHY_SDPA_OUTGATE=1):
+  // matches tail = Multiply(Reshape(Transpose(SDPA)), Sigmoid(gate)) for
+  // single-token (B=1, q_len=1, HD=128|256) bf16 attention. When gate is
+  // itself a post-SDPA Reshape of a pre-SDPA 4D (1,1,H,D) strided split view
+  // (Qwen3.5/Qwen3.8 q_proj split), skips the gate CopyGeneral as well as
+  // Sigmoid and Multiply, writing tail directly from SDPA.
+  if (fused_chain_enabled()) {
+    auto use_count = [&](const array& value) {
+      auto* it = uses.find(value.id());
+      return it == nullptr ? size_t{0} : *it;
+    };
+    auto contiguous_strides = [](const Shape& shape) {
+      Strides strides(shape.size(), 0);
+      strides.back() = 1;
+      for (int ax = static_cast<int>(shape.size()) - 2; ax >= 0; --ax) {
+        strides[ax] = strides[ax + 1] * shape[ax + 1];
+      }
+      return strides;
+    };
+    // Note: eval_impl pops from the back of tape (higher index runs earlier).
+    std::unordered_map<std::uintptr_t, size_t> tape_pos;
+    tape_pos.reserve(tape.size());
+    for (size_t ti = 0; ti < tape.size(); ++ti) {
+      tape_pos.emplace(tape[ti].id(), ti);
+    }
+    for (const auto& tail : tape) {
+      if (!is_op(&tail, typeid(Multiply)) || tail.inputs().size() != 2 ||
+          tail.dtype() != bfloat16 || claimed.count(tail.id()) ||
+          tail.ndim() != 3 || tail.shape(0) != 1 || tail.shape(1) != 1) {
+        continue;
+      }
+      const Device* tail_dev = stream_device(tail);
+      if (tail_dev == nullptr ||
+          !sdpa_outgate_enabled(tail_dev->capabilities())) {
+        continue;
+      }
+      const array* left = lookup(tail.inputs()[0]);
+      const array* right = lookup(tail.inputs()[1]);
+      const array* sigmoid = is_op(left, typeid(Sigmoid)) ? left
+          : (is_op(right, typeid(Sigmoid)) ? right : nullptr);
+      if (sigmoid == nullptr || sigmoid->inputs().size() != 1 ||
+          use_count(*sigmoid) != 1 || claimed.count(sigmoid->id()) ||
+          sigmoid->dtype() != bfloat16 ||
+          sigmoid->primitive().stream() != tail.primitive().stream()) {
+        continue;
+      }
+      const array& out_in =
+          sigmoid == left ? tail.inputs()[1] : tail.inputs()[0];
+      const array& gate_flat = sigmoid->inputs()[0];
+      if (out_in.id() == gate_flat.id() || out_in.dtype() != bfloat16 ||
+          gate_flat.dtype() != bfloat16 || out_in.shape() != tail.shape() ||
+          gate_flat.shape() != tail.shape()) {
+        continue;
+      }
+      const array* out_view = lookup(out_in);
+      if (out_view == nullptr || !is_op(out_view, typeid(Reshape)) ||
+          use_count(*out_view) != 1 || claimed.count(out_view->id()) ||
+          out_view->inputs().empty()) {
+        continue;
+      }
+      std::vector<const array*> out_chain;
+      const array* cur = &out_view->inputs()[0];
+      bool ok = true;
+      while (is_op(cur, typeid(Transpose)) || is_op(cur, typeid(Reshape))) {
+        if (use_count(*cur) != 1 || claimed.count(cur->id())) {
+          ok = false;
+          break;
+        }
+        out_chain.push_back(cur);
+        cur = &cur->inputs()[0];
+      }
+      if (!ok || out_chain.empty() ||
+          !is_op(cur, typeid(fast::ScaledDotProductAttention)) ||
+          cur->dtype() != bfloat16 || cur->ndim() != 4 ||
+          cur->shape(0) != 1 || cur->shape(2) != 1 ||
+          (cur->shape(3) != 128 && cur->shape(3) != 256) ||
+          cur->inputs().size() != 3 || use_count(*cur) != 1 ||
+          claimed.count(cur->id()) ||
+          cur->primitive().stream() != tail.primitive().stream()) {
+        continue;
+      }
+      const array& sdpa = *cur;
+      const int heads = sdpa.shape(1);
+      const int head_dim = sdpa.shape(3);
+      if (tail.shape() != Shape{1, 1, heads * head_dim}) {
+        continue;
+      }
+      // Verify the view chain from contiguous (1,H,1,D) maps head-major
+      // (head * D + d) contiguously into (1,1,H*D).
+      Shape map_shape(sdpa.shape());
+      Strides map_strides = contiguous_strides(map_shape);
+      bool composes = true;
+      for (auto it = out_chain.rbegin(); it != out_chain.rend(); ++it) {
+        const array& view = **it;
+        if (is_op(&view, typeid(Transpose))) {
+          const auto& axes =
+              static_cast<const Transpose&>(view.primitive()).state();
+          if (axes.size() != map_shape.size()) {
+            composes = false;
+            break;
+          }
+          Shape next_shape(map_shape.size());
+          Strides next_strides(map_shape.size());
+          for (size_t ax = 0; ax < axes.size(); ++ax) {
+            if (axes[ax] < 0 ||
+                static_cast<size_t>(axes[ax]) >= map_shape.size()) {
+              composes = false;
+              break;
+            }
+            next_shape[ax] = map_shape[axes[ax]];
+            next_strides[ax] = map_strides[axes[ax]];
+          }
+          if (!composes) {
+            break;
+          }
+          map_shape = std::move(next_shape);
+          map_strides = std::move(next_strides);
+        } else {
+          if (map_strides != contiguous_strides(map_shape)) {
+            composes = false;
+            break;
+          }
+          map_shape = view.shape();
+          map_strides = contiguous_strides(map_shape);
+        }
+      }
+      if (!composes || map_shape != Shape{1, 1, heads, head_dim} ||
+          map_strides[2] != static_cast<ptrdiff_t>(head_dim) ||
+          map_strides[3] != 1) {
+        continue;
+      }
+      // Higher tape_pos runs earlier: sdpa must run before sigmoid and tail.
+      const size_t sdpa_pos = tape_pos[sdpa.id()];
+      if (tape_pos[sigmoid->id()] >= sdpa_pos ||
+          tape_pos[tail.id()] >= sdpa_pos) {
+        continue;
+      }
+      const array* gate_flat_node = lookup(gate_flat);
+      const array* skip_gate_reshape = nullptr;
+      std::optional<array> gate_src;
+      if (gate_flat_node != nullptr &&
+          is_op(gate_flat_node, typeid(Reshape)) &&
+          use_count(*gate_flat_node) == 1 &&
+          !claimed.count(gate_flat_node->id()) &&
+          gate_flat_node->inputs().size() == 1 &&
+          gate_flat_node->primitive().stream() == tail.primitive().stream() &&
+          tape_pos[gate_flat_node->id()] < sdpa_pos) {
+        const array& gsrc = gate_flat_node->inputs()[0];
+        auto gsrc_pos = tape_pos.find(gsrc.id());
+        if (gsrc.dtype() == bfloat16 && gsrc.ndim() == 4 &&
+            gsrc.shape() == Shape{1, 1, heads, head_dim} &&
+            (gsrc_pos == tape_pos.end() || gsrc_pos->second > sdpa_pos)) {
+          gate_src = gsrc;
+          skip_gate_reshape = gate_flat_node;
+        }
+      }
+      if (!gate_src.has_value()) {
+        auto gf_pos = tape_pos.find(gate_flat.id());
+        if (gf_pos == tape_pos.end() || gf_pos->second > sdpa_pos) {
+          gate_src = gate_flat;
+        } else {
+          continue;
+        }
+      }
+      const size_t index = state->sdpa_outgate_folds.size();
+      state->sdpa_outgate_folds.push_back(
+          SdpaOutgateFold{SdpaOutgatePlan{tail, *gate_src}, false});
+      state->sdpa_outgate_plans.emplace(sdpa.id(), index);
+      claimed.put_if_absent(sdpa.id(), 1);
+      for (const array* view : out_chain) {
+        state->sdpa_outgate_skip_roles.emplace(view->id(), index);
+        claimed.put_if_absent(view->id(), 1);
+      }
+      state->sdpa_outgate_skip_roles.emplace(out_view->id(), index);
+      claimed.put_if_absent(out_view->id(), 1);
+      if (skip_gate_reshape != nullptr) {
+        state->sdpa_outgate_skip_roles.emplace(skip_gate_reshape->id(), index);
+        claimed.put_if_absent(skip_gate_reshape->id(), 1);
+      }
+      state->sdpa_outgate_skip_roles.emplace(sigmoid->id(), index);
+      claimed.put_if_absent(sigmoid->id(), 1);
+      state->sdpa_outgate_skip_roles.emplace(tail.id(), index);
+      claimed.put_if_absent(tail.id(), 1);
+    }
+  }
   // Decode-rows SDPA out-transpose fold: a materializing Reshape whose
   // single-consumer view chain bottoms out at a bf16
   // ScaledDotProductAttention is exactly the (1,H,S,D) -> (1,S,H*D)
@@ -2821,34 +3027,42 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     }
   }
   // Fused Q/K RMSNorm+RoPE+KV-cache-write+online-softmax BF16 decode SDPA
-  // (HD=128, batch 1, q_len 1; MLX_OMARCHY_SDPA_ONLINE_ROPE=1). Collapses
-  // FastRopeNormBF16(Q) + FastRopeNormBF16(K -> k_cache) + SdpaDecodeOnline
-  // into a single 1024-thread dispatch per attention layer.
+  // (HD=128 or HD=256, batch 1, q_len 1; MLX_OMARCHY_SDPA_ONLINE_ROPE=1).
+  // Collapses FastRopeNormBF16(Q) + FastRopeNormBF16(K -> k_cache) +
+  // SdpaDecodeOnline (plus optional SdpaOutgate epilogue) into a single
+  // 1024-thread dispatch per attention layer.
   if (fused_chain_enabled()) {
     for (const array& sdpa : tape) {
       if (!is_op(&sdpa, typeid(fast::ScaledDotProductAttention)) ||
           sdpa.dtype() != bfloat16 || sdpa.ndim() != 4 || sdpa.shape(0) != 1 ||
-          sdpa.shape(2) != 1 || sdpa.shape(3) != 128 ||
-          sdpa.inputs().size() != 3 || claimed.count(sdpa.id())) {
+          sdpa.shape(2) != 1 ||
+          (sdpa.shape(3) != 128 && sdpa.shape(3) != 256) ||
+          sdpa.inputs().size() != 3 ||
+          (claimed.count(sdpa.id()) &&
+           !state->sdpa_outgate_plans.count(sdpa.id()))) {
         continue;
       }
+      const int head_dim = sdpa.shape(3);
       const array* q_rope = lookup(sdpa.inputs()[0]);
       const array* k_in = lookup(sdpa.inputs()[1]);
       const array& v_in = sdpa.inputs()[2];
       if (q_rope == nullptr || k_in == nullptr ||
           q_rope->dtype() != bfloat16 || k_in->dtype() != bfloat16 ||
           v_in.dtype() != bfloat16 || k_in->ndim() != 4 || v_in.ndim() != 4 ||
-          k_in->shape(0) != 1 || k_in->shape(3) != 128 ||
-          v_in.shape(0) != 1 || v_in.shape(3) != 128 ||
+          k_in->shape(0) != 1 || k_in->shape(3) != head_dim ||
+          v_in.shape(0) != 1 || v_in.shape(3) != head_dim ||
           k_in->shape(2) <= 0 || k_in->shape(1) <= 0 ||
           sdpa.shape(1) % k_in->shape(1) != 0) {
         continue;
       }
       const Device* sdpa_dev = stream_device(sdpa);
+      const bool has_outgate = state->sdpa_outgate_plans.count(sdpa.id()) != 0;
       if (sdpa_dev == nullptr ||
           !sdpa_online_rope_enabled(
               sdpa_dev->capabilities(),
-              static_cast<uint32_t>(k_in->shape(2)))) {
+              static_cast<uint32_t>(k_in->shape(2)),
+              head_dim,
+              has_outgate)) {
         continue;
       }
       if (!is_op(q_rope, typeid(fast::RoPE)) || uses[q_rope->id()] != 1 ||
@@ -2897,11 +3111,17 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       const auto& kr = static_cast<const fast::RoPE&>(k_rope->primitive());
       const auto& qst = qr.state();
       const auto& kst = kr.state();
-      // Forward, non-traditional, dims == 128, matching base/scale, shared
-      // scalar offset (same node or equal host-constant int32 scalars).
+      // Forward, non-traditional, matching rotary dims (128 for HD=128; any
+      // even 2..256 for HD=256), matching base/scale, shared scalar offset.
+      const int rope_dims = std::get<1>(qst);
+      const bool dims_ok = rope_dims == std::get<1>(kst) &&
+          (head_dim == 128
+               ? rope_dims == 128
+               : (rope_dims > 0 && (rope_dims % 2) == 0 &&
+                  rope_dims <= head_dim));
       if (!std::get<5>(qst) || !std::get<5>(kst) || std::get<2>(qst) ||
-          std::get<2>(kst) || std::get<1>(qst) != 128 ||
-          std::get<1>(kst) != 128 || std::get<3>(qst) != std::get<3>(kst) ||
+          std::get<2>(kst) || !dims_ok ||
+          std::get<3>(qst) != std::get<3>(kst) ||
           std::get<4>(qst) != std::get<4>(kst) ||
           q_rope->inputs().size() < 2 || k_rope->inputs().size() < 2 ||
           q_rope->inputs()[1].size() != 1 ||
@@ -2935,8 +3155,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
         if (qr.norm_eps() != kr.norm_eps() ||
             q_rope->inputs()[2].dtype() != bfloat16 ||
             k_rope->inputs()[2].dtype() != bfloat16 ||
-            q_rope->inputs()[2].size() != 128 ||
-            k_rope->inputs()[2].size() != 128) {
+            q_rope->inputs()[2].size() != static_cast<size_t>(head_dim) ||
+            k_rope->inputs()[2].size() != static_cast<size_t>(head_dim)) {
           continue;
         }
         has_norm = true;
@@ -2946,7 +3166,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
       } else if (q_folded_norm && k_folded_norm) {
         const auto& qf = state->rope_norms[*q_fold_ptr];
         const auto& kf = state->rope_norms[*k_fold_ptr];
-        if (qf.eps != kf.eps || qf.w.size() != 128 || kf.w.size() != 128) {
+        if (qf.eps != kf.eps ||
+            qf.w.size() != static_cast<size_t>(head_dim) ||
+            kf.w.size() != static_cast<size_t>(head_dim)) {
           continue;
         }
         has_norm = true;
@@ -2994,7 +3216,7 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           eps,
           std::get<3>(qst),
           std::get<4>(qst),
-          128,
+          rope_dims,
           SdpaOnlineRopeCtx{},
           false,
           false,
@@ -3552,31 +3774,37 @@ bool rope_norm_pair_enabled() {
       std::strcmp(env, "0") != 0;
 }
 
-bool sdpa_online_rope_enabled(const CapabilityReport& caps, uint32_t k_len) {
-  if (!fused_chain_enabled()) {
+bool sdpa_online_rope_enabled(
+    const CapabilityReport& caps,
+    uint32_t k_len,
+    int head_dim,
+    bool has_outgate) {
+  if (!fused_chain_enabled() || (head_dim != 128 && head_dim != 256)) {
     return false;
   }
+  const uint32_t min_shared = head_dim == 256 ? 17152u : 16896u;
+  constexpr VkSubgroupFeatureFlags kOnlineRopeSubgroupFeatures =
+      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+  const bool device_ok = caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 1024u &&
+      caps.max_compute_work_group_size[0] >= 1024u &&
+      caps.max_compute_shared_memory_size >= min_shared &&
+      (caps.subgroup_operations & kOnlineRopeSubgroupFeatures) ==
+          kOnlineRopeSubgroupFeatures;
   const char* env = omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE_ROPE");
   if (env != nullptr && env[0] != '\0') {
-    return std::strcmp(env, "0") != 0;
+    return std::strcmp(env, "0") != 0 && device_ok;
   }
   const char* online_env = omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE");
   if (online_env != nullptr && std::strcmp(online_env, "0") == 0) {
     return false;
   }
-  constexpr VkSubgroupFeatureFlags kOnlineRopeSubgroupFeatures =
-      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
-      VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
-      VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
-  if (caps.subgroup_size != 32u ||
-      caps.max_compute_work_group_invocations < 1024u ||
-      caps.max_compute_work_group_size[0] < 1024u ||
-      caps.max_compute_shared_memory_size < 16896u ||
-      (caps.subgroup_operations & kOnlineRopeSubgroupFeatures) !=
-          kOnlineRopeSubgroupFeatures) {
+  if (!device_ok) {
     return false;
   }
-  return sdpa_online_rope_default(caps.device_name, k_len);
+  return sdpa_online_rope_default(caps.device_name, k_len, head_dim, has_outgate);
 }
 
 static bool resolve_sdpa_rope_head_stride(
@@ -3584,6 +3812,7 @@ static bool resolve_sdpa_rope_head_stride(
     const std::optional<array>& view,
     const std::shared_ptr<Primitive>& view_prim,
     int expected_heads,
+    int expected_head_dim,
     uint32_t& head_stride_out) {
   if (raw.data_shared_ptr() == nullptr || raw.dtype() != bfloat16 ||
       raw.offset() % raw.itemsize() != 0) {
@@ -3600,18 +3829,20 @@ static bool resolve_sdpa_rope_head_stride(
   Strides strides;
   Shape shape;
   if (view.has_value()) {
-    if (!raw.flags().row_contiguous ||
-        view->offset() % view->itemsize() != 0 ||
+    if (view->offset() % view->itemsize() != 0 ||
         view->shape(-1) != raw.shape(-1)) {
       return false;
     }
     shape = view->shape();
-    Strides parent = contiguous_strides(raw.shape());
     if (view_prim && typeid(*view_prim) == typeid(Transpose)) {
       const auto& axes = static_cast<const Transpose&>(*view_prim).state();
-      if (axes.size() != static_cast<size_t>(view->ndim())) {
+      if (axes.size() != static_cast<size_t>(view->ndim()) ||
+          raw.ndim() != static_cast<int>(axes.size()) ||
+          raw.strides().back() != 1 ||
+          axes.back() != static_cast<int>(axes.size()) - 1) {
         return false;
       }
+      const Strides& parent = raw.strides();
       strides = Strides(axes.size(), 0);
       for (size_t ax = 0; ax < axes.size(); ++ax) {
         if (axes[ax] < 0 || static_cast<size_t>(axes[ax]) >= parent.size()) {
@@ -3620,6 +3851,9 @@ static bool resolve_sdpa_rope_head_stride(
         strides[ax] = parent[axes[ax]];
       }
     } else {
+      if (!raw.flags().row_contiguous) {
+        return false;
+      }
       strides = contiguous_strides(view->shape());
     }
   } else {
@@ -3627,7 +3861,8 @@ static bool resolve_sdpa_rope_head_stride(
     strides = raw.strides();
   }
   if (shape.size() != 4 || shape[0] != 1 || shape[1] != expected_heads ||
-      shape[2] != 1 || shape[3] != 128 || strides[3] != 1 || strides[1] < 0) {
+      shape[2] != 1 || shape[3] != expected_head_dim || strides[3] != 1 ||
+      strides[1] < 0) {
     return false;
   }
   head_stride_out = static_cast<uint32_t>(strides[1]);
@@ -3693,16 +3928,23 @@ const SdpaOnlineRopeCtx* find_sdpa_online_rope(
        plan.k_weight->offset() % plan.k_weight->itemsize() == 0);
   const bool off_ok = plan.offset.data_shared_ptr() != nullptr &&
       plan.offset.offset() % plan.offset.itemsize() == 0;
+  const int expected_hd = plan.sdpa.shape(3);
   if (!pair.windows[0].has_value() ||
       pair.windows[0]->node.data_shared_ptr() == nullptr || !weights_ok ||
       !off_ok ||
       !resolve_sdpa_rope_head_stride(
-          plan.q_raw, plan.q_view, plan.q_view_prim, plan.sdpa.shape(1), q_hs) ||
+          plan.q_raw,
+          plan.q_view,
+          plan.q_view_prim,
+          plan.sdpa.shape(1),
+          expected_hd,
+          q_hs) ||
       !resolve_sdpa_rope_head_stride(
           plan.k_raw,
           plan.k_view,
           plan.k_view_prim,
           plan.k_rope.shape(1),
+          expected_hd,
           k_hs)) {
     abort_sdpa_online_rope(out, stream);
     return nullptr;
@@ -3719,7 +3961,8 @@ const SdpaOnlineRopeCtx* find_sdpa_online_rope(
       plan.has_norm,
       plan.eps,
       plan.base,
-      plan.scale};
+      plan.scale,
+      plan.dims};
   return &plan.ctx;
 }
 
@@ -3861,6 +4104,36 @@ void commit_sdpa_transpose_out(const array& out) {
   auto it = eager_state->sdpa_transpose_plans.find(out.id());
   if (it != eager_state->sdpa_transpose_plans.end()) {
     eager_state->sdpa_transpose_folds[it->second].fired = true;
+  }
+}
+
+bool sdpa_outgate_enabled(const CapabilityReport& caps) {
+  const char* v = omarchy::env_str("MLX_OMARCHY_SDPA_OUTGATE");
+  if (v != nullptr && *v != '\0') {
+    return !(v[0] == '0' && v[1] == '\0');
+  }
+  return sdpa_outgate_default(caps.device_name);
+}
+
+const SdpaOutgatePlan* find_sdpa_outgate(const array& out) {
+  if (!eager_state) {
+    return nullptr;
+  }
+  auto it = eager_state->sdpa_outgate_plans.find(out.id());
+  if (it == eager_state->sdpa_outgate_plans.end()) {
+    return nullptr;
+  }
+  auto& fold = eager_state->sdpa_outgate_folds[it->second];
+  return fold.fired ? nullptr : &fold.plan;
+}
+
+void commit_sdpa_outgate(const array& out) {
+  if (!eager_state) {
+    return;
+  }
+  auto it = eager_state->sdpa_outgate_plans.find(out.id());
+  if (it != eager_state->sdpa_outgate_plans.end()) {
+    eager_state->sdpa_outgate_folds[it->second].fired = true;
   }
 }
 
@@ -4132,6 +4405,10 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
   if (auto skip = eager_state->sdpa_transpose_skip_roles.find(node.id());
       skip != eager_state->sdpa_transpose_skip_roles.end()) {
     return eager_state->sdpa_transpose_folds[skip->second].fired;
+  }
+  if (auto skip = eager_state->sdpa_outgate_skip_roles.find(node.id());
+      skip != eager_state->sdpa_outgate_skip_roles.end()) {
+    return eager_state->sdpa_outgate_folds[skip->second].fired;
   }
   if (auto skip = eager_state->prologue_skip_roles.find(node.id());
       skip != nullptr) {

@@ -390,8 +390,18 @@
 #include "sdpa_decode_split_p2_hd256_bk64.h"
 #include "sdpa_decode_online_sg32_bf16_hd128.h"
 #include "sdpa_decode_online_rope_sg32_bf16_hd128.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd128.h"
+#include "sdpa_decode_online_rope_sg32_bf16_hd256.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256.h"
 #include "sdpa_decode_online_sg32_bf16_hd256.h"
 #include "sdpa_decode_online_sg16_bf16_hd256.h"
+#include "sdpa_decode_online_outgate_sg32_bf16_hd128.h"
+#include "sdpa_decode_online_outgate_sg32_bf16_hd256.h"
+#include "sdpa_decode_online_outgate_sg16_bf16_hd256.h"
+#include "sdpa_decode_split_p2_outgate_hd128.h"
+#include "sdpa_decode_split_p2_outgate_hd256.h"
+#include "sdpa_decode_split_p2_outgate_hd256_bk32.h"
+#include "sdpa_decode_split_p2_outgate_hd256_bk64.h"
 #include "partition_smallk_f32.h"
 #include "partition_smallk_f16.h"
 #include "partition_smallk_bf16.h"
@@ -2483,6 +2493,46 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {sdpa_decode_split_p2_hd256_bk64, sdpa_decode_split_p2_hd256_bk64_size};
     case ComputeKernel::FastAddRmsNormAppleBF16:
       return {fast_add_norm_apple_bf16, fast_add_norm_apple_bf16_size};
+    case ComputeKernel::SdpaDecodeOnlineOutgateSg32BF16Hd128:
+      return {
+          sdpa_decode_online_outgate_sg32_bf16_hd128,
+          sdpa_decode_online_outgate_sg32_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeOnlineOutgateSg32BF16Hd256:
+      return {
+          sdpa_decode_online_outgate_sg32_bf16_hd256,
+          sdpa_decode_online_outgate_sg32_bf16_hd256_size};
+    case ComputeKernel::SdpaDecodeOnlineOutgateSg16BF16Hd256:
+      return {
+          sdpa_decode_online_outgate_sg16_bf16_hd256,
+          sdpa_decode_online_outgate_sg16_bf16_hd256_size};
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBF16Hd128:
+      return {
+          sdpa_decode_split_p2_outgate_hd128,
+          sdpa_decode_split_p2_outgate_hd128_size};
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBF16Hd256:
+      return {
+          sdpa_decode_split_p2_outgate_hd256,
+          sdpa_decode_split_p2_outgate_hd256_size};
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBk32BF16Hd256:
+      return {
+          sdpa_decode_split_p2_outgate_hd256_bk32,
+          sdpa_decode_split_p2_outgate_hd256_bk32_size};
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBk64BF16Hd256:
+      return {
+          sdpa_decode_split_p2_outgate_hd256_bk64,
+          sdpa_decode_split_p2_outgate_hd256_bk64_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd128:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd128,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256:
+      return {
+          sdpa_decode_online_rope_sg32_bf16_hd256,
+          sdpa_decode_online_rope_sg32_bf16_hd256_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;
