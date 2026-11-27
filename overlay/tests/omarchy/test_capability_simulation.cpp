@@ -31,6 +31,7 @@
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/qmm_prefill_select.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/device.h"
 #include "mlx/fast.h"
@@ -1611,4 +1612,25 @@ int main(int argc, char** argv) {
 
   unsetenv("MLX_OMARCHY_CAPS_SIM");
   return status;
+}
+
+TEST_CASE("apple_gpu_cores covers the M3 family and leaves other parts unchanged") {
+  using omarchy::apple_gpu_cores;
+  // M3 entries: top-bin counts per the chip-id table (t8122/t6030/t6031+t6034).
+  CHECK(apple_gpu_cores("Apple M3 (G15G B1)") == 10u);
+  CHECK(apple_gpu_cores("Apple M3 Pro (G15S B1)") == 18u);
+  CHECK(apple_gpu_cores("Apple M3 Max (G15C B1)") == 40u);
+  // Every revision/binned letter still matches its family token.
+  CHECK(apple_gpu_cores("Apple M3 (G15G A0)") == 10u);
+  CHECK(apple_gpu_cores("Apple M3 Pro (G15S C0)") == 18u);
+  CHECK(apple_gpu_cores("Apple M3 Max (G15C C0)") == 40u);
+  // Unlisted parts keep 0 (the occupancy floor stays ungated).
+  CHECK(apple_gpu_cores("Apple M3 Ultra (G15U B1)") == 0u);
+  CHECK(apple_gpu_cores("some other device") == 0u);
+  // Existing entries unchanged.
+  CHECK(apple_gpu_cores("Apple M1 (G13G B1)") == 8u);
+  CHECK(apple_gpu_cores("Apple M1 Max (G13C C0)") == 32u);
+  CHECK(apple_gpu_cores("Apple M2 Max (G14C B1)") == 38u);
+  CHECK(apple_gpu_cores("Apple M4 Pro (G16S B1)") == 20u);
+  CHECK(apple_gpu_cores("Apple M5 Max (G17C B1)") == 38u);
 }

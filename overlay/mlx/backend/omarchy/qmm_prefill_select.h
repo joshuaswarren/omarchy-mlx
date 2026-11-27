@@ -64,6 +64,22 @@ inline uint32_t apple_gpu_cores(const std::string& device_name) {
     // route was unreachable and the 64-row fill gate was vacuous.
     return 20u;
   }
+  if (device_name.find("G15G") != std::string::npos) {
+    // Apple M3 (t8122): 10-core GPU per the ane-soc records. The binned
+    // 8-core part clears the per-core floor sooner, the conservative
+    // direction this table already accepts for G14C and G16S.
+    return 10u;
+  }
+  if (device_name.find("G15S") != std::string::npos) {
+    // Apple M3 Pro (t6030): 18-core top bin; a 14-core part clears the
+    // floor sooner, same conservative direction.
+    return 18u;
+  }
+  if (device_name.find("G15C") != std::string::npos) {
+    // Apple M3 Max (t6031/t6034): 40-core top bin; the 30-core variant
+    // clears the floor sooner, same conservative direction.
+    return 40u;
+  }
   if (device_name.find("G17C") != std::string::npos) {
     // M5 Max: initial value matching G14C (same Max class) pending calibration on M5
     return 38u;
