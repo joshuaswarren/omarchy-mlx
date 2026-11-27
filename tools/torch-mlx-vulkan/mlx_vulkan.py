@@ -2252,6 +2252,13 @@ def make_executor(gm):
                     try:
                         val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in kwargs.items()})
                         on_mlx = True
+                        # d-review: an in-place ATen op (masked_fill_, add_, ...)
+                        # must mutate the graph's input placeholder, so later
+                        # nodes - and an output that returns the placeholder -
+                        # see the filled values, matching torch.
+                        if name.endswith("_") and node.args \
+                                and isinstance(node.args[0], torch.fx.Node):
+                            env[node.args[0]] = val
                     except Exception as e:
                         def _sh(v):
                             if isinstance(v, (mx.array, torch.Tensor)):
