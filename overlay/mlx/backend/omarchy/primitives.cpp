@@ -11219,14 +11219,12 @@ bool dispatch_quantized_gemv_group(
   // resnorm epilogue kernels.
   bool multi_r2s16_active = false;
   bool multi_r2s16_trim3_active = false;
+  bool multi_r2s8_trim3_active = false;
   if (!res_norm_active && !dedicated_swiglu_active && !swiglu_out &&
       !token_route && outgate == nullptr && dtype == bfloat16 &&
       subgroup_ready &&
       geom.multi == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 &&
-      k % 512 == 0 &&
-      encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
-      encoder.device().capabilities().max_compute_work_group_size[0] >= 512u &&
-      omarchy::qmm_g14c_multi_r2s16_default_part(qmm_dev_name)) {
+      k % 512 == 0) {
     bool all_n8 = true;
     bool any_epi_or_view = false;
     for (const auto& m : members) {
@@ -11239,8 +11237,28 @@ bool dispatch_quantized_gemv_group(
         break;
       }
     }
-    multi_r2s16_active = all_n8;
-    multi_r2s16_trim3_active = all_n8 && members.size() <= 3u && !any_epi_or_view;
+    if (all_n8) {
+      if (encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 512u &&
+          omarchy::qmm_g14c_multi_r2s16_default_part(qmm_dev_name)) {
+        multi_r2s16_active = true;
+        multi_r2s16_trim3_active = members.size() <= 3u && !any_epi_or_view;
+      } else if (members.size() <= 3u && !any_epi_or_view) {
+        const char* up_env = omarchy::env_str("MLX_OMARCHY_Q4_UPFRONT");
+        const bool up_want =
+            (up_env != nullptr && up_env[0] != '\0')
+                ? (std::strcmp(up_env, "0") != 0)
+                : omarchy::qmm_multi_upfront_default(qmm_dev_name);
+        const char* m3_env = omarchy::env_str("MLX_OMARCHY_MULTI_3M");
+        const bool m3_opt_in =
+            (m3_env != nullptr && m3_env[0] != '\0' &&
+             std::strcmp(m3_env, "0") != 0);
+        if (up_want && m3_opt_in &&
+            omarchy::qmm_g14c_fast_only_default_part(qmm_dev_name)) {
+          multi_r2s8_trim3_active = true;
+        }
+      }
+    }
   }
   const uint32_t group_columns = res_norm_active
       ? (token_route
@@ -11837,8 +11855,8 @@ bool dispatch_quantized_gemv_group(
           (res_norm->out.offset() & 15u) == 0u &&
           omarchy::qmm_g14c_fast_only_default_part(
               encoder.device().capabilities().device_name)) {
+        const char* spec_env = omarchy::env_str("MLX_OMARCHY_RESNORM_SPEC");
         if (resnorm_kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2) {
-          const char* spec_env = omarchy::env_str("MLX_OMARCHY_RESNORM_SPEC");
           const bool spec_allow =
               (spec_env == nullptr || spec_env[0] == '\0' ||
                std::strcmp(spec_env, "0") != 0);
@@ -11850,7 +11868,16 @@ bool dispatch_quantized_gemv_group(
             resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Fast;
           }
         } else {
-          resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2Fast;
+          const bool spec_opt_in =
+              (spec_env != nullptr && spec_env[0] != '\0' &&
+               std::strcmp(spec_env, "0") != 0);
+          if (spec_opt_in) {
+            resnorm_kernel = (params.shape[0] == 2048u)
+                ? ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2FastD2048
+                : ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2FastD4096;
+          } else {
+            resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2Fast;
+          }
         }
         if (res_norm->dead_qmm_out) {
           params.flags |= 0x1000000u;
@@ -11969,7 +11996,7 @@ bool dispatch_quantized_gemv_group(
         1u);
     return true;
   }
-  if (multi_r2s16_trim3_active) {
+  if (multi_r2s16_trim3_active || multi_r2s8_trim3_active) {
     std::array<ComputeBinding, 16> bindings3m{};
     bindings3m[0] = binding(x);
     const ComputeBinding filler3m = binding(members[0].node);
@@ -11991,7 +12018,9 @@ bool dispatch_quantized_gemv_group(
       }
     }
     encoder.dispatch_compute(
-        ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast3M,
+        multi_r2s16_trim3_active
+            ? ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast3M
+            : ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast3M,
         bindings3m,
         params,
         total_groups,
