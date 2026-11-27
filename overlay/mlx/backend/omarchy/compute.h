@@ -1417,6 +1417,14 @@ enum class ComputeKernel : uint16_t {
   // subgroups 12 and 13 during Phase 1 (18 bindings, zero extra barriers).
   // Appended to keep profile kernel ids stable.
   GatedDeltaDecodeConvNormBaBF16Sg32,
+  // Track J: combined BA fold + Sg32Fast, HD=256 #1059-style fast SDPA,
+  // fused lm_head R2S32W2 + GreedyWord P1, and fused GatherDequant + RmsNorm.
+  GatedDeltaDecodeConvNormBaBF16Sg32Fast,
+  SdpaDecodeOnlineRopeSg32BF16Hd256Fast,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256SplitFast,
+  QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1,
+  GatherDequantNormBF16,
   Count,
 };
 

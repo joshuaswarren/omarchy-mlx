@@ -431,6 +431,12 @@
 #include "gated_delta_decode_conv_norm_bf16_sg32.h"
 #include "gated_delta_decode_conv_norm_bf16_sg32_fast.h"
 #include "gated_delta_decode_conv_norm_ba_bf16_sg32.h"
+#include "gated_delta_decode_conv_norm_ba_bf16_sg32_fast.h"
+#include "sdpa_decode_online_rope_sg32_bf16_hd256_fast.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split_fast.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedy_p1.h"
+#include "gather_dequant_norm_bf16.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
 #include "gated_delta_decode_composed_bf16.h"
@@ -2601,6 +2607,30 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_decode_conv_norm_ba_bf16_sg32,
           gated_delta_decode_conv_norm_ba_bf16_sg32_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32Fast:
+      return {
+          gated_delta_decode_conv_norm_ba_bf16_sg32_fast,
+          gated_delta_decode_conv_norm_ba_bf16_sg32_fast_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256Fast:
+      return {
+          sdpa_decode_online_rope_sg32_bf16_hd256_fast,
+          sdpa_decode_online_rope_sg32_bf16_hd256_fast_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256SplitFast:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split_fast,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split_fast_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedy_p1,
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedy_p1_size};
+    case ComputeKernel::GatherDequantNormBF16:
+      return {
+          gather_dequant_norm_bf16,
+          gather_dequant_norm_bf16_size};
     case ComputeKernel::GatedDeltaDecodeBF16Sg32:
       return {
           gated_delta_decode_bf16_sg32,

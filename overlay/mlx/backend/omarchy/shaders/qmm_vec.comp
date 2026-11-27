@@ -78,6 +78,10 @@ uint16_t bf16_store(float value) {
 // load-bearing part of this codepath.
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#ifdef QMM_VEC_GREEDY_P1
+#extension GL_KHR_shader_subgroup_vote : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#endif
 #endif
 #include "omarchy_half.h"
 #if defined(QMM_VEC_ROPE_EPI)
@@ -550,6 +554,22 @@ layout(set = 0, binding = 9, std430) writeonly buffer GStats {
 layout(set = 0, binding = 10, std430) buffer Logits {
   STORAGE_TYPE values[];
 } logits;
+#elif defined(QMM_VEC_GREEDY_P1)
+// Fused lm_head GEMV + GreedyWord P1 (R2S32W2, 1024 threads = 64 rows/WG):
+// skips logits DRAM round-trip and GreedyWord op=1 dispatch.
+layout(set = 0, binding = 4, std430) writeonly buffer Partials {
+  vec2 values[];
+} partials;
+layout(set = 0, binding = 5, std430) writeonly buffer PartialExt {
+  uvec2 values[];
+} partial_ext;
+layout(set = 0, binding = 6, std430) writeonly buffer Candidates {
+  uvec2 values[];
+} candidates;
+layout(set = 0, binding = 7, std430) coherent buffer GState {
+  uint values[];
+} gstate;
+shared float s_gp1_val[64];
 #else
 #if defined(QMM_VEC_ROPE_EPI)
 // The per-member rope epilogue reads the member's materialized output
@@ -3906,6 +3926,109 @@ void main() {
   }
 #endif
 }
+#elif defined(QMM_VEC_GREEDY_P1)
+// Fused lm_head GEMV + GreedyWord P1 (R2S32W2, 1024 threads = 64 rows/WG):
+// skips the 496 KB bf16 logits DRAM write+read and op=1 dispatch completely.
+#define GP1_NEG_INF uintBitsToFloat(0xff800000u)
+#define GP1_CAND_DELTA 0.5
+uint gp1_order_key(float f) {
+  uint bits = floatBitsToUint(f);
+  return (bits & 0x80000000u) != 0u ? ~bits : (bits | 0x80000000u);
+}
+float gp1_order_value(uint key) {
+  return uintBitsToFloat(
+      (key & 0x80000000u) != 0u ? (key & 0x7fffffffu) : ~key);
+}
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint column_slot = lane / LANES;
+  uint lane_in_slot = lane % LANES;
+  uint wg = gl_WorkGroupID.x;
+  uint column = wg * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
+  uint n = params.matrix_n;
+  bool column_active = column < n;
+  uint words_per_row = params.matrix_k / 8u;
+  uint groups_per_row = params.matrix_k / QGROUP;
+  precise float acc[ROWS_PER_SLOT];
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+    acc[r] = 0.0;
+  }
+  if (column_active) {
+    uint w_base = params.rhs_offset;
+    uint s_base = params.aux_offset;
+    uint b_base = params.aux_size;
+    uint x_row = params.lhs_offset;
+    Q4_ROWS(input_w, scales, biases)
+  }
+  float total0 = subgroupAdd(acc[0]);
+  float total1 = subgroupAdd(acc[1]);
+  if (lane_in_slot == 0u) {
+    uint c0 = column;
+    uint c1 = column + 1u;
+    s_gp1_val[column_slot * 2u] =
+        (c0 < n) ? LOAD_VALUE(STORE_VALUE(total0)) : GP1_NEG_INF;
+    s_gp1_val[column_slot * 2u + 1u] =
+        (c1 < n) ? LOAD_VALUE(STORE_VALUE(total1)) : GP1_NEG_INF;
+  }
+  barrier();
+  if (lane < 32u) {
+    uint ia = wg * 64u + lane;
+    uint ib = ia + 32u;
+    float va = s_gp1_val[lane];
+    float vb = s_gp1_val[lane + 32u];
+    bool a_ok = ia < n;
+    bool b_ok = ib < n;
+    bool any_nan = subgroupAny((a_ok && isnan(va)) || (b_ok && isnan(vb)));
+    float local_m = (a_ok && !isnan(va)) ? va : GP1_NEG_INF;
+    if (b_ok && !isnan(vb)) {
+      local_m = max(local_m, vb);
+    }
+    float wg_max = any_nan ? uintBitsToFloat(0x7fc00000u) : subgroupMax(local_m);
+    bool finite_m = !any_nan && !isinf(wg_max);
+    float ea = (finite_m && a_ok) ? exp(va - wg_max) : 0.0;
+    float eb = (finite_m && b_ok) ? exp(vb - wg_max) : 0.0;
+    float wg_sum = subgroupAdd(ea + eb);
+    uint at_m = min(
+        (a_ok && va == wg_max) ? ia : 0xFFFFFFFFu,
+        (b_ok && vb == wg_max) ? ib : 0xFFFFFFFFu);
+    uint wg_at_max = subgroupMin(at_m);
+    uint fn = min(
+        (a_ok && isnan(va)) ? ia : 0xFFFFFFFFu,
+        (b_ok && isnan(vb)) ? ib : 0xFFFFFFFFu);
+    uint wg_first_nan = subgroupMin(fn);
+    float thresh = GP1_NEG_INF;
+    if (lane == 0u) {
+      partials.values[wg] = vec2(wg_max, wg_sum);
+      partial_ext.values[wg] = uvec2(wg_at_max, wg_first_nan);
+      if (!any_nan) {
+        uint k = gp1_order_key(wg_max);
+        uint prev_k = atomicMax(gstate.values[2], k);
+        float gmax = (prev_k == 0u) ? wg_max
+                                    : max(wg_max, gp1_order_value(prev_k));
+        thresh = gmax - GP1_CAND_DELTA;
+      }
+    }
+    thresh = subgroupBroadcast(thresh, 0u);
+    if (finite_m && wg_max >= thresh) {
+      if (a_ok && va >= thresh) {
+        uint pos = atomicAdd(gstate.values[0], 1u);
+        if (pos < params.output_size) {
+          candidates.values[pos] = uvec2(ia, floatBitsToUint(va));
+        } else {
+          gstate.values[1] = 1u;
+        }
+      }
+      if (b_ok && vb >= thresh) {
+        uint pos = atomicAdd(gstate.values[0], 1u);
+        if (pos < params.output_size) {
+          candidates.values[pos] = uvec2(ib, floatBitsToUint(vb));
+        } else {
+          gstate.values[1] = 1u;
+        }
+      }
+    }
+  }
+}
 #else
 // Multi-row form of the Q4 word main: same batch walk and bases as the
 // single-row main below, each slot owning ROWS_PER_SLOT consecutive
@@ -4060,6 +4183,95 @@ void main() {
     barrier();
     if (lane == 0u) {
       partial_ext.values[chunk] = uvec2(g_reduce_u[0], g_reduce_u[1]);
+    }
+  } else if (params.operation == 3u) {
+    // Operation 3: merge per-WG (64-row) partials emitted by QMM_VEC_GREEDY_P1.
+    uint num_wgs = (n + 63u) / 64u;
+    float local_max = NEG_INF;
+    for (uint i = lane; i < num_wgs; i += 256u) {
+      local_max = nan_max(local_max, partials.values[i].x);
+    }
+    reduce_scratch[lane] = local_max;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (lane < stride) {
+        reduce_scratch[lane] =
+            nan_max(reduce_scratch[lane], reduce_scratch[lane + stride]);
+      }
+      barrier();
+    }
+    float row_max = reduce_scratch[0];
+    barrier();
+    bool finite_max = !isinf(row_max) && !isnan(row_max);
+    float local_sum = 0.0;
+    if (finite_max) {
+      for (uint i = lane; i < num_wgs; i += 256u) {
+        vec2 p = partials.values[i];
+        if (!isinf(p.x)) {
+          local_sum += p.y * exp(p.x - row_max);
+        }
+      }
+    }
+    reduce_scratch[lane] = local_sum;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+      if (lane < stride) {
+        reduce_scratch[lane] += reduce_scratch[lane + stride];
+      }
+      barrier();
+    }
+    float lse_value = finite_max ? row_max + log(reduce_scratch[0]) : row_max;
+    float lse = uintBitsToFloat(uint(bf16_store(lse_value)) << 16u);
+    uint token_idx = 0u;
+    bool overflow = gstate.values[1] != 0u;
+    if (isnan(row_max) || row_max == NEG_INF) {
+      token_idx = 0u;
+    } else if (isinf(row_max)) {
+      uint at_max = 0xFFFFFFFFu;
+      for (uint i = lane; i < num_wgs; i += 256u) {
+        if (partials.values[i].x == row_max) {
+          at_max = min(at_max, partial_ext.values[i].x);
+        }
+      }
+      g_reduce_u[lane] = at_max;
+      barrier();
+      for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+          g_reduce_u[lane] = min(g_reduce_u[lane], g_reduce_u[lane + stride]);
+        }
+        barrier();
+      }
+      token_idx = g_reduce_u[0];
+    } else {
+      float t_norm = uintBitsToFloat(
+          uint(bf16_store(row_max - lse)) << 16u);
+      uint count = min(gstate.values[0], params.output_size);
+      uint best = 0xFFFFFFFFu;
+      for (uint i = lane; i < count; i += 256u) {
+        uvec2 c = candidates.values[i];
+        float x_norm = uintBitsToFloat(
+            uint(bf16_store(uintBitsToFloat(c.y) - lse)) << 16u);
+        if (x_norm == t_norm) {
+          best = min(best, c.x);
+        }
+      }
+      g_reduce_u[lane] = best;
+      barrier();
+      for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+          g_reduce_u[lane] = min(g_reduce_u[lane], g_reduce_u[lane + stride]);
+        }
+        barrier();
+      }
+      token_idx = (overflow || g_reduce_u[0] == 0xFFFFFFFFu)
+          ? 0xFFFFFFFFu
+          : g_reduce_u[0];
+    }
+    if (lane == 0u) {
+      gtoken.values[0] = token_idx;
+      gstats.values[0] = n;
+      gstats.values[1] = overflow ? 1u : 0u;
+      gstats.values[2] = floatBitsToUint(row_max);
     }
   } else {
     // Operation 2: logsumexp_combine verbatim, then the argmax select.
