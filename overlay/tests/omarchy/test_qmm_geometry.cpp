@@ -475,10 +475,10 @@ int main(int argc, char** argv) {
     std::string other = "/tmp/w7p-geom-other.bin";
     setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
     setenv("MLX_OMARCHY_Q4_UPFRONT", "0", 1);
-    int rc = run_child("multi", base.c_str());
+    int rc = run_child("group", base.c_str());
     setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
     setenv("MLX_OMARCHY_Q4_UPFRONT", "1", 1);
-    int rc2 = run_child("multi", other.c_str());
+    int rc2 = run_child("group", other.c_str());
     unsetenv("MLX_OMARCHY_QMM_GEOM");
     unsetenv("MLX_OMARCHY_Q4_UPFRONT");
     if (rc != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
