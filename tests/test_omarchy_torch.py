@@ -170,6 +170,10 @@ class TestOmarchyTorchBackend(unittest.TestCase):
             ("softshrink", (x, 0.5), F.softshrink(x, 0.5)),
             ("tanhshrink", (x,), F.tanhshrink(x)),
             ("softsign", (x,), F.softsign(x)),
+            ("hardshrink_", (x, 0.5), F.hardshrink(x, 0.5)),
+            ("softshrink_", (x, 0.5), F.softshrink(x, 0.5)),
+            ("tanhshrink_", (x,), F.tanhshrink(x)),
+            ("softsign_", (x,), F.softsign(x)),
         ]
         for name, ins, ref in cases:
             lowering = ATEN_TABLE[name]
