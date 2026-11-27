@@ -38,7 +38,10 @@ MARKERS = [
 # two unknowables must stay distinct.
 PROFILE = [
     {"k": "meta", "device": "llvmpipe", "period_ns": 33.333,
-     "valid_bits": 64, "pool": 65536, "label": "t", "host_t0": 100},
+     "valid_bits": 64, "pool": 65536, "label": "t", "host_t0": 100,
+     "wheel": "0.32.4.dev1+diag.testsha", "tag": "diag.testsha"},
+    {"k": "kn", "names": ["K0", "K1", "K2", "K3", "K4",
+                          "KernelFive", "K6", "KernelSeven"]},
     {"k": "d", "s": 3, "e": 7, "op": 0, "n": 1, "gx": 1, "gy": 1, "gz": 1,
      "h": 120, "t0": 5200, "t1": 8200, "b": [[1, 0, 256]]},
     {"k": "d", "s": 2, "e": 7, "op": 0, "n": 1, "gx": 1, "gy": 1, "gz": 1,
@@ -73,10 +76,12 @@ def write_fixture(dirpath, records, markers=None):
     return profile, markers_path
 
 
-def run_analyzer(profile, markers_path=None):
+def run_analyzer(profile, markers_path=None, extra=None):
     cmd = [sys.executable, str(SCRIPT), str(profile)]
     if markers_path:
         cmd += ["--markers", str(markers_path)]
+    if extra:
+        cmd += extra
     return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
 
@@ -134,13 +139,61 @@ class AttributionTests(unittest.TestCase):
         self.assertIn("compute-binding", r.stdout)
         self.assertIn("not a barrier-correctness bound", r.stdout)
 
-    def test_kernel_enum_grouping_without_header(self):
+    def test_kn_record_names_kernels(self):
         with tempfile.TemporaryDirectory() as td:
             profile, markers_path = write_fixture(td, PROFILE, MARKERS)
             r = run_analyzer(profile, markers_path)
-        # No --compute-h: enum 7 must surface as kernel_7, not crash or
-        # group by anything else.
-        self.assertIn("kernel_7", r.stdout)
+        # The kn record names enum 7/5 at record time; no compute.h needed.
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("KernelSeven", r.stdout)
+        self.assertIn("KernelFive", r.stdout)
+        self.assertIn("wheel=0.32.4.dev1+diag.testsha", r.stdout)
+
+    def test_no_names_source_exits_2(self):
+        legacy = [r for r in PROFILE if r.get("k") != "kn"]
+        with tempfile.TemporaryDirectory() as td:
+            profile, markers_path = write_fixture(td, legacy, MARKERS)
+            r = run_analyzer(profile, markers_path)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no kn record", r.stderr)
+
+    def test_legacy_compute_h_maps_names(self):
+        header = (
+            "enum class ComputeKernel : uint16_t {\n"
+            "  Zero,\n  One,\n  Two,\n  Three,\n  Four,\n"
+            "  HeaderFive,\n  Six,\n  HeaderSeven,\n  Count,\n};\n")
+        legacy = [r for r in PROFILE if r.get("k") != "kn"]
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "compute.h"
+            path.write_text(header, encoding="utf-8")
+            profile, markers_path = write_fixture(td, legacy, MARKERS)
+            r = run_analyzer(profile, markers_path,
+                             ["--compute-h", str(path)])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("HeaderSeven", r.stdout)
+
+    def test_malformed_kn_exits_2(self):
+        bad = PROFILE[:1] + [{"k": "kn", "names": "notalist"}] + PROFILE[2:]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, bad)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("malformed kn record", r.stderr)
+
+    def test_expect_wheel_refuses_mismatch(self):
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, PROFILE)
+            r = run_analyzer(profile, extra=[
+                "--expect-wheel", "0.32.4.dev1+diag.other"])
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("wheel mismatch", r.stderr)
+
+    def test_expect_tag_match_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            profile, markers_path = write_fixture(td, PROFILE, MARKERS)
+            r = run_analyzer(profile, markers_path,
+                             ["--expect-tag", "diag.testsha"])
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_enum_parse_keeps_enumerators_with_trailing_comments(self):
         # A retired enumerator keeps its id (append-only) and is written
@@ -266,6 +319,133 @@ class CalibrationRecordTests(unittest.TestCase):
             r = run_analyzer(profile)
         self.assertEqual(r.returncode, 2)
         self.assertIn("malformed cal record", r.stderr)
+
+
+class HoneykrispDt1Tests(unittest.TestCase):
+    def test_apple_device_auto_uses_dt1_within_submit(self):
+        rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1.0, "valid_bits": 64, "pool": 65536,
+             "label": "hk", "host_t0": 0},
+            {"k": "kn", "names": ["kernel_0", "kernel_1", "kernel_2"]},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 1000000, "t1": 1010000, "b": []},
+            {"k": "d", "s": 1, "e": 1, "op": 4, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 3010000, "t1": 3030000, "b": []},
+            {"k": "d", "s": 2, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 9000000, "t1": 9020000, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "s", "s": 2, "dur": 100, "t": 2000},
+            {"k": "end", "t": 3000, "dispatches": 3, "dropped": 0,
+             "submissions": 2, "joins": 0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, rec)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("timing=dt1", r.stdout)
+        # Heavy kernel_1 gets dt1 = 3030000 - 1010000 = 2.020ms, not 20us.
+        self.assertIn("kernel_1                   n=1      total=2.020ms", r.stdout)
+        # First kernel_0 gets 10us (submit 1) + 20us (submit 2 reset) = 30.0us.
+        self.assertIn("kernel_0                   n=2      total=30.0us", r.stdout)
+        # Intra-submit raw interval is labeled as included in dt1 busy, not double-counted as gap.
+        self.assertIn("raw intra-submission timestamp intervals (included in dt1 busy):", r.stdout)
+        self.assertNotIn("gaps intra-submission:", r.stdout)
+
+    def test_dt1_counter_wrap_and_untimed_dispatch_break(self):
+        # 8-bit wrap: (240,245) -> (4,8) at 1 us/tick => 5 us + 19 us = 24 us.
+        wrap_rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1000.0, "valid_bits": 8, "pool": 65536,
+             "label": "wrap", "host_t0": 0},
+            {"k": "kn", "names": ["kernel_0", "kernel_1", "kernel_2"]},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 240, "t1": 245, "b": []},
+            {"k": "d", "s": 1, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 4, "t1": 8, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "end", "t": 2000, "dispatches": 2, "dropped": 0,
+             "submissions": 1, "joins": 0},
+        ]
+        # Untimed dispatch between (100,105) and (125,130) breaks dt1 chain:
+        # kernel_2 gets t1-t0 = 5 us, not 25 us.
+        gap_rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1000.0, "valid_bits": 64, "pool": 65536,
+             "label": "gap", "host_t0": 0},
+            {"k": "kn", "names": ["kernel_0", "kernel_1", "kernel_2"]},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 100, "t1": 105, "b": []},
+            {"k": "d", "s": 1, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "b": []},
+            {"k": "d", "s": 1, "e": 2, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 125, "t1": 130, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "end", "t": 2000, "dispatches": 3, "dropped": 0,
+             "submissions": 1, "joins": 0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            p1, _ = write_fixture(td, wrap_rec)
+            r1 = run_analyzer(p1)
+            p2, _ = write_fixture(td, gap_rec)
+            r2 = run_analyzer(p2)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        self.assertIn("busy 24.0us / span 24.0us", r1.stdout)
+        self.assertIn("kernel_1                   n=1      total=19.0us", r1.stdout)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertIn("kernel_2                   n=1      total=5.0us", r2.stdout)
+        self.assertIn("gaps intra-submission: n=1 total=20.0us", r2.stdout)
+
+    def test_split_submit_counter_wrap_preserves_inter_submit_gap(self):
+        # 8-bit wrap split across s=1 (240,245) then s=2 (4,8) at 1 us/tick:
+        # s1=5us, s2=4us, inter-submit gap = (260 - 245) = +15.0us (not -24us).
+        rec = [
+            {"k": "meta", "device": "Apple M1 Max (G13C C0)",
+             "period_ns": 1000.0, "valid_bits": 8, "pool": 65536,
+             "label": "split-wrap", "host_t0": 0},
+            {"k": "kn", "names": ["kernel_0", "kernel_1", "kernel_2"]},
+            {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 240, "t1": 245, "b": []},
+            {"k": "d", "s": 2, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+             "gz": 1, "h": 10, "t0": 4, "t1": 8, "b": []},
+            {"k": "s", "s": 1, "dur": 100, "t": 1000},
+            {"k": "s", "s": 2, "dur": 100, "t": 2000},
+            {"k": "end", "t": 3000, "dispatches": 2, "dropped": 0,
+             "submissions": 2, "joins": 0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            profile, _ = write_fixture(td, rec)
+            r = run_analyzer(profile)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("busy 9.0us / span 24.0us", r.stdout)
+        self.assertIn("gaps inter-submission: n=1 total=15.0us", r.stdout)
+
+    def test_missing_middle_submit_record_keeps_submission_id_order(self):
+        # Missing s-record for s=2 between s=1 and s=3 must keep [1, 2, 3]
+        # timeline order on both Apple and non-Apple devices (180ns total gap,
+        # 2/2 disjoint pairs).
+        for device in ("Apple M1 Max (G13C C0)", "NVIDIA GeForce RTX 5060 Ti"):
+            rec = [
+                {"k": "meta", "device": device, "period_ns": 1.0,
+                 "valid_bits": 64, "pool": 65536, "label": "mid", "host_t0": 0},
+                {"k": "kn", "names": ["kernel_0", "kernel_1", "kernel_2"]},
+                {"k": "d", "s": 1, "e": 0, "op": 0, "n": 1, "gx": 1, "gy": 1,
+                 "gz": 1, "h": 10, "t0": 100, "t1": 110, "b": [[1, 0, 64]]},
+                {"k": "d", "s": 2, "e": 1, "op": 0, "n": 1, "gx": 1, "gy": 1,
+                 "gz": 1, "h": 10, "t0": 200, "t1": 210, "b": [[2, 0, 64]]},
+                {"k": "d", "s": 3, "e": 2, "op": 0, "n": 1, "gx": 1, "gy": 1,
+                 "gz": 1, "h": 10, "t0": 300, "t1": 310, "b": [[1, 0, 64]]},
+                {"k": "s", "s": 1, "dur": 10, "t": 1000},
+                {"k": "s", "s": 3, "dur": 10, "t": 3000},
+                {"k": "end", "t": 4000, "dispatches": 3, "dropped": 0,
+                 "submissions": 2, "joins": 0},
+            ]
+            with tempfile.TemporaryDirectory() as td:
+                profile, _ = write_fixture(td, rec)
+                r = run_analyzer(profile)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("gaps inter-submission: n=2 total=180ns", r.stdout)
+            self.assertIn("dependency proxy [all]: 2/2 consecutive pairs fully disjoint", r.stdout)
 
 
 if __name__ == "__main__":

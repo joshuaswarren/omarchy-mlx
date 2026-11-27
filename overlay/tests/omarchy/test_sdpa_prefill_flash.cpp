@@ -30,6 +30,7 @@
 
 #include "mlx/backend/gpu/device_info.h"
 #include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/coopmat_select.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/trace.h"
@@ -807,10 +808,31 @@ TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal ro
   Stream stream = gpu_stream();
   // The causal flash route needs the bf16 cooperative-matrix shape. A part
   // without it (M1 G13G) must fall back to the composed route.
-  const bool flash_engages = omarchy::get_command_encoder(stream)
-                                 .device()
-                                 .capabilities()
-                                 .cooperative_matrix_bf16_8;
+  const auto& cf_caps =
+      omarchy::get_command_encoder(stream).device().capabilities();
+  // Two flash routes share the MLX_OMARCHY_SDPA_CAUSAL_FLASH env: the
+  // 8x8x8 wave32 kernel (k_len % 8, any query tail) and the 16x16x16
+  // wave64 twin (q_len % 16 and k_len % 16; the shader backs the last
+  // workgroup up a full tile). Eligibility is per-route so the dispatch
+  // checks below hold on either part.
+  const bool cf8 = cf_caps.cooperative_matrix_bf16_8 &&
+      cf_caps.subgroup_size == 32u;
+  // Mirror the runtime's rule in primitives.cpp: the 16x16x16 route
+  // engages on the advertised shape AND cf16_wave64 (native-or-pinnable
+  // 64-lane subgroup with 64-invocation workgroups) AND >=6144 B of
+  // shared memory — not bare subgroup_size == 64.
+  const bool cf16 =
+      omarchy::cooperative_matrix_advertises(
+          cf_caps.cooperative_matrix_shapes,
+          omarchy::sdpa_causal_flash_coopmat16_bf16_shape()) &&
+      (cf_caps.subgroup_size_64_admitted ||
+       (cf_caps.subgroup_size == 64u &&
+        (cf_caps.required_subgroup_size == 0u ||
+         cf_caps.required_subgroup_size == 64u))) &&
+      cf_caps.max_compute_work_group_invocations >= 64u &&
+      cf_caps.max_compute_work_group_size[0] >= 64u &&
+      cf_caps.max_compute_shared_memory_size >= 6144u;
+  const bool flash_engages = cf8 || cf16;
   struct Case {
     int heads;
     int kv_heads;
@@ -860,7 +882,12 @@ TEST_CASE("causal coopmat flash prefill is as accurate as the composed causal ro
       std::vector<float> run3 = flat(sdpa_causal(q, k, v, stream), stream);
       unsetenv("MLX_OMARCHY_SDPA_CAUSAL_FLASH");
 
-      const bool eligible = c.lk % 8 == 0 && c.lq >= 64;
+      // The env=1 pin bypasses the q_len floor on both routes; the tile
+      // terms stay mandatory, so a flash dispatch is expected exactly
+      // when the case satisfies the engaging route's alignment contract.
+      const bool eligible =
+          (cf8 && c.lk % 8 == 0 && c.lq >= 64) ||
+          (cf16 && c.lq % 16 == 0 && c.lk % 16 == 0);
       CAPTURE(outlier);
       CAPTURE(c.heads);
       CAPTURE(c.kv_heads);

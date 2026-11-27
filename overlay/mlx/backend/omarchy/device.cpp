@@ -580,6 +580,7 @@ CapabilityReport collect_capabilities(
   caps.total_memory = host_visible_heap > 0 ? host_visible_heap : device_local;
 
   caps.timeline_semaphore = f12.timelineSemaphore == VK_TRUE;
+  caps.vulkan_memory_model = f12.vulkanMemoryModel == VK_TRUE;
   caps.shader_float16 = f12.shaderFloat16 == VK_TRUE;
   caps.shader_int16 = feats2.features.shaderInt16 == VK_TRUE;
   caps.shader_int64 = feats2.features.shaderInt64 == VK_TRUE;
@@ -833,6 +834,24 @@ bool Runtime::init_impl() {
   // wait (about 21000 expired waits per decoded token on a 13-inch M1): 5 s more process CPU and about 1 W more system power over a 400-token decode,
   // for no change in tok/s, and no gain in Parakeet tdt_decode either (receipts/2026-11-03-hk-submit-poll). The variable stays available: a value set in
   // the environment reaches the driver untouched.
+  //
+  // On Apple M2 Max (apple,t6021 / G14C), Mesa Honeykrisp leaves AGX_HOIST_LOADS
+  // off on Gen 14 today. Setting AGX_HOIST_LOADS=1 before vkCreateInstance
+  // enables it consistently in both pipeline/disk cache UUIDs and shader
+  // compilation while leaving any explicit AGX_HOIST_LOADS value (including "0")
+  // untouched.
+  {
+    std::ifstream dt("/proc/device-tree/compatible", std::ios::binary);
+    if (dt.is_open()) {
+      std::string compat(
+          (std::istreambuf_iterator<char>(dt)),
+          std::istreambuf_iterator<char>());
+      if (should_auto_enable_agx_hoist_loads(
+              compat, std::getenv("AGX_HOIST_LOADS"))) {
+        ::setenv("AGX_HOIST_LOADS", "1", /*overwrite=*/0);
+      }
+    }
+  }
 
   if (!vk::load_loader()) {
     error =
@@ -1062,6 +1081,33 @@ bool Runtime::init_impl() {
             p13.maxComputeWorkgroupSubgroups,
             16u,
             256u);
+    // 32-lane admission follows the same enable rule, for the CMAT16
+    // dense matmul builds on drivers whose native subgroup is 16 (ANV)
+    // or 64 (RADV) lanes. A native-32 device reports
+    // required_subgroup_size == 0 and needs no pin.
+    info.caps.subgroup_size_32_admitted =
+        info.caps.required_subgroup_size != 0 &&
+        subgroup_size_admitted(
+            f13.subgroupSizeControl == VK_TRUE,
+            p13.requiredSubgroupSizeStages,
+            p13.minSubgroupSize,
+            p13.maxSubgroupSize,
+            p13.maxComputeWorkgroupSubgroups,
+            32u,
+            128u);
+    // 64-lane admission: the one-subgroup 16x16x16 coopmat builds run a
+    // 64-wide wave, so a device whose native subgroup is narrower needs a
+    // legal requiredSubgroupSize = 64 pin for the whole workgroup.
+    info.caps.subgroup_size_64_admitted =
+        info.caps.required_subgroup_size != 0 &&
+        subgroup_size_admitted(
+            f13.subgroupSizeControl == VK_TRUE,
+            p13.requiredSubgroupSizeStages,
+            p13.minSubgroupSize,
+            p13.maxSubgroupSize,
+            p13.maxComputeWorkgroupSubgroups,
+            64u,
+            64u);
     info.caps.icd_path = icd_path;
     info.caps.icd_source = icd_selection.packaged
         ? "packaged"
@@ -1172,16 +1218,68 @@ bool runtime_alive() {
 // Compiled-tape debug switch plumbing (device.h). At omarchy scope, not
 // in the anonymous namespace above: the encoder and allocator call these
 // through the header declarations.
+namespace {
+struct EnvCache {
+  // 0 = no eval boundary seen on this thread yet: every lookup reads
+  // fresh, so pre-eval env mutation keeps full std::getenv semantics.
+  uint64_t epoch = 0;
+  // name -> (epoch read, getenv result copy; nullopt = unset).
+  std::unordered_map<std::string, std::pair<uint64_t, std::optional<std::string>>>
+      values;
+};
+thread_local EnvCache env_cache_;
+
+const char* env_lookup(const char* name) {
+  if (env_cache_.epoch == 0) {
+    return std::getenv(name);
+  }
+  auto it = env_cache_.values.find(name);
+  if (it == env_cache_.values.end() || it->second.first != env_cache_.epoch) {
+    const char* v = std::getenv(name);
+    auto [pos, _] = env_cache_.values.insert_or_assign(
+        name,
+        std::pair{
+            env_cache_.epoch,
+            v == nullptr ? std::nullopt : std::optional<std::string>(v)});
+    it = pos;
+  }
+  const auto& stored = it->second.second;
+  return stored ? stored->c_str() : nullptr;
+}
+} // namespace
+
+void env_note_eval() {
+  ++env_cache_.epoch;
+}
+
+uint64_t env_epoch() {
+  return env_cache_.epoch;
+}
+
+const char* env_str(const char* name) {
+  return env_lookup(name);
+}
+
+bool env_set(const char* name) {
+  return env_lookup(name) != nullptr;
+}
+
 bool env_flag(const char* name) {
-  const char* v = std::getenv(name);
+  const char* v = env_lookup(name);
   if (!v) {
     return false;
   }
-  std::string s = v;
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return s == "1" || s == "on" || s == "true" || s == "yes";
+  auto ieq = [v](const char* word) {
+    size_t i = 0;
+    for (; word[i] != '\0'; ++i) {
+      if (v[i] == '\0' ||
+          std::tolower(static_cast<unsigned char>(v[i])) != word[i]) {
+        return false;
+      }
+    }
+    return v[i] == '\0';
+  };
+  return ieq("1") || ieq("on") || ieq("true") || ieq("yes");
 }
 
 // Heap formula (device.h). max(50%, MemTotal - 16 GiB), 1 MiB-rounded
@@ -1526,8 +1624,12 @@ Device::Device(uint32_t physical_device_index) {
       hw.shader_atomic_float_add ? VK_TRUE : VK_FALSE;
   VkPhysicalDeviceCooperativeMatrixFeaturesKHR enabled_cm{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+  // Any advertised shape enables the feature: a driver that lists only
+  // the 16x16x16 fp16-operand C16 entry sets neither convenience
+  // boolean, yet the dense CMAT16 route can claim it.
   enabled_cm.cooperativeMatrix =
-      (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16)
+      (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16 ||
+       !hw.cooperative_matrix_shapes.empty())
           ? VK_TRUE
           : VK_FALSE;
   VkPhysicalDevice16BitStorageFeatures enabled16{
@@ -1537,6 +1639,10 @@ Device::Device(uint32_t physical_device_index) {
   VkPhysicalDeviceVulkan12Features enabled12{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
   enabled12.timelineSemaphore = VK_TRUE;
+  // The coopmat16 shaders declare OpCapability VulkanMemoryModel; enable
+  // the feature exactly where the hardware supports it so the generated
+  // module and the device feature chain agree.
+  enabled12.vulkanMemoryModel = hw.vulkan_memory_model ? VK_TRUE : VK_FALSE;
   enabled12.shaderFloat16 = hw.shader_float16 ? VK_TRUE : VK_FALSE;
   VkPhysicalDeviceVulkan13Features enabled13{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
@@ -1549,7 +1655,8 @@ Device::Device(uint32_t physical_device_index) {
   enabled16.pNext = &enabled12;
   enabled12.pNext = &enabled13;
   enabled13.pNext = &enabled_fa;
-  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16) {
+  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16 ||
+      !hw.cooperative_matrix_shapes.empty()) {
     enabled_fa.pNext = &enabled_cm;
   }
 #ifdef OMARCHY_BF16_CMAT
@@ -1576,7 +1683,8 @@ Device::Device(uint32_t physical_device_index) {
   // tail exists when both bits are set, matching the extension pair in
   // device_extension_names.
   void** tail = &enabled_fa.pNext;
-  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16) {
+  if (hw.cooperative_matrix_f32_8 || hw.cooperative_matrix_bf16 ||
+      !hw.cooperative_matrix_shapes.empty()) {
     tail = &enabled_cm.pNext;
 #ifdef OMARCHY_BF16_CMAT
     if (hw.cooperative_matrix_bf16_8 || hw.cooperative_matrix_bf16) {
@@ -1658,6 +1766,8 @@ Device::Device(uint32_t physical_device_index) {
   DeviceExtInput ext_in;
   ext_in.shader_atomic_float_add = hw.shader_atomic_float_add;
   ext_in.cooperative_matrix_f32_8 = hw.cooperative_matrix_f32_8;
+  ext_in.cooperative_matrix_any_shape =
+      !hw.cooperative_matrix_shapes.empty();
 #ifdef OMARCHY_BF16_CMAT
   ext_in.cooperative_matrix_bf16_8 = hw.cooperative_matrix_bf16_8;
   ext_in.cooperative_matrix_bf16 = hw.cooperative_matrix_bf16;
@@ -1811,8 +1921,11 @@ Device::Device(uint32_t physical_device_index) {
   compute_ = std::make_unique<ComputeRuntime>(
       device_,
       binding_limit,
+      hardware_caps_.subgroup_size,
       hardware_caps_.required_subgroup_size,
-      hardware_caps_.subgroup_size_16_admitted);
+      hardware_caps_.subgroup_size_16_admitted,
+      hardware_caps_.subgroup_size_32_admitted,
+      hardware_caps_.subgroup_size_64_admitted);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 

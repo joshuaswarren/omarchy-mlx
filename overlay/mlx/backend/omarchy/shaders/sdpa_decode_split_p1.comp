@@ -378,17 +378,17 @@ void main() {
 
   for (uint r = 0u; r < SPLIT_R; ++r) {
     uint head = kv_head * SPLIT_R + r;
-    uint base = (head * nblocks + block) * (D + 2u);
+    uint base = (head * nblocks + block) * (D + 4u);
     if (t == 0u) {
-      scratch_data.values[base] = block_max[r];
-      scratch_data.values[base + 1u] = s_sum[r * SUBGROUPS] + s_sum[r * SUBGROUPS + 1u] +
+      scratch_data.values[base + D] = block_max[r];
+      scratch_data.values[base + D + 1u] = s_sum[r * SUBGROUPS] + s_sum[r * SUBGROUPS + 1u] +
           s_sum[r * SUBGROUPS + 2u] + s_sum[r * SUBGROUPS + 3u];
     }
 #if HD == 128
-    scratch_data.values[base + 2u + t] = o[r];
+    scratch_data.values[base + t] = o[r];
 #else
     for (uint d = 0u; d < DPT; ++d) {
-      scratch_data.values[base + 2u + d * 128u + t] = o[r * DPT + d];
+      scratch_data.values[base + d * 128u + t] = o[r * DPT + d];
     }
 #endif
   }

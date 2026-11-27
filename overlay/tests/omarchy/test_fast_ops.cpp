@@ -410,14 +410,17 @@ TEST_CASE("fused norm forward on f16 and bf16 storage") {
 
 // The rope_rms_norm fuse is contractually bit-identical to
 // rope(rms_norm(x, weight, eps), ...) (mlx/fast.h), and the Apple
-// row-reduction shares one reduction order with the composed kernels at
-// every shape it serves, so flipping MLX_OMARCHY_NORM_APPLE must not
-// move a single bit either. The backend fuse gate (mlx/fast.cpp
+// row-reduction matches the composed kernels' bits at every shape it
+// serves (the shared shapes share one order; the rope-site 128 route
+// reduces in the subgroup order and the checks below still require the
+// same bits), so flipping MLX_OMARCHY_NORM_APPLE must not move a single
+// bit either. The backend fuse gate (mlx/fast.cpp
 // "omarchy fence") only accepts bf16, non-traditional, D <= 256 with
 // even D and a contiguous last axis; anything else throws the named
 // refusal (the model path pre-filters through the python gate). Sweep
 // the dispatch-predicate edges across fuseable cells: the 128-wide q/k
-// rows (never Apple-selected), the 256 any-rows selections with the
+// rows (Apple-selected only on the parts of
+// norm_apple_128_default_part), the 256 any-rows selections with the
 // 64/65-row boundary, and even prefill widths; pin refusals for
 // non-bf16 dtypes, D > 256, and odd widths (they must throw, never
 // silently fall back to a plain rope with the norm skipped).
@@ -4273,13 +4276,14 @@ TEST_CASE("rope half-split builds: the part rule") {
   // an earlier answer.
   for (int round = 0; round < 2; ++round) {
     CHECK(omarchy::rope_half_split_default_part("Apple M4 (G16G B1)"));
-    CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M1 (G13G B1)"));
+    CHECK(omarchy::rope_half_split_default_part("Apple M1 (G13G B1)"));
   }
-  CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::rope_half_split_default_part("Apple M1 (G13G B1)"));
   CHECK(omarchy::rope_half_split_default_part("Apple M4 (G16G B1)"));
-  CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M1 Max (G13C C0)"));
-  CHECK_FALSE(omarchy::rope_half_split_default_part("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::rope_half_split_default_part(""));
+  CHECK(omarchy::rope_half_split_default_part("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::rope_half_split_default_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::rope_half_split_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::rope_half_split_default_part(""));
 }
 
 TEST_CASE("rope half-split builds: MLX_OMARCHY_NO_ROPE_HALF_SPLIT values") {
@@ -4294,6 +4298,23 @@ TEST_CASE("rope half-split builds: MLX_OMARCHY_NO_ROPE_HALF_SPLIT values") {
     INFO("value=\"" << v << "\"");
     CHECK_EQ(omarchy::rope_half_split_setting(v), -1);
   }
+}
+
+TEST_CASE("norm apple 128 part rule") {
+  // Pure and per call: the fused rope+norm D=128 subgroup build defaults
+  // on only on G13C today; every other part keeps the shared-tree kernel
+  // (the measured gated/scaled losses at 128 stay on that family
+  // everywhere).
+  for (int round = 0; round < 2; ++round) {
+    CHECK(omarchy::norm_apple_128_default_part("Apple M1 Max (G13C C0)"));
+    CHECK(!omarchy::norm_apple_128_default_part("Apple M2 Max (G14C B1)"));
+  }
+  CHECK(omarchy::norm_apple_128_default_part("Apple M1 Max (G13C B1)"));
+  CHECK(omarchy::norm_apple_128_default_part("Apple M1 (G13G B1)"));
+  CHECK(!omarchy::norm_apple_128_default_part("Apple M4 (G16G B1)"));
+  CHECK(!omarchy::norm_apple_128_default_part("Apple M5 Max (G17C B1)"));
+  CHECK(!omarchy::norm_apple_128_default_part("Apple M6 (G18G B1)"));
+  CHECK(!omarchy::norm_apple_128_default_part(""));
 }
 
 TEST_CASE("fused rope half-split form runs the half-split builds") {
@@ -4363,4 +4384,217 @@ TEST_CASE("fused rope half-split form runs the half-split builds") {
       }
     }
   }
+}
+
+// ---- Issue 1023: fast primitives take the composed path on a CPU stream ----
+// Before the fix, each of the seven fast primitives returned false from
+// use_fallback on every stream, so an explicit CPU stream raised mlx core's
+// bare NYI. Each case names its reference the same way the GPU cases do.
+
+std::vector<float> flat_cpu(const array& value, Stream stream) {
+  array copy = astype(value, float32, stream);
+  copy.eval();
+  synchronize(stream);
+  const float* data = copy.data<float>();
+  return std::vector<float>(data, data + copy.size());
+}
+
+TEST_CASE("issue 1023: rms_norm runs the composed path on a CPU stream") {
+  if (!cpu::is_available()) {
+    skip("no CPU device");
+    return;
+  }
+  Stream cpu = new_stream(Device::cpu);
+  const size_t rows = 3;
+  const size_t cols = 8;
+  const float eps = 1e-5f;
+  auto x_data = pattern(rows * cols, 7);
+  auto w_data = pattern(cols, 11);
+  array x = array(x_data.begin(), Shape{int(rows), int(cols)}, float32);
+  array w = array(w_data.begin(), Shape{int(cols)}, float32);
+  auto got = flat_cpu(fast::rms_norm(x, w, eps, cpu), cpu);
+
+  std::vector<double> x_host = widen(x_data);
+  std::vector<double> w_broad(rows * cols);
+  for (size_t row = 0; row < rows; ++row) {
+    for (size_t col = 0; col < cols; ++col) {
+      w_broad[row * cols + col] = w_data[col];
+    }
+  }
+  std::vector<double> zeros(rows * cols, 0.0);
+  auto want = host_norm(x_host, w_broad, zeros, rows, cols, eps, false);
+  require_close(got, want, 1e-5, "rms_norm cpu stream");
+}
+
+TEST_CASE("issue 1023: layer_norm runs the composed path on a CPU stream") {
+  if (!cpu::is_available()) {
+    skip("no CPU device");
+    return;
+  }
+  Stream cpu = new_stream(Device::cpu);
+  const size_t rows = 4;
+  const size_t cols = 6;
+  const float eps = 1e-5f;
+  auto x_data = pattern(rows * cols, 13);
+  auto w_data = pattern(cols, 17);
+  auto b_data = pattern(cols, 19);
+  array x = array(x_data.begin(), Shape{int(rows), int(cols)}, float32);
+  array w = array(w_data.begin(), Shape{int(cols)}, float32);
+  array b = array(b_data.begin(), Shape{int(cols)}, float32);
+  auto got = flat_cpu(fast::layer_norm(x, w, b, eps, cpu), cpu);
+
+  std::vector<double> x_host = widen(x_data);
+  std::vector<double> w_broad(rows * cols);
+  std::vector<double> b_broad(rows * cols);
+  for (size_t row = 0; row < rows; ++row) {
+    for (size_t col = 0; col < cols; ++col) {
+      w_broad[row * cols + col] = w_data[col];
+      b_broad[row * cols + col] = b_data[col];
+    }
+  }
+  auto want = host_norm(x_host, w_broad, b_broad, rows, cols, eps, true);
+  require_close(got, want, 1e-5, "layer_norm cpu stream");
+}
+
+TEST_CASE("issue 1023: rope runs the composed path on a CPU stream") {
+  if (!cpu::is_available()) {
+    skip("no CPU device");
+    return;
+  }
+  Stream cpu = new_stream(Device::cpu);
+  const int T = 2;
+  const int D = 8;
+  const int dims = 8;
+  auto x_data = pattern(size_t(T * D), 23);
+  array x = array(x_data.begin(), Shape{1, T, D}, float32);
+  auto got = flat_cpu(
+      fast::rope(
+          x, dims, false, std::optional<float>(10000.0f), 1.0f, 0,
+          std::nullopt, cpu),
+      cpu);
+  auto want = host_rope_reference(
+      x_data, Shape{1, T, D}, dims, false, {}, 10000.0f, 1.0, 0);
+  require_close(got, want, 1e-4, "rope cpu stream");
+}
+
+TEST_CASE(
+    "issue 1023: scaled_dot_product_attention runs the composed path on a "
+    "CPU stream") {
+  if (!cpu::is_available()) {
+    skip("no CPU device");
+    return;
+  }
+  Stream cpu = new_stream(Device::cpu);
+  const int B = 1, H = 2, KV = 2, qL = 1, kL = 4, D = 8;
+  auto q_data = pattern(size_t(B * H * qL * D), 29);
+  auto k_data = pattern(size_t(B * KV * kL * D), 31);
+  auto v_data = pattern(size_t(B * KV * kL * D), 37);
+  array q = array(q_data.begin(), Shape{B, H, qL, D}, float32);
+  array k = array(k_data.begin(), Shape{B, KV, kL, D}, float32);
+  array v = array(v_data.begin(), Shape{B, KV, kL, D}, float32);
+  const float scale = 1.0f / std::sqrt(float(D));
+  auto got = flat_cpu(
+      fast::scaled_dot_product_attention(
+          q, k, v, scale, "", {}, std::nullopt, false, cpu),
+      cpu);
+  auto want = host_sdpa(q_data, k_data, v_data, B, H, KV, qL, kL, D, scale, false);
+  require_close(got, want, 1e-5, "sdpa cpu stream");
+}
+
+TEST_CASE("issue 1023: cross_entropy runs the composed path on a CPU stream") {
+  if (!cpu::is_available()) {
+    skip("no CPU device");
+    return;
+  }
+  Stream cpu = new_stream(Device::cpu);
+  const size_t rows = 3;
+  const size_t cols = 7;
+  auto logits_data = pattern(rows * cols, 67);
+  std::vector<int> targets{0, 3, 6};
+  array logits =
+      array(logits_data.begin(), Shape{int(rows), int(cols)}, float32);
+  array targets_arr = array(targets.begin(), Shape{int(rows)}, int32);
+  auto got = flat_cpu(fast::cross_entropy(logits, targets_arr, cpu), cpu);
+
+  std::vector<double> want(rows);
+  std::vector<double> logit_host = widen(logits_data);
+  for (size_t row = 0; row < rows; ++row) {
+    double max_value = logit_host[row * cols];
+    for (size_t col = 1; col < cols; ++col) {
+      max_value = std::max(max_value, logit_host[row * cols + col]);
+    }
+    double sum_exp = 0.0;
+    for (size_t col = 0; col < cols; ++col) {
+      sum_exp += std::exp(logit_host[row * cols + col] - max_value);
+    }
+    want[row] = max_value + std::log(sum_exp) -
+        logit_host[row * cols + size_t(targets[row])];
+  }
+  require_close(got, want, 1e-5, "cross_entropy cpu stream");
+}
+
+TEST_CASE("issue 1023: rms_norm_gated runs the composed path on a CPU stream") {
+  if (!cpu::is_available()) {
+    skip("no CPU device");
+    return;
+  }
+  Stream cpu = new_stream(Device::cpu);
+  const size_t rows = 3;
+  const size_t cols = 8;
+  const float eps = 1e-5f;
+  auto x_data = pattern(rows * cols, 41);
+  auto g_data = pattern(rows * cols, 43);
+  auto w_data = pattern(cols, 47);
+  array x = array(x_data.begin(), Shape{int(rows), int(cols)}, float32);
+  array g = array(g_data.begin(), Shape{int(rows), int(cols)}, float32);
+  array w = array(w_data.begin(), Shape{int(cols)}, float32);
+  auto got = flat_cpu(fast::rms_norm_gated(x, g, w, eps, cpu), cpu);
+
+  std::vector<double> x_host = widen(x_data);
+  std::vector<double> w_broad(rows * cols);
+  for (size_t row = 0; row < rows; ++row) {
+    for (size_t col = 0; col < cols; ++col) {
+      w_broad[row * cols + col] = w_data[col];
+    }
+  }
+  std::vector<double> zeros(rows * cols, 0.0);
+  auto normed = host_norm(x_host, w_broad, zeros, rows, cols, eps, false);
+  std::vector<double> want(rows * cols);
+  for (size_t i = 0; i < want.size(); ++i) {
+    const double gv = g_data[i];
+    want[i] = normed[i] * (gv / (1.0 + std::exp(-gv)));
+  }
+  require_close(got, want, 1e-4, "rms_norm_gated cpu stream");
+}
+
+TEST_CASE("issue 1023: rms_norm_scaled runs the composed path on a CPU stream") {
+  if (!cpu::is_available()) {
+    skip("no CPU device");
+    return;
+  }
+  Stream cpu = new_stream(Device::cpu);
+  const size_t rows = 3;
+  const size_t cols = 8;
+  const float eps = 1e-5f;
+  const float scale = 1.5f;
+  auto x_data = pattern(rows * cols, 53);
+  auto w_data = pattern(cols, 59);
+  array x = array(x_data.begin(), Shape{int(rows), int(cols)}, float32);
+  array w = array(w_data.begin(), Shape{int(cols)}, float32);
+  auto got = flat_cpu(fast::rms_norm_scaled(x, w, scale, eps, cpu), cpu);
+
+  std::vector<double> x_host = widen(x_data);
+  std::vector<double> w_broad(rows * cols);
+  for (size_t row = 0; row < rows; ++row) {
+    for (size_t col = 0; col < cols; ++col) {
+      w_broad[row * cols + col] = w_data[col];
+    }
+  }
+  std::vector<double> zeros(rows * cols, 0.0);
+  auto normed = host_norm(x_host, w_broad, zeros, rows, cols, eps, false);
+  std::vector<double> want(rows * cols);
+  for (size_t i = 0; i < want.size(); ++i) {
+    want[i] = double(scale) * normed[i];
+  }
+  require_close(got, want, 1e-4, "rms_norm_scaled cpu stream");
 }

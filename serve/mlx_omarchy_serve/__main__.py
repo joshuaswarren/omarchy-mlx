@@ -32,6 +32,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path, PurePosixPath
 
 from . import budget, catalog
@@ -325,9 +326,24 @@ def resolve_target(target: str | None, cat: dict) -> Resolved:
     for entry in cat["models"]:
         if entry["id"] == target:
             return Resolved(target, entry, None, entry["repo"], entry["revision"])
-    path = Path(target).expanduser()
-    if path.is_dir():
-        return Resolved(target, None, path, None, None)
+    path, is_dir = Path(target), False
+    try:
+        path = path.expanduser()
+        is_dir = stat.S_ISDIR(path.stat().st_mode)
+        if is_dir:  # list and search it without lengthening the path
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))  # listing needs read permission
+            try:
+                os.stat(".", dir_fd=fd)  # a lookup inside it needs search permission
+            finally:
+                os.close(fd)
+            return Resolved(target, None, path, None, None)
+    except (OSError, RuntimeError, ValueError) as exc:
+        # A missing path, a non-directory parent or an embedded NUL is no local directory;
+        # once a directory was found, any probe error is about that directory.
+        if is_dir or not isinstance(exc, (FileNotFoundError, NotADirectoryError, ValueError)):
+            raise budget.BudgetError(
+                f"cannot access local path {target!r} ({getattr(exc, 'strerror', None) or exc})"
+            )
     if REPO_RE.match(target) and "/" in target and not target.startswith("."):
         return Resolved(target, None, None, target, None)
     raise budget.BudgetError(
@@ -359,7 +375,7 @@ def backend_for(resolved: Resolved, server_flag: str | None) -> tuple[str, str |
 # ------------------------------------------------------------------- planning
 
 
-def hf_cache_dir() -> Path:
+def hf_cache_dir(*, create: bool = True) -> Path:
     # Mirror huggingface_hub's own precedence when it is importable
     # (HF_HUB_CACHE > HF_HOME/hub > default); fall back to the same
     # order manually so the disk check cannot look at the wrong volume.
@@ -375,7 +391,8 @@ def hf_cache_dir() -> Path:
             home = os.environ.get("HF_HOME")
             base = Path(home) if home else Path.home() / ".cache/huggingface"
             hub = base / "hub"
-    hub.mkdir(parents=True, exist_ok=True)  # the download would create it; stat it now
+    if create:
+        hub.mkdir(parents=True, exist_ok=True)  # the download would create it; stat it now
     return hub
 
 
@@ -502,6 +519,14 @@ def nonempty_file(path: Path) -> bool:
     return stat.S_ISREG(info.st_mode) and info.st_size > 0
 
 
+def regular_file(path: Path) -> bool:
+    try:
+        info = path.stat()
+    except (OSError, ValueError):  # 3.11's Path.is_file() raises for an untraversable directory
+        return False
+    return stat.S_ISREG(info.st_mode)
+
+
 def shard_name_ok(name: str) -> bool:
     """A relative file path inside the snapshot, written in normal form:
     not empty, ".", absolute, "..", NUL, a lone surrogate, "./x", "x/" or "x/."."""
@@ -514,12 +539,45 @@ def shard_name_ok(name: str) -> bool:
             and ".." not in path.parts and "\0" not in name)
 
 
+# Cap for a snapshot's model.safetensors.index.json and config.json. Public
+# 1T-parameter MoE weight maps reach about 20 MB (one entry per expert
+# tensor and scale) and mixed-precision MLX configs list every layer's
+# quantization (a few hundred KB); 64 MiB leaves room above both.
+SNAPSHOT_JSON_MAX_BYTES = 64 << 20
+SNAPSHOT_JSON_CHUNK = 64 << 10
+
+
+def read_snapshot_text(path: Path) -> str:
+    """UTF-8 text of a regular file of at most SNAPSHOT_JSON_MAX_BYTES.
+    Symlinks are followed: a Hugging Face cache snapshot links each file
+    into blobs/. A FIFO, device or oversized file raises ValueError
+    instead of blocking or reading without bound."""
+    cap = SNAPSHOT_JSON_MAX_BYTES
+    # O_NONBLOCK: a FIFO opens without a writer and is refused below.
+    with open(path, "rb", buffering=0,  # a buffered read would read ahead past the cap
+              opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("not a regular file")
+        if info.st_size > cap:
+            raise ValueError(f"exceeds {cap} bytes")
+        raw = bytearray()
+        while len(raw) <= cap:  # a short read is not EOF; stop at cap + 1
+            chunk = stream.read(min(SNAPSHOT_JSON_CHUNK, cap + 1 - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+    if len(raw) > cap:
+        raise ValueError(f"exceeds {cap} bytes")
+    return raw.decode("utf-8")
+
+
 def index_shards(index: Path) -> list[str] | None:
     """Sorted shard names of a safetensors index, or None when the file is
     unreadable or is not {"weight_map": {tensor: shard}} with every shard a
     name shard_name_ok accepts."""
     try:
-        obj = json.loads(index.read_text(encoding="utf-8"))
+        obj = json.loads(read_snapshot_text(index))
     except (OSError, ValueError, RecursionError):
         return None
     weight_map = obj.get("weight_map") if isinstance(obj, dict) else None
@@ -539,10 +597,16 @@ def snapshot_gaps(path: Path, patterns: list[str] | None = None,
     transformers-style checkpoints) config.json and some tokenizer file must
     also be present; a pack with its own layout (Laya keeps encoder/config.json
     and tokenizer/) declares its files in patterns and passes hf_layout=False.
-    Empty list means complete."""
+    A file that cannot be checked counts as a gap. Empty list means complete."""
     gaps: list[str] = []
     index = path / "model.safetensors.index.json"
-    if index.is_file():
+    try:
+        has_index = stat.S_ISREG(index.stat().st_mode)
+    except (FileNotFoundError, NotADirectoryError, ValueError):
+        has_index = False
+    except OSError:  # an index that cannot be checked may exist: no single-file fallback
+        has_index = True
+    if has_index:
         shards = index_shards(index)
         if shards is None:
             gaps.append("model.safetensors.index.json (unreadable or malformed)")
@@ -552,17 +616,21 @@ def snapshot_gaps(path: Path, patterns: list[str] | None = None,
             gaps.extend(shard for shard in shards if not nonempty_file(path / shard))
     elif not nonempty_file(path / "model.safetensors"):
         gaps.append("model.safetensors")
-    if hf_layout and not (path / "config.json").is_file():
+    if hf_layout and not regular_file(path / "config.json"):
         gaps.append("config.json")
-    if hf_layout and not any((path / name).is_file() for name in
+    if hf_layout and not any(regular_file(path / name) for name in
                              ("tokenizer.json", "tokenizer.model", "tokenizer_config.json")):
         gaps.append("a tokenizer file (tokenizer.json et al.)")
     if patterns:
         for pattern in patterns:
             if any(ch in pattern for ch in "*?["):
-                if not any(path.glob(pattern)):
+                try:
+                    matched = any(path.glob(pattern))
+                except OSError:  # 3.11's Path.glob() calls is_dir() on path
+                    matched = False
+                if not matched:
                     gaps.append(pattern)
-            elif not (path / pattern).is_file():
+            elif not regular_file(path / pattern):
                 gaps.append(pattern)
     return gaps
 
@@ -575,18 +643,36 @@ def snapshot_complete(path: Path, patterns: list[str] | None = None,
 def offline_snapshot_detail(resolved: Resolved, patterns: list[str] | None = None,
                             hf_layout: bool = True) -> str:
     """Human-readable cache state for an offline refusal: names the exact
-    missing files when a snapshot directory exists, or says none does."""
+    missing files when a snapshot directory exists, names an unreadable
+    snapshot directory, or says none does."""
     if resolved.local_path is not None or not resolved.revision:
         return ""
-    directory = (hf_cache_dir() / ("models--" + resolved.repo.replace("/", "--"))
+    directory = (hf_cache_dir(create=False) / ("models--" + resolved.repo.replace("/", "--"))
                  / "snapshots" / resolved.revision)
-    if not directory.is_dir():
-        return (f"; the Hugging Face cache has no snapshot for revision "
-                f"{resolved.revision[:12]} of {resolved.repo}")
+
+    def unreadable_or_absent() -> str | None:
+        try:
+            with os.scandir(directory):  # the snapshot exists and can be listed and searched
+                pass
+            os.stat(os.path.join(directory, "."))
+        except (FileNotFoundError, NotADirectoryError, ValueError):
+            return (f"; the Hugging Face cache has no snapshot for revision "
+                    f"{resolved.revision[:12]} of {resolved.repo}")
+        except OSError as exc:  # an untraversable cache or snapshot directory
+            return (f"; the Hugging Face cache snapshot for revision {resolved.revision[:12]} "
+                    f"of {resolved.repo} is unreadable at {directory} ({exc.strerror or exc})")
+        return None
+
+    state = unreadable_or_absent()
+    if state is not None:
+        return state
     gaps = snapshot_gaps(directory, patterns, hf_layout)
     if not gaps:
         return ""
-    return f"; the cached snapshot for {resolved.repo} is missing: " + ", ".join(gaps[:8])
+    # a directory locked or removed during the scan: report that, not missing files
+    return unreadable_or_absent() or (
+        f"; the cached snapshot for {resolved.repo} is missing: " + ", ".join(gaps[:8])
+    )
 
 
 def probe_snapshot(resolved: Resolved, patterns: list[str] | None = None,
@@ -634,7 +720,7 @@ def download_snapshot(resolved: Resolved, patterns: list[str] | None = None) -> 
 def check_custom_code(model_dir: Path) -> None:
     config = model_dir / "config.json"
     try:
-        obj = json.loads(config.read_text(encoding="utf-8"))
+        obj = json.loads(read_snapshot_text(config))
     except (OSError, ValueError, RecursionError):
         return  # advisory only: an unreadable config.json warns about nothing
     if isinstance(obj, dict) and "auto_map" in obj:
@@ -1123,6 +1209,27 @@ def host_nonlocal(host: str) -> bool:
     return host not in ("127.0.0.1", "localhost", "::1")
 
 
+def cache_status(path: Path) -> tuple[str, bool]:
+    """The `catalog status` cache line, and whether load_catalog() serves the cache."""
+    try:
+        info = path.stat()  # one stat: no is_file()/stat() race
+        if not stat.S_ISREG(info.st_mode):
+            return f"none at {path}", False
+        # load_catalog() serves the cache only when it validates; say the same.
+        catalog.validate_file(path)
+    except catalog.CatalogError:  # before ValueError: CatalogError subclasses it
+        note = ", invalid"
+    except (FileNotFoundError, NotADirectoryError, IsADirectoryError, ValueError):
+        # removed or replaced mid-check; ValueError: a name the filesystem encoding cannot hold
+        return f"none at {path}", False
+    except OSError as exc:  # an untraversable directory or an unreadable file
+        return f"unreadable at {path} ({exc.strerror or exc})", False
+    else:
+        note = ""
+    age_h = (time.time() - info.st_mtime) / 3600.0
+    return f"{path} ({age_h:.1f}h old{note})", not note
+
+
 def cmd_catalog(args, _cat, home) -> int:
     if args.catalog_command == "list":
         cat = catalog.load_catalog(home)
@@ -1135,19 +1242,8 @@ def cmd_catalog(args, _cat, home) -> int:
                   f" {e['memory']['weights_bytes'] / GiB:>7.2f}")
         return 0
     if args.catalog_command == "status":
-        path = catalog.cache_path(home)
-        cache_ok = False
-        if path.is_file():
-            age_h = 0.0
-            import time
-
-            age_h = (time.time() - path.stat().st_mtime) / 3600.0
-            # load_catalog() serves the cache only when it validates; say the same.
-            cache_ok = catalog._is_valid(path)
-            note = "" if cache_ok else ", invalid"
-            print(f"cache:  {path} ({age_h:.1f}h old{note})")
-        else:
-            print(f"cache:  none at {path}")
+        line, cache_ok = cache_status(catalog.cache_path(home))
+        print(f"cache:  {line}")
         print(f"bundled: {catalog.bundled_path()}")
         print(f"url:    {os.environ.get('MLX_OMARCHY_CATALOG_URL') or catalog.DEFAULT_CATALOG_URL}")
         print(f"live:   {'cache' if cache_ok else 'bundled fallback'}")

@@ -133,6 +133,7 @@
 #include "copy_general_bf16.h"
 #include "copy_general_f16.h"
 #include "slice_update_pair_f16.h"
+#include "slice_update_pair_bf16.h"
 #include "copy_general_f32.h"
 #include "copy_general_u32.h"
 #include "copy_general_bool.h"
@@ -265,6 +266,11 @@
 #include "fast_rope_freqs_bf16.h"
 #include "fast_rope_norm_bf16.h"
 #include "fast_rope_norm_apple_bf16.h"
+#include "fast_rope_norm_pair_bf16.h"
+#include "fast_rope_norm_pair_apple_bf16.h"
+#include "fast_rope_norm_bf16_w128.h"
+#include "fast_rope_norm_apple_bf16_w128.h"
+
 #include "fast_rope_freqs_f16.h"
 #include "fast_rope_freqs_f32.h"
 #include "scan_f16.h"
@@ -304,6 +310,7 @@
 #include "qmm_vec_q4_word_subgroup_bf16_g128.h"
 #include "qmm_vec_q4_word_subgroup_batch4_bf16.h"
 #include "qmm_vec_q4_word_subgroup_rows8_bf16.h"
+#include "qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16.h"
 #include "qmm_vec_q4_word_subgroup_batch8_bf16.h"
 #include "qmm_vec_q4_word_subgroup_f16.h"
 #include "qmm_vec_q4_word_subgroup_f32.h"
@@ -312,20 +319,35 @@
 #include "qmm_vec_q4_multi_f32.h"
 #include "qmm_vec_q4_multi_subgroup_bf16.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s16.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s8w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s8w2_fast.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16kcont.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16kconts16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s4w2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast.h"
+#include "qmm_vec_q4_swiglu_bf16_r2s8w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r2s8w2_fast.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s8w2.h"
 #include "qmm_vec_q4_multi_outgate_bf16.h"
 #include "qmm_vec_q4_resnorm_bf16.h"
+#include "qmm_vec_q4_resnorm_bf16_r2s8w2.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s16w2.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2.h"
+#include "qmm_vec_q4_resnorm_bf16_r2s8w2_vec.h"
+#include "qmm_vec_q4_resnorm_bf16_r2s8w2_vec_fast.h"
 #include "qmm_vec_q4_outgate_resnorm_bf16.h"
+#include "qmm_vec_q4_outgate_resnorm_bf16_r2s8w2.h"
 #include "qmm_vec_q4_multi_token4_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token16_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token4_bf16.h"
 #include "qmm_vec_q4_multi_token16_bf16.h"
 #include "qmm_vec_q4_multi_token8_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_token8_bf16.h"
+#include "qmm_vec_q4_multi_token4_resnorm_subgroup_bf16.h"
+#include "qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16.h"
 #include "qmm_vec_q4_multi_subgroup_f16.h"
 #include "qmm_vec_q4_multi_subgroup_f32.h"
 #include "sdpa_decode_native_f16.h"
@@ -355,6 +377,7 @@
 #include "sdpa_decode_split_p1v_g8.h"
 #include "sdpa_decode_split_p2.h"
 #include "sdpa_decode_split_p1v_bk64.h"
+#include "sdpa_decode_split_p1m_g4.h"
 #include "sdpa_decode_split_p2_bk64.h"
 #include "sdpa_decode_split_p1_hd256_g1.h"
 #include "sdpa_decode_split_p1_hd256_g2.h"
@@ -364,6 +387,32 @@
 #include "sdpa_decode_split_p1_hd256_g8.h"
 #include "sdpa_decode_split_p1v_hd256_g4.h"
 #include "sdpa_decode_split_p2_hd256.h"
+#include "sdpa_decode_split_p1kv_bk32_g4.h"
+#include "sdpa_decode_split_p1kv_bk64_g4.h"
+#include "sdpa_decode_split_p1kv_bk128_g4.h"
+#include "sdpa_decode_split_p2_bk32.h"
+#include "sdpa_decode_split_p1kv_hd256_bk32_g4.h"
+#include "sdpa_decode_split_p1kv_hd256_bk64_g4.h"
+#include "sdpa_decode_split_p1kv_hd256_bk128_g4.h"
+#include "sdpa_decode_split_p2_hd256_bk32.h"
+#include "sdpa_decode_split_p2_hd256_bk64.h"
+#include "sdpa_decode_online_sg32_bf16_hd128.h"
+#include "sdpa_decode_online_rope_sg32_bf16_hd128.h"
+#include "sdpa_decode_online_rope_sg32_bf16_hd128_g13c.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd128.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd128_g13c.h"
+#include "sdpa_decode_online_rope_sg32_bf16_hd256.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split.h"
+#include "sdpa_decode_online_sg32_bf16_hd256.h"
+#include "sdpa_decode_online_sg16_bf16_hd256.h"
+#include "sdpa_decode_online_outgate_sg32_bf16_hd128.h"
+#include "sdpa_decode_online_outgate_sg32_bf16_hd256.h"
+#include "sdpa_decode_online_outgate_sg16_bf16_hd256.h"
+#include "sdpa_decode_split_p2_outgate_hd128.h"
+#include "sdpa_decode_split_p2_outgate_hd256.h"
+#include "sdpa_decode_split_p2_outgate_hd256_bk32.h"
+#include "sdpa_decode_split_p2_outgate_hd256_bk64.h"
 #include "partition_smallk_f32.h"
 #include "partition_smallk_f16.h"
 #include "partition_smallk_bf16.h"
@@ -378,6 +427,10 @@
 #include "sdpa_vjp_reduce_f16.h"
 #include "sdpa_vjp_reduce_bf16.h"
 #include "gated_delta_decode_bf16.h"
+#include "gated_delta_decode_bf16_sg32.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_fast.h"
+#include "gated_delta_decode_conv_norm_ba_bf16_sg32.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
 #include "gated_delta_decode_composed_bf16.h"
@@ -399,6 +452,8 @@
 #include "gated_delta_decode_perrow_pfw_conv_bf16.h"
 #include "gated_delta_decode_perrow_pf_conv_norm_bf16.h"
 #include "gated_delta_decode_perrow_pfw_conv_norm_bf16.h"
+#include "gated_delta_decode_perrow_pf_conv_gqa_bf16.h"
+#include "gated_delta_decode_perrow_pf_conv_norm_gqa_bf16.h"
 #include "gated_delta_prefill_bf16.h"
 #include "gated_delta_prefill_coopmat_bf16.h"
 #include "gated_delta_prefill_coopmat_batch_bf16.h"
@@ -413,6 +468,7 @@
 #include "gdn_conv_decode_bf16.h"
 #include "gdn_conv_decode_apple_bf16.h"
 #include "qmm_vec_greedy_bf16.h"
+#include "qmm_vec_greedy_word_bf16.h"
 #include "bonsai_q1_qmv_subgroup_f32.h"
 #include "bonsai_q1_qmv_subgroup_f16.h"
 #include "bonsai_q1_qmv_subgroup_bf16.h"
@@ -437,6 +493,7 @@
 #include "qmm_coopmat_f16.h"
 #include "qmm_coopmat_m16_f16.h"
 #include "qmm_coopmat_bf16.h"
+#include "qmm_coopmat_c16_bf16.h"
 #include "qmm_coopmat_m16_bf16.h"
 #include "qmm_coopmat_x32.h"
 #include "qmm_coopmat_m16_x32.h"
@@ -464,6 +521,10 @@
 #include "qmm_coopmat_sg4_x32_fn_g4_pad_cheap.h"
 #include "qmm_coopmat_sg4_x32_fn_g4_pad_k32.h"
 #include "qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap.h"
+#include "qmm_coopmat_sg4_x32_fn_g4_pad_k64.h"
+#include "qmm_coopmat_sg4_x32_fn_g4_pad_k64_fm.h"
+#include "qmm_coopmat_sg8_x32_fn_g4_pad_k64.h"
+#include "qmm_coopmat_sg8_x32_fn_g4_pad_k64_fm.h"
 #include "gated_delta_decode_bf16.h"
 #include "gated_delta_decode_perrow_bf16.h"
 #include "gated_delta_decode_perrow_pf_bf16.h"
@@ -476,6 +537,9 @@
 #include "matmul_bm32_bf16.h"
 #include "binary_vec_f16.h"
 #include "binary_vec_bf16.h"
+#include "binary_simple_f32.h"
+#include "binary_simple_f16.h"
+#include "binary_simple_bf16.h"
 #include "unary_vec_f16.h"
 #include "unary_vec_bf16.h"
 #include "matmul_rb_f16.h"
@@ -646,6 +710,7 @@
 #include "fast_rms_norm_f16.h"
 #include "fast_rms_norm_bf16.h"
 #include "fast_rms_norm_apple_bf16.h"
+#include "fast_add_norm_apple_bf16.h"
 #include "fast_layer_norm_f32.h"
 #include "fast_layer_norm_f16.h"
 #include "fast_layer_norm_bf16.h"
@@ -717,6 +782,20 @@
 #include "matmul_direct_f16_nt_k2s8.h"
 #include "matmul_direct_f32_nt_k4s8.h"
 #include "matmul_direct_f32_tn_ws8.h"
+#include "matmul_direct_f16_c16_nn.h"
+#include "matmul_direct_f16_c16_nt.h"
+#include "matmul_direct_f16_c16_tn.h"
+#include "matmul_direct_f16_c16_tt.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s32w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s4w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s4w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s4w2_fast.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_fast.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
@@ -724,10 +803,18 @@
 #include "matmul_direct_bf16_tt.h"
 #include "matmul_direct_bf16_tn_ws8.h"
 #include "matmul_direct_bf16_nt_k4s8.h"
+#include "matmul_direct_bf16_c16_nn.h"
+#include "matmul_direct_bf16_c16_nt.h"
+#include "matmul_direct_bf16_c16_tn.h"
+#include "matmul_direct_bf16_c16_tt.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8.h"
 #include "sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2.h"
+#include "sdpa_prefill_flash_causal_coopmat16_bf16.h"
 #include "qmm_intel_bf16.h"
+#include "matmul_bf16_coopmat_xe16.h"
+#include "qmm_coopmat16_xe.h"
+#include "qmm_coopmat16_bf16.h"
 #endif
 
 namespace mlx::core::omarchy {
@@ -1072,6 +1159,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {copy_general_f16, copy_general_f16_size};
     case ComputeKernel::SliceUpdatePairF16:
       return {slice_update_pair_f16, slice_update_pair_f16_size};
+    case ComputeKernel::SliceUpdatePairBF16:
+      return {slice_update_pair_bf16, slice_update_pair_bf16_size};
     case ComputeKernel::CopyGeneralBF16:
       return {copy_general_bf16, copy_general_bf16_size};
     case ComputeKernel::CopyGeneralU32:
@@ -1356,6 +1445,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           gated_delta_decode_perrow_pfw_conv_norm_bf16,
           gated_delta_decode_perrow_pfw_conv_norm_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeConvBF16PfGqa:
+      return {
+          gated_delta_decode_perrow_pf_conv_gqa_bf16,
+          gated_delta_decode_perrow_pf_conv_gqa_bf16_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16PfGqa:
+      return {
+          gated_delta_decode_perrow_pf_conv_norm_gqa_bf16,
+          gated_delta_decode_perrow_pf_conv_norm_gqa_bf16_size};
     case ComputeKernel::GatedDeltaDecodeStateBF16:
       return {gated_delta_decode_state_bf16, gated_delta_decode_state_bf16_size};
     case ComputeKernel::GatedDeltaDecodeGqaStateBF16:
@@ -1384,6 +1481,31 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {fast_rope_norm_bf16, fast_rope_norm_bf16_size};
     case ComputeKernel::FastRopeNormAppleBF16:
       return {fast_rope_norm_apple_bf16, fast_rope_norm_apple_bf16_size};
+    case ComputeKernel::FastRopeNormPairBF16:
+      return {fast_rope_norm_pair_bf16, fast_rope_norm_pair_bf16_size};
+    case ComputeKernel::FastRopeNormPairAppleBF16:
+      return {fast_rope_norm_pair_apple_bf16,
+              fast_rope_norm_pair_apple_bf16_size};
+    case ComputeKernel::SdpaDecodeOnlineSg32BF16Hd128:
+      return {sdpa_decode_online_sg32_bf16_hd128,
+              sdpa_decode_online_sg32_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128:
+      return {sdpa_decode_online_rope_sg32_bf16_hd128,
+              sdpa_decode_online_rope_sg32_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128G13C:
+      return {sdpa_decode_online_rope_sg32_bf16_hd128_g13c,
+              sdpa_decode_online_rope_sg32_bf16_hd128_g13c_size};
+    case ComputeKernel::SdpaDecodeOnlineSg32BF16Hd256:
+      return {sdpa_decode_online_sg32_bf16_hd256,
+              sdpa_decode_online_sg32_bf16_hd256_size};
+    case ComputeKernel::SdpaDecodeOnlineSg16BF16Hd256:
+      return {sdpa_decode_online_sg16_bf16_hd256,
+              sdpa_decode_online_sg16_bf16_hd256_size};
+    case ComputeKernel::FastRopeNormBF16W128:
+      return {fast_rope_norm_bf16_w128, fast_rope_norm_bf16_w128_size};
+    case ComputeKernel::FastRopeNormAppleBF16W128:
+      return {fast_rope_norm_apple_bf16_w128, fast_rope_norm_apple_bf16_w128_size};
+
     case ComputeKernel::CrossEntropyBF16:
       return {fast_cross_entropy_bf16, fast_cross_entropy_bf16_size};
     case ComputeKernel::Fp8ToF32:
@@ -1623,6 +1745,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_coopmat_m16_f16, qmm_coopmat_m16_f16_size};
     case ComputeKernel::QmmPrefillCoopmatBF16:
       return {qmm_coopmat_bf16, qmm_coopmat_bf16_size};
+    case ComputeKernel::QmmPrefillCoopmat16BF16:
+      return {qmm_coopmat_c16_bf16, qmm_coopmat_c16_bf16_size};
     case ComputeKernel::QmmPrefillCoopmatM16BF16:
       return {qmm_coopmat_m16_bf16, qmm_coopmat_m16_bf16_size};
     case ComputeKernel::QmmPrefillCoopmatBF16X32:
@@ -1733,6 +1857,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {gdn_conv_decode_apple_bf16, gdn_conv_decode_apple_bf16_size};
     case ComputeKernel::QmmVecGreedyBF16:
       return {qmm_vec_greedy_bf16, qmm_vec_greedy_bf16_size};
+    case ComputeKernel::QmmVecGreedyWordBF16:
+      return {qmm_vec_greedy_word_bf16, qmm_vec_greedy_word_bf16_size};
     case ComputeKernel::BonsaiQ1QmvSubgroupF32:
       return {bonsai_q1_qmv_subgroup_f32, bonsai_q1_qmv_subgroup_f32_size};
     case ComputeKernel::BonsaiQ1QmvSubgroupF16:
@@ -1810,6 +1936,12 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {binary_vec_f16, binary_vec_f16_size};
     case ComputeKernel::BinaryVecBF16:
       return {binary_vec_bf16, binary_vec_bf16_size};
+    case ComputeKernel::BinarySimpleF32:
+      return {binary_simple_f32, binary_simple_f32_size};
+    case ComputeKernel::BinarySimpleF16:
+      return {binary_simple_f16, binary_simple_f16_size};
+    case ComputeKernel::BinarySimpleBF16:
+      return {binary_simple_bf16, binary_simple_bf16_size};
     case ComputeKernel::UnaryVecF16:
       return {unary_vec_f16, unary_vec_f16_size};
     case ComputeKernel::UnaryVecBF16:
@@ -1924,6 +2056,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
           qmm_vec_q4_multi_token8_subgroup_bf16_size};
     case ComputeKernel::QmmVecQ4MultiToken8BF16:
       return {qmm_vec_q4_multi_token8_bf16, qmm_vec_q4_multi_token8_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken4ResNormSubgroupBF16:
+      return {
+          qmm_vec_q4_multi_token4_resnorm_subgroup_bf16,
+          qmm_vec_q4_multi_token4_resnorm_subgroup_bf16_size};
+    case ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16:
+      return {
+          qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16,
+          qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16_size};
     case ComputeKernel::SdpaDecodeNativeF16:
       return {sdpa_decode_native_f16, sdpa_decode_native_f16_size};
     case ComputeKernel::SdpaDecodeNativeBF16:
@@ -1982,6 +2122,8 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {sdpa_decode_split_p1v_bk64, sdpa_decode_split_p1v_bk64_size};
     case ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128:
       return {sdpa_decode_split_p2_bk64, sdpa_decode_split_p2_bk64_size};
+    case ComputeKernel::SdpaDecodeSplitP1MR4BF16Hd128:
+      return {sdpa_decode_split_p1m_g4, sdpa_decode_split_p1m_g4_size};
     case ComputeKernel::SdpaDecodeSplitP1R1BF16Hd256:
       return {sdpa_decode_split_p1_hd256_g1, sdpa_decode_split_p1_hd256_g1_size};
     case ComputeKernel::SdpaDecodeSplitP1R2BF16Hd256:
@@ -2102,6 +2244,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_direct_f32_nt_k4s8, matmul_direct_f32_nt_k4s8_size};
     case ComputeKernel::MatmulDirectF32TnWS8:
       return {matmul_direct_f32_tn_ws8, matmul_direct_f32_tn_ws8_size};
+    case ComputeKernel::MatmulDirectF16C16Nn:
+      return {matmul_direct_f16_c16_nn, matmul_direct_f16_c16_nn_size};
+    case ComputeKernel::MatmulDirectF16C16Nt:
+      return {matmul_direct_f16_c16_nt, matmul_direct_f16_c16_nt_size};
+    case ComputeKernel::MatmulDirectF16C16Tn:
+      return {matmul_direct_f16_c16_tn, matmul_direct_f16_c16_tn_size};
+    case ComputeKernel::MatmulDirectF16C16Tt:
+      return {matmul_direct_f16_c16_tt, matmul_direct_f16_c16_tt_size};
 #ifdef MLX_OMARCHY_BF16_DIRECT
     case ComputeKernel::MatmulDirectBF16Nn:
       return {matmul_direct_bf16_nn, matmul_direct_bf16_nn_size};
@@ -2115,6 +2265,18 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {matmul_direct_bf16_tn_ws8, matmul_direct_bf16_tn_ws8_size};
     case ComputeKernel::MatmulDirectBF16NtK4S8:
       return {matmul_direct_bf16_nt_k4s8, matmul_direct_bf16_nt_k4s8_size};
+    case ComputeKernel::MatmulDirectBF16C16Nn:
+      return {
+          matmul_direct_bf16_c16_nn, matmul_direct_bf16_c16_nn_size};
+    case ComputeKernel::MatmulDirectBF16C16Nt:
+      return {
+          matmul_direct_bf16_c16_nt, matmul_direct_bf16_c16_nt_size};
+    case ComputeKernel::MatmulDirectBF16C16Tn:
+      return {
+          matmul_direct_bf16_c16_tn, matmul_direct_bf16_c16_tn_size};
+    case ComputeKernel::MatmulDirectBF16C16Tt:
+      return {
+          matmul_direct_bf16_c16_tt, matmul_direct_bf16_c16_tt_size};
     case ComputeKernel::SdpaCausalFlashCoopmatBF16:
       return {
           sdpa_prefill_flash_causal_coopmat_bf16,
@@ -2129,6 +2291,16 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
           sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2_size};
     case ComputeKernel::QmmPrefillIntelBF16:
       return {qmm_intel_bf16, qmm_intel_bf16_size};
+    case ComputeKernel::MatmulBF16CoopmatXe16:
+      return {matmul_bf16_coopmat_xe16, matmul_bf16_coopmat_xe16_size};
+    case ComputeKernel::QmmPrefillCoopmat16XeBF16:
+      return {qmm_coopmat16_xe, qmm_coopmat16_xe_size};
+    case ComputeKernel::QmmPrefillCoopmatBF16x16:
+      return {qmm_coopmat16_bf16, qmm_coopmat16_bf16_size};
+    case ComputeKernel::SdpaCausalFlashCoopmat16BF16:
+      return {
+          sdpa_prefill_flash_causal_coopmat16_bf16,
+          sdpa_prefill_flash_causal_coopmat16_bf16_size};
 #else
     case ComputeKernel::MatmulDirectBF16Nn:
     case ComputeKernel::MatmulDirectBF16Nt:
@@ -2136,10 +2308,18 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::MatmulDirectBF16Tt:
     case ComputeKernel::MatmulDirectBF16TnWS8:
     case ComputeKernel::MatmulDirectBF16NtK4S8:
+    case ComputeKernel::MatmulDirectBF16C16Nn:
+    case ComputeKernel::MatmulDirectBF16C16Nt:
+    case ComputeKernel::MatmulDirectBF16C16Tn:
+    case ComputeKernel::MatmulDirectBF16C16Tt:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8:
     case ComputeKernel::SdpaCausalFlashCoopmatBF16Qchunk8Heads2:
     case ComputeKernel::QmmPrefillIntelBF16:
+    case ComputeKernel::MatmulBF16CoopmatXe16:
+    case ComputeKernel::QmmPrefillCoopmat16XeBF16:
+    case ComputeKernel::QmmPrefillCoopmatBF16x16:
+    case ComputeKernel::SdpaCausalFlashCoopmat16BF16:
       break;
 #endif
     case ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16:
@@ -2150,6 +2330,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_rows8_bf16,
           qmm_vec_q4_word_subgroup_rows8_bf16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16:
+      return {
+          qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16,
+          qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16_size};
     case ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16:
       return {
           qmm_vec_q4_word_subgroup_batch8_bf16,
@@ -2296,11 +2480,192 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {qmm_coopmat_sg4_x32_fn_g4_pad_k32, qmm_coopmat_sg4_x32_fn_g4_pad_k32_size};
     case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap:
       return {qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap, qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap_size};
+    case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64:
+      return {qmm_coopmat_sg4_x32_fn_g4_pad_k64, qmm_coopmat_sg4_x32_fn_g4_pad_k64_size};
+    case ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM:
+      return {qmm_coopmat_sg4_x32_fn_g4_pad_k64_fm, qmm_coopmat_sg4_x32_fn_g4_pad_k64_fm_size};
+    case ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64:
+      return {qmm_coopmat_sg8_x32_fn_g4_pad_k64, qmm_coopmat_sg8_x32_fn_g4_pad_k64_size};
+    case ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM:
+      return {qmm_coopmat_sg8_x32_fn_g4_pad_k64_fm, qmm_coopmat_sg8_x32_fn_g4_pad_k64_fm_size};
     case ComputeKernel::QmmVecQ4ResNormBF16:
       return {qmm_vec_q4_resnorm_bf16, qmm_vec_q4_resnorm_bf16_size};
     case ComputeKernel::QmmVecQ4OutgateResNormBF16:
       return {
           qmm_vec_q4_outgate_resnorm_bf16, qmm_vec_q4_outgate_resnorm_bf16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s8w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s8w2_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R2S8W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r2s8w2, qmm_vec_q4_swiglu_bf16_r2s8w2_size};
+    case ComputeKernel::QmmVecQ4ResNormBF16R2S8W2:
+      return {
+          qmm_vec_q4_resnorm_bf16_r2s8w2, qmm_vec_q4_resnorm_bf16_r2s8w2_size};
+    case ComputeKernel::QmmVecQ4ResNormBF16R2S8W2Vec:
+      return {
+          qmm_vec_q4_resnorm_bf16_r2s8w2_vec,
+          qmm_vec_q4_resnorm_bf16_r2s8w2_vec_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2Fast:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s8w2_fast,
+          qmm_vec_q4_word_subgroup_bf16_r2s8w2_fast_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R2S8W2Fast:
+      return {
+          qmm_vec_q4_swiglu_bf16_r2s8w2_fast,
+          qmm_vec_q4_swiglu_bf16_r2s8w2_fast_size};
+    case ComputeKernel::QmmVecQ4ResNormBF16R2S8W2VecFast:
+      return {
+          qmm_vec_q4_resnorm_bf16_r2s8w2_vec_fast,
+          qmm_vec_q4_resnorm_bf16_r2s8w2_vec_fast_size};
+    case ComputeKernel::QmmVecQ4OutgateResNormBF16R2S8W2:
+      return {
+          qmm_vec_q4_outgate_resnorm_bf16_r2s8w2,
+          qmm_vec_q4_outgate_resnorm_bf16_r2s8w2_size};
+    case ComputeKernel::SdpaDecodeSplitP1KVBk32R4BF16Hd128:
+      return {sdpa_decode_split_p1kv_bk32_g4, sdpa_decode_split_p1kv_bk32_g4_size};
+    case ComputeKernel::SdpaDecodeSplitP1KVBk64R4BF16Hd128:
+      return {sdpa_decode_split_p1kv_bk64_g4, sdpa_decode_split_p1kv_bk64_g4_size};
+    case ComputeKernel::SdpaDecodeSplitP1KVBk128R4BF16Hd128:
+      return {sdpa_decode_split_p1kv_bk128_g4, sdpa_decode_split_p1kv_bk128_g4_size};
+    case ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd128:
+      return {sdpa_decode_split_p2_bk32, sdpa_decode_split_p2_bk32_size};
+    case ComputeKernel::SdpaDecodeSplitP1KVBk32R4BF16Hd256:
+      return {sdpa_decode_split_p1kv_hd256_bk32_g4, sdpa_decode_split_p1kv_hd256_bk32_g4_size};
+    case ComputeKernel::SdpaDecodeSplitP1KVBk64R4BF16Hd256:
+      return {sdpa_decode_split_p1kv_hd256_bk64_g4, sdpa_decode_split_p1kv_hd256_bk64_g4_size};
+    case ComputeKernel::SdpaDecodeSplitP1KVBk128R4BF16Hd256:
+      return {sdpa_decode_split_p1kv_hd256_bk128_g4, sdpa_decode_split_p1kv_hd256_bk128_g4_size};
+    case ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd256:
+      return {sdpa_decode_split_p2_hd256_bk32, sdpa_decode_split_p2_hd256_bk32_size};
+    case ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd256:
+      return {sdpa_decode_split_p2_hd256_bk64, sdpa_decode_split_p2_hd256_bk64_size};
+    case ComputeKernel::FastAddRmsNormAppleBF16:
+      return {fast_add_norm_apple_bf16, fast_add_norm_apple_bf16_size};
+    case ComputeKernel::SdpaDecodeOnlineOutgateSg32BF16Hd128:
+      return {
+          sdpa_decode_online_outgate_sg32_bf16_hd128,
+          sdpa_decode_online_outgate_sg32_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeOnlineOutgateSg32BF16Hd256:
+      return {
+          sdpa_decode_online_outgate_sg32_bf16_hd256,
+          sdpa_decode_online_outgate_sg32_bf16_hd256_size};
+    case ComputeKernel::SdpaDecodeOnlineOutgateSg16BF16Hd256:
+      return {
+          sdpa_decode_online_outgate_sg16_bf16_hd256,
+          sdpa_decode_online_outgate_sg16_bf16_hd256_size};
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBF16Hd128:
+      return {
+          sdpa_decode_split_p2_outgate_hd128,
+          sdpa_decode_split_p2_outgate_hd128_size};
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBF16Hd256:
+      return {
+          sdpa_decode_split_p2_outgate_hd256,
+          sdpa_decode_split_p2_outgate_hd256_size};
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBk32BF16Hd256:
+      return {
+          sdpa_decode_split_p2_outgate_hd256_bk32,
+          sdpa_decode_split_p2_outgate_hd256_bk32_size};
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBk64BF16Hd256:
+      return {
+          sdpa_decode_split_p2_outgate_hd256_bk64,
+          sdpa_decode_split_p2_outgate_hd256_bk64_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd128:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd128,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd128_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd128_g13c,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd128_g13c_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256:
+      return {
+          sdpa_decode_online_rope_sg32_bf16_hd256,
+          sdpa_decode_online_rope_sg32_bf16_hd256_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32,
+          gated_delta_decode_conv_norm_bf16_sg32_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_fast,
+          gated_delta_decode_conv_norm_bf16_sg32_fast_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32:
+      return {
+          gated_delta_decode_conv_norm_ba_bf16_sg32,
+          gated_delta_decode_conv_norm_ba_bf16_sg32_size};
+    case ComputeKernel::GatedDeltaDecodeBF16Sg32:
+      return {
+          gated_delta_decode_bf16_sg32,
+          gated_delta_decode_bf16_sg32_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S8W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s8w2, qmm_vec_q4_swiglu_bf16_r1s8w2_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s16w2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S4W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s4w2,
+          qmm_vec_q4_swiglu_bf16_r1s4w2_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Upfront:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2Fast:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast,
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2Fast:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast,
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_fast,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_fast_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S4W2Fast:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s4w2_fast,
+          qmm_vec_q4_swiglu_bf16_r1s4w2_fast_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Fast:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast,
+          qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;
@@ -2313,12 +2678,18 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
 ComputeRuntime::ComputeRuntime(
     VkDevice device,
     uint32_t binding_limit,
+    uint32_t subgroup_size,
     uint32_t required_subgroup_size,
-    bool subgroup_size_16_admitted)
+    bool subgroup_size_16_admitted,
+    bool subgroup_size_32_admitted,
+    bool subgroup_size_64_admitted)
     : device_(device),
       binding_limit_(binding_limit),
+      subgroup_size_(subgroup_size),
       required_subgroup_size_(required_subgroup_size),
-      subgroup_size_16_admitted_(subgroup_size_16_admitted) {
+      subgroup_size_16_admitted_(subgroup_size_16_admitted),
+      subgroup_size_32_admitted_(subgroup_size_32_admitted),
+      subgroup_size_64_admitted_(subgroup_size_64_admitted) {
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -2490,6 +2861,66 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
         "main",
         nullptr,
         16u);
+  }
+  // The CMAT16 dense direct builds assume 32-lane subgroups: a device
+  // reporting a different native size (16 on ANV, 64 on RADV) reaches
+  // them only through a requiredSubgroupSize pin, and only when the
+  // hardware report admitted the pin. A native-32 device takes the
+  // default (required_subgroup_size_ is 0 or already 32). Same
+  // fail-closed rule as the KCONTS16 pin.
+  if (kernel == ComputeKernel::MatmulDirectF16C16Nn ||
+      kernel == ComputeKernel::MatmulDirectF16C16Nt ||
+      kernel == ComputeKernel::MatmulDirectF16C16Tn ||
+      kernel == ComputeKernel::MatmulDirectF16C16Tt ||
+      kernel == ComputeKernel::MatmulDirectBF16C16Nn ||
+      kernel == ComputeKernel::MatmulDirectBF16C16Nt ||
+      kernel == ComputeKernel::MatmulDirectBF16C16Tn ||
+      kernel == ComputeKernel::MatmulDirectBF16C16Tt) {
+    if (required_subgroup_size_ != 0u &&
+        required_subgroup_size_ != 32u &&
+        !subgroup_size_32_admitted_) {
+      throw std::runtime_error(
+          "[omarchy] CMAT16 dense matmul requires 32-lane subgroups, "
+          "which this device cannot legally pin.");
+    }
+    const uint32_t pin =
+        required_subgroup_size_ != 0u && required_subgroup_size_ != 32u
+        ? 32u
+        : required_subgroup_size_;
+    return create_pipeline(
+        std::span<const uint32_t>{
+            reinterpret_cast<const uint32_t*>(bytes),
+            size / sizeof(uint32_t)},
+        "main",
+        nullptr,
+        pin);
+  }
+  if (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16 ||
+      kernel == ComputeKernel::SdpaCausalFlashCoopmat16BF16) {
+    // Same fail-closed rule as the 16-lane build, one wave up: the kernel
+    // launches one 64-lane subgroup per workgroup. Pin 64 when the device
+    // legally accepts it; unpinned is correct only when wave64 is both
+    // native and what the global pin would ask for anyway.
+    if (subgroup_size_64_admitted_) {
+      return create_pipeline(
+          std::span<const uint32_t>{
+              reinterpret_cast<const uint32_t*>(bytes),
+              size / sizeof(uint32_t)},
+          "main",
+          nullptr,
+          64u);
+    }
+    if (subgroup_size_ != 64u ||
+        (required_subgroup_size_ != 0u && required_subgroup_size_ != 64u)) {
+      throw std::runtime_error(
+          std::string("[omarchy] ") +
+          (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16
+               ? "QmmPrefillCoopmatBF16x16"
+               : "SdpaCausalFlashCoopmat16BF16") +
+          " runs one 64-lane subgroup per workgroup, and this device can"
+          " neither run that unpinned nor legally pin"
+          " requiredSubgroupSize = 64.");
+    }
   }
   return create_pipeline(
       std::span<const uint32_t>{

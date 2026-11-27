@@ -81,6 +81,17 @@ for name, digest in approved_bm32.items():
         sys.exit(f"prepare-mlx: BM32 port body changed: {name}")
     rows.append(f'constexpr std::string_view {name} = R"BM32({body.decode("utf-8")})BM32";\n')
 (staging / "mlx/backend/omarchy/bm32_msl.inc").write_bytes("".join(rows).encode("utf-8"))
+
+approved_ssm = {
+    "ssm_kernel": "1792b241523f2f797bed2983209bab6ec5b904f79f4ec3736c8be7a3369f8e3d",
+}
+rows = []
+for name, digest in approved_ssm.items():
+    body = (source / f"{name}.msl").read_bytes()
+    if hashlib.sha256(body).hexdigest() != digest:
+        sys.exit(f"prepare-mlx: SSM port body changed: {name}")
+    rows.append(f'constexpr std::string_view {name} = R"SSM({body.decode("utf-8")})SSM";\n')
+(staging / "mlx/backend/omarchy/ssm_msl.inc").write_bytes("".join(rows).encode("utf-8"))
 PY
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-build.patch"
@@ -119,6 +130,14 @@ patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
 # (a batched call used to take the per-token composed fallback).
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-gated-delta-prefill-rows.patch"
+# mlx-lm gated-delta route for pip installs: import the wheel's
+# mlx._omarchy_gdn_route hook at mlx.core init (no mlx-lm files patched).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-omarchy-gdn-pyinit-route.patch"
+# mlx-lm Mamba-2 / Nemotron-H ssm_update decode route for pip installs:
+# import mlx._omarchy_ssm_route at mlx.core init (no mlx-lm files patched).
+patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
+  < "$ROOT/patches/mlx-omarchy-ssm-pyinit-route.patch"
 patch --directory="$STAGING_DIR" --strip=1 --forward --fuzz=0 \
   < "$ROOT/patches/mlx-version-time.patch"
 # GDN decode chain: fused RMSNorm+SwiGLU-gate and RMSNorm+scalar-mul

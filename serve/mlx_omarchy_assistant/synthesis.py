@@ -37,6 +37,7 @@ import multiprocessing
 import os
 import re
 import signal
+import stat
 import sys
 import tempfile
 import threading
@@ -58,6 +59,10 @@ PROBE_TTL_SECONDS = 30.0
 MP_START_METHOD = "spawn"
 _RECEIPT_NAME = "manifest.json"
 _QUALIFICATION_NAME = "qualification.json"
+# manifest.json, qualification.json and voice.json are a few KB at most
+# and at most 3 levels deep.
+_STATE_FILE_MAX_BYTES = 1 << 20
+_STATE_FILE_MAX_DEPTH = 32
 _URL_TIMEOUT = 120
 _GRACEFUL_JOIN = 1.0
 SHUTDOWN_SEGMENT_GRACE = 2.0
@@ -237,8 +242,11 @@ def resolve_voice(name) -> str:
     """Validate a requested voice across engines; unknown is a named
     refusal, never a fallback to the default."""
     if not isinstance(name, str) or _voice_pack(name) is None:
+        shown = (repr(name)
+                 if name is None or isinstance(name, (str, int, float, bool))
+                 else type(name).__name__)
         raise VoiceError(
-            f"unknown voice {name!r}; available voices: "
+            f"unknown voice {shown}; available voices: "
             + ", ".join(o["id"] for o in voice_options()))
     return name
 
@@ -389,20 +397,151 @@ def probe_accelerator() -> dict:
     return _cached_probe("accel", _probe_accelerator_now)
 
 
+def _open_regular(path: Path):
+    """An unbuffered binary reader and its fstat for a regular file, or
+    OSError. O_NONBLOCK: a FIFO opens without a writer and is refused here
+    instead of blocking the open or the first read. A symlink to a regular
+    file is followed."""
+    fh = open(path, "rb", buffering=0,  # a buffered read would read ahead past a cap
+              opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK))
+    try:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError("not a regular file")
+    except BaseException:
+        fh.close()
+        raise
+    return fh, st
+
+
+def _check_state_size(size: int) -> None:
+    if size > _STATE_FILE_MAX_BYTES:
+        raise ValueError(f"exceeds {_STATE_FILE_MAX_BYTES} bytes")
+
+
+def _check_state_depth(value) -> None:
+    """Reject deeply nested containers iteratively; json.loads on 3.14 can
+    parse nesting deeper than repr() or json.dumps() can later recurse."""
+    stack = [(value, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict):
+            children = node.values()
+        elif isinstance(node, (list, tuple)):
+            children = node
+        else:
+            continue
+        next_depth = depth + 1
+        if next_depth > _STATE_FILE_MAX_DEPTH:
+            raise ValueError(f"exceeds nesting depth {_STATE_FILE_MAX_DEPTH}")
+        for child in children:
+            if isinstance(child, (dict, list, tuple)):
+                stack.append((child, next_depth))
+
+
+def _read_state_json(path: Path):
+    """Parse one small local JSON state file. Opens non-blocking so a FIFO
+    is rejected instead of hanging, refuses up front when fstat exceeds
+    _STATE_FILE_MAX_BYTES, and reads at most _STATE_FILE_MAX_BYTES + 1
+    bytes from the file. Raises FileNotFoundError when absent, another
+    OSError when unreadable or not a regular file, ValueError when
+    oversized, too deeply nested, or not UTF-8 JSON, and RecursionError
+    when nested too deeply to parse."""
+    cap = _STATE_FILE_MAX_BYTES
+    fh, st = _open_regular(path)
+    with fh:
+        _check_state_size(st.st_size)
+        raw = bytearray()
+        while len(raw) <= cap:  # a short read is not EOF; stop at cap + 1
+            chunk = fh.read(cap + 1 - len(raw))
+            if not chunk:
+                break
+            raw += chunk
+    _check_state_size(len(raw))
+    data = json.loads(raw.decode("utf-8"))
+    _check_state_depth(data)
+    return data
+
+
 def read_receipt(assets_dir: Path) -> dict | None:
     try:
-        receipt = json.loads((assets_dir / _RECEIPT_NAME).read_text())
-    except (OSError, ValueError):
+        receipt = _read_state_json(assets_dir / _RECEIPT_NAME)
+    except (OSError, ValueError, RecursionError):
         return None
     return receipt if isinstance(receipt, dict) else None
 
 
-def _sha256_file(path: Path) -> str:
+def _error_reason(exc: BaseException) -> str:
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    return str(exc)
+
+
+def _sha256_stream(fh, expected_bytes: int) -> str | None:
     digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    total = 0
+    while total <= expected_bytes:
+        chunk = fh.read(min(1 << 20, expected_bytes + 1 - total))
+        if not chunk:
+            break
+        digest.update(chunk)
+        total += len(chunk)
+    return digest.hexdigest() if total == expected_bytes else None
+
+
+def _sha256_file(path: Path) -> str:
+    """sha256 of a regular file, bounded to its fstat size; OSError for
+    anything else or a file that changes size while hashing, never a hang
+    on a FIFO or device."""
+    fh, st = _open_regular(path)
+    with fh:
+        digest = _sha256_stream(fh, st.st_size)
+    if digest is None:
+        raise OSError("changed while hashing")
+    return digest
+
+
+def _verify_pinned(path: Path, entry: dict, *,
+                   cached: tuple | None = None) -> tuple[tuple | None, str | None]:
+    """Verify one pinned pack file from a single regular-file open.
+
+    Returns ``(identity, actual_sha256)``. ``identity`` is non-None only
+    when ``st_size == entry['bytes']`` and either ``identity == cached``
+    (skipping the hash) or a bounded read of at most ``entry['bytes'] + 1``
+    bytes matches ``entry['sha256']``. Returns ``(None, None)`` on a size
+    mismatch and ``(None, actual_sha256)`` on a same-size digest mismatch.
+    Raises ``OSError`` from opening or reading the file.
+    """
+    fh, st = _open_regular(path)
+    with fh:
+        if st.st_size != entry["bytes"]:
+            return None, None
+        ident = _identity(st)
+        if cached is not None and cached == ident:
+            return ident, None
+        actual = _sha256_stream(fh, entry["bytes"])
+        if actual != entry["sha256"]:
+            return None, actual
+        return ident, actual
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        try:
+            fh = os.fdopen(fd, "wb")
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            raise
+        with fh:
+            os.fchmod(fh.fileno(), 0o600)
+            fh.write(payload)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
 
 
 def _default_fetch(url: str, dest: Path) -> None:
@@ -483,7 +622,10 @@ def _loaded_libmlx_path(package_dir: Path) -> Path | None:
     except OSError:
         pass
     packaged = package_dir / "lib" / "libmlx.so"
-    return packaged if packaged.is_file() else None
+    try:
+        return packaged if packaged.is_file() else None
+    except OSError:
+        return None
 
 
 def _record_hashes(dist) -> dict:
@@ -517,12 +659,22 @@ def _provenance_from_paths(extension_path, libmlx_path, record_map,
          extension_path),
         ("mlx/lib/libmlx.so", "mlx/lib/libmlx.so", libmlx_path),
     ):
-        if path is None or not Path(path).is_file():
+        if path is None:
             files.append({"label": label, "path": str(path),
                           "present": False})
             details.append(f"{label} is not present on disk")
             continue
-        actual = _sha256_file(Path(path))
+        try:
+            actual = _sha256_file(Path(path))
+        except OSError as exc:
+            files.append({"label": label, "path": str(path),
+                          "present": False})
+            if isinstance(exc, FileNotFoundError):
+                details.append(f"{label} is not present on disk")
+            else:
+                details.append(
+                    f"{label} at {path} is unreadable: {_error_reason(exc)}")
+            continue
         expected = record_map.get(relative)
         match = None if expected is None else actual == expected
         files.append({"label": label, "path": str(path), "present": True,
@@ -1047,13 +1199,14 @@ class Synthesis:
         the built-in default when nothing is persisted; an unreadable or
         unknown stored choice is a named refusal, never a silent fallback."""
         path = self._voice_choice_path()
-        if not path.is_file():
-            return VOICE_ENGINES[0]["voice"]
         try:
-            raw = json.loads(path.read_text())
-        except (OSError, ValueError) as exc:
+            raw = _read_state_json(path)
+        except FileNotFoundError:
+            return VOICE_ENGINES[0]["voice"]
+        except (OSError, ValueError, RecursionError) as exc:
             raise VoiceError(
-                f"saved voice choice at {path} is unreadable ({exc}); "
+                f"saved voice choice at {path} is unreadable "
+                f"({_error_reason(exc)}); "
                 "pick a voice in settings to replace it") from exc
         if not isinstance(raw, dict) or "voice" not in raw:
             raise VoiceError(
@@ -1068,20 +1221,9 @@ class Synthesis:
         resolved = resolve_voice(name)
         target = self._voice_choice_path()
         target.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=target.parent, suffix=".tmp",
-                                    prefix=".voice-")
-        try:
-            with os.fdopen(fd, "w") as fh:
-                json.dump({"voice": resolved, "set_at": time.time()}, fh,
-                          indent=2, sort_keys=True)
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, target)
-        except Exception:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        payload = json.dumps({"voice": resolved, "set_at": time.time()},
+                             indent=2, sort_keys=True).encode("utf-8")
+        _atomic_write_bytes(target, payload)
         meta = _voice_meta(resolved)
         return {"voice": resolved, "label": meta["label"],
                 "accent": meta["accent"],
@@ -1092,9 +1234,6 @@ class Synthesis:
     def _asset_status_for(assets: Path, pack: dict | None = None) -> dict:
         pack = pack if pack is not None else VOICE_ENGINES[0]
         expected = pack["asset_bytes"]
-        if not assets.is_dir():
-            return {"path": str(assets), "present": False, "verified": False,
-                    "bytes": 0, "expected_bytes": expected}
         receipt = read_receipt(assets)
         pinned = {entry["name"]: entry for entry in pack["files"]}
         if receipt is None or receipt.get("revision") != pack["revision"]:
@@ -1103,24 +1242,22 @@ class Synthesis:
         present_bytes = 0
         verified = True
         for name, entry in pinned.items():
-            path = assets / name
-            if not path.is_file():
-                verified = False
-                break
-            st = path.stat()
-            if st.st_size != entry["bytes"]:
-                verified = False
-                break
             key = (str(assets), name)
             with _stat_identity_lock:
                 cached = _stat_identity_cache.get(key)
-            if cached != _identity(st):
-                if _sha256_file(path) != entry["sha256"]:
-                    verified = False
-                    break
+            try:
+                ident, _actual = _verify_pinned(assets / name, entry,
+                                                cached=cached)
+            except OSError:
+                verified = False
+                break
+            if ident is None:
+                verified = False
+                break
+            if cached != ident:
                 with _stat_identity_lock:
-                    _stat_identity_cache[key] = _identity(st)
-            present_bytes += st.st_size
+                    _stat_identity_cache[key] = ident
+            present_bytes += entry["bytes"]
         if not verified:
             present_bytes = 0
         return {"path": str(assets), "present": present_bytes > 0,
@@ -1223,9 +1360,8 @@ class Synthesis:
 
     def _qualification_status(self, assets: dict, accel: dict) -> dict:
         try:
-            receipt = json.loads(
-                (self.assets_dir() / _QUALIFICATION_NAME).read_text())
-        except (OSError, ValueError):
+            receipt = _read_state_json(self.assets_dir() / _QUALIFICATION_NAME)
+        except (OSError, ValueError, RecursionError):
             receipt = None
         absent = {"qualified": False, "receipt": None,
                   "reason": "no qualification receipt (audible listener "
@@ -1299,12 +1435,12 @@ class Synthesis:
             "receipt_source": receipt["receipt_source"],
             "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
+        _check_state_depth(record)
+        payload = json.dumps(record, indent=2, sort_keys=True).encode("utf-8")
+        _check_state_size(len(payload))
         assets = self.assets_dir()
         assets.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=assets, suffix=".tmp")
-        with os.fdopen(fd, "w") as fh:
-            json.dump(record, fh, indent=2, sort_keys=True)
-        os.replace(tmp_name, assets / _QUALIFICATION_NAME)
+        _atomic_write_bytes(assets / _QUALIFICATION_NAME, payload)
         return {"recorded": True, "path": str(assets / _QUALIFICATION_NAME)}
 
     def prepare(self, approve_download: bool, *, fetch=None) -> dict:
@@ -1328,7 +1464,7 @@ class Synthesis:
                 results.append({"engine": pack["id"], "downloaded": False,
                                 "verified": False})
                 continue
-            if assets.is_dir() and self._asset_status_for(assets, pack)["verified"]:
+            if self._asset_status_for(assets, pack)["verified"]:
                 results.append({"engine": pack["id"], "downloaded": True,
                                 "verified": True, "path": str(assets),
                                 "bytes": pack["asset_bytes"]})
@@ -1349,11 +1485,35 @@ class Synthesis:
 
     def _prepare_pack(self, pack: dict, assets: Path, fetch) -> dict:
         assets.mkdir(parents=True, exist_ok=True)
+
+        def verify_or_raise(path: Path, entry: dict, *,
+                            downloaded: bool = False) -> tuple:
+            try:
+                ident, actual = _verify_pinned(path, entry)
+            except OSError as exc:
+                raise VoiceError(
+                    f"voice pack file {entry['name']} failed verification: "
+                    f"{_error_reason(exc)}") from exc
+            if ident is None:
+                if actual is not None or downloaded:
+                    got = actual or "a file of the wrong size"
+                    suffix = ("; delete the pack and retry the download"
+                              if downloaded else "")
+                    raise VoiceError(
+                        f"voice pack file {entry['name']}: sha256 mismatch "
+                        f"(expected {entry['sha256']}, got {got}){suffix}")
+                raise VoiceError(
+                    f"voice pack file {entry['name']} failed verification")
+            return ident
+
         try:
             for entry in sorted(pack["files"], key=lambda e: e["bytes"]):
                 dest = assets / entry["name"]
-                if dest.is_file() and dest.stat().st_size == entry["bytes"] \
-                        and _sha256_file(dest) == entry["sha256"]:
+                try:
+                    ident, _actual = _verify_pinned(dest, entry)
+                except OSError:
+                    ident = None
+                if ident is not None:
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 tmp = dest.with_name(dest.name + ".part")
@@ -1361,28 +1521,14 @@ class Synthesis:
                     fetch(_URL_TEMPLATE.format(repo=pack["repo"],
                                                revision=pack["revision"],
                                                name=entry["name"]), tmp)
-                    actual = _sha256_file(tmp)
-                    if actual != entry["sha256"]:
-                        raise VoiceError(
-                            f"voice pack file {entry['name']}: sha256 mismatch "
-                            f"(expected {entry['sha256']}, got {actual}); "
-                            "delete the pack and retry the download")
+                    verify_or_raise(tmp, entry, downloaded=True)
                     os.replace(tmp, dest)
                 finally:
                     tmp.unlink(missing_ok=True)
             for entry in pack["files"]:
-                dest = assets / entry["name"]
-                if not dest.is_file() or dest.stat().st_size != entry["bytes"]:
-                    raise VoiceError(
-                        f"voice pack file {entry['name']} failed verification")
-                actual = _sha256_file(dest)
-                if actual != entry["sha256"]:
-                    raise VoiceError(
-                        f"voice pack file {entry['name']}: sha256 mismatch "
-                        f"(expected {entry['sha256']}, got {actual})")
+                ident = verify_or_raise(assets / entry["name"], entry)
                 with _stat_identity_lock:
-                    _stat_identity_cache[(str(assets), entry["name"])] = \
-                        _identity(dest.stat())
+                    _stat_identity_cache[(str(assets), entry["name"])] = ident
             self._write_receipt(assets, pack)
         except VoiceError as exc:
             self._last_error = str(exc)
@@ -1408,11 +1554,8 @@ class Synthesis:
                             "(size, mtimes, ctime, inode) is compared "
                             "in-memory only"),
         }
-        payload = json.dumps(receipt, indent=2, sort_keys=True)
-        fd, tmp_name = tempfile.mkstemp(dir=assets, suffix=".tmp")
-        with os.fdopen(fd, "w") as fh:
-            fh.write(payload)
-        os.replace(tmp_name, assets / _RECEIPT_NAME)
+        payload = json.dumps(receipt, indent=2, sort_keys=True).encode("utf-8")
+        _atomic_write_bytes(assets / _RECEIPT_NAME, payload)
 
     def _guard(self) -> None:
         pack = self._current_engine()

@@ -57,6 +57,7 @@ import mlx_omarchy_paths
 import os
 import shutil
 import signal
+import stat
 import tempfile
 import threading
 import uuid
@@ -126,6 +127,8 @@ def prefill_scratch_bytes(step: int, context_tokens: int) -> int:
     return int(raw * PREFILL_MARGIN)
 
 RESERVATIONS_FILE = "reservations.json"
+# A real file holds a few entries of a few hundred bytes each; 256 KiB bounds reads and writes.
+RESERVATIONS_MAX_BYTES = 256 * 1024
 RESERVATION_STATES = ("pending", "resident")
 
 # Managed pair runtime: claims travel on a private inherited pipe (fd number
@@ -233,9 +236,40 @@ def reservations_path(home: Path | None = None) -> Path:
 
 def _load_reservations_file(path: Path) -> dict[str, dict]:
     try:
-        obj = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
+        try:
+            fh = open(
+                path,
+                "rb",
+                buffering=0,  # a buffered read would read ahead past the cap
+                opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK),
+            )
+        except FileNotFoundError:
+            return {}
+        with fh:
+            st = os.fstat(fh.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                raise BudgetError("reservations file is not a regular file; refusing to guess")
+            if st.st_size > RESERVATIONS_MAX_BYTES:
+                raise BudgetError(
+                    f"reservations file is {st.st_size} bytes, over the "
+                    f"{RESERVATIONS_MAX_BYTES}-byte limit; refusing to guess"
+                )
+            raw = bytearray()
+            while len(raw) <= RESERVATIONS_MAX_BYTES:  # a short read is not EOF; stop at cap + 1
+                chunk = fh.read(RESERVATIONS_MAX_BYTES + 1 - len(raw))
+                if chunk is None:
+                    raise BudgetError("reservations file read would block; refusing to guess")
+                if not chunk:
+                    break
+                raw += chunk
+        if len(raw) > RESERVATIONS_MAX_BYTES:
+            raise BudgetError(
+                f"reservations file is {len(raw)} bytes, over the "
+                f"{RESERVATIONS_MAX_BYTES}-byte limit; refusing to guess"
+            )
+        obj = json.loads(raw.decode("utf-8"))
+    except BudgetError:
+        raise
     except (OSError, ValueError, RecursionError) as exc:
         # ValueError covers JSONDecodeError, UnicodeDecodeError and the
         # int-digit limit; RecursionError covers deeply nested JSON.
@@ -309,15 +343,33 @@ def _transaction(mutate, home: Path | None, available_bytes: int | None = None):
     path = reservations_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
-    with open(lock_path, "w") as lock_fh:
+    try:
+        lock_fh = open(  # "ab": create without truncating; never follow a symlink
+            lock_path,
+            "ab",
+            buffering=0,
+            opener=lambda name, flags: os.open(
+                name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600),
+        )
+    except OSError as exc:
+        raise BudgetError(f"reservations lock unusable ({exc}); refusing to lock") from exc
+    with lock_fh:
+        if not stat.S_ISREG(os.fstat(lock_fh.fileno()).st_mode):
+            raise BudgetError("reservations lock is not a regular file; refusing to lock")
         fcntl.flock(lock_fh, fcntl.LOCK_EX)
         data = _load_reservations_file(path)
         available = available_bytes if available_bytes is not None else mem_available()
         result = mutate(data, available)
+        payload = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        if len(payload) > RESERVATIONS_MAX_BYTES:
+            raise BudgetError(
+                f"reservations file would be {len(payload)} bytes, over the "
+                f"{RESERVATIONS_MAX_BYTES}-byte limit; refusing to write"
+            )
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps(data, indent=2, sort_keys=True) + "\n")
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(payload)
             os.replace(tmp, path)
         except BaseException:
             try:
@@ -339,8 +391,9 @@ def set_reservation(name: str, byte_count: int, note: str = "",
                     resident_floor_bytes: int | None = None,
                     owner: str | None = None,
                     identity: dict | None = None) -> None:
-    if not name or byte_count <= 0:
-        raise BudgetError("reservation needs a name and positive bytes")
+    if not name or isinstance(byte_count, bool) or not isinstance(byte_count, int) \
+            or byte_count <= 0:
+        raise BudgetError("reservation needs a name and positive integer bytes")
     if state not in RESERVATION_STATES:
         raise BudgetError(f"reservation state must be one of {RESERVATION_STATES}")
     _validate_floor(byte_count, resident_floor_bytes)
@@ -352,7 +405,7 @@ def set_reservation(name: str, byte_count: int, note: str = "",
                 f"reservation {name!r} is owned by another holder "
                 f"({existing['owner']}); refusing to overwrite"
             )
-        data[name] = {"bytes": int(byte_count), "note": note, "state": state,
+        data[name] = {"bytes": byte_count, "note": note, "state": state,
                       "resident_floor_bytes": resident_floor_bytes, "owner": owner,
                       "identity": identity}
 
@@ -503,8 +556,9 @@ def admit_and_reserve(
     available_bytes exists for deterministic tests; production omits it
     and the transaction reads live MemAvailable inside the lock.
     """
-    if not name or byte_count <= 0:
-        raise BudgetError("admit_and_reserve needs a name and positive bytes")
+    if not name or isinstance(byte_count, bool) or not isinstance(byte_count, int) \
+            or byte_count <= 0:
+        raise BudgetError("admit_and_reserve needs a name and positive integer bytes")
     if not owner:
         raise BudgetError("admit_and_reserve needs an owner token (generate_owner())")
     _validate_floor(byte_count, resident_floor_bytes)
@@ -542,7 +596,7 @@ def admit_and_reserve(
                 "never allocate its buffers on this machine; lower --context "
                 "or use a smaller model"
             )
-        data[name] = {"bytes": int(byte_count), "note": note, "state": state,
+        data[name] = {"bytes": byte_count, "note": note, "state": state,
                       "resident_floor_bytes": resident_floor_bytes, "owner": owner,
                       "identity": identity}
         return Admission(True, byte_count, others, available,
@@ -611,10 +665,13 @@ def pair_records(pair_id: str, home: Path | None = None) -> dict[str, dict]:
 
 
 def admit_and_reserve_batch(items, *, pair_id: str, home: Path | None = None,
-                            available_bytes: int | None = None) -> list[dict]:
+                            available_bytes: int | None = None,
+                            gpu_client_cap_bytes: int | None = None) -> list[dict]:
     """One locked transaction for a whole model pair: the COMBINED
-    requirement is fit-checked, then one pending record per child is written
-    with a distinct owner token (which doubles as that child's claim token).
+    requirement is fit-checked against host memory, each child is fit-checked
+    against the per-client GPU cap (each child runs in its own worker process
+    / DRM client), then one pending record per child is written with a
+    distinct owner token (which doubles as that child's claim token).
     Records share pair_id — the cleanup group; the parent never adds its own
     byte-counted reservation. Refusal writes nothing, not even the part
     that would have fit on its own."""
@@ -654,13 +711,18 @@ def admit_and_reserve_batch(items, *, pair_id: str, home: Path | None = None,
         if headroom < 0:
             raise BudgetError(
                 "pair does not fit: " + "; ".join(lines) + " — refusing concurrent overcommit")
-        cap = gpu_client_cap()  # batch has no test override; sysfs only
-        if cap is not None and total > cap:
-            raise BudgetError(
-                f"pair does not fit: gpu per-client cap {cap / GiB:.2f} GiB < "
-                f"pair requirement {total / GiB:.2f} GiB — lower --context "
-                "or use a smaller model"
-            )
+        cap = gpu_client_cap_bytes if gpu_client_cap_bytes is not None \
+            else gpu_client_cap()
+        if cap is not None:
+            over = [(name, byte_count) for name, byte_count, _note in items
+                    if byte_count > cap]
+            if over:
+                name, byte_count = max(over, key=lambda item: item[1])
+                raise BudgetError(
+                    f"pair does not fit: gpu per-client cap {cap / GiB:.2f} GiB < "
+                    f"child {name!r} requirement {byte_count / GiB:.2f} GiB — "
+                    "lower --context or use a smaller model"
+                )
         out = []
         for name, byte_count, note in items:
             owner = generate_owner()
@@ -687,6 +749,11 @@ def claim_reservation(name: str, claim_token: str, *, expected_bytes: int,
     a live or uncertain child is refused."""
     if not claim_token:
         raise BudgetError("claim refused: missing token")
+    if isinstance(expected_bytes, bool) or not isinstance(expected_bytes, int) \
+            or expected_bytes <= 0:
+        raise BudgetError(
+            f"claim refused for {name!r}: expected_bytes must be a positive integer, "
+            f"got {type(expected_bytes).__name__}")
     child_ident = proc_identity(os.getpid())
     if child_ident is None:
         raise BudgetError("claim refused: cannot read the claiming process's identity")
@@ -703,7 +770,7 @@ def claim_reservation(name: str, claim_token: str, *, expected_bytes: int,
                 f"not {expected_pair!r}")
         if entry.get("owner") != claim_token:
             raise BudgetError(f"claim refused for {name!r}: token mismatch")
-        if int(expected_bytes) != entry["bytes"]:
+        if expected_bytes != entry["bytes"]:
             raise BudgetError(
                 f"claim refused for {name!r}: allocation {expected_bytes} != "
                 f"reserved {entry['bytes']}; a claim never changes an allocation")
@@ -727,7 +794,8 @@ def claim_reservation(name: str, claim_token: str, *, expected_bytes: int,
 
 def resize_reservation(name: str, byte_count: int, *, owner: str,
                        home: Path | None = None,
-                       available_bytes: int | None = None) -> dict:
+                       available_bytes: int | None = None,
+                       gpu_client_cap_bytes: int | None = None) -> dict:
     """Atomically revise an owned reservation: the fresh fit check for the
     NEW total and the write happen under one lock. This is the only way a
     claimed allocation may change. On refusal the prior bytes stay."""
@@ -748,6 +816,13 @@ def resize_reservation(name: str, byte_count: int, *, owner: str,
             raise BudgetError(
                 f"resize of {name!r} to {byte_count} bytes does not fit; "
                 f"retaining the prior {entry['bytes']} bytes")
+        cap = gpu_client_cap_bytes if gpu_client_cap_bytes is not None \
+            else gpu_client_cap()
+        if cap is not None and byte_count > cap:
+            raise BudgetError(
+                f"resize of {name!r} to {byte_count / GiB:.2f} GiB exceeds "
+                f"gpu per-client cap {cap / GiB:.2f} GiB; "
+                f"retaining the prior {entry['bytes']} bytes")
         entry["bytes"] = int(byte_count)
         return {"name": name, "bytes": int(byte_count)}
 
@@ -755,12 +830,19 @@ def resize_reservation(name: str, byte_count: int, *, owner: str,
 
 
 def read_claim_fd(fd: int) -> dict:
-    """Read one JSON claim payload from the inherited private pipe. The
-    parent closes its end right after writing, so EOF terminates the read."""
+    """Read one JSON claim payload from the read end of an open pipe above
+    fd 2 (parent closes its write end so EOF ends the read). Any other fd is
+    refused before reading without closing it, and any malformed payload is a
+    BudgetError, never a raw exception or a coerced value."""
+    if isinstance(fd, bool) or not isinstance(fd, int):
+        raise BudgetError(f"claim fd must be an int, got {type(fd).__name__}")
+    if not _pipe_read_end(fd):
+        raise BudgetError(
+            "claim pipe unreadable: not the read end of an open pipe above fd 2")
     chunks = []
     while True:
         try:
-            chunk = os.read(int(fd), 65536)
+            chunk = os.read(fd, 65536)
         except OSError as exc:
             raise BudgetError(f"claim pipe unreadable: {exc}") from exc
         if not chunk:
@@ -770,11 +852,22 @@ def read_claim_fd(fd: int) -> dict:
             raise BudgetError("claim payload exceeds 64 KiB; refusing")
     try:
         payload = json.loads(b"".join(chunks).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, RecursionError) as exc:
+        # ValueError covers JSONDecodeError, UnicodeDecodeError and the
+        # int-digit limit; RecursionError covers deeply nested JSON.
         raise BudgetError(f"claim payload is not valid JSON: {exc}") from exc
     required = ("name", "claim_token", "bytes")
     if not isinstance(payload, dict) or any(payload.get(k) is None for k in required):
         raise BudgetError(f"claim payload must contain {required}")
+    for key in ("name", "claim_token"):
+        if not isinstance(payload[key], str) or not payload[key]:
+            raise BudgetError(f"claim payload field {key!r} must be a non-empty string")
+    byte_count = payload["bytes"]
+    if isinstance(byte_count, bool) or not isinstance(byte_count, int) or byte_count <= 0:
+        raise BudgetError("claim payload field 'bytes' must be a positive integer")
+    pair_id = payload.get("pair_id")
+    if pair_id is not None and not isinstance(pair_id, str):
+        raise BudgetError("claim payload field 'pair_id' must be a string or null")
     return payload
 
 
@@ -782,45 +875,85 @@ def claim_from_env(home: Path | None = None) -> dict | None:
     """Child-side managed start: when CLAIM_FD_ENV is set, read the claim
     payload from the private pipe and claim the record before anything is
     loaded. Returns None when no claim fd is present (standalone launch)."""
-    raw = os.environ.get(CLAIM_FD_ENV, "")
-    if not raw:
+    raw = os.environ.get(CLAIM_FD_ENV)
+    if raw is None:
         return None
-    try:
-        fd = int(raw)
-    except ValueError as exc:
-        raise BudgetError(f"{CLAIM_FD_ENV} must be an fd number, got {raw!r}") from exc
+    fd = _env_fd(raw)
+    if fd is None:
+        raise BudgetError(
+            f"claim pipe unreadable: {CLAIM_FD_ENV} must be an fd number, "
+            f"got {raw[:40]!r}")
     payload = read_claim_fd(fd)
     return claim_reservation(
-        str(payload["name"]), str(payload["claim_token"]),
-        expected_bytes=int(payload["bytes"]), home=home,
+        payload["name"], payload["claim_token"],
+        expected_bytes=payload["bytes"], home=home,
         expected_pair=payload.get("pair_id"))
+
+
+# os.fdopen and os.fstat take a C int; a larger fd raises a raw
+# OverflowError or TypeError instead of OSError.
+_MAX_FD = 2**31 - 1
+
+
+def _env_fd(raw: str) -> int | None:
+    # ASCII digits only (str.isdigit and int() accept other Unicode digits),
+    # and at most 10 of them, so int() never meets the str-digits limit.
+    return int(raw) if len(raw) <= 10 and raw.isascii() and raw.isdigit() else None
+
+
+def _pipe_read_end(fd) -> bool:
+    """True only for the read end of an open pipe above stdio. Stdio (0-2,
+    and True, which is fd 1) is never the manager's pipe, and the lifetime
+    watchdog closes the fd it watches; a non-pipe (socket, tty, regular file,
+    directory), a pipe's write end, an O_PATH fd, or a FIFO opened read/write
+    is refused because it may never reach EOF (a read/write FIFO holds its
+    own writer, and O_PATH is unreadable)."""
+    if isinstance(fd, bool) or not isinstance(fd, int) or not (2 < fd <= _MAX_FD):
+        return False
+    try:
+        if not stat.S_ISFIFO(os.fstat(fd).st_mode):
+            return False
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        return (flags & (os.O_ACCMODE | getattr(os, "O_PATH", 0))) == os.O_RDONLY
+    except OSError:
+        return False
 
 
 def watch_parent_fd(fd: int, on_eof) -> None:
     """Child-side parent-lifetime watchdog: blocks until the inherited pipe
     closes (the manager exited or died), then invokes on_eof exactly once.
     Run this in a daemon thread; on_eof typically SIGTERMs the child's own
-    pid so existing shutdown paths release the reservation."""
-    try:
-        with os.fdopen(int(fd), "rb", closefd=True) as fh:
-            while fh.read(65536):
-                pass
-    except OSError:
-        pass
+    pid so existing shutdown paths release the reservation. An fd that is not
+    an open pipe above stdio counts as a closed pipe: on_eof runs and nothing
+    is opened or closed."""
+    if _pipe_read_end(fd):
+        try:
+            with os.fdopen(fd, "rb", closefd=True) as fh:
+                while fh.read(65536):
+                    pass
+        except OSError:
+            pass
     on_eof()
 
 
 def watch_parent_from_env() -> bool:
-    """Start the lifetime watchdog when the manager passed a lifetime fd.
+    """Start the lifetime watchdog when LIFETIME_FD_ENV is set.
     When the pipe closes the worker SIGTERMs itself, so the manager's death
-    never leaves an orphan that still holds weights. Returns False for a
-    standalone launch (no fd), where nothing is watched."""
-    raw = os.environ.get(LIFETIME_FD_ENV, "")
-    if not raw.isdigit():
+    never leaves an orphan that still holds weights. Returns False when
+    LIFETIME_FD_ENV is unset (standalone launch). Any set value, including '',
+    that is not an open pipe fd above stdio raises BudgetError before any
+    thread starts: the manager meant to supervise this child."""
+    raw = os.environ.get(LIFETIME_FD_ENV)
+    if raw is None:
         return False
+    fd = _env_fd(raw)
+    if not _pipe_read_end(fd):
+        raise BudgetError(
+            f"{LIFETIME_FD_ENV} must name the read end of an open pipe above fd 2, "
+            f"got {raw[:40]!r}")
     threading.Thread(
         target=watch_parent_fd,
-        args=(int(raw), lambda: os.kill(os.getpid(), signal.SIGTERM)),
+        args=(fd, lambda: os.kill(os.getpid(), signal.SIGTERM)),
         daemon=True,
     ).start()
     return True

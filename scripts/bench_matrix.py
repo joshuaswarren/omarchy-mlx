@@ -66,6 +66,7 @@ IDS_RE = re.compile(r"generated_ids sha256:([0-9a-f]+) n=(\d+)")
 PROMPT_TOKENS_RE = re.compile(r"prompt_tokens (\d+)")
 # bench_decode.py prints "uclamp: <outcome>" before the provenance line.
 UCLAMP_RE = re.compile(r"^uclamp: (.+)$")
+DEFER_TOKENS_RE = re.compile(r"^defer_tokens (.+)$")
 
 
 def sanitize(text, home=None):
@@ -494,7 +495,8 @@ def parse_bench_output(stdout):
     m = {"decode_tok_s": None, "decode_tokens": None, "requested_tokens": None,
          "prefill_s": None, "decode_mean_per_token_ms": None,
          "provenance_line": None, "generated_ids_sha256_16": None,
-         "generated_ids_n": None, "prompt_tokens": None, "uclamp": None}
+         "generated_ids_n": None, "prompt_tokens": None, "uclamp": None,
+         "defer_tokens": None}
     result_json = None
     for line in stdout.splitlines():
         if result_json is None and line.startswith("{"):
@@ -502,13 +504,15 @@ def parse_bench_output(stdout):
                 data = json.loads(line)
             except ValueError:
                 data = None
-            if isinstance(data, dict) and data.get("prefill_s"):
+            if isinstance(data, dict) and (
+                    data.get("prefill_s") or data.get("engine") == "bench_decode"):
                 result_json = data
         for regex, key, cast in ((DECODE_RE, None, float),
                                  (PREFILL_RE, "prefill_s", float),
                                  (PER_TOKEN_RE, "decode_mean_per_token_ms", float),
                                  (PROV_LINE_RE, "provenance_line", str),
                                  (UCLAMP_RE, "uclamp", str),
+                                 (DEFER_TOKENS_RE, "defer_tokens", str),
                                  (IDS_RE, None, str),
                                  (PROMPT_TOKENS_RE, None, str)):
             hit = regex.search(line)
@@ -532,7 +536,10 @@ def parse_bench_output(stdout):
         # 3 decimals (1 ms), which on a 30-token prefill (~0.1 s) is up
         # to half a percent of pure rounding. Never re-derive timings
         # from printed output when the JSON beside it carries them.
-        m["prefill_s"] = float(result_json["prefill_s"])
+        if result_json.get("prefill_s"):
+            m["prefill_s"] = float(result_json["prefill_s"])
+        if "defer_tokens" in result_json:
+            m["defer_tokens"] = result_json["defer_tokens"]
     return m
 
 
@@ -554,6 +561,7 @@ def execute_leg(leg, manifest, args, contended, paths):
         cmd += ["--wheel", args.wheel]
     env = dict(os.environ)
     env.update(gen.get("env", {}))
+    env.setdefault("MLX_OMARCHY_DEFER_TOKENS", "0")
     if args.allow_non_apple:
         env["MLX_OMARCHY_ALLOW_NON_APPLE"] = "1"
     leg["contended"] = contended

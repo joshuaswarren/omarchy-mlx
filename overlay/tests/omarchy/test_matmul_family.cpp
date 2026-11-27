@@ -30,6 +30,7 @@
 #include "mlx/backend/cpu/device_info.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/compute.h"
+#include "mlx/backend/omarchy/coopmat_select.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
 #include "mlx/backend/omarchy/matmul_direct_select.h"
@@ -94,6 +95,22 @@ void skip(const char* reason) {
 Stream gpu_stream() {
   set_default_device(Device::gpu);
   return new_stream(Device::gpu);
+}
+
+// CapabilityReport fixture for the tile-family selectors (DEC-17): the
+// measured parts these tests name all advertise the fp32 8x8x8 coopmat
+// shape, a 32-lane subgroup, 1024-invocation workgroups and 32 KiB of
+// shared memory, so a name-keyed check keeps the same pick it had when
+// the selectors took a raw device-name string.
+omarchy::CapabilityReport named_caps(const std::string& device_name) {
+  omarchy::CapabilityReport caps;
+  caps.device_name = device_name;
+  caps.subgroup_size = 32u;
+  caps.max_compute_work_group_invocations = 1024u;
+  caps.max_compute_work_group_size = {1024u, 1024u, 1024u};
+  caps.max_compute_shared_memory_size = 32768u;
+  caps.cooperative_matrix_f32_8 = true;
+  return caps;
 }
 
 bool compute_available() {
@@ -717,38 +734,41 @@ TEST_CASE("the 64-row coopmat prefill tile is a q4-g64 FullN route only") {
   // Allowed: 4-bit group-64 transposed and FullN at M >= 128 on G16S.
   CHECK(qmm_prefill_allow_rows64(true, true));
   CHECK(coopmat_tile_rows(
-            128u, n_groups, g16s, qmm_prefill_allow_rows64(true, true)) ==
+            128u, n_groups, named_caps(g16s), qmm_prefill_allow_rows64(true, true)) ==
         64u);
   const std::string g17c = "Apple M5 Max (G17C B1)";
   CHECK(coopmat_tile_rows(
-            128u, n_groups, g17c, qmm_prefill_allow_rows64(true, true)) ==
+            128u, n_groups, named_caps(g17c), qmm_prefill_allow_rows64(true, true)) ==
         32u);
   // Refused: another bf16 format (not q4-g64) at the same shape.
   CHECK_FALSE(qmm_prefill_allow_rows64(false, true));
   CHECK(coopmat_tile_rows(
-            128u, n_groups, g16s, qmm_prefill_allow_rows64(false, true)) ==
+            128u, n_groups, named_caps(g16s), qmm_prefill_allow_rows64(false, true)) ==
         32u);
   // Refused: a non-FullN N (the X32 build) at the same shape.
   CHECK_FALSE(qmm_prefill_allow_rows64(true, false));
   CHECK(coopmat_tile_rows(
-            128u, n_groups, g16s, qmm_prefill_allow_rows64(true, false)) ==
+            128u, n_groups, named_caps(g16s), qmm_prefill_allow_rows64(true, false)) ==
         32u);
   // G13G takes 64 rows when allowed and the 64-row grid fills the part;
   // when disallowed or under the occupancy floor, or on parts outside
   // G16S and G13G, it stays 32 rows.
   const std::string g13g = "Apple M1 (G13G B1)";
   CHECK(coopmat_tile_rows(
-            128u, n_groups, g13g, qmm_prefill_allow_rows64(true, true)) ==
+            128u, n_groups, named_caps(g13g), qmm_prefill_allow_rows64(true, true)) ==
         64u);
   CHECK(coopmat_tile_rows(
-            128u, n_groups, g13g, qmm_prefill_allow_rows64(false, true)) ==
+            128u, n_groups, named_caps(g13g), qmm_prefill_allow_rows64(false, true)) ==
         32u);
   CHECK(coopmat_tile_rows(
-            128u, 16u, g13g, qmm_prefill_allow_rows64(true, true)) == 32u);
+            128u, 16u, named_caps(g13g), qmm_prefill_allow_rows64(true, true)) == 32u);
   CHECK(coopmat_tile_rows(
-            128u, n_groups, "Apple M2 Max (G14C B1)", true) == 32u);
+            128u, n_groups, named_caps("Apple M2 Max (G14C B1)"), true) == 32u);
+  // G13C (32 cores): 2 m-groups x 64 n-groups meets the SG4 floor
+  // exactly (128 >= 32 x 4), so the 64-row tile wins at this boundary;
+  // the pin below it stays 32 on the wider G14C part (128 < 38 x 4).
   CHECK(coopmat_tile_rows(
-            128u, n_groups, "Apple M1 Max (G13C C0)", true) == 32u);
+            128u, n_groups, named_caps("Apple M1 Max (G13C C0)"), true) == 64u);
 }
 
 TEST_CASE("the small-M qmm prefill arm on G16S: the occupancy floor governs") {
@@ -761,28 +781,28 @@ TEST_CASE("the small-M qmm prefill arm on G16S: the occupancy floor governs") {
   // wider grids keep the shipped 32-row tile, and M <= 16 keeps its
   // unconditional 16-row tile. At M in 17..31 one 32-row m-group covers
   // the prompt (the kit workload is M=23, 9 of 32 tile rows dead).
-  CHECK(coopmat_tile_rows(16u, 64u, g16s, false) == 16u);
+  CHECK(coopmat_tile_rows(16u, 64u, named_caps(g16s), false) == 16u);
   // M=23: n_groups = ceil(N/32); N=1024 -> 32, N=2048 -> 64,
   // N=4096 -> 128, N=12288 -> 384. The floor boundary is exact.
-  CHECK(coopmat_tile_rows(23u, 32u, g16s, false) == 16u);
-  CHECK(coopmat_tile_rows(23u, 64u, g16s, false) == 16u);
-  CHECK(coopmat_tile_rows(23u, 119u, g16s, false) == 16u);
-  CHECK(coopmat_tile_rows(23u, 120u, g16s, false) == 32u);
-  CHECK(coopmat_tile_rows(23u, 128u, g16s, false) == 32u);
-  CHECK(coopmat_tile_rows(23u, 384u, g16s, false) == 32u);
+  CHECK(coopmat_tile_rows(23u, 32u, named_caps(g16s), false) == 16u);
+  CHECK(coopmat_tile_rows(23u, 64u, named_caps(g16s), false) == 16u);
+  CHECK(coopmat_tile_rows(23u, 119u, named_caps(g16s), false) == 16u);
+  CHECK(coopmat_tile_rows(23u, 120u, named_caps(g16s), false) == 32u);
+  CHECK(coopmat_tile_rows(23u, 128u, named_caps(g16s), false) == 32u);
+  CHECK(coopmat_tile_rows(23u, 384u, named_caps(g16s), false) == 32u);
   // Deeper in the arm four 32-row m-groups need a smaller column grid.
-  CHECK(coopmat_tile_rows(127u, 29u, g16s, false) == 16u); // 4*29 < 120
-  CHECK(coopmat_tile_rows(127u, 30u, g16s, false) == 32u); // 4*30 = 120
+  CHECK(coopmat_tile_rows(127u, 29u, named_caps(g16s), false) == 16u); // 4*29 < 120
+  CHECK(coopmat_tile_rows(127u, 30u, named_caps(g16s), false) == 32u); // 4*30 = 120
   // The 64-row default at M >= 128 keeps its fill gate now that the
   // core count is known; the tile64 receipt's shapes still fill.
-  CHECK(coopmat_tile_rows(128u, 64u, g16s, true) == 64u);
-  CHECK(coopmat_tile_rows(128u, 128u, g16s, true) == 64u);
+  CHECK(coopmat_tile_rows(128u, 64u, named_caps(g16s), true) == 64u);
+  CHECK(coopmat_tile_rows(128u, 128u, named_caps(g16s), true) == 64u);
   // A 64-row grid too small to fill the part falls to the floor
   // compare instead of the vacuous always-64.
-  CHECK(coopmat_tile_rows(128u, 32u, g16s, true) == 32u); // 64<120 -> floor 128>=120
+  CHECK(coopmat_tile_rows(128u, 32u, named_caps(g16s), true) == 32u); // 64<120 -> floor 128>=120
   // A part with a known core count still steps a small grid down.
   const std::string m1max = "Apple M1 Max (G13C C0)";
-  CHECK(coopmat_tile_rows(23u, 2u, m1max, false) == 16u);
+  CHECK(coopmat_tile_rows(23u, 2u, named_caps(m1max), false) == 16u);
 }
 
 TEST_CASE("register-blocked f32 matmul matches the 16x16 tile bit for bit") {
@@ -1432,9 +1452,24 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
   const auto& caps = omarchy::device(0).capabilities();
   const bool coopmat_device =
       caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32;
+  // The Intel/ANV 8x16x16 bf16 shape (MatmulBF16CoopmatXe16) serves
+  // the same calls where the fp32 8x8x8 route is absent; the two
+  // routes are mutually exclusive per device, so one flag covers the
+  // dispatch pin below.
+  const bool xe16_device =
+      !coopmat_device && caps.cooperative_matrix_bf16 &&
+      caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 64u &&
+      caps.max_compute_work_group_size[0] >= 64u &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::matmul_xe16_bf16_shape()) &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_MATMUL_XE16") &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT");
   std::cout << "[provenance] cooperative_matrix_f32_8="
             << (caps.cooperative_matrix_f32_8 ? 1 : 0)
-            << " subgroup_size=" << caps.subgroup_size << "\n";
+            << " subgroup_size=" << caps.subgroup_size
+            << " xe16_device=" << (xe16_device ? 1 : 0) << "\n";
 
   std::mt19937 rng(20260908);
   std::uniform_int_distribution<int> small(-4, 4);
@@ -1541,7 +1576,8 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
         if (a_t || b_t) {
           continue;
         }
-        if (coopmat_device && m >= 32 && k >= 896 && n >= 896) {
+        if ((coopmat_device || xe16_device) && m >= 32 && k >= 896 &&
+            n >= 896) {
           // The route expectation is load-bearing: a gate regression to
           // the 16x16 tile must fail here, so pin the dispatch the way
           // the q4g32 case does. Pinned on the Qwen shapes only: the
@@ -1570,10 +1606,13 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
               std::istreambuf_iterator<char>());
           // The direct route shadows MatmulBF16Coopmat wherever a row
           // (or the bf16_8 shape) engages; those kernels are the same
-          // 8x8x8 coopmat class, so accept the family. A regression to
-          // the tile or scalar-FMA kernels matches none of them.
+          // 8x8x8 coopmat class, so accept the family. The Xe16 kernel
+          // is the same cooperative-matrix class on ANV's 8x16x16
+          // shape. A regression to the tile or scalar-FMA kernels
+          // matches none of them.
           const std::vector<omarchy::ComputeKernel> dense_coopmat{
               omarchy::ComputeKernel::MatmulBF16Coopmat,
+              omarchy::ComputeKernel::MatmulBF16CoopmatXe16,
               omarchy::ComputeKernel::MatmulDirectBF16Nn,
               omarchy::ComputeKernel::MatmulDirectBF16Nt,
               omarchy::ComputeKernel::MatmulDirectBF16Tn,
@@ -6465,9 +6504,9 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
   const bool allow64 = qmm_prefill_allow_rows64(true, true);
 
   // Default G13G (M=128, n_groups=64 fills 8 cores): 64-row SG4 + STEP_K=32.
-  uint32_t rows = coopmat_tile_rows(128u, 64u, g13g, allow64);
-  bool sg4 = qmm_coopmat_sg4_requested(g13g);
-  uint32_t step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  uint32_t rows = coopmat_tile_rows(128u, 64u, named_caps(g13g), allow64);
+  bool sg4 = qmm_coopmat_sg4_requested(named_caps(g13g));
+  uint32_t step_k = qmm_coopmat_stepk_requested(named_caps(g13g), rows, sg4);
   CHECK(rows == 64u);
   CHECK(sg4);
   CHECK(step_k == 32u);
@@ -6475,8 +6514,8 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
         ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32);
 
   // When a small G13G grid falls back to 32 rows, STEP_K must stay 16.
-  rows = coopmat_tile_rows(128u, 16u, g13g, allow64);
-  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  rows = coopmat_tile_rows(128u, 16u, named_caps(g13g), allow64);
+  step_k = qmm_coopmat_stepk_requested(named_caps(g13g), rows, sg4);
   CHECK(rows == 32u);
   CHECK(step_k == 16u);
   CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
@@ -6484,9 +6523,9 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
 
   // Kill switch ROWS=32 restores shipped 32-row K=16 on G13G.
   setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "32", 1);
-  rows = coopmat_tile_rows(128u, 64u, g13g, allow64);
-  sg4 = qmm_coopmat_sg4_requested(g13g);
-  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  rows = coopmat_tile_rows(128u, 64u, named_caps(g13g), allow64);
+  sg4 = qmm_coopmat_sg4_requested(named_caps(g13g));
+  step_k = qmm_coopmat_stepk_requested(named_caps(g13g), rows, sg4);
   CHECK(rows == 32u);
   CHECK_FALSE(sg4);
   CHECK(step_k == 16u);
@@ -6495,9 +6534,9 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
 
   // Kill switch ROWS=64 selects M64 K=16 on G13G.
   setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "64", 1);
-  rows = coopmat_tile_rows(128u, 64u, g13g, allow64);
-  sg4 = qmm_coopmat_sg4_requested(g13g);
-  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  rows = coopmat_tile_rows(128u, 64u, named_caps(g13g), allow64);
+  sg4 = qmm_coopmat_sg4_requested(named_caps(g13g));
+  step_k = qmm_coopmat_stepk_requested(named_caps(g13g), rows, sg4);
   CHECK(rows == 64u);
   CHECK_FALSE(sg4);
   CHECK(step_k == 16u);
@@ -6507,9 +6546,9 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
   // Kill switch STEPK=16 keeps 64-row SG4 at K=16 on G13G.
   unsetenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
   setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "16", 1);
-  rows = coopmat_tile_rows(128u, 64u, g13g, allow64);
-  sg4 = qmm_coopmat_sg4_requested(g13g);
-  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  rows = coopmat_tile_rows(128u, 64u, named_caps(g13g), allow64);
+  sg4 = qmm_coopmat_sg4_requested(named_caps(g13g));
+  step_k = qmm_coopmat_stepk_requested(named_caps(g13g), rows, sg4);
   CHECK(rows == 64u);
   CHECK(sg4);
   CHECK(step_k == 16u);
@@ -6519,9 +6558,9 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
   // Explicit opt-in STEPK=32 overrides 32-row default when asked for A/B.
   setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "32", 1);
   setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "32", 1);
-  rows = coopmat_tile_rows(128u, 64u, g13g, allow64);
-  sg4 = qmm_coopmat_sg4_requested(g13g);
-  step_k = qmm_coopmat_stepk_requested(g13g, rows, sg4);
+  rows = coopmat_tile_rows(128u, 64u, named_caps(g13g), allow64);
+  sg4 = qmm_coopmat_sg4_requested(named_caps(g13g));
+  step_k = qmm_coopmat_stepk_requested(named_caps(g13g), rows, sg4);
   CHECK(rows == 32u);
   CHECK(step_k == 32u);
   CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
@@ -6530,25 +6569,215 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
   // Other parts keep their existing defaults cleanly.
   unsetenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
   unsetenv("MLX_OMARCHY_QMM_COOPMAT_STEPK");
-  rows = coopmat_tile_rows(128u, 64u, g16s, allow64);
-  sg4 = qmm_coopmat_sg4_requested(g16s);
-  step_k = qmm_coopmat_stepk_requested(g16s, rows, sg4);
+  rows = coopmat_tile_rows(128u, 64u, named_caps(g16s), allow64);
+  sg4 = qmm_coopmat_sg4_requested(named_caps(g16s));
+  step_k = qmm_coopmat_stepk_requested(named_caps(g16s), rows, sg4);
   CHECK(rows == 64u);
   CHECK_FALSE(sg4);
   CHECK(step_k == 16u);
   CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
         ComputeKernel::QmmPrefillCoopmatM64BF16X32FullNLdsPad);
 
-  for (const std::string& keep32 : {g14c, g13c, g17c}) {
-    rows = coopmat_tile_rows(128u, 64u, keep32, allow64);
-    sg4 = qmm_coopmat_sg4_requested(keep32);
-    step_k = qmm_coopmat_stepk_requested(keep32, rows, sg4);
+  // G13C, G14C and G13G default to 128-row SG8 coalesced-W K=64 on large
+  // grids (FULL_M when M % rows == 0, ragged twin otherwise), step down
+  // to 64-row SG4 on smaller M/N, and honor ROWS=32 kill switch.
+  rows = coopmat_tile_rows(512u, 32u, named_caps(g13g), allow64);
+  sg4 = qmm_coopmat_sg4_requested(named_caps(g13g));
+  step_k = qmm_coopmat_stepk_requested(named_caps(g13g), rows, sg4);
+  CHECK(rows == 128u);
+  CHECK(sg4);
+  CHECK(step_k == 64u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, true) ==
+        ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, false) ==
+        ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64);
+
+  // Six N groups fill the 64-row grid (8*6 >= 48), but not the
+  // 128-row grid (4*6 < 32).
+  rows = coopmat_tile_rows(512u, 6u, named_caps(g13g), allow64);
+  step_k = qmm_coopmat_stepk_requested(named_caps(g13g), rows, sg4);
+  CHECK(rows == 64u);
+  CHECK(step_k == 32u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32);
+
+  rows = coopmat_tile_rows(512u, 4u, named_caps(g13g), allow64);
+  step_k = qmm_coopmat_stepk_requested(named_caps(g13g), rows, sg4);
+  CHECK(rows == 32u);
+  CHECK(step_k == 16u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+        ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad);
+
+  rows = coopmat_tile_rows(512u, 32u, named_caps(g13c), allow64);
+  sg4 = qmm_coopmat_sg4_requested(named_caps(g13c));
+  step_k = qmm_coopmat_stepk_requested(named_caps(g13c), rows, sg4);
+  CHECK(rows == 128u);
+  CHECK(sg4);
+  CHECK(step_k == 64u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, true) ==
+        ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, false) ==
+        ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64);
+
+  rows = coopmat_tile_rows(256u, 32u, named_caps(g13c), allow64);
+  step_k = qmm_coopmat_stepk_requested(named_caps(g13c), rows, sg4);
+  CHECK(rows == 64u);
+  CHECK(step_k == 64u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, true) ==
+        ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, false) ==
+        ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64);
+
+  // G14C (38 cores): gate/up/down/q/o (n_groups >= 80) at M=512 take 128-row
+  // SG8 K=64; narrow k/v (n_groups = 32 -> 128 < 38*4) step down to 64-row SG4.
+  rows = coopmat_tile_rows(512u, 80u, named_caps(g14c), allow64);
+  sg4 = qmm_coopmat_sg4_requested(named_caps(g14c));
+  step_k = qmm_coopmat_stepk_requested(named_caps(g14c), rows, sg4);
+  CHECK(rows == 128u);
+  CHECK(sg4);
+  CHECK(step_k == 64u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, true) ==
+        ComputeKernel::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM);
+
+  rows = coopmat_tile_rows(512u, 32u, named_caps(g14c), allow64);
+  step_k = qmm_coopmat_stepk_requested(named_caps(g14c), rows, sg4);
+  CHECK(rows == 64u);
+  CHECK(step_k == 64u);
+  CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false, true) ==
+        ComputeKernel::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM);
+
+  setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "32", 1);
+  for (const std::string& maxpart : {g13c, g14c, g13g}) {
+    rows = coopmat_tile_rows(512u, 80u, named_caps(maxpart), allow64);
+    sg4 = qmm_coopmat_sg4_requested(named_caps(maxpart));
+    step_k = qmm_coopmat_stepk_requested(named_caps(maxpart), rows, sg4);
     CHECK(rows == 32u);
     CHECK_FALSE(sg4);
     CHECK(step_k == 16u);
     CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
           ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad);
   }
+  unsetenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+
+  // G17C is unlisted in the measured table: the capability probe
+  // (DEC-17) now reports it SG4-eligible (an f32 8x8x8 part with room
+  // for 128-lane workgroups), but at this 2x64 grid the fill gate
+  // still keeps it on the 32-row tile and the kernel is the same
+  // either way - the flags only bind when a 64-row grid wins.
+  for (const std::string& keep32 : {g17c}) {
+    rows = coopmat_tile_rows(128u, 64u, named_caps(keep32), allow64);
+    sg4 = qmm_coopmat_sg4_requested(named_caps(keep32));
+    step_k = qmm_coopmat_stepk_requested(named_caps(keep32), rows, sg4);
+    CHECK(rows == 32u);
+    CHECK(sg4);
+    CHECK(step_k == 16u);
+    CHECK(qmm_g4_pad_ratio_kernel(rows, sg4, step_k, false) ==
+          ComputeKernel::QmmPrefillCoopmatBF16X32FullNLdsPad);
+  }
+}
+
+TEST_CASE("QmmPrefillCoopmat tile family selects by capability not name") {
+  using mlx::core::omarchy::coopmat_tile_rows;
+  using mlx::core::omarchy::qmm_bf16w_default_part;
+  using mlx::core::omarchy::qmm_coopmat_rows128_requested;
+  using mlx::core::omarchy::qmm_coopmat_rows64_requested;
+  using mlx::core::omarchy::qmm_coopmat_sg4_requested;
+  using mlx::core::omarchy::qmm_coopmat_stepk_requested;
+  using mlx::core::omarchy::CoopmatShape;
+  using mlx::core::omarchy::CoopmatScope;
+  using mlx::core::omarchy::CoopmatType;
+
+  // A discrete part that advertises the fp32 8x8x8 subgroup shape under
+  // a 32-lane subgroup, a 256-lane workgroup and shared memory for the
+  // K=64 tile takes the measured-good defaults with no name entry
+  // (DEC-17 no-gating).
+  omarchy::CapabilityReport discrete_f32 = named_caps("RDNA4 discrete probe");
+  discrete_f32.max_compute_shared_memory_size = 49152u;
+  CHECK(qmm_coopmat_rows128_requested(discrete_f32));
+  CHECK(qmm_coopmat_rows64_requested(discrete_f32));
+  CHECK(qmm_coopmat_sg4_requested(discrete_f32));
+  CHECK(qmm_coopmat_stepk_requested(discrete_f32, 64u, true) == 64u);
+  CHECK(qmm_coopmat_stepk_requested(discrete_f32, 128u, true) == 64u);
+  // Unknown core count (cores == 0) takes the wide tile whenever the
+  // request passes: the fill gate cannot refuse what it cannot count.
+  CHECK(coopmat_tile_rows(512u, 32u, discrete_f32, true) == 128u);
+  CHECK(coopmat_tile_rows(128u, 64u, discrete_f32, true) == 64u);
+  // An fp32-coopmat part prefers the single-kernel route, so the
+  // two-pass bf16w default is off.
+  CHECK_FALSE(qmm_bf16w_default_part(discrete_f32));
+
+  // RADV profile: wave64 subgroup, no fp32 8x8x8 shape. The family
+  // probe refuses every tile pick even though workgroup and shared
+  // memory would admit it - the subgroup width is the binding gate.
+  omarchy::CapabilityReport radv;
+  radv.device_name = "AMD Radeon (RADV probe)";
+  radv.subgroup_size = 64u;
+  radv.max_compute_work_group_invocations = 1024u;
+  radv.max_compute_work_group_size = {1024u, 1024u, 1024u};
+  radv.max_compute_shared_memory_size = 65536u;
+  radv.cooperative_matrix_f32_8 = false;
+  radv.cooperative_matrix_bf16 = true;
+  CHECK_FALSE(qmm_coopmat_rows128_requested(radv));
+  CHECK_FALSE(qmm_coopmat_rows64_requested(radv));
+  CHECK_FALSE(qmm_coopmat_sg4_requested(radv));
+  CHECK(qmm_coopmat_stepk_requested(radv, 64u, true) == 16u);
+  CHECK(coopmat_tile_rows(512u, 32u, radv, true) == 32u);
+  // A bf16 shape exists, so a single-kernel coopmat route is reachable
+  // and the two-pass default stays off.
+  CHECK_FALSE(qmm_bf16w_default_part(radv));
+
+  // A wave64 part that DOES advertise the fp32 8x8x8 shape still
+  // refuses: the tile shaders assume a 32-lane subgroup.
+  omarchy::CapabilityReport wave64_f32 = radv;
+  wave64_f32.cooperative_matrix_f32_8 = true;
+  CHECK_FALSE(qmm_coopmat_rows128_requested(wave64_f32));
+  CHECK_FALSE(qmm_coopmat_rows64_requested(wave64_f32));
+  CHECK_FALSE(qmm_coopmat_sg4_requested(wave64_f32));
+
+  // ANV / Intel Arc Pro B60 (BMG G21) profile: subgroup 32, bf16
+  // 8x16x16 XMX shape, no fp32 8x8x8 - the tile family stays off and
+  // the Intel single-kernel route owns prefill.
+  omarchy::CapabilityReport anv;
+  anv.device_name = "Intel Arc Pro B60 (ANV probe)";
+  anv.subgroup_size = 32u;
+  anv.max_compute_work_group_invocations = 1024u;
+  anv.max_compute_work_group_size = {1024u, 1024u, 1024u};
+  anv.max_compute_shared_memory_size = 49152u;
+  anv.cooperative_matrix_bf16 = true;
+  CHECK_FALSE(qmm_coopmat_rows128_requested(anv));
+  CHECK_FALSE(qmm_coopmat_rows64_requested(anv));
+  CHECK_FALSE(qmm_coopmat_sg4_requested(anv));
+  CHECK(coopmat_tile_rows(512u, 32u, anv, true) == 32u);
+  CHECK_FALSE(qmm_bf16w_default_part(anv));
+
+  // NVIDIA profile (RTX 5060 Ti class): subgroup 32, 16x16x16 f16
+  // coopmat shape, no fp32 8x8x8, 48 KiB shared - the CMAT16 route
+  // owns qmm prefill and the fp32 tile family stays off.
+  omarchy::CapabilityReport nv;
+  nv.device_name = "NVIDIA GeForce RTX (probe)";
+  nv.subgroup_size = 32u;
+  nv.max_compute_work_group_invocations = 1024u;
+  nv.max_compute_work_group_size = {1024u, 1024u, 1024u};
+  nv.max_compute_shared_memory_size = 49152u;
+  nv.cooperative_matrix_shapes.push_back(
+      mlx::core::omarchy::qmm_prefill_coopmat_shape_f16x16());
+  CHECK_FALSE(qmm_coopmat_rows128_requested(nv));
+  CHECK_FALSE(qmm_coopmat_rows64_requested(nv));
+  CHECK_FALSE(qmm_coopmat_sg4_requested(nv));
+  CHECK(coopmat_tile_rows(512u, 32u, nv, true) == 32u);
+  CHECK_FALSE(qmm_bf16w_default_part(nv));
+
+  // A part with no coopmat route at all (no advertised shape) keeps
+  // the two-pass default; the bf16w gate cannot open there anyway.
+  omarchy::CapabilityReport bare;
+  bare.device_name = "no-coopmat probe";
+  CHECK(qmm_bf16w_default_part(bare));
+
+  // Measured exceptions keep their picks under the new signatures:
+  // G16S is the two-pass part, G13C the single-kernel part.
+  CHECK(qmm_bf16w_default_part(named_caps("Apple M4 Pro (G16S B1)")));
+  CHECK_FALSE(
+      qmm_bf16w_default_part(named_caps("Apple M1 Max (G13C C0)")));
 }
 
 TEST_CASE("MatmulBF16Coopmat alpha==1 stays bit-identical to the pre-fix drain") {
@@ -7760,15 +7989,35 @@ TEST_CASE("bf16 Q4 prefill runs the scalar-FMA build without the cooperative rou
       caps.subgroup_size == 32 && !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
       (32u * 16u + 16u * 32u) * sizeof(float) <=
           caps.max_compute_shared_memory_size;
+  // The Intel/ANV bf16-operand 8x16x16 route
+  // (QmmPrefillCoopmat16XeBF16) claims the same calls where its shape
+  // is advertised - the FMA kernels stay reachable only behind
+  // MLX_OMARCHY_NO_QMM_XE16 there, so this arm-vs-arm comparison is
+  // not the device's real pick. Mirrors the production gate's
+  // device-level terms; the m {5,77,1030}, k=192 shapes below all
+  // satisfy the call-level terms.
+  const bool qmm_xe16_reachable = caps.cooperative_matrix_bf16 &&
+      caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 64u &&
+      caps.max_compute_work_group_size[0] >= 64u &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_QMM_XE16") &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat16_xe_shape()) &&
+      (16u * 16u + 16u * 32u) * 2u + 2u * 8u * 16u * 4u <=
+          caps.max_compute_shared_memory_size;
   std::cout << "[provenance] device=" << caps.device_name
             << " cooperative_matrix_f32_8="
             << (caps.cooperative_matrix_f32_8 ? 1 : 0)
             << " subgroup_size=" << caps.subgroup_size
             << " no_coopmat_flag="
             << (omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") ? 1 : 0)
-            << " coopmat_reachable=" << (coopmat_reachable ? 1 : 0) << "\n";
-  if (coopmat_reachable) {
-    skip("the cooperative-matrix qmm route serves bf16 prefill on this device");
+            << " coopmat_reachable=" << (coopmat_reachable ? 1 : 0)
+            << " qmm_xe16_reachable=" << (qmm_xe16_reachable ? 1 : 0)
+            << "\n";
+  if (coopmat_reachable || qmm_xe16_reachable) {
+    skip("a cooperative-matrix qmm route serves bf16 prefill on this device");
     return;
   }
   if (omarchy::env_flag("MLX_OMARCHY_NO_QMM_FMA") ||
@@ -7862,6 +8111,105 @@ TEST_CASE("bf16 Q4 prefill runs the scalar-FMA build without the cooperative rou
               << " of " << results[0].size() << " outputs differ\n";
   }
   unsetenv("MLX_OMARCHY_QMM_TILE_RB");
+}
+
+// QmmPrefillCoopmat16XeBF16 (shaders/qmm_coopmat16_xe.comp): the bf16-
+// operand 8x16x16 subgroup shape ANV advertises on Xe2 (BMG), the same
+// hardware shape the dense Xe16 matmul emits. x stages through shared
+// as a straight bf16 copy, so a ragged matrix_m tile zero-fills - the
+// route claims the q4-g64 bf16 prefill calls the Intel direct kernel's
+// m%16 gate declines on a driver whose shape list has no M16 entry.
+// Pin the dispatch on m not a multiple of 16 and above the m<=8
+// batch-8 short pass (qmv_small_t_default_part), then check the value
+// class: bf16 operand staging bounds the call at roughly one 2^-8
+// rounding per operand on top of the f32 accumulation chain and the
+// bf16 store.
+TEST_CASE("bf16 Q4 prefill dispatches the Xe16 coopmat build on ragged rows") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool xe16_reachable = caps.cooperative_matrix_bf16 &&
+      caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 64u &&
+      caps.max_compute_work_group_size[0] >= 64u &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_QMM_XE16") &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat16_xe_shape()) &&
+      (16u * 16u + 16u * 32u) * 2u + 2u * 8u * 16u * 4u <=
+          caps.max_compute_shared_memory_size;
+  std::cout << "[provenance] device=" << caps.device_name
+            << " xe16_reachable=" << (xe16_reachable ? 1 : 0) << "\n";
+  if (!xe16_reachable) {
+    skip("no 8x16x16 bf16 subgroup coopmat shape on this device");
+    return;
+  }
+  unsetenv("MLX_OMARCHY_QMM_TILE");
+  unsetenv("MLX_OMARCHY_QMM_TILE_RB");
+  Stream stream = gpu_stream();
+  const int group_size = 64, bits = 4, k = 192, n = 130;
+  std::mt19937 gen(20261125);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  for (auto& v : matrix) {
+    v = dist(gen);
+  }
+  HostQuantizedWeights host =
+      host_affine_quantize(matrix, n, k, group_size, bits);
+  HostQuantizedWeights rounded = host;
+  rounded.scales = round_trip(stream, host.scales, bfloat16);
+  rounded.biases = round_trip(stream, host.biases, bfloat16);
+  array w_words(host.words.begin(), Shape{n, k * bits / 32}, uint32);
+  array scales(rounded.scales.begin(), Shape{n, k / group_size}, bfloat16);
+  array biases(rounded.biases.begin(), Shape{n, k / group_size}, bfloat16);
+  for (int m : {17, 77}) {
+    std::vector<float> x_values(static_cast<size_t>(m) * k);
+    for (auto& v : x_values) {
+      v = dist(gen);
+    }
+    std::vector<float> x_rt = round_trip(stream, x_values, bfloat16);
+    std::vector<float> expected =
+        host_quantized_matmul(rounded, x_rt, m, n, k, group_size, bits);
+    array x(x_rt.begin(), Shape{m, k}, bfloat16);
+    eval({x, w_words, scales, biases});
+    omarchy::get_command_encoder(stream).synchronize();
+    array out = quantized_matmul(
+        x, w_words, scales, biases, true, group_size, bits, "affine",
+        stream);
+    out.eval();
+    omarchy::get_command_encoder(stream).synchronize();
+    const int64_t dispatched =
+        omarchy::trace::counters().last_dispatched_kernel.load();
+    INFO("m=" << m << " n=" << n << " k=" << k);
+    CHECK_EQ(dispatched,
+             static_cast<int64_t>(
+                 omarchy::ComputeKernel::QmmPrefillCoopmat16XeBF16));
+    std::vector<float> got = readback_f32(stream, out);
+    REQUIRE_EQ(got.size(), expected.size());
+    double m_max = 0.0;
+    for (float v : got) {
+      REQUIRE(std::isfinite(v));
+      m_max = std::max(m_max, std::fabs(static_cast<double>(v)));
+    }
+    const double m_bound = std::max(m_max * 2.0, 1.0);
+    // bf16 operands: one 2^-8 relative rounding per factor against
+    // the f32 chain term the FMA route's bound uses, then the same
+    // bf16 storage rounding.
+    const double bound =
+        (3.0 * k + 1.0) * m_bound * std::ldexp(1.0, -23) +
+        2.0 * k * m_bound * std::ldexp(1.0, -8) +
+        m_bound * std::ldexp(1.0, -8);
+    double max_diff = 0.0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+      max_diff = std::max(
+          max_diff, std::fabs(static_cast<double>(got[i]) - expected[i]));
+    }
+    std::cout << "[qmm-xe16-bf16] m=" << m << " max_diff=" << max_diff
+              << " bound=" << bound << "\n";
+    CHECK(max_diff <= bound);
+  }
 }
 
 TEST_CASE("bf16 linear-layer FMA over the cooperative matrix: the part rule") {
@@ -8025,19 +8373,29 @@ TEST_CASE("short-pass GEMV: per-part default row cap") {
   CHECK(omarchy::qmv_small_t_default_part("Apple M3 (G13C B1)") == 8);
   CHECK(omarchy::qmv_small_t_default_part("Apple M1 (G13G B1)") == 8);
   CHECK(omarchy::qmv_small_t_default_part("Apple M2 Max (G14C B1)") == 8);
-  CHECK(omarchy::qmv_small_t_default_part("Apple M5 Max (G17C B1)") == 0);
-  CHECK(omarchy::qmv_small_t_default_part("Apple M4 (G16G B1)") == 0);
-  CHECK(omarchy::qmv_small_t_default_part("") == 0);
+  CHECK(omarchy::qmv_small_t_default_part("Apple M5 Max (G17C B1)") == 8);
+  CHECK(omarchy::qmv_small_t_default_part("Apple M4 (G16G B1)") == 8);
+  CHECK(omarchy::qmv_small_t_default_part("Apple M6 (G18G B1)") == 8);
+  CHECK(omarchy::qmv_small_t_default_part("") == 8);
 }
 
 TEST_CASE("bf16 Q4 two-pass prefill: the part and row rules") {
   for (int round = 0; round < 2; ++round) {
-    CHECK(omarchy::qmm_bf16w_default_part("Apple M4 Pro (G16S B1)"));
-    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M5 Max (G17C B1)"));
-    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M4 (G16G B1)"));
-    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M1 (G13G B1)"));
-    CHECK_FALSE(omarchy::qmm_bf16w_default_part("Apple M2 Max (G14C B1)"));
-    CHECK_FALSE(omarchy::qmm_bf16w_default_part(""));
+    // Measured exceptions (G16S two-pass) and capability defaults
+    // (DEC-17): an unlisted part that advertises a shape a
+    // single-kernel coopmat qmm route emits prefers that route, so the
+    // two-pass default is off for every f32-8x8x8 part - G17C, G16G
+    // and G18G included - and only a part with no coopmat shape keeps
+    // the two-pass default.
+    CHECK(omarchy::qmm_bf16w_default_part(named_caps("Apple M4 Pro (G16S B1)")));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part(named_caps("Apple M5 Max (G17C B1)")));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part(named_caps("Apple M4 (G16G B1)")));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part(named_caps("Apple M1 (G13G B1)")));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part(named_caps("Apple M1 Max (G13C C0)")));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part(named_caps("Apple M2 Max (G14C B1)")));
+    CHECK_FALSE(omarchy::qmm_bf16w_default_part(named_caps("Apple M6 (G18G B1)")));
+    omarchy::CapabilityReport bare;
+    CHECK(omarchy::qmm_bf16w_default_part(bare));
   }
   CHECK_FALSE(omarchy::qmm_bf16w_rows_ok(511, 4096, 4096));
   CHECK(omarchy::qmm_bf16w_rows_ok(512, 4096, 4096));
@@ -8066,14 +8424,15 @@ TEST_CASE("intel QMM prefill: the part and env rules") {
       "Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)"));
   CHECK(omarchy::qmm_intel_default_part(
       "Intel(R) Arc(tm) A770 Graphics (DG2)"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M4 Pro (G16S B1)"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M5 Max (G17C B1)"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part(
+  CHECK(omarchy::qmm_intel_default_part("Apple M4 Pro (G16S B1)"));
+  CHECK(omarchy::qmm_intel_default_part("Apple M5 Max (G17C B1)"));
+  CHECK(omarchy::qmm_intel_default_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::qmm_intel_default_part("Apple M1 (G13G B1)"));
+  CHECK(omarchy::qmm_intel_default_part("Apple M6 (G18G B1)"));
+  CHECK(omarchy::qmm_intel_default_part(
       "NVIDIA GeForce RTX 5060 Ti"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part("NVIDIA GeForce RTX 4090"));
-  CHECK_FALSE(omarchy::qmm_intel_default_part(""));
+  CHECK(omarchy::qmm_intel_default_part("NVIDIA GeForce RTX 4090"));
+  CHECK(omarchy::qmm_intel_default_part(""));
   setenv(flag, "0", 1);
   CHECK_FALSE(omarchy::qmm_intel_default_part(
       "Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)"));

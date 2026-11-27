@@ -6,8 +6,13 @@
 // Moved here from primitives.cpp so tests can pin the 64-row gate: the
 // 64-row default is a 4-bit group-64 transposed FullN route only
 // (review of #508); every other format and non-FullN shape keeps the
-// 32-row tile. G16S defaults to 64-row G4+LdsPad and G13G defaults to
-// 64-row SG4+LdsPad+STEPK=32; parts outside G16S and G13G keep 32 rows.
+// 32-row tile. G16S defaults to 64-row G4+LdsPad; G13C, G14C and G13G
+// default to 128-row SG8 K=64 where the grid fills the part, stepping
+// down to 64-row SG4 (G13G at STEP_K=32). Unlisted parts follow the
+// capability probe (DEC-17): the measured-good tile defaults apply
+// where the fp32 8x8x8 shape, 32-lane subgroup, workgroup size and
+// shared-memory floor all admit them, so a part that can legally
+// dispatch the family takes the same picks the measured parts do.
 
 #pragma once
 
@@ -15,6 +20,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include "mlx/backend/omarchy/device.h"
 
 namespace mlx::core::omarchy {
 
@@ -35,7 +41,7 @@ namespace mlx::core::omarchy {
 // grid clears the per-core floor sooner, so the wider tile wins), which
 // is the safe direction.
 inline uint32_t apple_gpu_cores(const std::string& device_name) {
-  if (const char* env = std::getenv("MLX_OMARCHY_GPU_CORES")) {
+  if (const char* env = omarchy::env_str("MLX_OMARCHY_GPU_CORES")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
   if (device_name == "Apple M1 (G13G B1)") {
@@ -90,7 +96,7 @@ constexpr uint32_t kCoopmatWorkgroupsPerCore = 6u;
 
 inline uint32_t coopmat_workgroups_per_core() {
   static const uint32_t value = [] {
-    const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_WG_PER_CORE");
+    const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_WG_PER_CORE");
     if (env == nullptr) {
       return kCoopmatWorkgroupsPerCore;
     }
@@ -122,43 +128,128 @@ inline uint32_t coopmat_workgroups_per_core() {
 // so nothing is traded for the halved per-step work. Contract prompts
 // are 11-18 tokens; on T8103 the 13-token prefill GEMMs at 32 rows
 // cost 400-950 us each, 133 of them per first token.
-inline bool qmm_coopmat_rows64_requested(const std::string& device_name) {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+// Cooperative-matrix capability probe for the qmm tile family (DEC-17):
+// every kernel the row/variant selectors below pick emits the fp32 8x8x8
+// subgroup shape, so a part has to advertise that shape and report the
+// 32-lane subgroup the shaders are built for before any tile default can
+// apply to it. A part that meets the probe takes the measured-good
+// defaults of the parts the family was measured on (no-gating: a
+// measured loss is a named exception, not another entry condition).
+// RADV-class parts advertise subgroup_size 64 and stay off until a
+// wave64 build exists; ANV (bf16 XMX only) and NVIDIA (f16 16x16x16
+// only) parts advertise no fp32 8x8x8 shape and take their own routes.
+inline bool qmm_coopmat_tile_family_capable(const CapabilityReport& caps) {
+  return caps.cooperative_matrix_f32_8 && caps.subgroup_size == 32u;
+}
+
+// Staged-tile shared-memory floors, matching need_ratio at the dispatch
+// site: STEP_K=64 doubles the B tile to 64x36 f32 and adds the 64-word
+// coalesced-W run (kSg8K64SharedBytes); STEP_K=32 halves it.
+constexpr uint32_t kQmmCoopmatTileSharedK64 = (64u * 36u + 64u) * 4u;
+constexpr uint32_t kQmmCoopmatTileSharedK32 = 32u * 36u * 4u;
+
+inline bool qmm_coopmat_rows128_requested(const CapabilityReport& caps) {
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  if (env != nullptr && env[0] != '\0') {
+    const std::string v(env);
+    if (v == "128sg8" || v == "128") {
+      return true;
+    }
+    if (v == "64" || v == "64sg4" || v == "32" || v == "0" || v == "16") {
+      return false;
+    }
+  }
+  // Measured table: G13C (M1 Max), G14C (M2 Max) and G13G (13-inch M1)
+  // default to 128-row SG8 coalesced-W K=64 where the grid fills the
+  // part, stepping down to 64-row SG4 K=64 for smaller M/N. G13G
+  // measured: prefill512 2.05-2.15x vs the 64-row SG4 default (9B 101.6
+  // vs 49.5 tok/s, 4B 210.3 vs 98.0, ids identical, 5-pair ABBA on main
+  // 1f854b9b85).
+  const std::string& device_name = caps.device_name;
+  if (device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos ||
+      device_name.find("G14C") != std::string::npos) {
+    return true;
+  }
+  // Capability default for unlisted parts: the 128-row SG8 build needs a
+  // 256-lane workgroup and its K=64 staged tile in shared memory.
+  return qmm_coopmat_tile_family_capable(caps) &&
+      caps.max_compute_work_group_invocations >= 256u &&
+      caps.max_compute_work_group_size[0] >= 256u &&
+      kQmmCoopmatTileSharedK64 <= caps.max_compute_shared_memory_size;
+}
+
+inline bool qmm_coopmat_rows64_requested(const CapabilityReport& caps) {
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_ROWS");
   if (env != nullptr && env[0] != '\0') {
     const std::string v(env);
     if (v == "32" || v == "0" || v == "16") {
       return false;
     }
-    if (v == "64" || v == "64sg4") {
+    if (v == "64" || v == "64sg4" || v == "128sg8" || v == "128") {
       return true;
     }
   }
-  // G16S defaults on (64-row G4+LdsPad); G13G defaults on (64-row
-  // SG4+LdsPad+STEPK=32). G14C and initial G17C (Max class) keep the
-  // 32-row default pending calibration.
-  return device_name.find("G16S") != std::string::npos ||
-      device_name.find("G13G") != std::string::npos;
+  // Measured table: G16S defaults on (64-row G4+LdsPad); G13G defaults
+  // on (64-row SG4+LdsPad+STEPK=32); G13C and G14C use 64-row SG4+K=64
+  // as their step-down from 128-row SG8.
+  const std::string& device_name = caps.device_name;
+  if (device_name.find("G16S") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos ||
+      device_name.find("G14C") != std::string::npos) {
+    return true;
+  }
+  // Capability default for unlisted parts: the 64-row variants are
+  // 128-lane workgroups; the K=64 staged tile is the largest they ask
+  // shared memory for.
+  return qmm_coopmat_tile_family_capable(caps) &&
+      caps.max_compute_work_group_invocations >= 128u &&
+      caps.max_compute_work_group_size[0] >= 128u &&
+      kQmmCoopmatTileSharedK64 <= caps.max_compute_shared_memory_size;
 }
 
-inline bool qmm_coopmat_sg4_requested(const std::string& device_name) {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+inline bool qmm_coopmat_sg4_requested(const CapabilityReport& caps) {
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_ROWS");
   if (env != nullptr && env[0] != '\0') {
     const std::string v(env);
-    if (v == "64sg4") {
+    if (v == "64sg4" || v == "128sg8" || v == "128") {
       return true;
     }
     if (v == "64" || v == "32" || v == "0" || v == "16") {
       return false;
     }
   }
-  return device_name.find("G13G") != std::string::npos;
+  const std::string& device_name = caps.device_name;
+  if (device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos ||
+      device_name.find("G14C") != std::string::npos) {
+    return true;
+  }
+  // Measured exception: G16S defaults to the M64 non-SG4 kernel, so the
+  // SG4 flag stays off for it even though the capability probe admits
+  // the family (the probe below would otherwise reroute its measured
+  // pick to the SG4 build).
+  if (device_name.find("G16S") != std::string::npos) {
+    return false;
+  }
+  // Capability default: SG4 variants are 128-lane workgroups.
+  return qmm_coopmat_tile_family_capable(caps) &&
+      caps.max_compute_work_group_invocations >= 128u &&
+      caps.max_compute_work_group_size[0] >= 128u;
 }
 
 inline uint32_t qmm_coopmat_stepk_requested(
-    const std::string& device_name, uint32_t rows, bool sg4) {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_COOPMAT_STEPK");
+    const CapabilityReport& caps, uint32_t rows, bool sg4) {
+  if (rows == 128u) {
+    return 64u;
+  }
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_STEPK");
   if (env != nullptr && env[0] != '\0') {
     const std::string v(env);
+    if (v == "64" && rows == 64u && sg4) {
+      return 64u;
+    }
     if (v == "32") {
       return 32u;
     }
@@ -166,28 +257,58 @@ inline uint32_t qmm_coopmat_stepk_requested(
       return 16u;
     }
   }
+  const std::string& device_name = caps.device_name;
+  if (rows == 64u && sg4 &&
+      (device_name.find("G13C") != std::string::npos ||
+       device_name.find("G14C") != std::string::npos)) {
+    return 64u;
+  }
   // Only 64-row SG4 on G13G defaults to STEP_K=32; standalone 32-row
   // STEP_K=32 regressed on G13G, so fallback 32-row grids keep 16.
   if (rows == 64u && sg4 &&
       device_name.find("G13G") != std::string::npos) {
     return 32u;
   }
+  // Capability ladder for unlisted parts on 64-row SG4: the largest
+  // staged tile the shared-memory budget admits, matching the Max-class
+  // measured pick (K=64) down to the base-part pick (K=32).
+  if (rows == 64u && sg4 && qmm_coopmat_tile_family_capable(caps)) {
+    if (kQmmCoopmatTileSharedK64 <= caps.max_compute_shared_memory_size) {
+      return 64u;
+    }
+    if (kQmmCoopmatTileSharedK32 <= caps.max_compute_shared_memory_size) {
+      return 32u;
+    }
+  }
   return 16u;
 }
 
 inline bool qmm_cheap_deq_env() {
-  const char* env = std::getenv("MLX_OMARCHY_QMM_CHEAP_DEQ");
+  const char* env = omarchy::env_str("MLX_OMARCHY_QMM_CHEAP_DEQ");
   return env != nullptr && env[0] == '1';
 }
 
 // Landed G4+LdsPad default, or an env-gated dequant-ratio twin of it.
 // The per-output k chain is unchanged; only staging granularity, the
 // number of rows sharing one W tile, or the nibble->f32 conversion
-// changes.
+// changes. full_m selects the compile-time tail-free build when
+// matrix_m % rows == 0 (keeps GPRs at 103 / 1024 threads per core).
 inline omarchy::ComputeKernel qmm_g4_pad_ratio_kernel(
-    uint32_t rows, bool sg4, uint32_t step_k, bool cheap) {
+    uint32_t rows,
+    bool sg4,
+    uint32_t step_k,
+    bool cheap,
+    bool full_m = false) {
   using K = omarchy::ComputeKernel;
+  if (rows == 128u) {
+    return full_m ? K::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM
+                  : K::QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64;
+  }
   if (rows == 64u && sg4) {
+    if (step_k == 64u) {
+      return full_m ? K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM
+                    : K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64;
+    }
     if (step_k == 32u) {
       return cheap ? K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32Cheap
                    : K::QmmPrefillCoopmatSG4BF16X32FullNLdsPadK32;
@@ -214,22 +335,43 @@ inline omarchy::ComputeKernel qmm_g4_pad_ratio_kernel(
 inline uint32_t coopmat_tile_rows(
     uint32_t matrix_m,
     uint32_t n_groups,
-    const std::string& device_name,
-    bool allow_rows64 = false) {
+    const CapabilityReport& caps,
+    bool allow_rows64 = false,
+    bool allow_rows128 = true) {
   if (matrix_m <= 16u) {
     return 16u;
   }
+  const std::string& device_name = caps.device_name;
   uint32_t cores = apple_gpu_cores(device_name);
   uint32_t per_core = coopmat_workgroups_per_core();
-  // 64-row experiment: take it only when M is large enough that the
-  // 64-row grid still fills the part (m_groups_64 * n_groups against
-  // the part's core count; G16S carries 20).
-  if (allow_rows64 && qmm_coopmat_rows64_requested(device_name) &&
+  // 128-row SG8 K=64 (256 threads/WG): take it when M >= 256 and the
+  // 128-row grid provides at least 4 workgroups per core (1024 threads/core).
+  if (allow_rows64 && allow_rows128 &&
+      qmm_coopmat_rows128_requested(caps) && matrix_m >= 256u) {
+    uint32_t m_groups_128 = (matrix_m + 127u) / 128u;
+    uint32_t sg8_per_core = per_core == 0u ? 0u : std::min(per_core, 4u);
+    if (cores == 0u || sg8_per_core == 0u ||
+        static_cast<uint64_t>(m_groups_128) * n_groups >=
+            static_cast<uint64_t>(cores) * sg8_per_core) {
+      return 128u;
+    }
+  }
+  // 64-row tile: take it only when M is large enough that the 64-row grid
+  // still fills the part (m_groups_64 * n_groups against the part's core
+  // count; G16S carries 20). On G13C/G14C (SG4 128-lane), 4 WG/core (512
+  // threads/core) suffices.
+  if (allow_rows64 && qmm_coopmat_rows64_requested(caps) &&
       matrix_m >= 128u) {
     uint32_t m_groups_64 = (matrix_m + 63u) / 64u;
-    if (cores == 0u || per_core == 0u ||
+    const bool max_class_sg4 =
+        device_name.find("G13C") != std::string::npos ||
+        device_name.find("G14C") != std::string::npos;
+    uint32_t r64_per_core = (per_core != 0u && max_class_sg4)
+        ? std::min(per_core, 4u)
+        : per_core;
+    if (cores == 0u || r64_per_core == 0u ||
         static_cast<uint64_t>(m_groups_64) * n_groups >=
-            static_cast<uint64_t>(cores) * per_core) {
+            static_cast<uint64_t>(cores) * r64_per_core) {
       return 64u;
     }
   }

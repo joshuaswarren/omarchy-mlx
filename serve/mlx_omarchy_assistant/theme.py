@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import os
 import re
+import stat
 import subprocess
 import tomllib
 from pathlib import Path
@@ -52,6 +54,10 @@ FALLBACK_LIGHT = {
 _COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3}")
 _ASCII_FONT_RE = re.compile(r"[\w -]{1,64}")
 _FONT_TIMEOUT = 2.0
+# Real theme files are under 1 KiB; tomllib's memory for nested dotted keys
+# under a nested table grows with the square of depth, so a small cap also
+# bounds parse memory and time.
+_MAX_THEME_BYTES = 4 * 1024
 
 # Application-owned CSS variable map (kept in sync with css/app.css).
 CSS_VARS = (
@@ -187,11 +193,31 @@ def _sanitize(value) -> str | None:
     return "#" + h.lower()
 
 
-def _read_slug(home: Path) -> str | None:
-    name_file = home / ".local" / "state" / "omarchy" / "current" / "theme.name"
+def _read_theme_bytes(path: Path) -> bytes | None:
     try:
-        text = name_file.read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeDecodeError):
+        with open(
+            path,
+            "rb",
+            buffering=_MAX_THEME_BYTES + 1,
+            opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK),
+        ) as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return None
+            raw = stream.read(_MAX_THEME_BYTES + 1)
+    except OSError:
+        return None
+    return None if raw is None or len(raw) > _MAX_THEME_BYTES else raw
+
+
+def _read_slug(home: Path) -> str | None:
+    raw = _read_theme_bytes(
+        home / ".local" / "state" / "omarchy" / "current" / "theme.name"
+    )
+    if raw is None:
+        return None
+    try:
+        text = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
         return None
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", text):
         return None
@@ -204,27 +230,28 @@ def _theme_dir(home: Path, slug: str) -> tuple[Path, bool]:
         home / ".local" / "state" / "omarchy" / "current" / "theme",
         home / ".config" / "omarchy" / "themes" / slug,
     ]
-    import os
     omarchy = os.environ.get("OMARCHY_PATH")
     if omarchy:
         candidates.append(Path(omarchy) / "themes" / slug)
     for candidate in candidates:
         colors = candidate / "colors.toml"
-        if candidate.is_dir() and colors.is_file():
+        if os.path.isdir(candidate) and os.path.isfile(colors):
             return candidate, True
     # Fall back to just the first candidate existing as a directory so the
     # mode detection can still read its light.mode marker.
     for candidate in candidates:
-        if candidate.is_dir():
+        if os.path.isdir(candidate):
             return candidate, False
     return candidates[0], False
 
 
 def _parse_colors_toml(path: Path) -> tuple[dict[str, str], str | None]:
+    raw_bytes = _read_theme_bytes(path)
+    if raw_bytes is None:
+        return {}, None
     try:
-        with path.open("rb") as fh:
-            data = tomllib.load(fh)
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        data = tomllib.loads(raw_bytes.decode("utf-8"))
+    except (ValueError, RecursionError, MemoryError):
         return {}, None
     if not isinstance(data, dict):
         return {}, None
@@ -252,7 +279,7 @@ def _detect_mode(theme_dir: Path, parsed_mode: str | None,
                  canvas_hex: str | None) -> str:
     if parsed_mode in ("dark", "light"):
         return parsed_mode
-    if (theme_dir / "light.mode").exists():
+    if os.path.exists(theme_dir / "light.mode"):
         return "light"
     if canvas_hex is not None:
         return "light" if _luminance(canvas_hex) > 0.55 else "dark"
@@ -497,7 +524,6 @@ def snapshot_tree(path: Path) -> dict[str, str]:
 @contextlib.contextmanager
 def temporary_home(root: Path):
     """Context manager that swaps $HOME for the duration; restores after."""
-    import os
     saved = os.environ.get("HOME")
     os.environ["HOME"] = str(root)
     try:

@@ -150,6 +150,46 @@ class RouteTests(unittest.TestCase):
         h.do_GET()
         self.assertEqual(h.written, b"upstream")  # fall-through untouched
 
+    def test_models_route_forwards_alias_and_api_key_and_respects_auth(self):
+        server = self._server()
+
+        class AuthAPIHandler(FakeHandler):
+            authorized = False
+            alias = "custom-alias"
+
+            def _authorized(self):
+                return self.authorized
+
+            def do_GET(self):
+                self.status = 401 if not self._authorized() else 200
+                self.written = b"auth-checked"
+
+        server.APIHandler = AuthAPIHandler
+        captured = {}
+
+        def spy(host, port, response_generator, server_class=None,
+                handler_class=None, alias="", api_key=""):
+            captured.update(handler=handler_class, alias=alias, api_key=api_key)
+            return host, port
+
+        server._run_http_server = spy
+        shim.install_models_route(server)
+        server._run_http_server(1, 2, None, alias="custom-alias", api_key="k")
+        self.assertEqual(captured["alias"], "custom-alias")
+        self.assertEqual(captured["api_key"], "k")
+
+        unauth = captured["handler"](FakeGenerator("some/model"))
+        unauth.authorized = False
+        unauth.do_GET()
+        self.assertEqual(unauth.status, 401)
+        self.assertEqual(unauth.written, b"auth-checked")
+
+        authed = captured["handler"](FakeGenerator("some/model"))
+        authed.authorized = True
+        authed.do_GET()
+        self.assertEqual(authed.status, 200)
+        self.assertIn(b"custom-alias", authed.wfile.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

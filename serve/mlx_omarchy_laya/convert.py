@@ -24,9 +24,14 @@ mlx_omarchy_serve.budget when that module is importable.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
+import os
 import shutil
+import stat
+import struct
 import sys
 import urllib.request
 from pathlib import Path
@@ -34,6 +39,18 @@ from pathlib import Path
 SOURCE_REPO = "convaiinnovations/laya"
 PINNED_REVISION = "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"
 WORKSPACE_HEADROOM_BYTES = 512 * 1024 * 1024
+# A converted manifest is about 1 KiB; cap reads to bound corrupt or hostile files.
+_MANIFEST_MAX_BYTES = 1 << 20
+# A Laya config is a few KiB; cap reads to bound corrupt or hostile files.
+_CONFIG_MAX_BYTES = 1 << 20
+# The safetensors format's own header size limit.
+_SAFETENSORS_HEADER_MAX_BYTES = 100_000_000
+_MANIFEST_FIELD_TYPES = (
+    ("catalog_id", str),
+    ("source_revision", str),
+    ("estimated_bytes", int),
+    ("weights_header.weight_bytes", int),
+)
 
 # variant -> (subpath in repo, catalog model id)
 # The catalog id must be the id the serve catalog serves and the pair runtime
@@ -47,12 +64,79 @@ FILES = ["model.safetensors", "rl_agent_config.json", "encoder/config.json",
          "tokenizer/tokenizer.json", "tokenizer/tokenizer_config.json"]
 
 
-def _sha256(path: Path) -> str:
+@contextlib.contextmanager
+def _open_source(path: Path, name: str):
+    try:
+        with open(path, "rb", opener=lambda p, flags: os.open(p, flags | os.O_NONBLOCK)) as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise SystemExit("convert: %s in source snapshot is not a regular file" % name)
+            yield f
+    except OSError as exc:
+        raise SystemExit(
+            "convert: cannot read %s in source snapshot (%s)"
+            % (name, exc.strerror or type(exc).__name__)
+        ) from None
+
+
+def _read_chunks(path: Path, name: str):
+    """Yield a source file in chunks; only source-side errors become convert: messages."""
+    with _open_source(path, name) as f:
+        yield from iter(lambda: f.read(1 << 20), b"")
+
+
+def _read_config(path: Path, name: str) -> tuple[dict, str]:
+    with _open_source(path, name) as f:
+        raw = f.read(_CONFIG_MAX_BYTES + 1)
+    if len(raw) > _CONFIG_MAX_BYTES:
+        raise SystemExit("convert: %s exceeds %d bytes" % (name, _CONFIG_MAX_BYTES))
+    return _parse_json_object(raw, name), hashlib.sha256(raw).hexdigest()
+
+
+def _sha256(path: Path, name: str) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    for chunk in _read_chunks(path, name):
+        h.update(chunk)
     return h.hexdigest()
+
+
+@contextlib.contextmanager
+def _lock_out(out: Path):
+    """Hold a non-blocking exclusive lock on out during the write phase."""
+    fd = os.open(out, os.O_RDONLY)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit("convert: another convert is writing to %s" % out) from None
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def _replace_file(dst: Path):
+    """Write to a sibling temp file and move it over dst only when the block succeeds."""
+    tmp = dst.with_name(".%s.part" % dst.name)
+    tmp.unlink(missing_ok=True)
+    try:
+        with open(tmp, "xb") as f:
+            yield f
+        os.replace(tmp, dst)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _copy_source(src: Path, dst: Path, name: str, sha256: str):
+    """Copy one source file to dst if its bytes still hash to sha256."""
+    dst.parent.mkdir(exist_ok=True)
+    h = hashlib.sha256()
+    with _replace_file(dst) as out, contextlib.closing(_read_chunks(src, name)) as chunks:
+        for chunk in chunks:
+            out.write(chunk)
+            h.update(chunk)
+        if h.hexdigest() != sha256:
+            raise SystemExit("convert: %s changed in the source snapshot during conversion" % name)
 
 
 def _fetch(repo: str, revision: str, subpath: str, name: str, dest: Path):
@@ -68,20 +152,60 @@ def _apply_aliases(header: dict) -> dict:
     return {_canonical_key(k): v for k, v in header.items()}
 
 
+def _parse_json_object(raw: bytes, name: str) -> dict:
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError) as exc:
+        raise SystemExit("convert: %s is not valid JSON (%s)" % (name, type(exc).__name__)) from None
+    if not isinstance(data, dict):
+        raise SystemExit("convert: %s is not a JSON object" % name)
+    return data
+
+
+def _positive_int(cfg: dict, key: str, name: str) -> int:
+    val = cfg.get(key)
+    if isinstance(val, int) and not isinstance(val, bool) and 0 < val < (1 << 63):
+        return val
+    raise SystemExit("convert: %s %s must be a positive integer below 2**63" % (name, key))
+
+
 def _validate_weights(path: Path, enc_cfg_json: dict, head_layers: int):
     """Validate the safetensors header: expected key set and shapes, no surprises."""
-    import struct
+    hidden, inter, layers, vocab = (
+        _positive_int(enc_cfg_json, k, "encoder/config.json")
+        for k in ("hidden_size", "intermediate_size", "num_hidden_layers", "vocab_size"))
 
-    with open(path, "rb") as f:
-        n = struct.unpack("<Q", f.read(8))[0]
-        header = json.loads(f.read(n))
+    with _open_source(path, "model.safetensors") as f:
+        prefix = f.read(8)
+        if len(prefix) < 8:
+            raise SystemExit("convert: model.safetensors is too short to hold a safetensors header")
+        n = struct.unpack("<Q", prefix)[0]
+        if n > _SAFETENSORS_HEADER_MAX_BYTES:
+            raise SystemExit(
+                "convert: model.safetensors header length %d exceeds the %d-byte safetensors limit"
+                % (n, _SAFETENSORS_HEADER_MAX_BYTES)
+            )
+        if 8 + n > os.fstat(f.fileno()).st_size:
+            raise SystemExit("convert: model.safetensors is truncated (header length %d)" % n)
+        raw = f.read(n)
+        if len(raw) != n:
+            raise SystemExit("convert: model.safetensors is truncated (header length %d)" % n)
+    header = _parse_json_object(raw, "model.safetensors header")
     header.pop("__metadata__", None)
+    for key, entry in header.items():
+        if (not isinstance(entry, dict) or not isinstance(entry.get("dtype"), str)
+                or not isinstance(entry.get("shape"), list)
+                or not all(isinstance(d, int) and not isinstance(d, bool) and d >= 0
+                           for d in entry["shape"])):
+            raise SystemExit("convert: tensor %r has malformed metadata" % key[:80])
     header = _apply_aliases(header)
-    hidden = enc_cfg_json["hidden_size"]
-    inter = enc_cfg_json["intermediate_size"]
-    layers = enc_cfg_json["num_hidden_layers"]
+    if 5 * layers + 12 * head_layers > len(header):
+        raise SystemExit(
+            "convert: checkpoint is missing expected tensors: %d encoder and %d head layers "
+            "need more tensors than the header's %d" % (layers, head_layers, len(header))
+        )
     expected = {
-        "encoder.embeddings.tok_embeddings.weight": (enc_cfg_json["vocab_size"], hidden),
+        "encoder.embeddings.tok_embeddings.weight": (vocab, hidden),
         "encoder.embeddings.norm.weight": (hidden,),
         "encoder.final_norm.weight": (hidden,),
         "type_emb.weight": (3, hidden),
@@ -136,9 +260,7 @@ def _validate_weights(path: Path, enc_cfg_json: dict, head_layers: int):
 
 
 def _emit_weights(src: Path, dst: Path) -> tuple:
-    """Write a canonical-key safetensors; returns (aliases_applied, output_sha256)."""
-    import hashlib
-
+    """Write a canonical-key safetensors atomically; returns (aliases_applied, output_sha256)."""
     from safetensors.numpy import load_file, save_file
 
     from .model import _canonical_key
@@ -150,73 +272,147 @@ def _emit_weights(src: Path, dst: Path) -> tuple:
         ck = _canonical_key(k)
         aliases |= ck != k
         renamed[ck] = v
-    save_file(renamed, str(dst))
     h = hashlib.sha256()
-    with open(dst, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    with _replace_file(dst) as f:
+        mode = stat.S_IMODE(os.fstat(f.fileno()).st_mode)
+        os.fchmod(f.fileno(), mode | stat.S_IRUSR | stat.S_IWUSR)
+        part = f.name
+        save_file(renamed, part)
+        with open(
+            part,
+            "rb",
+            opener=lambda p, flags: os.open(p, flags | os.O_NOFOLLOW | os.O_NONBLOCK),
+        ) as written:
+            st = os.fstat(written.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                raise SystemExit(
+                    "convert: staged weights file %s is not a regular file"
+                    % os.path.basename(part)
+                )
+            if stat.S_IMODE(st.st_mode) != mode:
+                os.fchmod(written.fileno(), mode)
+            for chunk in iter(lambda: written.read(1 << 20), b""):
+                h.update(chunk)
     return aliases, h.hexdigest()
 
 
 def convert(source: Path, repo: str, revision: str, out: Path, catalog_id: str) -> dict:
     import mlx.core  # noqa: F401  (fail fast outside a mlx environment)
 
-    out.mkdir(parents=True, exist_ok=True)
-    hashes = {}
-    for name in FILES:
-        src = source / name
-        if not src.exists():
-            raise SystemExit("convert: missing %s in source snapshot" % name)
-        hashes[name] = _sha256(src)
-    with open(source / "encoder/config.json") as f:
-        enc_cfg_json = json.load(f)
-    with open(source / "rl_agent_config.json") as f:
-        agent_cfg = json.load(f)
-    if enc_cfg_json.get("model_type") != "modernbert":
-        raise SystemExit(
-            "convert: encoder model_type %r is not modernbert; this adapter implements only "
-            "the ModernBERT-large checkpoints (the multilingual checkpoint uses mmBERT and "
-            "is intentionally unsupported)" % enc_cfg_json.get("model_type")
+    with contextlib.suppress(OSError):
+        if os.path.samefile(out, source):
+            raise SystemExit("convert: --out %s is the source snapshot directory" % out)
+    enc_cfg_json, enc_sha = _read_config(source / "encoder/config.json", "encoder/config.json")
+    agent_cfg, agent_sha = _read_config(source / "rl_agent_config.json", "rl_agent_config.json")
+    model_type = enc_cfg_json.get("model_type")
+    if model_type != "modernbert":
+        shown = (
+            repr(model_type[:80]) if isinstance(model_type, str)
+            else "None" if model_type is None
+            else type(model_type).__name__
         )
-    header = _validate_weights(source / "model.safetensors", enc_cfg_json, int(agent_cfg["head_layers"]))
+        raise SystemExit(
+            "convert: encoder model_type %s is not modernbert; this adapter implements only "
+            "the ModernBERT-large checkpoints (the multilingual checkpoint uses mmBERT and "
+            "is intentionally unsupported)" % shown
+        )
+    head_layers, max_len, head_max_len = (
+        _positive_int(agent_cfg, k, "rl_agent_config.json")
+        for k in ("head_layers", "max_len", "head_max_len"))
+    header = _validate_weights(source / "model.safetensors", enc_cfg_json, head_layers)
+    config_hashes = {
+        "encoder/config.json": enc_sha,
+        "rl_agent_config.json": agent_sha,
+    }
+    hashes = {
+        name: config_hashes[name] if name in config_hashes else _sha256(source / name, name)
+        for name in FILES
+    }
 
     weights_bytes = (source / "model.safetensors").stat().st_size
-    aliases_applied, out_sha = _emit_weights(source / "model.safetensors", out / "model.safetensors")
-    import math
+    out.mkdir(parents=True, exist_ok=True)
+    with _lock_out(out):
+        (out / "manifest.json").unlink(missing_ok=True)
+        aliases_applied, out_sha = _emit_weights(
+            source / "model.safetensors", out / "model.safetensors"
+        )
+        for name in FILES:
+            if name != "model.safetensors":
+                _copy_source(source / name, out / name, name, hashes[name])
+        import math
 
-    param_elements = sum(math.prod(v["shape"]) for v in header.values())
-    manifest = {
-        "catalog_id": catalog_id,
-        "source_repo": repo,
-        "source_revision": revision,
-        "source_files_sha256": hashes,
-        "weights_sha256": out_sha,
-        "key_aliases_applied": aliases_applied,
-        "encoder_architecture": enc_cfg_json.get("architectures", [None])[0],
-        "weights_header": {"tensor_count": len(header), "weight_bytes": weights_bytes,
-                           "param_elements": param_elements},
-        "context_max_tokens": int(agent_cfg["max_len"]),
-        "head_max_tokens": int(agent_cfg["head_max_len"]),
-        "estimated_bytes": weights_bytes + WORKSPACE_HEADROOM_BYTES,
-    }
-    with open(out / "manifest.json", "w") as f:
-        json.dump(manifest, f, indent=2, sort_keys=True)
+        param_elements = sum(math.prod(v["shape"]) for v in header.values())
+        archs = enc_cfg_json.get("architectures")
+        arch0 = archs[0] if isinstance(archs, list) and archs else None
+        manifest = {
+            "catalog_id": catalog_id,
+            "source_repo": repo,
+            "source_revision": revision,
+            "source_files_sha256": hashes,
+            "weights_sha256": out_sha,
+            "key_aliases_applied": aliases_applied,
+            "encoder_architecture": (
+                arch0 if isinstance(arch0, str) and len(arch0) <= 256 else None
+            ),
+            "weights_header": {"tensor_count": len(header), "weight_bytes": weights_bytes,
+                               "param_elements": param_elements},
+            "context_max_tokens": max_len,
+            "head_max_tokens": head_max_len,
+            "estimated_bytes": weights_bytes + WORKSPACE_HEADROOM_BYTES,
+        }
+        with _replace_file(out / "manifest.json") as f:
+            f.write(json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"))
 
-    shutil.copyfile(source / "rl_agent_config.json", out / "rl_agent_config.json")
-    shutil.copytree(source / "encoder", out / "encoder", dirs_exist_ok=True)
-    shutil.copytree(source / "tokenizer", out / "tokenizer", dirs_exist_ok=True)
     print("convert: %s -> %s (revision %s)" % (catalog_id, out, revision[:12]))
     print("convert: weights %.2f GiB, reservation estimate %.2f GiB"
           % (weights_bytes / 2**30, manifest["estimated_bytes"] / 2**30))
     return manifest
 
 
-def _read_manifest(model_dir: Path) -> dict:
+def _read_manifest(model_dir: Path) -> dict | None:
     path = Path(model_dir) / "manifest.json"
-    if path.exists():
-        with open(path) as f:
-            return json.load(f)
-    return {}
+    try:
+        with open(
+            path,
+            "rb",
+            opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK),
+        ) as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise ValueError("manifest.json is not a regular file")
+            raw = f.read(_MANIFEST_MAX_BYTES + 1)
+    except OSError as exc:
+        if isinstance(exc, FileNotFoundError):
+            try:
+                os.lstat(path)  # a dangling symlink still has an entry
+            except FileNotFoundError:
+                return None
+            except OSError as lstat_exc:
+                exc = lstat_exc
+        raise ValueError(
+            "manifest.json is unreadable: %s" % (exc.strerror or type(exc).__name__)
+        ) from None
+    if len(raw) > _MANIFEST_MAX_BYTES:
+        raise ValueError("manifest.json exceeds %d bytes" % _MANIFEST_MAX_BYTES)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError) as exc:
+        raise ValueError(
+            "manifest.json is not valid JSON (%s)" % type(exc).__name__
+        ) from None
+    if not isinstance(data, dict):
+        raise ValueError("manifest.json is not a JSON object")
+    return data
+
+
+def _probe_path(path: Path) -> tuple[bool, str | None]:
+    """Return (present, error) for path via os.stat(), following symlinks."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError, ValueError):
+        return False, None
+    except OSError as exc:
+        return False, exc.strerror or type(exc).__name__
+    return True, None
 
 
 def checkpoint_state(path: Path) -> tuple:
@@ -228,20 +424,31 @@ def checkpoint_state(path: Path) -> tuple:
       "raw"        — a plain upstream/HF snapshot (model.safetensors +
                      rl_agent_config.json present, no manifest): needs
                      `python -m mlx_omarchy_laya.convert --from-local <dir>`
-      "invalid"    — neither; details say what is missing
+      "invalid"    — neither, a required path cannot be checked, or
+                     manifest.json is unreadable, not a regular file, not a
+                     JSON object, or has missing or mistyped required fields
     """
     path = Path(path)
-    missing_files = [f for f in ["model.safetensors", "rl_agent_config.json",
-                                 "encoder/config.json", "tokenizer/tokenizer.json",
-                                 "tokenizer/tokenizer_config.json"] if not (path / f).exists()]
+    missing_files = []
+    for name in FILES:
+        present, err = _probe_path(path / name)
+        if err is not None:
+            return "invalid", {"unreadable_file": "%s is unreadable: %s" % (name, err)}
+        if not present:
+            missing_files.append(name)
     if missing_files:
         return "invalid", {"missing_files": missing_files}
-    manifest = _read_manifest(path)
-    if not manifest:
+    try:
+        manifest = _read_manifest(path)
+    except ValueError as exc:
+        return "invalid", {"manifest_error": str(exc)}
+    if manifest is None:
         return "raw", {"reason": "no manifest.json — run mlx_omarchy_laya.convert "
                                  "--from-local <snapshot> --out <dir>"}
-    missing_manifest = [k for k in ("catalog_id", "source_revision", "estimated_bytes",
-                                    "weights_header.weight_bytes") if _dget(manifest, k) is None]
+    missing_manifest = [
+        k for k, expected in _MANIFEST_FIELD_TYPES
+        if not (isinstance(v := _dget(manifest, k), expected) and not isinstance(v, bool))
+    ]
     if missing_manifest:
         return "invalid", {"missing_manifest_fields": missing_manifest}
     return "converted", {"catalog_id": manifest["catalog_id"],
@@ -282,7 +489,12 @@ def main(argv=None):
         if subpath:
             source = source / subpath.rstrip("/")
         repo, revision = SOURCE_REPO, args.revision
-        if not (source / "model.safetensors").exists():
+        present, err = _probe_path(source / "model.safetensors")
+        if err is not None:
+            raise SystemExit(
+                "convert: cannot read model.safetensors in %s (%s)" % (source, err)
+            )
+        if not present:
             raise SystemExit("convert: %s does not hold model.safetensors" % source)
     else:
         if not args.yes:

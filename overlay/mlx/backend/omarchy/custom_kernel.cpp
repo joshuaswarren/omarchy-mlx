@@ -64,7 +64,8 @@ enum CbqPort {
   CbqGlu,
   CbqGradD,
   CbqGradX,
-  SteelBm32
+  SteelBm32,
+  Mamba2Ssm
 };
 
 struct CbqDispatch {
@@ -72,6 +73,8 @@ struct CbqDispatch {
   int k = 0;
   int o = 0;
   int r = 0;
+  int h = 0;
+  int g = 0;
 };
 
 struct Translation {
@@ -3092,6 +3095,7 @@ constexpr std::string_view bf16_glsl_helpers =
 
 #include "custom_kernel_cbq.h"
 #include "custom_kernel_bm32.h"
+#include "custom_kernel_ssm.h"
 
 Translation translate_msl(
     const std::string& source,
@@ -3125,6 +3129,11 @@ Translation translate_msl(
           source, marker, arguments_open, arguments_close, body_open, body_close,
           parameters, grid, threadgroup, output_count)) {
     return std::move(*bm32);
+  }
+  if (auto ssm = translate_ssm(
+          source, marker, arguments_open, arguments_close, body_open, body_close,
+          parameters, grid, threadgroup, output_count)) {
+    return std::move(*ssm);
   }
 
   std::string header;
@@ -4319,12 +4328,16 @@ std::string serialize_translation(const Translation& translation) {
     payload.push_back(parameter.scalar ? 1 : 0);
     payload.push_back(parameter.atomic ? 1 : 0);
   }
-  const auto [port, k, o, r] = translation.cbq;
+  const auto [port, k, o, r, h, g] = translation.cbq;
   put_u64(payload, port);
   if (port != CbqNone) {
     put_u64(payload, k);
     put_u64(payload, o);
     put_u64(payload, r);
+    if (port == Mamba2Ssm) {
+      put_u64(payload, h);
+      put_u64(payload, g);
+    }
   }
   std::string blob(kTranslationCacheMagic, kTranslationCacheMagicSize);
   blob += payload;
@@ -4358,25 +4371,37 @@ bool parse_translation(const std::string& blob, Translation& translation) {
     remaining -= 2;
   }
   uint64_t port = 0;
-  if (!get_u64(blob, cursor, remaining, port) || port > SteelBm32) {
+  if (!get_u64(blob, cursor, remaining, port) || port > Mamba2Ssm) {
     return false;
   }
   translation.cbq = {};
   if (port != CbqNone) {
-    uint64_t k = 0, o = 0, r = 0;
+    uint64_t k = 0, o = 0, r = 0, h = 0, g = 0;
     if (!get_u64(blob, cursor, remaining, k) || k == 0 || k > INT32_MAX ||
         !get_u64(blob, cursor, remaining, o) || o == 0 || o > INT32_MAX ||
         !get_u64(blob, cursor, remaining, r) || r == 0 || r > INT32_MAX) {
       return false;
     }
-    const bool dims_ok = static_cast<CbqPort>(port) == SteelBm32
-        ? (k % 16 == 0 && o % 64 == 0 && r % 32 == 0)
-        : (k % 256 == 0);
-    if (!dims_ok) {
-      return false;
+    const auto p = static_cast<CbqPort>(port);
+    if (p == Mamba2Ssm) {
+      if (!get_u64(blob, cursor, remaining, h) || h == 0 || h > INT32_MAX ||
+          !get_u64(blob, cursor, remaining, g) || g == 0 || g > INT32_MAX ||
+          o % 32 != 0 || h % g != 0) {
+        return false;
+      }
+      translation.cbq = {p, static_cast<int>(k), static_cast<int>(o),
+                         static_cast<int>(r), static_cast<int>(h),
+                         static_cast<int>(g)};
+    } else {
+      const bool dims_ok = p == SteelBm32
+          ? (k % 16 == 0 && o % 64 == 0 && r % 32 == 0)
+          : (k % 256 == 0);
+      if (!dims_ok) {
+        return false;
+      }
+      translation.cbq = {p, static_cast<int>(k), static_cast<int>(o),
+                         static_cast<int>(r), 0, 0};
     }
-    translation.cbq = {static_cast<CbqPort>(port), static_cast<int>(k),
-                       static_cast<int>(o), static_cast<int>(r)};
   }
   if (remaining != 0) {
     return false;
@@ -4702,7 +4727,7 @@ void CustomKernel::eval_gpu(
         out_for_error);
   }
   const auto port = translation->cbq.port;
-  const bool cbq = port != CbqNone && port != SteelBm32;
+  const bool cbq = port != CbqNone && port != SteelBm32 && port != Mamba2Ssm;
   if (cbq && !cbq_dispatch_matches(
           translation->cbq, checked_inputs, outputs, init_value_.has_value())) {
     omarchy::unsupported(
@@ -4715,7 +4740,37 @@ void CustomKernel::eval_gpu(
         m2v_prefix + "unsupported BM32 kernel buffer shape or layout",
         out_for_error);
   }
-  if (port != CbqNone) {
+  if (port == Mamba2Ssm &&
+      !ssm_dispatch_matches(
+          *translation, checked_inputs, outputs, init_value_.has_value())) {
+    omarchy::unsupported(
+        m2v_prefix + "unsupported Mamba-2 SSM kernel buffer shape, dtype or layout",
+        out_for_error);
+  }
+  if (port == Mamba2Ssm) {
+    const auto& caps = encoder.device().hardware_capabilities();
+    if ((caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0) {
+      omarchy::unsupported(
+          m2v_prefix + "Mamba-2 SSM kernel requires Vulkan subgroup arithmetic",
+          out_for_error);
+    }
+    bool needs_bf16 = false;
+    bool needs_fp16 = false;
+    for (const auto& p : translation->parameters) {
+      if (p.type == "bfloat16_t") needs_bf16 = true;
+      if (ssm_is_fp16(p.type)) needs_fp16 = true;
+    }
+    if (needs_bf16 && (!caps.shader_int16 || !caps.storage_buffer_16bit_access)) {
+      omarchy::unsupported(
+          m2v_prefix + "BF16 Mamba-2 SSM kernel requires shaderInt16 and storageBuffer16BitAccess",
+          out_for_error);
+    }
+    if (needs_fp16 && (!caps.shader_float16 || !caps.storage_buffer_16bit_access)) {
+      omarchy::unsupported(
+          m2v_prefix + "FP16 Mamba-2 SSM kernel requires shaderFloat16 and storageBuffer16BitAccess",
+          out_for_error);
+    }
+  } else if (port != CbqNone) {
     const auto& caps = encoder.device().hardware_capabilities();
     if (!caps.shader_int16 || !caps.storage_buffer_16bit_access) {
       omarchy::unsupported(

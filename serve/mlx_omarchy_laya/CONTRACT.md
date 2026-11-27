@@ -51,6 +51,7 @@ Pinned provenance used by this lane:
 | `serve/mlx_omarchy_laya/sequence.py` | upstream question rendering / sequence building / collate / calibration helpers |
 | `serve/mlx_omarchy_laya/api.py` | `LayaEngine.system_one` — upstream envelope with exact calibration semantics |
 | `serve/mlx_omarchy_laya/server.py` | stdlib HTTP server, `serve_main(argv)` for `mlx_omarchy_serve` |
+| `serve/mlx_omarchy_laya/jsonfile.py` | bounded regular-file JSON object reader for Laya manifest and config files |
 | `serve/mlx_omarchy_laya/convert.py` | approve-first pinned-revision packaging (+ validation of key set/shapes) |
 | `serve/mlx_omarchy_laya/qualify.py` | hardware qualification runner against the committed CPU fixture |
 | `tests/test_laya_unit.py` | always-on structural tests (no download) |

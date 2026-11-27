@@ -23,9 +23,11 @@ never promote an unqualified pair.
 from __future__ import annotations
 
 import dataclasses
+import errno
 import hashlib
 import json
 import os
+import stat
 import sys
 import tempfile
 import threading
@@ -50,6 +52,7 @@ HEALTH_TIMEOUT_SECONDS = 120.0
 CONVERT_TIMEOUT_SECONDS = 900.0
 CHAT_PORT_ROLE = "chat"
 DECISION_PORT_ROLE = "decision"
+CHAT_PROMPT_CACHE_SIZE = 1  # retain one chat KV prefix slot when the budget covers it
 
 
 class PairError(RuntimeError):
@@ -105,7 +108,8 @@ def admissible_context(chat_entry: dict, *, other_bytes: int, preference: str,
     reserve = desktop_reserve(available)
 
     def fits(tokens: int) -> bool:
-        total = chat_estimate(chat_entry, tokens).total
+        total = chat_estimate(chat_entry, tokens,
+                              ignore_peak_override=backend_override).total
         return total + other_bytes + reserved_bytes + reserve <= available
 
     def largest_fitting(upper: int) -> int | None:
@@ -405,6 +409,11 @@ def select_pair(pair_records, model_entries, *, preference: str,
 
 # ------------------------------------------------------------------ locks
 
+# A written lock is a few KiB at most; the cap bounds a damaged or hostile one
+# before it reaches memory or the JSON parser.
+PAIR_LOCK_MAX_BYTES = 1 << 20
+
+
 def pair_lock_path(home: Path, pair_id: str) -> Path:
     return Path(home) / "assistant" / "pair-locks" / f"{pair_id}.json"
 
@@ -426,10 +435,35 @@ def write_pair_lock(home: Path, pair_id: str, lock: dict) -> Path:
     return path
 
 
+def _read_capped(path: Path, cap: int) -> bytearray:
+    """A small regular file's bytes as a bytearray, or ValueError: never a
+    blocked open or read, never more than cap + 1 bytes in memory. A symlink to
+    a regular file is followed (Hugging Face snapshots link config.json into
+    blobs/)."""
+    # O_NONBLOCK: a FIFO opens without a writer and is refused below instead
+    # of blocking the open or the read.
+    with open(path, "rb", buffering=0,  # a buffered read would read ahead past the cap
+              opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("not a regular file")
+        if info.st_size > cap:
+            raise ValueError(f"exceeds {cap} bytes")
+        raw = bytearray()
+        while len(raw) <= cap:  # a short read is not EOF; stop at cap + 1
+            chunk = stream.read(cap + 1 - len(raw))
+            if not chunk:
+                break
+            raw += chunk
+    if len(raw) > cap:
+        raise ValueError(f"exceeds {cap} bytes")
+    return raw
+
+
 def load_pair_lock(home: Path, pair_id: str) -> dict | None:
     path = pair_lock_path(home, pair_id)
     try:
-        lock = json.loads(path.read_text(encoding="utf-8"))
+        lock = json.loads(_read_capped(path, PAIR_LOCK_MAX_BYTES).decode("utf-8"))
     except FileNotFoundError:
         return None
     except (OSError, ValueError, RecursionError) as exc:
@@ -446,26 +480,94 @@ def load_pair_lock(home: Path, pair_id: str) -> dict | None:
     return lock
 
 
-def _sha256_file(path: Path) -> str:
+# O_NONBLOCK: a FIFO swapped in after the type check opens without a writer
+# and is refused by the fstat() check instead of blocking the open or read.
+_ARTIFACT_OPEN = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC
+
+
+def _sha256_fd(fd: int) -> tuple[str, int]:
+    """sha256 and byte count of what one read of fd returns, so the two
+    always describe the same bytes."""
     digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    size = 0
+    while chunk := os.read(fd, 1 << 20):
+        digest.update(chunk)
+        size += len(chunk)
+    return digest.hexdigest(), size
 
 
 def artifact_files(path: Path) -> list[dict]:
     """Every regular file under an artifact dir: relative posix name, size,
-    sha256. The offline transfer's hashing helper."""
+    sha256. The offline transfer's hashing helper.
+
+    Symlinks are skipped, never followed. A directory or file that cannot
+    be listed or read, or any other non-regular entry, is a PairError: the
+    manifest is never silently incomplete. The walk opens each entry
+    relative to its parent directory's descriptor, so paths past PATH_MAX
+    still hash, and a directory swapped for a symlink mid-walk is refused.
+    It holds one open descriptor per directory level, so a tree deeper than
+    the open-file limit is a PairError."""
     path = Path(path)
-    if not path.is_dir():
-        raise PairError(f"artifact path {path} does not exist")
+    try:  # a symlinked root is followed, as before
+        root = os.open(path, _ARTIFACT_OPEN | os.O_DIRECTORY)
+    except (FileNotFoundError, NotADirectoryError, ValueError) as exc:  # ValueError: NUL
+        raise PairError(f"artifact path {path} does not exist") from exc
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise PairError(f"artifact path {path} does not exist") from exc
+        raise PairError(f"artifact path {path} is unreadable: {exc}") from exc
+    stack = []
     out = []
-    for item in sorted(path.rglob("*")):
-        if item.is_file() and not item.is_symlink():
-            out.append({"name": item.relative_to(path).as_posix(),
-                        "bytes": item.stat().st_size,
-                        "sha256": _sha256_file(item)})
+
+    def push(dir_fd: int, rel: str) -> None:
+        stack.append((dir_fd, rel, iter(())))
+        try:
+            with os.scandir(dir_fd) as entries:
+                # per-level name order then depth first is sorted(Path.rglob()) order
+                listed = sorted(entries, key=lambda entry: entry.name)
+        except OSError as exc:
+            raise PairError(f"artifact path {path / rel} is unreadable: {exc}") from exc
+        stack[-1] = (dir_fd, rel, iter(listed))
+
+    try:
+        push(root, "")
+        while stack:
+            dir_fd, rel, entries = stack[-1]
+            entry = next(entries, None)
+            if entry is None:
+                stack.pop()
+                os.close(dir_fd)
+                continue
+            name = rel + entry.name
+            try:
+                if entry.is_symlink():
+                    continue
+                is_dir = entry.is_dir(follow_symlinks=False)
+                if not is_dir and not entry.is_file(follow_symlinks=False):
+                    # on DT_UNKNOWN, a vanished entry returns False above; stat() -> ENOENT
+                    entry.stat(follow_symlinks=False)
+                    raise PairError(f"artifact entry {path / name} is not a regular file")
+                flags = _ARTIFACT_OPEN | os.O_NOFOLLOW | (os.O_DIRECTORY if is_dir else 0)
+                fd = os.open(entry.name, flags, dir_fd=dir_fd)
+            except FileNotFoundError:  # vanished mid-walk
+                continue
+            except OSError as exc:
+                raise PairError(f"artifact path {path / name} is unreadable: {exc}") from exc
+            if is_dir:
+                push(fd, name + "/")
+                continue
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise PairError(f"artifact entry {path / name} is not a regular file")
+                digest, size = _sha256_fd(fd)
+            except OSError as exc:
+                raise PairError(f"artifact path {path / name} is unreadable: {exc}") from exc
+            finally:
+                os.close(fd)
+            out.append({"name": name, "bytes": size, "sha256": digest})
+    finally:
+        while stack:
+            os.close(stack.pop()[0])
     return out
 
 
@@ -500,27 +602,107 @@ def _boot_id() -> str | None:
 
 # ------------------------------------------------------------------ workers
 
-def chat_estimate(chat_entry: dict, tokens: int) -> budget.Estimate:
+def _peak_override_bytes(chat_entry: dict, tokens: int) -> int | None:
+    """Measured worker peak bytes governing `tokens` (> DEFAULT_CONTEXT_TOKENS).
+
+    When `extension.backend_context_peak_bytes_by_tokens` lists measured tiers
+    (e.g. {"8192": ..., "16384": ...}), select the smallest qualified tier >=
+    `tokens` so a smaller context (8192 on 16 GiB) uses its own measured peak
+    while larger contexts keep the higher-tier peak. Falls back to scalar
+    `extension.backend_context_peak_bytes` when absent or above all tiers.
+    """
+    if tokens <= budget.DEFAULT_CONTEXT_TOKENS:
+        return None
+    extension = chat_entry.get("extension") or {}
+    by_tokens = extension.get("backend_context_peak_bytes_by_tokens")
+    if by_tokens is not None:
+        if not isinstance(by_tokens, dict):
+            raise PairError(
+                "catalog extension.backend_context_peak_bytes_by_tokens must be a dict or absent")
+        tiers: list[tuple[int, int]] = []
+        for raw_tok, raw_peak in by_tokens.items():
+            try:
+                tok = int(raw_tok)
+            except (TypeError, ValueError) as exc:
+                raise PairError(
+                    f"catalog extension.backend_context_peak_bytes_by_tokens key {raw_tok!r} "
+                    "must be a positive int") from exc
+            if isinstance(raw_tok, bool) or tok <= 0:
+                raise PairError(
+                    f"catalog extension.backend_context_peak_bytes_by_tokens key {raw_tok!r} "
+                    "must be a positive int")
+            peak = _opt_int(raw_peak, f"backend_context_peak_bytes_by_tokens[{raw_tok}]")
+            if peak is None:
+                raise PairError(
+                    f"catalog extension.backend_context_peak_bytes_by_tokens[{raw_tok}] "
+                    "must be a positive int")
+            tiers.append((tok, peak))
+        tiers.sort()
+        for tier_tok, tier_peak in tiers:
+            if tokens <= tier_tok:
+                return tier_peak
+    return _opt_int(extension.get("backend_context_peak_bytes"),
+                    "backend_context_peak_bytes")
+
+
+def chat_estimate(chat_entry: dict, tokens: int,
+                  prompt_cache_size: int = 0,
+                  *, ignore_peak_override: bool = False) -> budget.Estimate:
     """What the chat worker needs at `tokens`. _chat_worker_argv launches mlx-lm with the
     prefill chunk serve_cli.server_argv pins, so its scratch is part of the estimate (issue
     #240); every admission, reservation and claim of the chat worker goes through here.
     Above the default context, an entry that names a measured worker peak
-    (extension.backend_context_peak_bytes, taken at its qualified limit) needs at least that peak:
-    the scratch formula alone read 7.7 GiB where the 4B worker peaked at 16.9 GiB."""
+    (extension.backend_context_peak_bytes_by_tokens or extension.backend_context_peak_bytes)
+    needs at least that peak: the scratch formula alone read 7.7 GiB where the 4B worker
+    peaked at 16.9 GiB at 16384.
+    When prompt_cache_size > 0, each retained cache slot adds one full-context KV allocation
+    on top of the active-request requirement (matching mlx_omarchy_serve.__main__)."""
+    if isinstance(prompt_cache_size, bool) or not isinstance(prompt_cache_size, int) \
+            or prompt_cache_size < 0:
+        raise PairError(f"prompt_cache_size must be a non-negative int, got {prompt_cache_size!r}")
     estimate = budget.estimate_required(
         chat_entry["memory"], tokens,
         budget.effective_prefill_step(budget.DEFAULT_PREFILL_STEP_TOKENS, tokens))
-    peak = _opt_int((chat_entry.get("extension") or {}).get("backend_context_peak_bytes"),
-                    "backend_context_peak_bytes")
-    if peak is None or tokens <= budget.DEFAULT_CONTEXT_TOKENS or peak <= estimate.total:
-        return estimate
-    return dataclasses.replace(estimate, workspace=peak - estimate.weights - estimate.kv,
-                               peak_override=True, total=peak)
+    peak = None if ignore_peak_override else _peak_override_bytes(chat_entry, tokens)
+    if peak is not None and tokens > budget.DEFAULT_CONTEXT_TOKENS and peak > estimate.total:
+        estimate = dataclasses.replace(
+            estimate, workspace=peak - estimate.weights - estimate.kv,
+            peak_override=True, total=peak)
+    if prompt_cache_size > 0:
+        if not estimate.kv_known:
+            raise PairError(
+                f"prompt_cache_size={prompt_cache_size} requires known kv_bytes_per_token "
+                "to budget retained KV caches")
+        cache_extra = estimate.kv * prompt_cache_size
+        estimate = dataclasses.replace(
+            estimate, workspace=estimate.workspace + cache_extra,
+            total=estimate.total + cache_extra)
+    return estimate
+
+
+def chat_prompt_cache_size(chat_entry: dict, tokens: int, *,
+                           other_bytes: int,
+                           available_bytes: int,
+                           reserved_bytes: int = 0,
+                           ignore_peak_override: bool = False) -> int:
+    """Enable one retained KV cache slot on the chat worker when KV facts are
+    known and the extra slot fits inside the pair memory budget; fall back to
+    0 on tight-RAM hosts so caching never causes a pair refusal."""
+    if chat_entry["memory"].get("kv_bytes_per_token") is None:
+        return 0
+    reserve = desktop_reserve(available_bytes)
+    cached_total = chat_estimate(chat_entry, tokens,
+                                 prompt_cache_size=CHAT_PROMPT_CACHE_SIZE,
+                                 ignore_peak_override=ignore_peak_override).total
+    if cached_total + other_bytes + reserved_bytes + reserve <= available_bytes:
+        return CHAT_PROMPT_CACHE_SIZE
+    return 0
 
 
 def _chat_worker_argv(spec: managed.WorkerSpec) -> list[str]:
     return serve_cli.server_argv("mlx-lm", None, spec.model_dir,
-                                 "127.0.0.1", spec.port, spec.context_tokens)
+                                 "127.0.0.1", spec.port, spec.context_tokens,
+                                 prompt_cache_size=spec.prompt_cache_size)
 
 
 def _decision_worker_argv(spec: managed.WorkerSpec) -> list[str]:
@@ -530,11 +712,30 @@ def _decision_worker_argv(spec: managed.WorkerSpec) -> list[str]:
                                  max_questions=spec.max_questions)
 
 
+def _artifact_int(value, where: str, minimum: int = 1) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        # a container's repr can overflow the C stack its decode fit in (3.14)
+        shown = repr(value) if isinstance(value, (int, float)) else type(value).__name__
+        raise PairError(f"{where} must be an int >= {minimum}, got {shown}")
+    return value
+
+
+# A converted manifest is about 1 KiB and an encoder config a few KiB; the cap
+# bounds a damaged or hostile one, as the converter's own reads do.
+ARTIFACT_JSON_MAX_BYTES = 1 << 20
+
+
 def _encoder_cfg(encoder_dir: Path):
     """The three fields the Laya workspace math needs, read with stdlib only
     (mlx_omarchy_laya.model pulls mlx.core)."""
-    cfg = json.loads((Path(encoder_dir) / "config.json").read_text(encoding="utf-8"))
-    return type("EncoderCfg", (), {k: int(cfg[k]) for k in
+    path = Path(encoder_dir) / "config.json"
+    try:
+        cfg = json.loads(_read_capped(path, ARTIFACT_JSON_MAX_BYTES).decode("utf-8"))
+    except (OSError, ValueError, RecursionError) as exc:
+        raise PairError(f"encoder config {path} is unreadable: {exc}") from exc
+    if not isinstance(cfg, dict):
+        raise PairError(f"encoder config {path} is not a JSON object")
+    return type("EncoderCfg", (), {k: _artifact_int(cfg.get(k), f"{path} {k}") for k in
                                    ("hidden_size", "num_attention_heads",
                                     "intermediate_size")})()
 
@@ -542,9 +743,10 @@ def _encoder_cfg(encoder_dir: Path):
 def _read_manifest(model_dir: Path) -> dict:
     path = Path(model_dir) / "manifest.json"
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(_read_capped(path, ARTIFACT_JSON_MAX_BYTES).decode("utf-8"))
     except (OSError, ValueError, RecursionError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def decision_requirement_bytes(model_dir: Path, max_questions: int) -> int:
@@ -555,9 +757,28 @@ def decision_requirement_bytes(model_dir: Path, max_questions: int) -> int:
 
     manifest = _read_manifest(model_dir)
     if not manifest:
-        raise PairError(f"{model_dir}: converted decision artifact has no manifest")
-    return int(total_estimate_bytes(manifest, _encoder_cfg(Path(model_dir) / "encoder"),
-                                    "float16", max_questions))
+        raise PairError(f"{Path(model_dir) / 'manifest.json'} is missing, unreadable, "
+                        "empty or not a JSON object")
+    # the fields total_estimate_bytes reads, checked so a damaged manifest is
+    # a named refusal, not a traceback or a silent zero-byte parameter floor
+    where = f"{model_dir}: manifest"
+    header = manifest.get("weights_header")
+    if not isinstance(header, dict):
+        raise PairError(f"{where} weights_header must be an object")
+    # weight_bytes is halved into fp16 elements, so 1 would still floor to zero
+    field, minimum = (("weight_bytes", 2) if header.get("param_elements") is None
+                      else ("param_elements", 1))
+    _artifact_int(header.get(field), f"{where} weights_header.{field}", minimum)
+    if manifest.get("context_max_tokens") is not None:
+        _artifact_int(manifest["context_max_tokens"], f"{where} context_max_tokens")
+    enc_cfg = _encoder_cfg(Path(model_dir) / "encoder")
+    try:
+        total = int(total_estimate_bytes(manifest, enc_cfg, "float16", max_questions))
+        float(total)  # the workspace bound is float math; the sum must fit a float too
+        return total
+    except OverflowError as exc:
+        raise PairError(f"{model_dir}: decision artifact sizes overflow the "
+                        f"memory estimate: {exc}") from exc
 
 
 DOWNLOAD_TIMEOUT_SECONDS = 3600.0
@@ -599,8 +820,10 @@ class PairManager:
         self._lifetime_write_fd: int | None = None
         self._lifetime_read_fd: int | None = None
         self._context_tokens: int | None = None
+        self._chat_prompt_cache_size: int = 0
         self._available_bytes_override: int | None = None  # test seam
         self._cancel = threading.Event()
+        self._replacing_chat = False
 
 
     def _available_bytes(self) -> int:
@@ -656,7 +879,6 @@ class PairManager:
         if self._lifetime_read_fd is None or self._lifetime_write_fd is None:
             self._close_lifetime()
             read_fd, write_fd = os.pipe()
-            os.set_inheritable(read_fd, True)
             self._lifetime_read_fd = read_fd
             self._lifetime_write_fd = write_fd
         return self._lifetime_read_fd
@@ -668,14 +890,24 @@ class PairManager:
         partial downloads. Returns the verified-complete path."""
         progress("download", role="chat" if patterns is not None else "download",
                  model_id=model_id)
-        lifetime_r = self._ensure_lifetime_pipe()
         log_path = self.home / "assistant" / "logs" / f"download-{model_id}.log"
         argv = [sys.executable, "-c", _download_child_code(
             resolved.repo, resolved.revision, str(serve_cli.hf_cache_dir()),
             patterns)]
-        proc = managed.spawn_supervised(argv, lifetime_read_fd=lifetime_r,
-                                        env=self._child_env(),
-                                        log_path=log_path)
+        try:
+            lifetime_r = self._ensure_lifetime_pipe()
+            proc = managed.spawn_supervised(argv, lifetime_read_fd=lifetime_r,
+                                            env=self._child_env(),
+                                            log_path=log_path,
+                                            log_root=self.home)
+        except (OSError, ValueError, managed.WorkerError) as exc:
+            unverified = exc.proc if isinstance(exc, managed.WorkerError) else None
+            if unverified is not None:
+                role = f"download-{model_id}"
+                self._children[role] = managed.ManagedChild(role, unverified, "")
+            raise PairError(
+                f"{model_id}: could not start download ({exc}); "
+                f"log: {log_path}") from exc
         deadline = time.monotonic() + DOWNLOAD_TIMEOUT_SECONDS
         while proc.poll() is None:
             if self._cancel.is_set():
@@ -691,10 +923,12 @@ class PairManager:
             raise PairError(f"{model_id}: download failed (exit "
                             f"{proc.returncode}); log: {log_path}")
         try:
-            lines = [ln for ln in log_path.read_text(encoding="utf-8")
+            lines = [ln for ln in managed.read_log_tail(log_path, root=self.home)
                      .strip().splitlines() if ln.strip()]
+            if not lines or "\x00" in lines[-1]:
+                raise ValueError("empty or invalid snapshot path")
             path = Path(lines[-1])
-        except (OSError, IndexError) as exc:
+        except (OSError, ValueError) as exc:
             raise PairError(
                 f"{model_id}: download finished but reported no snapshot path "
                 f"({exc}); log: {log_path}") from exc
@@ -760,14 +994,20 @@ class PairManager:
 
 
     def status(self) -> dict:
-        if self._children:
-            managed.reap_pair_records(self._pair_id, self.home,
-                                      children=tuple(self._children.values()))
-        dead = sorted(c.role for c in tuple(self._children.values())
-                      if c.popen.poll() is not None)
-        if dead and self._state == "ready":
-            self._state = "error"
-            self._error = f"worker(s) exited: {', '.join(dead)}"
+        if self._op_lock.acquire(blocking=False):
+            try:
+                if not self._replacing_chat:
+                    if self._children and self._pair_id:
+                        managed.reap_pair_records(
+                            self._pair_id, self.home,
+                            children=tuple(self._children.values()))
+                    dead = sorted(c.role for c in tuple(self._children.values())
+                                  if c.popen.poll() is not None)
+                    if dead and self._state == "ready":
+                        self._state = "error"
+                        self._error = f"worker(s) exited: {', '.join(dead)}"
+            finally:
+                self._op_lock.release()
         pair = (self._pair(self._pair_id) if self._pair_id else None)
         children = [{"role": c.role, "pid": c.popen.pid,
                      "alive": c.popen.poll() is None}
@@ -791,6 +1031,7 @@ class PairManager:
             "chat_model": prepared.get("chat_id"),
             "decision_model": prepared.get("decision_id"),
             "context_tokens": self._context_tokens,
+            "chat_prompt_cache_size": self._chat_prompt_cache_size,
             "context": prepared.get("sizing")
                        or (self._last_plan or {}).get("context"),
             "downloads": (self._last_plan or {}).get("downloads") or [],
@@ -1061,11 +1302,21 @@ class PairManager:
                 "--variant", "root", "--revision", decision["revision"], "--yes"]
         # supervised like downloads: manager death or cancel kills the
         # converter (bounded, no orphan), output lands in a readable log
-        lifetime_r = self._ensure_lifetime_pipe()
         log_path = (self.home / "assistant" / "logs"
                     / f"convert-{decision['id']}.log")
-        proc = managed.spawn_supervised(argv, lifetime_read_fd=lifetime_r,
-                                        env=env, log_path=log_path)
+        try:
+            lifetime_r = self._ensure_lifetime_pipe()
+            proc = managed.spawn_supervised(argv, lifetime_read_fd=lifetime_r,
+                                            env=env, log_path=log_path,
+                                            log_root=self.home)
+        except (OSError, ValueError, managed.WorkerError) as exc:
+            unverified = exc.proc if isinstance(exc, managed.WorkerError) else None
+            if unverified is not None:
+                role = f"convert-{decision['id']}"
+                self._children[role] = managed.ManagedChild(role, unverified, "")
+            raise PairError(
+                f"{decision['id']}: could not start conversion ({exc}); "
+                f"log: {log_path}") from exc
         deadline = time.monotonic() + CONVERT_TIMEOUT_SECONDS
         while proc.poll() is None:
             if self._cancel.is_set():
@@ -1079,10 +1330,12 @@ class PairManager:
             time.sleep(0.2)
         if proc.returncode != 0:
             try:
-                tail = " | ".join(log_path.read_text(encoding="utf-8",
-                                                     errors="replace")
-                                  .strip().splitlines()[-5:])
-            except OSError:
+                tail = " | ".join(
+                    managed.read_log_tail(log_path, root=self.home)
+                    .strip().splitlines()[-5:])
+            except (OSError, ValueError):
+                tail = ""
+            if not tail:
                 tail = f"log: {log_path}"
             raise PairError(
                 f"{decision['id']}: conversion failed (exit {proc.returncode}): "
@@ -1158,11 +1411,28 @@ class PairManager:
             return self.status()
 
     def _newest_lock_pair_id(self) -> str | None:
+        """The newest regular *.json lock file. Absent dir: None; a dir that
+        cannot be listed or searched: PairError, never "no saved pair lock"."""
         directory = pair_lock_path(self.home, "unused").parent
-        if not directory.is_dir():
+        candidates = []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if not entry.name.endswith(".json"):
+                        continue
+                    try:
+                        info = entry.stat()
+                    except OSError:  # vanished mid-scan, dangling or looping link
+                        continue
+                    if stat.S_ISREG(info.st_mode):  # never a dir or FIFO
+                        candidates.append((info.st_mtime_ns, entry.name))
+            # still searchable, so a failed entry stat was that entry's own
+            os.stat(os.path.join(directory, "."))
+        except (FileNotFoundError, NotADirectoryError, ValueError):  # ValueError: unencodable path
             return None
-        candidates = sorted(directory.glob("*.json"), key=lambda path: path.stat().st_mtime)
-        return candidates[-1].stem if candidates else None
+        except OSError as exc:
+            raise PairError(f"pair lock directory {directory} is unreadable: {exc}") from exc
+        return Path(max(candidates)[1]).stem if candidates else None
 
     def start(self, pair_id: str | None = None) -> dict:
         with self._op_lock:
@@ -1193,7 +1463,7 @@ class PairManager:
             # a child whose termination cannot be verified stays owned
             survivors = {}
             for child in self._children.values():
-                if not managed.terminate(child.popen):
+                if not self._safe_terminate(child.popen):
                     survivors[child.role] = child
             managed.reap_pair_records(pair["id"], self.home,
                                       children=self._children.values())
@@ -1216,34 +1486,57 @@ class PairManager:
                     f"memory changed since setup: the prepared context {context} "
                     f"no longer fits (admissible {sizing['context_tokens']}, "
                     f"binding {sizing['binding']}); re-run setup")
-            chat_bytes = chat_estimate(chat, context).total
-            items = [(chat["id"], chat_bytes, f"pair {pair['id']} chat"),
-                     (decision["id"], decision_bytes, f"pair {pair['id']} decisions")]
-            if prepared["voice_bytes"]:
-                items.append((f"voice-{pair['id']}", prepared["voice_bytes"],
-                              f"pair {pair['id']} voice admission"))
+            available = self._available_bytes()
+            other_bytes = decision_bytes + prepared["voice_bytes"]
+            cache_size = chat_prompt_cache_size(
+                chat, context, other_bytes=other_bytes,
+                available_bytes=available)
+
+            def build_items(size: int) -> list[tuple[str, int, str]]:
+                chat_bytes = chat_estimate(chat, context, prompt_cache_size=size).total
+                batch = [(chat["id"], chat_bytes, f"pair {pair['id']} chat"),
+                         (decision["id"], decision_bytes, f"pair {pair['id']} decisions")]
+                if prepared["voice_bytes"]:
+                    batch.append((f"voice-{pair['id']}", prepared["voice_bytes"],
+                                  f"pair {pair['id']} voice admission"))
+                return batch
+
             self._state = "starting"
             try:
                 records = budget.admit_and_reserve_batch(
-                    items, pair_id=pair["id"], home=self.home,
-                    available_bytes=self._available_bytes())
+                    build_items(cache_size), pair_id=pair["id"], home=self.home,
+                    available_bytes=available)
             except budget.BudgetError as exc:
-                self._state = "error"
-                self._error = str(exc)
-                raise PairError(f"pair admission refused: {exc}") from exc
+                if cache_size > 0:
+                    cache_size = 0
+                    try:
+                        records = budget.admit_and_reserve_batch(
+                            build_items(0), pair_id=pair["id"], home=self.home,
+                            available_bytes=available)
+                    except budget.BudgetError as fallback_exc:
+                        self._state = "error"
+                        self._error = str(fallback_exc)
+                        raise PairError(f"pair admission refused: {fallback_exc}") from fallback_exc
+                else:
+                    self._state = "error"
+                    self._error = str(exc)
+                    raise PairError(f"pair admission refused: {exc}") from exc
             self._records = {r["name"]: r for r in records}
             self._pair_id = pair["id"]
             self._context_tokens = context
+            self._chat_prompt_cache_size = cache_size
             self._error = None
-            lifetime_r = self._ensure_lifetime_pipe()
             env = self._child_env()
             log_dir = self.home / "assistant" / "logs"
             chat_port = decision_port = None
+            spawning: tuple[str, str, str] | None = None
             try:
+                lifetime_r = self._ensure_lifetime_pipe()
                 chat_port, decision_port = managed.free_ports(2)
                 specs = {
                     "chat": managed.WorkerSpec("chat", prepared["chat_path"],
-                                               chat_port, context, 0),
+                                               chat_port, context, 0,
+                                               prompt_cache_size=cache_size),
                     "decision": managed.WorkerSpec("decision", prepared["decision_path"],
                                                    decision_port, context,
                                                    prepared["max_questions"]),
@@ -1260,14 +1553,16 @@ class PairManager:
                                "bytes": record["bytes"],
                                "pair_id": pair["id"]}
                     log_path = log_dir / f"{pair['id']}-{role}.log"
+                    spawning = (role, record_name, record["owner"])
                     popen = managed.spawn_claiming_worker(
                         builders[role](specs[role]), payload,
                         lifetime_read_fd=lifetime_r, env=child_env,
-                        log_path=log_path)
+                        log_path=log_path, log_root=self.home)
                     # register IMMEDIATELY: a later role's failure must be
                     # able to terminate and reap this child
-                    self._children[role] = managed.ManagedChild(role, popen,
-                                                                record_name)
+                    self._children[role] = managed.ManagedChild(
+                        role, popen, record_name, owner=record["owner"])
+                    spawning = None
                 self._check_cancel("health wait")
 
                 def _abort():
@@ -1298,17 +1593,26 @@ class PairManager:
                     raise managed.WorkerError(
                         f"workers failed to become healthy: {'; '.join(failed)}")
             except Exception as exc:
+                unverified = (exc.proc if isinstance(exc, managed.WorkerError)
+                              else None)
+                if unverified is not None and spawning is not None:
+                    s_role, s_record, s_owner = spawning
+                    self._children[s_role] = managed.ManagedChild(
+                        s_role, unverified, s_record, owner=s_owner)
                 survivors = {}
                 for role, child in self._children.items():
-                    if not managed.terminate(child.popen):
+                    if not self._safe_terminate(child.popen):
                         # termination unconfirmed: keep the child owned so
                         # status()/stop() keep watching it and its record
                         survivors[role] = child
                 managed.reap_pair_records(pair["id"], self.home,
                                           children=self._children.values())
-                self._release_unclaimed_records(pair["id"])
+                self._release_unclaimed_records(
+                    pair["id"],
+                    retained={c.record_name for c in survivors.values()})
                 self._children = survivors
                 self._close_lifetime()
+                self._chat_prompt_cache_size = 0
                 self._state = "error"
                 self._error = str(exc)
                 raise PairError(f"pair start failed: {exc}") from exc
@@ -1348,16 +1652,31 @@ class PairManager:
         }
         write_pair_lock(self.home, pair["id"], lock)
 
-    def _release_unclaimed_records(self, pair_id: str) -> None:
+    def _release_unclaimed_records(self, pair_id: str, *,
+                                   retained: set[str] | frozenset[str] = frozenset()) -> None:
         """Parent-owned (never claimed) records — e.g. voice admission — are
-        released only by the manager that owns their tokens."""
+        released only by the manager that owns their tokens. Records whose
+        name is in `retained` belong to live children with unverified exits
+        and must keep their reservations."""
         for name, record in budget.pair_records(pair_id, self.home).items():
+            if name in retained:
+                continue
+            owned = self._records.get(name)
+            if owned is None or owned.get("owner") != record.get("owner"):
+                continue
             if record.get("claimed") is None:
                 try:
                     budget.clear_reservation(name, home=self.home,
-                                             owner=record["owner"])
+                                             owner=owned["owner"])
                 except budget.BudgetError:
                     pass
+
+    @staticmethod
+    def _safe_terminate(popen) -> bool:
+        try:
+            return bool(managed.terminate(popen))
+        except Exception:
+            return popen.poll() is not None
 
     def _close_lifetime(self) -> None:
         for attr in ("_lifetime_write_fd", "_lifetime_read_fd"):
@@ -1394,24 +1713,28 @@ class PairManager:
             report = {"stopped": False, "children": {}, "cleared": [],
                       "retained": []}
             for role, child in self._children.items():
-                confirmed = managed.terminate(child.popen)
+                confirmed = self._safe_terminate(child.popen)
                 report["children"][role] = {
                     "pid": child.popen.pid,
                     "confirmed_dead": confirmed,
                     "returncode": child.popen.poll(),
                 }
             self._close_lifetime()
+            retained_children = {
+                role: child for role, child in self._children.items()
+                if not report["children"][role]["confirmed_dead"]}
             if self._pair_id:
                 report["cleared"] = managed.reap_pair_records(
                     self._pair_id, self.home, children=self._children.values())
-                self._release_unclaimed_records(self._pair_id)
+                self._release_unclaimed_records(
+                    self._pair_id,
+                    retained={c.record_name for c in retained_children.values()})
                 report["retained"] = sorted(
                     set(budget.pair_records(self._pair_id, self.home))
                     - set(report["cleared"]))
-            self._children = {role: child for role, child in
-                              self._children.items()
-                              if not report["children"][role]["confirmed_dead"]}
+            self._children = retained_children
             self._context_tokens = None
+            self._chat_prompt_cache_size = 0
             if self._prepared:
                 for key in ("chat_url", "decision_url"):
                     self._prepared.pop(key, None)
@@ -1426,7 +1749,8 @@ class PairManager:
         """Grow the chat worker's admitted context to at least required_tokens:
         one atomic fit-checked reservation resize, then a chat-worker restart
         at the new cap (the mlx-lm cap is fixed at launch). The decision worker
-        is untouched. Refusal retains the prior cap."""
+        is untouched. Admission or health refusal retains the prior cap; a
+        post-termination spawn or port-allocation failure settles the pair."""
         with self._op_lock:
             if self._state != "ready" or self._prepared is None:
                 raise PairError("ensure_context requires a running pair")
@@ -1448,40 +1772,77 @@ class PairManager:
             decision = self.catalog_models[prepared["decision_id"]]
             decision_bytes = decision_requirement_bytes(prepared["decision_path"],
                                                         prepared["max_questions"])
-            sizing = self._admissible(chat, other_bytes=decision_bytes,
+            reservations = budget.load_reservations(self.home)
+            decision_rec = reservations.get(decision["id"])
+            if (decision_rec is not None
+                    and decision_rec.get("pair_id") == prepared["pair_id"]):
+                decision_remaining = budget._contribution(decision_rec)
+            else:
+                decision_remaining = decision_bytes
+            available = self._available_bytes()
+            sizing = self._admissible(chat, other_bytes=decision_remaining,
                                       preference=prepared["preference"],
-                                        available_bytes=self._available_bytes())
+                                      available_bytes=available)
             if required_tokens > sizing["context_tokens"]:
                 return {"ok": False, "changed": False,
                         "reason": sizing["binding"], "limits": sizing["limits"],
                         "context_tokens": current, "requested": required_tokens}
-            new_bytes = chat_estimate(chat, required_tokens).total
-            current_bytes = chat_estimate(chat, current).total
+            dev_smoke = self._dev_smoke()
+            current_cache = self._chat_prompt_cache_size
+            new_cache = chat_prompt_cache_size(
+                chat, required_tokens,
+                other_bytes=decision_remaining + prepared["voice_bytes"],
+                available_bytes=available,
+                ignore_peak_override=dev_smoke)
+            new_bytes = chat_estimate(chat, required_tokens,
+                                      prompt_cache_size=new_cache,
+                                      ignore_peak_override=dev_smoke).total
+            current_bytes = chat_estimate(chat, current,
+                                          prompt_cache_size=current_cache,
+                                          ignore_peak_override=dev_smoke).total
             record = self._records[chat["id"]]
             log_path = (self.home / "assistant" / "logs"
                         / f"{prepared['pair_id']}-chat.log")
             try:
                 budget.resize_reservation(chat["id"], new_bytes,
                                           owner=record["owner"], home=self.home,
-                                          available_bytes=self._available_bytes())
+                                          available_bytes=available)
             except budget.BudgetError as exc:
-                return {"ok": False, "changed": False, "reason": "memory",
-                        "error": str(exc), "context_tokens": current,
-                        "requested": required_tokens}
+                if new_cache > 0:
+                    new_cache = 0
+                    new_bytes = chat_estimate(chat, required_tokens,
+                                              prompt_cache_size=0,
+                                              ignore_peak_override=dev_smoke).total
+                    try:
+                        budget.resize_reservation(chat["id"], new_bytes,
+                                                  owner=record["owner"],
+                                                  home=self.home,
+                                                  available_bytes=available)
+                    except budget.BudgetError as fallback_exc:
+                        return {"ok": False, "changed": False, "reason": "memory",
+                                "error": str(fallback_exc),
+                                "context_tokens": current,
+                                "requested": required_tokens}
+                else:
+                    return {"ok": False, "changed": False, "reason": "memory",
+                            "error": str(exc), "context_tokens": current,
+                            "requested": required_tokens}
 
-            def spawn_chat(tokens: int, port: int):
+            def spawn_chat(tokens: int, port: int, cache_size: int):
                 spec = managed.WorkerSpec("chat", prepared["chat_path"], port,
-                                          tokens, 0)
+                                          tokens, 0, prompt_cache_size=cache_size)
                 payload = {"name": chat["id"],
                            "claim_token": record["claim_token"],
-                           "bytes": chat_estimate(chat, tokens).total,
+                           "bytes": chat_estimate(chat, tokens,
+                                                  prompt_cache_size=cache_size,
+                                                  ignore_peak_override=dev_smoke).total,
                            "pair_id": prepared["pair_id"]}
                 return managed.spawn_claiming_worker(
                     _chat_worker_argv(spec), payload,
                     lifetime_read_fd=self._lifetime_read_fd,
                     env=dict(self._child_env(),
                              **{cap_shim.LIMIT_ENV: str(tokens)}),
-                    log_path=log_path)
+                    log_path=log_path, log_root=self.home)
 
             def restore_reservation():
                 budget.resize_reservation(chat["id"], current_bytes,
@@ -1497,60 +1858,86 @@ class PairManager:
                         "retained with its reservation")
 
             old_child = self._children["chat"]
-            if not managed.terminate(old_child.popen):
-                # the old worker is still live at `current`: put the
-                # reservation back so admitted bytes match the running worker
+            self._replacing_chat = True
+            try:
+                if not managed.terminate(old_child.popen):
+                    # the old worker is still live at `current`: put the
+                    # reservation back so admitted bytes match the running worker
+                    restore_reservation()
+                    return {"ok": False, "changed": False, "reason": "worker",
+                            "error": "chat worker did not confirm termination; "
+                                     "the running worker keeps the prior "
+                                     "reservation",
+                            "context_tokens": current,
+                            "requested": required_tokens}
+                try:
+                    new_port = managed.free_port()
+                    popen = spawn_chat(required_tokens, new_port, new_cache)
+                except Exception as exc:
+                    unverified = (exc.proc if isinstance(exc, managed.WorkerError)
+                                  else None)
+                    if unverified is not None:
+                        self._children = {
+                            **self._children,
+                            "chat": managed.ManagedChild(
+                                "chat", unverified, chat["id"],
+                                owner=record["owner"]),
+                        }
+                    raise PairError(stop_note(
+                        f"chat worker restart failed to spawn: {exc}")) from exc
+                self._children = {**self._children,
+                                  "chat": managed.ManagedChild(
+                                      "chat", popen, chat["id"],
+                                      owner=record["owner"])}
+                abort = self._abort_predicate()
+                if managed.wait_health(f"http://127.0.0.1:{new_port}/v1/models",
+                                       deadline=HEALTH_TIMEOUT_SECONDS, abort=abort):
+                    prepared["chat_url"] = f"http://127.0.0.1:{new_port}/v1"
+                    self._context_tokens = required_tokens
+                    self._chat_prompt_cache_size = new_cache
+                    self._records[chat["id"]]["bytes"] = new_bytes
+                    return {"ok": True, "changed": True,
+                            "context_tokens": required_tokens,
+                            "chat_prompt_cache_size": new_cache,
+                            "limits": sizing["limits"], "requested": required_tokens}
+                # the growth failed: the failed candidate is terminated and
+                # verified dead BEFORE the reservation is touched or any
+                # fallback spawns, and it stays tracked until then
+                candidate = self._children["chat"]
+                if not managed.terminate(candidate.popen):
+                    raise PairError(stop_note(
+                        "grown chat worker would not confirm termination"))
                 restore_reservation()
+                try:
+                    fallback_port = managed.free_port()
+                    popen = spawn_chat(current, fallback_port, current_cache)
+                except Exception as exc:
+                    unverified = (exc.proc if isinstance(exc, managed.WorkerError)
+                                  else None)
+                    if unverified is not None:
+                        self._children = {
+                            **self._children,
+                            "chat": managed.ManagedChild(
+                                "chat", unverified, chat["id"],
+                                owner=record["owner"]),
+                        }
+                    raise PairError(stop_note(
+                        f"chat worker failed health at {required_tokens} tokens "
+                        f"and the fallback did not spawn: {exc}")) from exc
+                self._children = {**self._children,
+                                  "chat": managed.ManagedChild(
+                                      "chat", popen, chat["id"],
+                                      owner=record["owner"])}
+                if not managed.wait_health(
+                        f"http://127.0.0.1:{fallback_port}/v1/models",
+                        deadline=HEALTH_TIMEOUT_SECONDS, abort=abort):
+                    raise PairError(stop_note(
+                        "chat worker failed to restart at either context"))
+                prepared["chat_url"] = f"http://127.0.0.1:{fallback_port}/v1"
+                self._context_tokens = current
                 return {"ok": False, "changed": False, "reason": "worker",
-                        "error": "chat worker did not confirm termination; "
-                                 "the running worker keeps the prior "
-                                 "reservation",
-                        "context_tokens": current,
-                        "requested": required_tokens}
-            new_port = managed.free_port()
-            try:
-                popen = spawn_chat(required_tokens, new_port)
-            except Exception as exc:
-                restore_reservation()
-                raise PairError(f"chat worker restart failed to spawn: {exc}; "
-                                "reservation restored to the prior context"
-                                ) from exc
-            self._children = {**self._children,
-                              "chat": managed.ManagedChild("chat", popen, chat["id"])}
-            abort = self._abort_predicate()
-            if managed.wait_health(f"http://127.0.0.1:{new_port}/v1/models",
-                                   deadline=HEALTH_TIMEOUT_SECONDS, abort=abort):
-                prepared["chat_url"] = f"http://127.0.0.1:{new_port}/v1"
-                self._context_tokens = required_tokens
-                self._records[chat["id"]]["bytes"] = new_bytes
-                return {"ok": True, "changed": True,
-                        "context_tokens": required_tokens,
-                        "limits": sizing["limits"], "requested": required_tokens}
-            # the growth failed: the failed candidate is terminated and
-            # verified dead BEFORE the reservation is touched or any
-            # fallback spawns, and it stays tracked until then
-            candidate = self._children["chat"]
-            if not managed.terminate(candidate.popen):
-                raise PairError(stop_note(
-                    "grown chat worker would not confirm termination"))
-            restore_reservation()
-            fallback_port = managed.free_port()
-            try:
-                popen = spawn_chat(current, fallback_port)
-            except Exception as exc:
-                raise PairError(stop_note(
-                    f"chat worker failed health at {required_tokens} tokens "
-                    f"and the fallback did not spawn: {exc}")) from exc
-            self._children = {**self._children,
-                              "chat": managed.ManagedChild("chat", popen, chat["id"])}
-            if not managed.wait_health(
-                    f"http://127.0.0.1:{fallback_port}/v1/models",
-                    deadline=HEALTH_TIMEOUT_SECONDS, abort=abort):
-                raise PairError(stop_note(
-                    "chat worker failed to restart at either context"))
-            prepared["chat_url"] = f"http://127.0.0.1:{fallback_port}/v1"
-            self._context_tokens = current
-            return {"ok": False, "changed": False, "reason": "worker",
-                    "error": f"chat worker failed health at {required_tokens} "
-                             "tokens; the prior context is still serving",
-                    "context_tokens": current, "requested": required_tokens}
+                        "error": f"chat worker failed health at {required_tokens} "
+                                 "tokens; the prior context is still serving",
+                        "context_tokens": current, "requested": required_tokens}
+            finally:
+                self._replacing_chat = False

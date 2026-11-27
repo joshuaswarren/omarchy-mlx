@@ -36,6 +36,7 @@ UPSTREAM = {
     "situ_fused": "situ_fused.msl",
     "situ_pair_fused": "situ_pair_fused.msl",
     "nemotron_bm32_steel_linear_nt": "nemotron_bm32_steel_linear_nt.msl",
+    "ssm_kernel": "ssm_kernel.msl",
 }
 
 # Static prediction from reading custom_kernel.cpp at 09da0917a, recorded in
@@ -68,6 +69,7 @@ PREDICT = {
     "situ_fused": "crash",
     "situ_pair_fused": "crash",
     "nemotron_bm32_steel_linear_nt": "pass",   # named BM32 hand port
+    "ssm_kernel": "pass",                      # named Mamba-2 SSM hand port
 }
 
 
@@ -941,6 +943,7 @@ IN_DTYPES = {
     "moe_route_fused": [BF16, BF16, I32, I32, I32],
     "situ_fused": [BF16, FP32],
     "situ_pair_fused": [BF16, BF16, FP32],
+    "ssm_kernel": [BF16, FP32, BF16, BF16, FP32, FP32, FP32],
 }
 
 
@@ -961,6 +964,47 @@ def ref_bm32(inp):
     x = inp["x"].astype(np.float64)
     w = inp["weight"].astype(np.float64)
     return [bf16(np.float32(x @ w.T))]
+
+
+# ssm_kernel: Mamba-2 / Nemotron-H selective scan decode step (seq_len == 1)
+# from mlx_lm/models/ssm.py. Shape matches Muse-Glimmer-30B (H=64, Dh=64,
+# Ds=128, hb=8, G=8); BF16 X/B/C/out and FP32 A_log/D/dt/state_in/state_out.
+SSM = {"n": 1, "H": 64, "Dh": 64, "Ds": 128, "hb": 8}
+
+
+def build_ssm(seed=17):
+    r = rng(seed)
+    n, H, Dh, Ds, hb = SSM["n"], SSM["H"], SSM["Dh"], SSM["Ds"], SSM["hb"]
+    return {
+        "X": bf16(r.standard_normal((n, 1, H, Dh)) * 0.5),
+        "A_log": (r.standard_normal((H,)) * 0.5 - 1.0).astype(np.float32),
+        "B": bf16(r.standard_normal((n, 1, hb, Ds)) * 0.5),
+        "C": bf16(r.standard_normal((n, 1, hb, Ds)) * 0.5),
+        "D": r.standard_normal((H,)).astype(np.float32),
+        "dt": np.clip(np.abs(r.standard_normal((n, 1, H))) * 0.1 + 0.01, 0.001, 100.0).astype(np.float32),
+        "state_in": (r.standard_normal((n, H, Dh, Ds)) * 0.25).astype(np.float32),
+    }
+
+
+def ref_ssm(inp):
+    X = inp["X"].astype(np.float64)
+    A_log = inp["A_log"].astype(np.float64)
+    B = inp["B"].astype(np.float64)
+    C = inp["C"].astype(np.float64)
+    D = inp["D"].astype(np.float64)
+    dt = inp["dt"].astype(np.float64).reshape(X.shape[0], X.shape[2])
+    st_in = inp["state_in"].astype(np.float64)
+    n, _, H, Dh = X.shape
+    hb, Ds = B.shape[2], B.shape[3]
+    G = H // hb
+    A = -np.exp(A_log)  # (H,)
+    dA = np.exp(dt * A[None, :])  # (n, H)
+    B_rep = np.repeat(B[:, 0], G, axis=1)  # (n, H, Ds)
+    C_rep = np.repeat(C[:, 0], G, axis=1)  # (n, H, Ds)
+    x_s = X[:, 0]  # (n, H, Dh)
+    st_out = dA[:, :, None, None] * st_in + (x_s * dt[:, :, None])[:, :, :, None] * B_rep[:, :, None, :]
+    y = np.sum(st_out * C_rep[:, :, None, :], axis=-1) + x_s * D[None, :, None]
+    return [bf16(np.float32(y[:, None, :, :])), st_out.astype(np.float32)]
 
 SPECS = [
     dict(name="bitlinear_matmul", builder=build_bitlinear, ref=ref_bitlinear,
@@ -1087,6 +1131,14 @@ SPECS = [
          header="nemotron_bm32_steel_linear_nt.header.msl",
          template=[("T", BF16), ("K", 2048), ("O", 512)],
          grid=(128 * (512 // 64), 1, 1), threadgroup=(128, 1, 1)),
+    dict(name="ssm_kernel", builder=build_ssm, ref=ref_ssm,
+         inputs=("X", "A_log", "B", "C", "D", "dt", "state_in"),
+         outputs=("out", "state_out"),
+         out_shapes=[(1, 1, 64, 64), (1, 64, 64, 128)],
+         out_dtypes=[BF16, FP32], tol=[REL, ("rel", 1e-5, 1e-5)],
+         template=[("T", BF16), ("U", FP32), ("Dh", 64), ("Ds", 128),
+                   ("H", 64), ("G", 8)],
+         grid=(32, 64, 64), threadgroup=(32, 8, 1)),
     dict(name="kda_glue_pre", builder=build_glue_pre, ref=ref_glue_pre,
          inputs=("hp", "z", "s0", "s1", "s2", "wq", "wk", "wv", "dtb", "alog", "cons"),
          outputs=("q", "k", "v", "g", "beta", "ns0", "ns1", "ns2"),

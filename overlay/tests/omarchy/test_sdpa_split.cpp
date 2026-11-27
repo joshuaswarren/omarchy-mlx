@@ -57,6 +57,10 @@ uint64_t dispatches() {
   return omarchy::trace::counters().vk_compute_dispatches.load();
 }
 
+uint32_t split_binding_limit(const Stream& stream) {
+  return omarchy::get_command_encoder(stream).device().compute().binding_limit();
+}
+
 std::vector<float> pattern(size_t count, uint32_t seed, float amplitude) {
   std::vector<float> values;
   values.reserve(count);
@@ -225,6 +229,29 @@ void check_shape(int heads, int kv_heads, int keys, int capacity, int key_start,
   if (!bk64_shape) {
     CHECK(split_bk64.out == split_pv.out);
   }
+  // The single-dispatch merge variant (MLX_OMARCHY_SDPA_SPLIT_MERGE) covers the same shape as the plain value-phase
+  // route at group 4 and head width 128: the value-phase pass 1 with the merge folded into the last block's workgroup is
+  // one dispatch, and its merge folds blocks in the same order as the serial pass 2. Other shapes keep the two-dispatch
+  // route and its bits. A second call on the same stream exercises the counter pool's self-cleaning.
+  const bool merge_shape = heads == 4 * kv_heads && width == 128;
+  setenv("MLX_OMARCHY_SDPA_SPLIT_PV", "1", 1);
+  setenv("MLX_OMARCHY_SDPA_SPLIT_MERGE", "1", 1);
+  Run split_merge = run_attention(q.x, k, v, scale, "1", stream);
+  Run split_merge_again = run_attention(q.x, k, v, scale, "1", stream);
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_MERGE");
+  unsetenv("MLX_OMARCHY_SDPA_SPLIT_PV");
+  Errors e_merge = error_against(split_merge.out, ref);
+  if (split_device_ready()) {
+    CHECK(split_merge.launched == (merge_shape && split_binding_limit(stream) >= 6 ? 1 : 2));
+    CHECK(split_merge_again.launched == split_merge.launched);
+    CHECK(split_merge_again.out == split_merge.out);
+  }
+  CHECK(e_merge.max <= e_fused.max + 2.0 * rounding + 1e-6);
+  CHECK(e_merge.mean <= e_fused.mean + 0.25 * rounding + 1e-7);
+  CHECK(e_merge.max <= 3.0 * rounding + 1e-5);
+  if (!merge_shape) {
+    CHECK(split_merge.out == split_pv.out);
+  }
 }
 
 } // namespace
@@ -318,9 +345,13 @@ TEST_CASE("split-K decode SDPA: misaligned K views keep the fused route and the 
     CHECK(on.launched == off.launched);
     CHECK(on.out == off.out);
   }
-  // Flag unset: the route follows the part rule of this device at 300 keys and at 1000 keys (one shape, 32 query heads and 8 key-value heads), with the bits and
-  // dispatch count of the route it names.
+  // Flag unset (with online-softmax explicitly off so the split-K part rule is
+  // exercised directly even on parts that default to online-softmax): the route
+  // follows the part rule of this device at 300 keys and at 1000 keys (one
+  // shape, 32 query heads and 8 key-value heads), with the bits and dispatch
+  // count of the route it names.
   const std::string part = omarchy::device(0).capabilities().device_name;
+  setenv("MLX_OMARCHY_SDPA_ONLINE", "0", 1);
   for (int n : {300, 1000}) {
     Stored kn = make_bf16(pattern(static_cast<size_t>(kv_heads) * n * 128, 6, 1.0f), Shape{1, kv_heads, n, 128}, stream);
     Stored vn = make_bf16(pattern(static_cast<size_t>(kv_heads) * n * 128, 7, 1.0f), Shape{1, kv_heads, n, 128}, stream);
@@ -335,6 +366,7 @@ TEST_CASE("split-K decode SDPA: misaligned K views keep the fused route and the 
     CHECK(dispatches() - before == (want_split ? split.launched : fused.launched));
     CHECK(flat(r, stream) == (want_split ? split.out : fused.out));
   }
+  unsetenv("MLX_OMARCHY_SDPA_ONLINE");
   unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
 }
 
@@ -342,14 +374,14 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK(omarchy::sdpa_split_min_keys("Apple M1 (G13G B1)") == 128);
   CHECK(omarchy::sdpa_split_min_keys("Apple M1 Max (G13C C0)") == 256);
   CHECK(omarchy::sdpa_split_min_keys("Apple M2 Max (G14C B1)") == 128);
-  CHECK(omarchy::sdpa_split_min_keys("") == 0);
+  CHECK(omarchy::sdpa_split_min_keys("") == 320);
   CHECK(omarchy::sdpa_split_min_keys("Apple M1 Pro (G13S C0)") == 192);
   CHECK(omarchy::sdpa_split_min_keys("Apple M2 (G14G B0)") == 192);
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 Pro (G13S C0)", 191));
   CHECK(omarchy::sdpa_split_default("Apple M1 Pro (G13S C0)", 192));
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 (G14G B0)", 191));
   CHECK(omarchy::sdpa_split_default("Apple M2 (G14G B0)", 192));
-  CHECK(omarchy::sdpa_split_min_keys("Apple M2 Pro (G14S B1)") == 0);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M2 Pro (G14S B1)") == 320);
   // BMG G21 (Intel Arc Pro B60 eGPU): EG-1 showed the fused kernel at ~2 GB/s
   // on a fixed 32-group grid; EG-2 measured the split route winning at 512.
   CHECK(omarchy::sdpa_split_min_keys("Intel(R) Arc(tm) Pro B60 Graphics (BMG G21)") == 512);
@@ -358,10 +390,10 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   // Ultra exclusions (#418): neither Ultra part is qualified for a nonzero
   // default, so both keep the fused kernel (min_keys 0) and the default is
   // off at any key length.
-  CHECK(omarchy::sdpa_split_min_keys("Apple M1 Ultra (G13D B1)") == 0);
-  CHECK(omarchy::sdpa_split_min_keys("Apple M2 Ultra (G14D B1)") == 0);
-  CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 Ultra (G13D B1)", 4096));
-  CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 Ultra (G14D B1)", 4096));
+  CHECK(omarchy::sdpa_split_min_keys("Apple M1 Ultra (G13D B1)") == 320);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M2 Ultra (G14D B1)") == 320);
+  CHECK(omarchy::sdpa_split_default("Apple M1 Ultra (G13D B1)", 4096));
+  CHECK(omarchy::sdpa_split_default("Apple M2 Ultra (G14D B1)", 4096));
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 127));
   CHECK(omarchy::sdpa_split_default("Apple M2 Max (G14C B1)", 128));
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 Max (G13C C0)", 255));
@@ -369,11 +401,11 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 127));
   CHECK(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 128));
   CHECK(omarchy::sdpa_split_default("Apple M1 (G13G B1)", 1048576));
-  CHECK_FALSE(omarchy::sdpa_split_default("", 4096));
+  CHECK(omarchy::sdpa_split_default("", 4096));
   CHECK(omarchy::sdpa_split_min_keys("Apple M4 Pro (G16S B1)") == 320);
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M4 Pro (G16S B1)", 319));
   CHECK(omarchy::sdpa_split_default("Apple M4 Pro (G16S B1)", 320));
-  CHECK(omarchy::sdpa_split_min_keys("Apple M4 (G16G B0)") == 0);
+  CHECK(omarchy::sdpa_split_min_keys("Apple M4 (G16G B0)") == 320);
   CHECK(omarchy::sdpa_split_min_keys("Apple M5 Max (G17C B1)") == 320);
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M5 Max (G17C B1)", 319));
   CHECK(omarchy::sdpa_split_default("Apple M5 Max (G17C B1)", 320));
@@ -392,23 +424,23 @@ TEST_CASE("split-K decode SDPA default: the part rule and its key thresholds") {
   CHECK_FALSE(omarchy::sdpa_split_default("Apple M1 Max (G13C C0)", 319, 256));
   CHECK(omarchy::sdpa_split_default("Apple M1 Max (G13C C0)", 320, 256));
   CHECK(omarchy::sdpa_split_wide_min_keys("Apple M1 (G13G B1)") == 128);
-  CHECK(omarchy::sdpa_split_wide_min_keys("") == 0);
-  CHECK_FALSE(omarchy::sdpa_split_default("", 4096, 256));
+  CHECK(omarchy::sdpa_split_wide_min_keys("") == 320);
+  CHECK(omarchy::sdpa_split_default("", 4096, 256));
 }
 
 TEST_CASE("split-K decode SDPA: the value-phase variant default is on up to a key limit on G14C, G13C and G16S and off on G13G") {
   CHECK(omarchy::sdpa_split_pv_max_keys("Apple M2 Max (G14C B1)") == 2176);
   CHECK(omarchy::sdpa_split_pv_max_keys("Apple M1 Max (G13C C0)") == 1152);
   CHECK(omarchy::sdpa_split_pv_max_keys("Apple M1 (G13G B1)") == 0);
-  CHECK(omarchy::sdpa_split_pv_max_keys("") == 0);
-  CHECK(omarchy::sdpa_split_pv_max_keys("Apple M2 Pro (G14S B1)") == 0);
+  CHECK(omarchy::sdpa_split_pv_max_keys("") == 2048);
+  CHECK(omarchy::sdpa_split_pv_max_keys("Apple M2 Pro (G14S B1)") == 2048);
   CHECK(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 128));
   CHECK(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 2176));
   CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M2 Max (G14C B1)", 2177));
   CHECK(omarchy::sdpa_split_pv_default("Apple M1 Max (G13C C0)", 1152));
   CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M1 Max (G13C C0)", 1153));
   CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M1 (G13G B1)", 128));
-  CHECK_FALSE(omarchy::sdpa_split_pv_default("", 128));
+  CHECK(omarchy::sdpa_split_pv_default("", 128));
   CHECK(omarchy::sdpa_split_pv_max_keys("Apple M4 Pro (G16S B1)") == 16384);
   CHECK(omarchy::sdpa_split_pv_default("Apple M4 Pro (G16S B1)", 320));
   CHECK(omarchy::sdpa_split_pv_default("Apple M4 Pro (G16S B1)", 16384));
@@ -419,18 +451,18 @@ TEST_CASE("split-K decode SDPA: the value-phase variant default is on up to a ke
   CHECK_FALSE(omarchy::sdpa_split_pv_default("Apple M5 Max (G17C B1)", 2048 + 1));
 }
 
-TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to per-part key limits on G14C, G13C, G16S, G15S and G17C and off elsewhere") {
+TEST_CASE("split-K decode SDPA: the 64-key block variant default is on up to per-part key limits; unlisted parts take the 512-key newest-class ceiling") {
   CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M2 Max (G14C B1)") == 1088);
   CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M1 Max (G13C C0)") == 640);
-  CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M1 (G13G B1)") == 0);
-  CHECK(omarchy::sdpa_split_bk64_max_keys("") == 0);
+  CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M1 (G13G B1)") == 512);
+  CHECK(omarchy::sdpa_split_bk64_max_keys("") == 512);
   CHECK(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 128));
   CHECK(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 1088));
   CHECK_FALSE(omarchy::sdpa_split_bk64_default("Apple M2 Max (G14C B1)", 1089));
   CHECK(omarchy::sdpa_split_bk64_default("Apple M1 Max (G13C C0)", 512));
   CHECK(omarchy::sdpa_split_bk64_default("Apple M1 Max (G13C C0)", 640));
   CHECK_FALSE(omarchy::sdpa_split_bk64_default("Apple M1 Max (G13C C0)", 641));
-  CHECK_FALSE(omarchy::sdpa_split_bk64_default("", 512));
+  CHECK(omarchy::sdpa_split_bk64_default("", 512));
   CHECK(omarchy::sdpa_split_bk64_max_keys("Apple M4 Pro (G16S B1)") == 512);
   CHECK(omarchy::sdpa_split_bk64_default("Apple M4 Pro (G16S B1)", 320));
   CHECK_FALSE(omarchy::sdpa_split_bk64_default("Apple M4 Pro (G16S B1)", 513));
@@ -453,7 +485,7 @@ TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4,
   CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m1max) == 64);
   CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m2max) == 68);
   CHECK(omarchy::sdpa_split_pv_wide_max_workgroups("Apple M5 Max (G17C B1)") == 68);
-  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups("") == 0);
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups("") == 68);
   struct Edge { uint32_t kv_heads; uint32_t last_on; };
   // G13G (16 workgroups): 1 head 2048 keys, 2 heads 1024 (the Qwen3.8-2B), 3 heads 640, 4 heads 512 (the Qwen3.8-9B), 8 heads 256.
   for (Edge e : {Edge{1, 2048}, Edge{2, 1024}, Edge{3, 640}, Edge{4, 512}, Edge{8, 256}}) {
@@ -472,8 +504,8 @@ TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4,
   }
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 320, m1max, 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, 1, 4097, m1max, 0, 8192, 256));  // the explicit flag still selects it past the limit
-  // Unknown parts have no width-256 default; no heads or no keys must not pass on a count of zero.
-  CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, "", 0, 8192, 256));
+  // Unlisted parts take the newest-class workgroup limit; no heads or no keys must not pass on a count of zero.
+  CHECK(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, "", 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 0, m1max, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 100, m1max, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 0, -1, 0, m1, 0, 8192, 256));
@@ -494,7 +526,7 @@ TEST_CASE("split-K decode SDPA: the width-256 value-phase variant needs group 4,
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 500, m1, 0, 8192, 252));
 }
 
-TEST_CASE("split-K decode SDPA: the M3 Pro (G15S) defaults and their variable overrides; the M3 (G15G) stays uncalibrated") {
+TEST_CASE("split-K decode SDPA: the M3 Pro (G15S) defaults and their variable overrides; the unlisted M3 (G15G) takes the newest-class defaults") {
   const std::string m3pro = "Apple M3 Pro (G15S B1)";
   const std::string m3 = "Apple M3 (G15G B1)";
   CHECK(omarchy::sdpa_split_min_keys(m3pro) == 192);
@@ -513,13 +545,13 @@ TEST_CASE("split-K decode SDPA: the M3 Pro (G15S) defaults and their variable ov
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 2, -1, 2305, m3pro, 0, 8192, 256));
   CHECK(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 1152, m3pro, 0, 8192, 256));
   CHECK_FALSE(omarchy::sdpa_split_pv_wide(256, 4, 4, -1, 1153, m3pro, 0, 8192, 256));
-  // The base M3 is not calibrated: every rule keeps its off value.
-  CHECK(omarchy::sdpa_split_min_keys(m3) == 0);
-  CHECK(omarchy::sdpa_split_wide_min_keys(m3) == 0);
-  CHECK(omarchy::sdpa_split_pv_max_keys(m3) == 0);
-  CHECK(omarchy::sdpa_split_bk64_max_keys(m3) == 0);
-  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m3) == 0);
-  CHECK_FALSE(omarchy::sdpa_split_default(m3, 4096));
+  // The base M3 is unlisted: every rule gives it the newest-class default.
+  CHECK(omarchy::sdpa_split_min_keys(m3) == 320);
+  CHECK(omarchy::sdpa_split_wide_min_keys(m3) == 320);
+  CHECK(omarchy::sdpa_split_pv_max_keys(m3) == 2048);
+  CHECK(omarchy::sdpa_split_bk64_max_keys(m3) == 512);
+  CHECK(omarchy::sdpa_split_pv_wide_max_workgroups(m3) == 68);
+  CHECK(omarchy::sdpa_split_default(m3, 4096));
   // Each variable replaces the part value; the wide threshold falls back to the width-128 variable on a part without its own row.
   for (const char* name : {"MLX_OMARCHY_SDPA_SPLIT_MIN_KEYS", "MLX_OMARCHY_SDPA_SPLIT_WIDE_MIN_KEYS", "MLX_OMARCHY_SDPA_SPLIT_PV_MAX_KEYS",
                            "MLX_OMARCHY_SDPA_SPLIT_BK64_MAX_KEYS", "MLX_OMARCHY_SDPA_HD256_PV_LIMIT"}) {
@@ -670,6 +702,188 @@ TEST_CASE("split-K verify rows: each causal row equals the same token decoded al
       }
     }
     unsetenv("MLX_OMARCHY_SDPA_SPLIT_ROWS");
+  }
+  unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
+}
+
+TEST_CASE("split-K P1KV: float64 accuracy gate and two-dispatch count across HD=128/256 and BK=32/64/128") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool shuffle_ready =
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_BIT) != 0u;
+  struct ShapeCase {
+    int heads, kv_heads, width, keys;
+    bool one_hot;
+  };
+  for (const ShapeCase& sc : {
+           ShapeCase{32, 8, 128, 1, false},
+           ShapeCase{32, 8, 128, 17, false},
+           ShapeCase{32, 8, 128, 31, false},
+           ShapeCase{32, 8, 128, 33, false},
+           ShapeCase{32, 8, 128, 65, true},
+           ShapeCase{32, 8, 128, 513, false},
+           ShapeCase{16, 4, 256, 17, false},
+           ShapeCase{16, 4, 256, 65, true},
+           ShapeCase{16, 4, 256, 513, false},
+       }) {
+    Stream stream = gpu_stream();
+    Stored q = make_bf16(
+        pattern(static_cast<size_t>(sc.heads) * sc.width, 11, 1.0f),
+        Shape{1, sc.heads, 1, sc.width},
+        stream);
+    std::vector<float> k_host =
+        pattern(static_cast<size_t>(sc.kv_heads) * sc.keys * sc.width, 23, 1.0f);
+    std::vector<float> v_host =
+        pattern(static_cast<size_t>(sc.kv_heads) * sc.keys * sc.width, 37, 1.0f);
+    if (sc.one_hot) {
+      std::fill(k_host.begin(), k_host.end(), 0.0f);
+      for (size_t i = 0; i != v_host.size(); ++i) {
+        size_t key = (i / sc.width) % sc.keys;
+        v_host[i] = (i % sc.width) == (key % sc.width) ? 1.0f : 0.0f;
+      }
+    }
+    Stored k = make_bf16(k_host, Shape{1, sc.kv_heads, sc.keys, sc.width}, stream);
+    Stored v = make_bf16(v_host, Shape{1, sc.kv_heads, sc.keys, sc.width}, stream);
+    const float scale = 1.0f / std::sqrt(static_cast<float>(sc.width));
+    std::vector<double> ref = reference(
+        q.values, k.values, v.values, sc.heads, sc.kv_heads, sc.keys, sc.keys, 0, sc.width, scale);
+    Run baseline = run_attention(q.x, k.x, v.x, scale, "0", stream);
+    Errors e_base = error_against(baseline.out, ref);
+    double rounding = 0.0;
+    for (double r : ref) {
+      rounding = std::max(rounding, std::fabs(r) * std::ldexp(1.0, -8));
+    }
+    for (const char* bk : {"32", "64", "128"}) {
+      setenv("MLX_OMARCHY_SDPA_SPLIT_P1KV", bk, 1);
+      Run p1kv = run_attention(q.x, k.x, v.x, scale, "1", stream);
+      unsetenv("MLX_OMARCHY_SDPA_SPLIT_P1KV");
+      Errors e_p1kv = error_against(p1kv.out, ref);
+      INFO("width=" << sc.width << " keys=" << sc.keys << " bk=" << bk);
+      CHECK(e_p1kv.max <= e_base.max + 2.0 * rounding + 1e-6);
+      CHECK(e_p1kv.mean <= e_base.mean + 0.25 * rounding + 1e-7);
+      CHECK(e_p1kv.max <= 3.0 * rounding + 1e-5);
+      if (split_device_ready() && (sc.width == 256 || shuffle_ready)) {
+        CHECK(p1kv.launched == 2);
+      }
+    }
+  }
+  unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
+}
+
+TEST_CASE("online-softmax 1-dispatch SDPA: default gating, float64 accuracy, and single-dispatch count") {
+  unsetenv("MLX_OMARCHY_SDPA_ONLINE_MAX_KEYS");
+  CHECK(omarchy::sdpa_online_default("Apple M1 Max (G13C C0)", 512u, 128));
+  CHECK(omarchy::sdpa_online_default("Apple M1 Max (G13C C0)", 2304u, 128));
+  CHECK(!omarchy::sdpa_online_default("Apple M1 Max (G13C C0)", 2305u, 128));
+  CHECK(!omarchy::sdpa_online_default("Apple M1 Max (G13C C0)", 512u, 256));
+  CHECK(omarchy::sdpa_online_default("Apple M1 (G13G B1)", 512u, 128));
+  CHECK(omarchy::sdpa_online_default("Apple M1 (G13G B1)", 2304u, 128));
+  CHECK(!omarchy::sdpa_online_default("Apple M1 (G13G B1)", 2305u, 128));
+  CHECK(!omarchy::sdpa_online_default("Apple M1 (G13G B1)", 512u, 256));
+  CHECK(omarchy::sdpa_online_default("Apple M2 Max (G14C B1)", 512u, 128));
+  CHECK(omarchy::sdpa_online_default("Apple M2 Max (G14C B1)", 1024u, 128));
+  CHECK(!omarchy::sdpa_online_default("Apple M2 Max (G14C B1)", 1025u, 128));
+  CHECK(omarchy::sdpa_online_default("Apple M2 Max (G14C B1)", 512u, 256));
+  CHECK(omarchy::sdpa_online_default("Apple M2 Max (G14C B1)", 1024u, 256));
+  CHECK(!omarchy::sdpa_online_default("Apple M2 Max (G14C B1)", 1025u, 256));
+
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  constexpr VkSubgroupFeatureFlags kOnlineFeatures =
+      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
+  const bool online_sg32_ready = caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 1024u &&
+      caps.max_compute_work_group_size[0] >= 1024u &&
+      caps.max_compute_shared_memory_size >= 16640u &&
+      (caps.subgroup_operations & kOnlineFeatures) == kOnlineFeatures;
+  const bool online_sg16_ready = caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 512u &&
+      caps.max_compute_work_group_size[0] >= 512u &&
+      caps.max_compute_shared_memory_size >= 8320u &&
+      (caps.subgroup_operations & kOnlineFeatures) == kOnlineFeatures;
+  struct ShapeCase {
+    int heads, kv_heads, width, keys;
+    bool one_hot;
+  };
+  for (const ShapeCase& sc : {
+           ShapeCase{32, 8, 128, 1, false},
+           ShapeCase{32, 8, 128, 15, false},
+           ShapeCase{32, 8, 128, 31, false},
+           ShapeCase{32, 8, 128, 32, false},
+           ShapeCase{32, 8, 128, 33, false},
+           ShapeCase{32, 8, 128, 65, true},
+           ShapeCase{32, 8, 128, 513, false},
+           ShapeCase{32, 8, 128, 544, false},
+           ShapeCase{32, 8, 128, 2048, false},
+           ShapeCase{8, 2, 256, 1, false},
+           ShapeCase{8, 2, 256, 15, false},
+           ShapeCase{8, 2, 256, 16, false},
+           ShapeCase{8, 2, 256, 17, false},
+           ShapeCase{8, 2, 256, 31, false},
+           ShapeCase{8, 2, 256, 32, false},
+           ShapeCase{8, 2, 256, 33, false},
+           ShapeCase{8, 2, 256, 65, true},
+           ShapeCase{8, 2, 256, 513, false},
+           ShapeCase{16, 4, 256, 17, false},
+           ShapeCase{16, 4, 256, 544, false},
+       }) {
+    Stream stream = gpu_stream();
+    Stored q = make_bf16(
+        pattern(static_cast<size_t>(sc.heads) * sc.width, 11, 1.0f),
+        Shape{1, sc.heads, 1, sc.width},
+        stream);
+    std::vector<float> k_host =
+        pattern(static_cast<size_t>(sc.kv_heads) * sc.keys * sc.width, 23, 1.0f);
+    std::vector<float> v_host =
+        pattern(static_cast<size_t>(sc.kv_heads) * sc.keys * sc.width, 37, 1.0f);
+    if (sc.one_hot) {
+      std::fill(k_host.begin(), k_host.end(), 0.0f);
+      for (size_t i = 0; i != v_host.size(); ++i) {
+        size_t key = (i / sc.width) % sc.keys;
+        v_host[i] = (i % sc.width) == (key % sc.width) ? 1.0f : 0.0f;
+      }
+    }
+    Stored k = make_bf16(k_host, Shape{1, sc.kv_heads, sc.keys, sc.width}, stream);
+    Stored v = make_bf16(v_host, Shape{1, sc.kv_heads, sc.keys, sc.width}, stream);
+    const float scale = 1.0f / std::sqrt(static_cast<float>(sc.width));
+    std::vector<double> ref = reference(
+        q.values, k.values, v.values, sc.heads, sc.kv_heads, sc.keys, sc.keys, 0, sc.width, scale);
+    setenv("MLX_OMARCHY_SDPA_ONLINE", "0", 1);
+    Run baseline = run_attention(q.x, k.x, v.x, scale, "0", stream);
+    Errors e_base = error_against(baseline.out, ref);
+    double rounding = 0.0;
+    for (double r : ref) {
+      rounding = std::max(rounding, std::fabs(r) * std::ldexp(1.0, -8));
+    }
+    setenv("MLX_OMARCHY_SDPA_ONLINE", "1", 1);
+    Run online = run_attention(q.x, k.x, v.x, scale, "1", stream);
+    unsetenv("MLX_OMARCHY_SDPA_ONLINE");
+    Errors e_online = error_against(online.out, ref);
+    INFO("width=" << sc.width << " keys=" << sc.keys << " mode=sg32");
+    CHECK(e_online.max <= e_base.max + 2.0 * rounding + 1e-6);
+    CHECK(e_online.mean <= e_base.mean + 0.25 * rounding + 1e-7);
+    CHECK(e_online.max <= 3.0 * rounding + 1e-5);
+    if (online_sg32_ready) {
+      CHECK(online.launched == 1);
+    }
+    if (sc.width == 256) {
+      setenv("MLX_OMARCHY_SDPA_ONLINE", "16", 1);
+      Run online16 = run_attention(q.x, k.x, v.x, scale, "1", stream);
+      unsetenv("MLX_OMARCHY_SDPA_ONLINE");
+      Errors e_online16 = error_against(online16.out, ref);
+      INFO("width=" << sc.width << " keys=" << sc.keys << " mode=sg16");
+      CHECK(e_online16.max <= e_base.max + 2.0 * rounding + 1e-6);
+      CHECK(e_online16.mean <= e_base.mean + 0.25 * rounding + 1e-7);
+      CHECK(e_online16.max <= 3.0 * rounding + 1e-5);
+      if (online_sg16_ready) {
+        CHECK(online16.launched == 1);
+      }
+    }
   }
   unsetenv("MLX_OMARCHY_SDPA_DECODE_SPLIT");
 }

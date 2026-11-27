@@ -4,7 +4,7 @@ Starts the actual stdlib server over the tiny pack fixture and exercises
 /health, /v1/models, non-streaming and streaming chat completions, the
 hard context cap, request validation, the CPU-device guard, and error
 paths. The model is served through the real loader and the real
-generation loop; no part of the serving path is mocked.
+generation loop.
 """
 
 import json
@@ -271,6 +271,75 @@ class RequestValidationTests(unittest.TestCase):
     def test_invalid_utf8_rejected(self):
         self.assertEqual(self._raw(b'{"messages": "\xff\xfe"}'), 400)
 
+    def _raw_error(self, payload: bytes):
+        req = urllib.request.Request(
+            self.base + "/v1/chat/completions", data=payload,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=30).close()
+        with ctx.exception as exc:
+            return exc.code, json.loads(exc.read())["error"]
+
+    def test_deeply_nested_json_rejected(self):
+        # Python 3.14 bounds JSON nesting by the C stack, not the recursion
+        # limit, so pin the handler threads' stack: 200k levels overflow
+        # 4 MiB on 3.14 and the recursion limit on 3.11.
+        old = threading.stack_size(4 * 1024 * 1024)
+        self.addCleanup(threading.stack_size, old)
+        depth = 200_000
+        bodies = {
+            "array": b"[" * depth + b"]" * depth,
+            "object": b'{"a":' * depth + b"1" + b"}" * depth,
+        }
+        for kind, body in bodies.items():
+            with self.subTest(kind=kind):
+                status, error = self._raw_error(body)
+                self.assertEqual(status, 400)
+                self.assertTrue(error.startswith("invalid JSON body: "), error)
+
+    def test_recursion_error_from_json_decoder_rejected(self):
+        # Stack-independent twin of the nesting test above.
+        import types
+        from unittest import mock
+
+        from mlx_omarchy_bonsai2 import server as server_module
+
+        def too_deep(raw):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        fake_json = types.SimpleNamespace(
+            loads=too_deep,
+            dumps=json.dumps,
+            JSONDecodeError=json.JSONDecodeError,
+        )
+        with mock.patch.object(server_module, "json", fake_json):
+            status, error = self._raw_error(b"[[]]")
+        self.assertEqual(status, 400)
+        self.assertEqual(error, "invalid JSON body: maximum recursion depth exceeded")
+
+    def test_integer_too_large_for_float_rejected(self):
+        message = '"messages": [{"role": "user", "content": "x"}]'
+        cases = {
+            "temperature": ("'temperature' must be a finite non-negative number", 10**400),
+            "top_p": ("'top_p' must be a finite number in (0, 1]", 10**400),
+        }
+        for field, (expected, value) in cases.items():
+            for number in (value, -value):
+                with self.subTest(field=field, negative=number < 0):
+                    body = ('{%s, "%s": %d}' % (message, field, number)).encode()
+                    self.assertEqual(self._raw_error(body), (400, expected))
+
+    def test_large_integer_temperature_is_sampled(self):
+        status, body = _request(
+            self.base, "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "x"}], "temperature": 2**63,
+             "max_tokens": 2},
+        )
+        # Near-uniform sampling may pick EOS first, so only the status is fixed.
+        self.assertEqual(status, 200, body)
+        self.assertIn(body["choices"][0]["finish_reason"], ("stop", "length"))
+
     def test_nan_temperature_rejected(self):
         body = json.dumps(
             {"messages": [{"role": "user", "content": "x"}], "temperature": float("nan")}
@@ -372,10 +441,11 @@ class RequestValidationTests(unittest.TestCase):
 
         from mlx_omarchy_bonsai2 import server as server_module
 
-        def refuse(name, byte_count, *, note="", owner=None, state="pending"):
+        def refuse(name, byte_count, *, note="", owner=None, home=None, state="pending"):
             raise ValueError("required bytes exceed available headroom")
 
         fake_budget = types.SimpleNamespace(
+            default_home=lambda: self.tmp / "home",
             estimate_required=lambda memory, context_tokens: types.SimpleNamespace(total=1),
             admit_and_reserve=refuse,
         )
@@ -413,11 +483,12 @@ class RequestValidationTests(unittest.TestCase):
 
         events = []
 
-        def fake_atomic(name, byte_count, *, note="", owner=None, state="pending"):
+        def fake_atomic(name, byte_count, *, note="", owner=None, home=None, state="pending"):
             events.append("reserve")
             return types.SimpleNamespace(fits=True, lines=[])
 
         fake_budget = types.SimpleNamespace(
+            default_home=lambda: self.tmp / "home",
             estimate_required=lambda memory, context_tokens: types.SimpleNamespace(total=1024),
             admit_and_reserve=fake_atomic,
             set_reservation_state=lambda *a, **k: events.append("resident"),
@@ -473,12 +544,16 @@ class RequestValidationTests(unittest.TestCase):
         from mlx_omarchy_bonsai2 import server as server_module
 
         calls = {}
+        pinned_home = self.tmp / "pinned-home"
 
-        def fake_atomic(name, byte_count, *, note="", owner=None, state="pending"):
-            calls.update(name=name, byte_count=byte_count, note=note, owner=owner, state=state)
+        def fake_atomic(name, byte_count, *, note="", owner=None, home=None, state="pending"):
+            calls.update(
+                name=name, byte_count=byte_count, note=note, owner=owner, home=home, state=state
+            )
             return types.SimpleNamespace(fits=True, lines=["ok"])
 
         fake_budget = types.SimpleNamespace(
+            default_home=lambda: pinned_home,
             estimate_required=lambda memory, context_tokens: types.SimpleNamespace(
                 total=memory["weights_bytes"] + 1024
             ),
@@ -508,6 +583,7 @@ class RequestValidationTests(unittest.TestCase):
         self.assertGreaterEqual(calls["byte_count"], facts["total_header_bytes"] + 1024)
         self.assertGreater(calls["byte_count"], facts["live_weights_bytes"])
         self.assertEqual(calls["owner"], "pid0-abc")
+        self.assertEqual(calls["home"], pinned_home)
         self.assertEqual(calls["state"], "pending")
 
     def test_bind_failure_releases_reservation(self):
@@ -518,11 +594,12 @@ class RequestValidationTests(unittest.TestCase):
 
         events = []
 
-        def fake_atomic(name, byte_count, *, note="", owner=None, state="pending"):
+        def fake_atomic(name, byte_count, *, note="", owner=None, home=None, state="pending"):
             events.append("reserve")
             return types.SimpleNamespace(fits=True, lines=[])
 
         fake_budget = types.SimpleNamespace(
+            default_home=lambda: self.tmp / "home",
             estimate_required=lambda memory, context_tokens: types.SimpleNamespace(total=1024),
             admit_and_reserve=fake_atomic,
             set_reservation_state=lambda *a, **k: events.append("resident"),

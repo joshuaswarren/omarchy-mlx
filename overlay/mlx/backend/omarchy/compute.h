@@ -1078,6 +1078,8 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeSplitP2BF16Hd128,
   SdpaDecodeSplitP1VBk64R4BF16Hd128,
   SdpaDecodeSplitP2Bk64BF16Hd128,
+  // Single-dispatch value-phase split-K with the pass-2 merge folded into the last block's workgroup (sdpa_decode_split_p1m.comp, head width 128).
+  SdpaDecodeSplitP1MR4BF16Hd128,
   // Head width 256 of the split-K pair (sdpa_decode_split_p1.comp / sdpa_decode_split_p2.comp -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Plain pass 1 only.
   SdpaDecodeSplitP1R1BF16Hd256,
   SdpaDecodeSplitP1R2BF16Hd256,
@@ -1211,6 +1213,224 @@ enum class ComputeKernel : uint16_t {
   // (shaders/qmm_vec.comp, QMM_LANES=16; requiredSubgroupSize 16).
   // Appended to keep profile kernel ids stable.
   QmmVecQ4MultiSubgroupBF16R2S16KCONTS16,
+  // Lean contiguous / scalar-broadcast binary add/mul/div/sub
+  // (shaders/binary_simple.comp). Appended to keep profile kernel ids stable.
+  BinarySimpleF32,
+  BinarySimpleF16,
+  BinarySimpleBF16,
+  // Coalesced-W K=64 prefill coopmat builds (64-row SG4 and 128-row SG8,
+  // ragged-M and FULL_M twins, subgroup-private zero-barrier drain,
+  // bit-exact with shipped QmmPrefillCoopmatBF16X32FullNLdsPad). Appended
+  // to keep profile kernel ids stable.
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64,
+  QmmPrefillCoopmatSG4BF16X32FullNLdsPadK64FullM,
+  QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64,
+  QmmPrefillCoopmatSG8BF16X32FullNLdsPadK64FullM,
+  // fp16-operand 16x16x16 build of the QMM prefill coopmat kernel for
+  // devices whose coopmat list has no fp32 8x8x8 shape (NVIDIA advertises
+  // only 16-wide f16/bf16 entries): bf16 x staged as fp16, the
+  // dequantized B stored fp16, fp32 accumulator (shaders/qmm_coopmat.comp
+  // -DCMAT16). Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmat16BF16,
+  // Unified 2x8w2 decode QMV builds (2 rows/slot x 8 slots = 256 threads/WG,
+  // 16 cols/WG, hoisted uvec2 loads, dedicated 1-pass interleaved SwiGLU,
+  // 1-pass ResNorm/OutgateResNorm). Appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S8W2,
+  QmmVecQ4MultiSubgroupBF16R2S8W2,
+  QmmVecQ4SwigluBF16R2S8W2,
+  QmmVecQ4ResNormBF16R2S8W2,
+  QmmVecQ4OutgateResNormBF16R2S8W2,
+  // Fused GDN decode conv + gated-delta step for unequal key/value head
+  // counts (gated_delta_decode_perrow_pf.comp -DGDN_CONV_FUSED
+  // -DGDN_NATIVE_GQA_INDEX): the conv prologue reads q and k channels by
+  // the key-head index, the delta body is unchanged. Appended to keep
+  // profile kernel ids stable.
+  GatedDeltaDecodeConvBF16PfGqa,
+  GatedDeltaDecodeConvNormBF16PfGqa,
+  // 16x16x16 dense direct builds (matmul_coopmat_direct.comp -DCMAT16):
+  // same tile geometry as the 8x8x8 family, for drivers whose coopmat
+  // list has no fp32 8x8x8 shape (NVIDIA, ANV, RADV). fp16 operands;
+  // bf16 operands gated on OMARCHY_BF16_DIRECT. Dispatched with a
+  // requiredSubgroupSize 32 pin on drivers whose native subgroup size
+  // differs. Appended to keep profile kernel ids stable.
+  MatmulDirectF16C16Nn,
+  MatmulDirectF16C16Nt,
+  MatmulDirectF16C16Tn,
+  MatmulDirectF16C16Tt,
+  MatmulDirectBF16C16Nn,
+  MatmulDirectBF16C16Nt,
+  MatmulDirectBF16C16Tn,
+  MatmulDirectBF16C16Tt,
+  QmmVecGreedyWordBF16,
+  // Coalesced-K+V split-K decode SDPA pass 1 and matching pass 2 builds
+  // (shaders/sdpa_decode_split_p1kv.comp, sdpa_decode_split_p2.comp).
+  // Appended to keep profile kernel ids stable.
+  SdpaDecodeSplitP1KVBk32R4BF16Hd128,
+  SdpaDecodeSplitP1KVBk64R4BF16Hd128,
+  SdpaDecodeSplitP1KVBk128R4BF16Hd128,
+  SdpaDecodeSplitP2Bk32BF16Hd128,
+  SdpaDecodeSplitP1KVBk32R4BF16Hd256,
+  SdpaDecodeSplitP1KVBk64R4BF16Hd256,
+  SdpaDecodeSplitP1KVBk128R4BF16Hd256,
+  SdpaDecodeSplitP2Bk32BF16Hd256,
+  SdpaDecodeSplitP2Bk64BF16Hd256,
+  // bf16 twin of the two-tensor SliceUpdate merge (slice_update_pair.comp
+  // -DUSE_BF16): verbatim 16-bit copy, so the variant only changes the
+  // element type. Appended to keep profile kernel ids stable.
+  SliceUpdatePairBF16,
+  // Token4 column carrying the residual+norm epilogue (qmm_vec.comp
+  // QMM_VEC_TOKENS+RESNORM): the last finishing workgroup norms every
+  // live token row of the materialized sum. Appended to keep profile
+  // kernel ids stable.
+  QmmVecQ4MultiToken4ResNormSubgroupBF16,
+  // QMM_VEC_TOKENS+ROPE_EPI): the last finishing workgroup norms and
+  // rotates the Q/K member rows of the layer's two fused-norm ropes,
+  // storing queries to a fresh buffer and keys through the slice
+  // pair's KV window. Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiToken4RopeEpiSubgroupBF16,
+  // Per-member twin of the rope epilogue above: the same tail on the
+  // single-weight Rows8 column, one dispatch per group member.
+  QmmVecQ4WordSubgroupRows8RopeEpiBF16,
+  // Dense bf16 matmul on the Intel/ANV 8x16x16 bf16 x bf16 -> f32
+  // subgroup shape (shaders/matmul_coopmat_xe16.comp), for devices
+  // without the fp32 8x8x8 shape the staged coopmat routes require.
+  // Appended to keep profile kernel ids stable.
+  MatmulBF16CoopmatXe16,
+  // bf16-operand 8x16x16 build of the QMM prefill coopmat16 kernel for
+  // Intel/ANV, whose coopmat list carries no M16 entry
+  // (shaders/qmm_coopmat16_xe.comp): staged x_s tile, so ragged
+  // matrix_m is covered where QmmPrefillIntelBF16's m%16 gate is not.
+  // Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmat16XeBF16,
+  // Both rope_rms_norm calls of one layer in one dispatch (the
+  // FastTrioRopePair idea for the norm-carrying bf16 form). One
+  // workgroup per rotation row per side; see shaders/fast_rope_norm_pair.comp.
+  // Appended to keep profile kernel ids stable.
+  FastRopeNormPairBF16,
+  FastRopeNormPairAppleBF16,
+  // Single-dispatch online-softmax bf16 decode SDPA for head width 128 or 256
+  // (32 or 16 subgroups per query-head workgroup, coalesced uvec2/uvec4 K+V
+  // loads, zero scratch/atomics). Appended to keep profile kernel ids stable.
+  SdpaDecodeOnlineSg32BF16Hd128,
+  SdpaDecodeOnlineRopeSg32BF16Hd128,
+  SdpaDecodeOnlineSg32BF16Hd256,
+  SdpaDecodeOnlineSg16BF16Hd256,
+  // Fused residual Add + RMSNorm, Apple-tree reduction (M2D-2): one
+  // dispatch replaces BinaryVecBF16(Add) -> FastRmsNormAppleBF16 for
+  // same-shape bf16 residual edges. Bit-exact by construction (the add
+  // rounds h with the shared RNE helper and the reduction consumes the
+  // rounded values). Appended to keep profile kernel ids stable.
+  FastAddRmsNormAppleBF16,
+  // M2D-3: 128-thread fused rope+norm variants for D <= 128 rows (the 256
+  // -thread build wastes half its threads there). Appended to keep profile
+  // kernel ids stable. Bit-exact to the 256-thread builds at these shapes:
+  // the dropped threads 128..255 load 0.0 and contribute exact +0.0 to the
+  // reduction, and the 256-thread tree's stride-128 step is therefore
+  // (+0.0)-neutral on every element the 128-thread build computes.
+  FastRopeNormBF16W128,
+  FastRopeNormAppleBF16W128,
+  // Fused SDPA output-gate epilogue (out * sigmoid(gate) with direct strided
+  // gate read from q_proj split output), deleting CopyGeneral + Sigmoid +
+  // Multiply dispatches and 2 CDM barriers per full-attention layer.
+  // Bit-identical to the unfused sequence. Appended to keep profile ids stable.
+  SdpaDecodeOnlineOutgateSg32BF16Hd128,
+  SdpaDecodeOnlineOutgateSg32BF16Hd256,
+  SdpaDecodeOnlineOutgateSg16BF16Hd256,
+  SdpaDecodeSplitP2OutgateBF16Hd128,
+  SdpaDecodeSplitP2OutgateBF16Hd256,
+  SdpaDecodeSplitP2OutgateBk32BF16Hd256,
+  SdpaDecodeSplitP2OutgateBk64BF16Hd256,
+  // Single-dispatch fused Q/K RMSNorm+RoPE+KV-cache-write+online-softmax+
+  // optional output-gate decode SDPA for HD=128 (outgate) and HD=256 (plain
+  // and outgate, full or partial rotary width). Appended to keep profile ids
+  // stable.
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd128,
+  SdpaDecodeOnlineRopeSg32BF16Hd256,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256,
+  // Coalesced-state fused GDN decode conv + gated-delta + gated-RMSNorm
+  // (Dk == Dv == 128, f32 state, bf16 qkv/gates/out; 1024 threads, 32 SGs).
+  // Appended to keep profile kernel ids stable.
+  GatedDeltaDecodeConvNormBF16Sg32,
+  // Coalesced-state standalone GDN decode (Dk == Dv == 128, f32 state, bf16
+  // q/k/v/out, bf16 or f32 A_log, native GQA; 1024 threads, 32 SGs).
+  GatedDeltaDecodeBF16Sg32,
+  // Low-register dedicated SwiGLU (ROWS_PER_SLOT=1, SLOTS=8, W2; 2 live rows/SG
+  // across gate+up) and 512-thread coalesced uvec4 ResNorm (ROWS=2, SLOTS=16, W2).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4SwigluBF16R1S8W2,
+  QmmVecQ4ResNormVec4BF16R2S16W2,
+  // bf16-operand 16x16x16 build for parts whose driver advertises only
+  // the WMMA-shaped bf16 x bf16 -> f32 subgroup shape (RADV RDNA3+;
+  // shaders/qmm_coopmat16_bf16.comp). Distinct from QmmPrefillCoopmat16BF16,
+  // the fp16-operand CMAT16 build. Appended to keep profile kernel ids
+  // stable.
+  QmmPrefillCoopmatBF16x16,
+  // Single-dispatch split-K Q/K RMSNorm + RoPE + K-cache write + online-softmax
+  // SDPA + outgate (HD=256, 32 subgroups, runtime split_k in out_strides[3]).
+  // Appended to keep profile kernel ids stable.
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split,
+  // 1024-thread (32 subgroups, 64 cols/WG) coalesced uvec4 ResNormVec4.
+  QmmVecQ4ResNormVec4BF16R2S32W2,
+  // 1024-thread (32 subgroups, 64 cols/WG) Q4 word subgroup decode GEMV for
+  // large-vocabulary lm_head (Appended to keep profile kernel ids stable).
+  QmmVecQ4WordSubgroupBF16R2S32W2,
+  // bf16-operand 16x16x16 causal flash prefill for parts whose driver
+  // advertises only the WMMA-shaped bf16 x bf16 -> f32 subgroup shape
+  // (RADV RDNA3+; shaders/sdpa_prefill_flash_causal_coopmat16.comp),
+  // one 64-lane subgroup per workgroup. Appended to keep profile kernel
+  // ids stable.
+  SdpaCausalFlashCoopmat16BF16,
+  // 128-thread (4 subgroups) Q4 word subgroup GEMV (8 cols/WG) and dedicated
+  // SwiGLU (4 cols/WG) for G14C occupancy headroom (Appended to keep profile
+  // kernel ids stable).
+  QmmVecQ4WordSubgroupBF16R2S4W2,
+  QmmVecQ4SwigluBF16R1S4W2,
+  // Cooperative 128-bit uvec4 coherent-L2 -> shmem load + packed 32-bit
+  // output store in the last-WG R2S8W2 ResNorm epilogue (zero extra QMV regs,
+  // bit-identical to QmmVecQ4ResNormBF16R2S8W2). Appended to keep profile ids
+  // stable.
+  QmmVecQ4ResNormBF16R2S8W2Vec,
+  // Fast-tile-only CFG variants of R2S8W2 Q4 decode kernels (K % 512 == 0,
+  // N % 8 == 0, even w_base; trims unreachable slow-path fallback loops to
+  // reduce SPIR-V CFG size and AGX register pressure, bit-identical).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S8W2Fast,
+  QmmVecQ4MultiSubgroupBF16R2S8W2Fast,
+  QmmVecQ4SwigluBF16R2S8W2Fast,
+  QmmVecQ4ResNormBF16R2S8W2VecFast,
+  // Upfront 8-load 256-thread Multi GEMV for G14C (preserves 2-wait load
+  // coalescing while leaving G13C on low-reg QmmVecQ4MultiSubgroupBF16R2S8W2).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiSubgroupBF16R2S8W2Upfront,
+  // G13C-gated HD=128 SdpaOnlineRope (parallel Phase-A RoPE trig + 2-barrier
+  // subgroupShuffleDown K pack + preloaded epilogue). Appended to keep profile
+  // kernel ids stable.
+  SdpaDecodeOnlineRopeSg32BF16Hd128G13C,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C,
+  // G14C-gated fast Sg32 coalesced GDN conv+delta+norm: subgroupAdd reductions,
+  // 4x vec4 s_in burst hoisted after barrier 1, and straight-line 4-row Phase-2
+  // epilogue (MLX_OMARCHY_GDN_SG32_FAST=0/1). Appended to keep profile kernel
+  // ids stable.
+  GatedDeltaDecodeConvNormBF16Sg32Fast,
+  // Coalesced-state fused GDN decode conv + gated-delta + gated-RMSNorm with
+  // folded in_proj_a/b Q4/g64 projections executed concurrently on idle
+  // subgroups 12 and 13 during Phase 1 (18 bindings, zero extra barriers).
+  // Appended to keep profile kernel ids stable.
+  GatedDeltaDecodeConvNormBaBF16Sg32,
+  // G14C-gated fast-tile-only upfront Q4 decode variants (K % 512 == 0,
+  // N % 8 == 0, even w_base; ResNormVec4 also requires row_length in {2048,4096},
+  // norm_w_size != 1, and 8-element-aligned norm_w offset). Trims unreachable
+  // slow-path loops and uses uniform sb_delta (0-ULP bit-identical). Appended
+  // to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S4W2Fast,
+  QmmVecQ4WordSubgroupBF16R2S32W2Fast,
+  QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast,
+  QmmVecQ4SwigluBF16R1S4W2Fast,
+  QmmVecQ4ResNormVec4BF16R2S32W2Fast,
+  // G14C-gated 512-thread upfront fast-tile-only Multi GEMV (32 cols/WG,
+  // halves QKV preamble launches on Apple M2 Max; 0-ULP bit-identical).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast,
   Count,
 };
 
@@ -1286,8 +1506,11 @@ class ComputeRuntime {
   ComputeRuntime(
       VkDevice device,
       uint32_t binding_limit,
+      uint32_t subgroup_size,
       uint32_t required_subgroup_size,
-      bool subgroup_size_16_admitted);
+      bool subgroup_size_16_admitted,
+      bool subgroup_size_32_admitted,
+      bool subgroup_size_64_admitted);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -1356,8 +1579,11 @@ class ComputeRuntime {
       uint32_t required_subgroup_size);
 
   uint32_t binding_limit_{0};
+  uint32_t subgroup_size_{0};
   uint32_t required_subgroup_size_{0};
   bool subgroup_size_16_admitted_{false};
+  bool subgroup_size_32_admitted_{false};
+  bool subgroup_size_64_admitted_{false};
   bool push_descriptors_{false};
 
   VkDevice device_;

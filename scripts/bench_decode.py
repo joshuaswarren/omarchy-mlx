@@ -40,9 +40,13 @@ unusable environment; 3 provenance refusal.
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import defer_tokens_guard  # noqa: E402
 
 
 def ids_digest(ids):
@@ -83,11 +87,12 @@ def run_generation(gen_iter, ids=None, stats=None):
 
 
 def result_line(decode_tps, ids, prefill_ns, prompt_tokens=None,
-                device=None):
+                device=None, defer_tokens=None):
     """One machine-readable JSON line per run (parse with json.loads)."""
     return json.dumps({
         "engine": "bench_decode",
         "decode_tps": round(decode_tps, 4),
+        "defer_tokens": defer_tokens,
         "generated": len(ids),
         "ids_sha256_16": ids_digest(ids),
         "ids_first": [int(i) for i in ids[:3]],
@@ -101,8 +106,10 @@ def result_line(decode_tps, ids, prefill_ns, prompt_tokens=None,
 
 
 def report(prefill_ns, token_times, requested, ids=None,
-           prompt_tokens=None, device=None):
+           prompt_tokens=None, device=None, defer_tokens=None):
     """Print prefill and pinned-length decode rates, or fail loudly."""
+    if defer_tokens is None:
+        defer_tokens = defer_tokens_guard.require_defer_tokens("bench_decode")
     n = len(token_times)
     if n != requested:
         print(
@@ -117,6 +124,8 @@ def report(prefill_ns, token_times, requested, ids=None,
     decode_tps = (n - 1) / (decode_ns / 1e9) if decode_ns else float("nan")
     print(f"decode {decode_tps:.2f} tok/s over {n - 1} tokens "
           f"({n} requested, EOS suppressed)")
+    if defer_tokens is not None:
+        print(f"defer_tokens {defer_tokens}")
     if prefill_ns:
         print(f"prefill {prefill_ns / 1e9:.3f}s (reported separately, "
               "excluded from decode)")
@@ -133,7 +142,8 @@ def report(prefill_ns, token_times, requested, ids=None,
               f"first={','.join(str(int(i)) for i in ids[:3])} "
               f"last={','.join(str(int(i)) for i in ids[-3:])}")
         print(result_line(decode_tps, ids, prefill_ns,
-                          prompt_tokens=prompt_tokens, device=device))
+                          prompt_tokens=prompt_tokens, device=device,
+                          defer_tokens=defer_tokens))
     return decode_tps
 
 
@@ -282,8 +292,12 @@ def main():
         print("mlx is not importable in this interpreter; cannot benchmark.",
               file=sys.stderr)
         sys.exit(2)
+    # Pin MLX_OMARCHY_DEFER_TOKENS=0 before importing mlx_lm so deferred
+    # token yield cannot shift decode tokens into prefill and inflate tok/s.
+    defer_tokens_guard.pin_defer_tokens()
     from mlx_lm.utils import load
     from mlx_lm.generate import stream_generate
+    defer_tokens = defer_tokens_guard.require_defer_tokens("bench_decode")
 
     model, tokenizer = load(args.model)
     import mlx.core as mx
@@ -332,7 +346,8 @@ def main():
                               run_stats)
     prefill_ns = times[0] - t0 if times else 0
     report(prefill_ns, times, args.tokens, generated_ids,
-           prompt_tokens=run_stats.get("prompt_tokens"), device=device)
+           prompt_tokens=run_stats.get("prompt_tokens"), device=device,
+           defer_tokens=defer_tokens)
 
 
 if __name__ == "__main__":

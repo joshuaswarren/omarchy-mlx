@@ -15,6 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .jsonfile import read_json_object
+
 QTYPES = {"choice": 0, "score": 1, "noul": 2}
 QTYPE_NAMES = {v: k for k, v in QTYPES.items()}
 
@@ -27,8 +29,7 @@ class LayaTokenizer:
 
         tokenizer_dir = Path(tokenizer_dir)
         self._tok = Tokenizer.from_file(str(tokenizer_dir / "tokenizer.json"))
-        with open(tokenizer_dir / "tokenizer_config.json") as f:
-            cfg = json.load(f)
+        cfg = read_json_object(tokenizer_dir / "tokenizer_config.json")
         self.cls_token = cfg["cls_token"]
         self.sep_token = cfg["sep_token"]
         self.mask_token = cfg["mask_token"]

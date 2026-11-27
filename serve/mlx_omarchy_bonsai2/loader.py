@@ -6,8 +6,12 @@ without importing or executing any code shipped inside the pack.
 
 Contract enforced here (everything else is refused, never approximated):
 
-- config.json: model_type == prism_hadamard_qwen35, schema_version == 2,
-  base_model_type == qwen3_5, quantization == affine 2-bit group-128.
+- config.json: bounded regular-file read (16 MiB cap), model_type ==
+  prism_hadamard_qwen35, schema_version == 2, base_model_type == qwen3_5,
+  quantization == affine 2-bit group-128.
+- model.safetensors header: bounded regular-file read (16 MiB cap) with
+  validated dtypes, shapes, byte spans, and in-file data_offsets before
+  memory admission or weight loading.
 - tensor namespace "language_model." (mlx-vlm-qwen3_5); keys outside it
   (vision tower, MTP drafts) are excluded from residency and reported,
   never loaded.
@@ -23,8 +27,11 @@ mx.dequantize inside `Packed`.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
+import stat
 import struct
 from pathlib import Path
 
@@ -40,6 +47,29 @@ SCHEMA_VERSION = 2
 LM_PREFIX = "language_model."
 RECORD_FIELDS = ("path", "block", "embedding", "dtype")
 PACKED_SUFFIXES = ("weight", "scales", "biases", "signs")
+# Real Bonsai-2 header is 303,102 bytes; 16 MiB also bounds JSON parser memory before admission.
+_SAFETENSORS_HEADER_MAX_BYTES = 16 << 20
+# Real Bonsai-2 config.json is ~58 KiB; cap reads to bound corrupt or hostile files.
+_CONFIG_MAX_BYTES = 16 << 20
+_READ_CHUNK_BYTES = 1 << 20
+# Element sizes for the dtypes accepted by mlx's safetensors loader.
+_SAFETENSORS_DTYPE_BYTES = {
+    "BOOL": 1,
+    "U8": 1,
+    "I8": 1,
+    "F8_E4M3": 1,
+    "F8_E8M0": 1,
+    "U16": 2,
+    "I16": 2,
+    "F16": 2,
+    "BF16": 2,
+    "U32": 4,
+    "I32": 4,
+    "F32": 4,
+    "U64": 8,
+    "I64": 8,
+    "C64": 8,
+}
 
 
 class PackError(ValueError):
@@ -50,24 +80,140 @@ def _fail(msg: str) -> None:
     raise PackError(msg)
 
 
+def _is_nonneg_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+@contextlib.contextmanager
+def _open_regular(path: Path):
+    """Open a regular file non-blockingly, following symlinks for HF caches."""
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            _fail(f"{path} is not a regular file")
+        yield fd, st
+    except OSError as exc:
+        raise PackError(
+            f"cannot read {path} ({exc.strerror or type(exc).__name__})"
+        ) from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _read_exact(fd: int, n: int) -> bytes:
+    chunks = []
+    remaining = n
+    while remaining > 0:
+        chunk = os.read(fd, min(_READ_CHUNK_BYTES, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _reject_json_constant(token: str) -> None:
+    raise ValueError(f"non-standard JSON constant {token!r}")
+
+
+def _parse_json_object(raw: bytes, name: str, *, strict_constants: bool = False) -> dict:
+    try:
+        data = json.loads(
+            raw.decode("utf-8"),
+            parse_constant=_reject_json_constant if strict_constants else None,
+        )
+    except (ValueError, RecursionError) as exc:
+        raise PackError(f"{name} is not valid JSON ({type(exc).__name__})") from None
+    if not isinstance(data, dict):
+        _fail(f"{name} is not a JSON object")
+    return data
+
+
+def _read_config_bytes(path: Path) -> bytes:
+    cap = _CONFIG_MAX_BYTES
+    with _open_regular(path) as (fd, st):
+        if st.st_size > cap:
+            _fail(f"{path} exceeds {cap} bytes")
+        raw = _read_exact(fd, cap + 1)
+    if len(raw) > cap:
+        _fail(f"{path} exceeds {cap} bytes")
+    return raw
+
+
+def _load_config(path: Path) -> dict:
+    return _parse_json_object(_read_config_bytes(path), "config.json")
+
+
 def config_sha256(pack_dir: Path) -> str:
-    return hashlib.sha256((pack_dir / "config.json").read_bytes()).hexdigest()
+    return hashlib.sha256(_read_config_bytes(Path(pack_dir) / "config.json")).hexdigest()
 
 
 def _safetensors_header(path: Path) -> dict:
-    """Parse the safetensors header: name -> (dtype, shape, nbytes).
+    """Parse and validate the safetensors header: name -> (dtype, shape, nbytes).
 
     Reads only the header bytes, never the tensor data; gives exact
     per-tensor sizes for residency accounting without touching weights.
     """
-    with path.open("rb") as f:
-        (header_len,) = struct.unpack("<Q", f.read(8))
-        header = json.loads(f.read(header_len))
-    header.pop("__metadata__", None)
+    with _open_regular(path) as (fd, st):
+        file_size = st.st_size
+        prefix = _read_exact(fd, 8)
+        if len(prefix) < 8:
+            _fail("model.safetensors is too short to hold a safetensors header")
+        (header_len,) = struct.unpack("<Q", prefix)
+        if header_len > _SAFETENSORS_HEADER_MAX_BYTES:
+            _fail(
+                f"model.safetensors header length {header_len} exceeds the "
+                f"{_SAFETENSORS_HEADER_MAX_BYTES}-byte limit"
+            )
+        if 8 + header_len > file_size:
+            _fail(f"model.safetensors is truncated (header length {header_len})")
+        raw = _read_exact(fd, header_len)
+        if len(raw) != header_len:
+            _fail(f"model.safetensors is truncated (header length {header_len})")
+    header = _parse_json_object(raw, "model.safetensors header", strict_constants=True)
+    metadata = header.pop("__metadata__", None)
+    if metadata is not None and (
+        not isinstance(metadata, dict) or not all(isinstance(v, str) for v in metadata.values())
+    ):
+        _fail("model.safetensors header __metadata__ must map strings to strings")
     out = {}
     for name, info in header.items():
-        begin, end = info["data_offsets"]
-        out[name] = (info["dtype"], tuple(info["shape"]), end - begin)
+        label = name[:80]
+        if not isinstance(info, dict):
+            _fail(f"tensor {label!r} has malformed metadata")
+        dtype = info.get("dtype")
+        shape = info.get("shape")
+        offsets = info.get("data_offsets")
+        if (
+            not isinstance(dtype, str)
+            or not isinstance(shape, list)
+            or not all(_is_nonneg_int(d) for d in shape)
+            or not isinstance(offsets, list)
+            or len(offsets) != 2
+            or not all(_is_nonneg_int(o) for o in offsets)
+        ):
+            _fail(f"tensor {label!r} has malformed metadata")
+        itemsize = _SAFETENSORS_DTYPE_BYTES.get(dtype)
+        if itemsize is None:
+            _fail(f"tensor {label!r} has unsupported dtype {dtype[:80]!r}")
+        begin, end = offsets
+        if begin > end or 8 + header_len + end > file_size:
+            _fail(f"tensor {label!r} has invalid data_offsets")
+        span = end - begin
+        if 0 in shape:
+            expected_bytes = 0
+        else:
+            expected_bytes = itemsize
+            for dim in shape:
+                expected_bytes *= dim
+                if expected_bytes > span:
+                    break
+        if span != expected_bytes:
+            _fail(f"tensor {label!r} byte span does not match dtype and shape")
+        out[name] = (dtype, tuple(shape), span)
     return out
 
 
@@ -120,15 +266,9 @@ def pack_footprint(pack_dir):
     KV rate so memory admission can happen BEFORE the model is loaded.
     """
     pack_dir = Path(pack_dir)
-    config_path = pack_dir / "config.json"
-    if not config_path.is_file():
-        _fail(f"{pack_dir}: no config.json")
-    config = json.loads(config_path.read_text())
+    config = _load_config(pack_dir / "config.json")
     _check_config(config)
-    safetensors = pack_dir / "model.safetensors"
-    if not safetensors.is_file():
-        _fail(f"{pack_dir}: no model.safetensors")
-    header = _safetensors_header(safetensors)
+    header = _safetensors_header(pack_dir / "model.safetensors")
     lm_bytes = sum(n for k, (_, _, n) in header.items() if k.startswith(LM_PREFIX))
     total_header_bytes = sum(n for _, (_, _, n) in header.items())
     if not lm_bytes:
@@ -151,14 +291,9 @@ def load_text_model(pack_dir):
     from mlx_lm.models.qwen3_5 import TextModel, TextModelArgs
 
     pack_dir = Path(pack_dir)
-    config_path = pack_dir / "config.json"
-    if not config_path.is_file():
-        _fail(f"{pack_dir}: no config.json")
-    config = json.loads(config_path.read_text())
+    config = _load_config(pack_dir / "config.json")
     _check_config(config)
     safetensors = pack_dir / "model.safetensors"
-    if not safetensors.is_file():
-        _fail(f"{pack_dir}: no model.safetensors")
     header = _safetensors_header(safetensors)
 
     lm_keys = {k: v for k, v in header.items() if k.startswith(LM_PREFIX)}

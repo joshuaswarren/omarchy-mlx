@@ -8,6 +8,11 @@ rounds its weight operands to bf16 while the FMA kernel keeps them f32,
 so the outputs are not bit-identical; the check is that the intel
 route's error against the f32 dequantize-matmul reference is no worse
 than the shipped route's.
+
+DEC-19 adds QmmPrefillCoopmat16XeBF16 (bf16 operands on the same ANV
+8x16x16 family, staged x so ragged matrix_m works): arms here pin
+MLX_OMARCHY_NO_QMM_XE16=1 to keep the Intel-vs-FMA contract, and
+test_xe16_covers_ragged_m covers the ragged-m shapes it newly takes.
 """
 
 import os
@@ -46,8 +51,11 @@ class QmmIntelParity(unittest.TestCase):
             raise unittest.SkipTest(
                 "device advertises no bf16 subgroup coopmat shape")
 
-    def run_arm(self, intel, m_rows=64):
-        env = dict(os.environ, MLX_OMARCHY_QMM_INTEL="1" if intel else "0")
+    def run_arm(self, intel, m_rows=64, no_xe16=True):
+        env = dict(
+            os.environ,
+            MLX_OMARCHY_QMM_INTEL="1" if intel else "0",
+            MLX_OMARCHY_NO_QMM_XE16="1" if no_xe16 else "0")
         with tempfile.TemporaryDirectory() as td:
             out = os.path.join(td, "y.npz")
             subprocess.run(
@@ -75,9 +83,26 @@ class QmmIntelParity(unittest.TestCase):
         # matrix_m is not a multiple of the kernel's 16-row tile: the
         # intel route must decline the call (its global A loads read
         # whole 16-row blocks) and the FMA path below must answer it.
+        # MLX_OMARCHY_NO_QMM_XE16=1 (the run_arm default) keeps the
+        # staged-x Xe16 variant out of this comparison.
         ctl_y, ref = self.run_arm(False, m_rows=20)
         intel_y, _ = self.run_arm(True, m_rows=20)
         np.testing.assert_allclose(intel_y, ctl_y, rtol=1e-3, atol=1e-3)
+
+    def test_xe16_covers_ragged_m(self):
+        # QmmPrefillCoopmat16XeBF16 (bf16 operands on the ANV 8x16x16
+        # shape) stages x through shared, so a ragged matrix_m tile
+        # zero-fills: the m=20 call the intel route declines lands on
+        # it. bf16 operand rounding puts it in the same error class as
+        # the intel route, not the FMA route's bit-level agreement.
+        ctl_y, ref = self.run_arm(False, m_rows=20)
+        xe_y, _ = self.run_arm(False, m_rows=20, no_xe16=False)
+        ctl_err = np.abs(ctl_y - ref).max()
+        xe_err = np.abs(xe_y - ref).max()
+        self.assertLessEqual(xe_err, ctl_err * 2.0 + 1e-3)
+        np.testing.assert_allclose(xe_y, ctl_y, rtol=5e-2, atol=0.6)
+        flips = (xe_y.argmax(axis=-1) != ctl_y.argmax(axis=-1)).sum()
+        self.assertLessEqual(flips, 4)
 
 
 if __name__ == "__main__":

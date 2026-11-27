@@ -478,6 +478,31 @@ def test_select_backward():
         _cmp(f"select_backward {shape} dim={dim} idx={index}", my, ref)
 
 
+def test_relu_inplace_and_boolean_dispatch():
+    """PT-M salvage (superseded #812): the relu_/relu_ aten lowerings match
+    CPU and sit in the always-lower gate, and a boolean_dispatch'd
+    F.max_pool2d(return_indices=True) call unwraps to the inner aten
+    function so the executor lowers it instead of CPU-falling back."""
+    torch.manual_seed(7)
+    x = torch.randn(2, 4, 16, 16)
+    ref = torch.relu(x)
+    _cmp("relu", mlx_vulkan.ATEN_TABLE["relu"](mx.array(x.numpy())), ref)
+    _cmp("relu_", mlx_vulkan.ATEN_TABLE["relu_"](mx.array(x.numpy())), ref)
+    assert {"relu", "relu_"} <= mlx_vulkan._ALWAYS_LOWER
+
+    tgt = mlx_vulkan._bd_inner(
+        F.max_pool2d, (x,), {"kernel_size": 2, "stride": 2, "return_indices": True})
+    assert tgt is not F.max_pool2d, "F.max_pool2d is not boolean_dispatch'd on this torch"
+    tn = getattr(tgt, "__name__", "")
+    assert "max_pool2d" in tn, tn
+    lowered = mlx_vulkan.FUNC_TABLE_BY_NAME.get(tn) or mlx_vulkan.ATEN_TABLE.get(tn)
+    assert lowered is not None, f"no lowering for unwrapped {tn}"
+    out, idx = F.max_pool2d(x, 2, return_indices=True)
+    my_out, my_idx = lowered(mx.array(x.numpy()), 2, 2, 0, 1, False)
+    _cmp("bd.max_pool2d", my_out, out)
+    assert np.array_equal(np.array(my_idx), idx.numpy())
+
+
 if __name__ == "__main__":
     test_native_layer_norm_backward()
     test_embedding_dense_backward()
@@ -495,6 +520,7 @@ if __name__ == "__main__":
     test_flash_cpu_bwd_dtype()
     test_efficient_attention_forward_schema()
     test_no_duplicate_table_keys()
+    test_relu_inplace_and_boolean_dispatch()
     print("ALL PASS")
 
 

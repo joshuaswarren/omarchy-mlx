@@ -8,7 +8,8 @@
     "engine": "bench_decode",
     "engine_script": "scripts/bench_decode.py",
     "env": {
-      "MLX_DISABLE_COMPILE": "1"
+      "MLX_DISABLE_COMPILE": "1",
+      "MLX_OMARCHY_DEFER_TOKENS": "0"
     }
   },
   "models": [

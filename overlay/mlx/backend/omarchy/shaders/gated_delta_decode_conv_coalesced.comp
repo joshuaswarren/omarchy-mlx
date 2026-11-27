@@ -1,0 +1,660 @@
+// Copyright © 2026 Joshua Warren / mlx-omarchy contributors.
+// SPDX-License-Identifier: MIT
+//
+// Coalesced-state fused GDN decode conv + gated-delta + gated-RMSNorm kernel
+// (Dk == Dv == 128, bf16 qkv/gates/out, f32 state, K == 4, B == 1; 1024 threads,
+// 32 subgroups x 32 lanes = 4 Dv rows per subgroup).
+//
+// Eliminates the 512-byte inter-lane stride and 128-register live state tile
+// of gated_delta_decode_perrow_pf.comp: each 32-lane subgroup owns one Dv row
+// per iteration (4 elements/lane via coalesced 512-byte vec4 load/store) with
+// sk/skg/sq held in registers and hardware subgroupAdd reductions (zero shared
+// state tile, zero barriers inside the state loop).
+
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer ConvState { uint16_t v[]; } conv_state;
+layout(set = 0, binding = 1, std430) readonly buffer ConvX     { uint16_t v[]; } conv_x;
+layout(set = 0, binding = 2, std430) readonly buffer ConvW     { uint16_t v[]; } conv_w;
+#ifdef GDN_INPROJ_BA_FUSED
+// Folded in_proj_a / in_proj_b Q4/g64 affine projections: slots 3..4 and 13..17 carry
+// the shared normed input row x plus a/b weights, scales, and biases (18 bindings total).
+layout(set = 0, binding = 3, std430) readonly buffer BaX       { uvec4    v[]; } ba_x;
+layout(set = 0, binding = 4, std430) readonly buffer BaWA      { uvec2    v[]; } ba_wa;
+#else
+layout(set = 0, binding = 3, std430) readonly buffer GBuf      { uint16_t v[]; } g_buf;
+layout(set = 0, binding = 4, std430) readonly buffer BBuf      { uint16_t v[]; } b_buf;
+#endif
+layout(set = 0, binding = 5, std430) readonly buffer SIn       { vec4     v[]; } s_in;
+layout(set = 0, binding = 6, std430) writeonly buffer YBuf     { uint16_t v[]; } y_buf;
+layout(set = 0, binding = 7, std430) buffer         SOut       { vec4     v[]; } s_out;
+layout(set = 0, binding = 8, std430) readonly buffer ALogBuf   { uint16_t v[]; } alog_buf;
+layout(set = 0, binding = 9, std430) readonly buffer DtBuf     { uint16_t v[]; } dt_buf;
+layout(set = 0, binding = 10, std430) buffer ConvStateOut      { uint16_t v[]; } conv_state_out;
+layout(set = 0, binding = 11, std430) readonly buffer NormGate { uint16_t v[]; } norm_gate;
+layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[]; } norm_w;
+#ifdef GDN_INPROJ_BA_FUSED
+layout(set = 0, binding = 13, std430) readonly buffer BaSA     { uint16_t v[]; } ba_sa;
+layout(set = 0, binding = 14, std430) readonly buffer BaBA     { uint16_t v[]; } ba_ba;
+layout(set = 0, binding = 15, std430) readonly buffer BaWB     { uvec2    v[]; } ba_wb;
+layout(set = 0, binding = 16, std430) readonly buffer BaSB     { uint16_t v[]; } ba_sb;
+layout(set = 0, binding = 17, std430) readonly buffer BaBB     { uint16_t v[]; } ba_bb;
+#endif
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint operation;      // K (4)
+  uint lhs_size;       // K - 1 (3)
+  uint rhs_size;       // key_dim
+  uint reduce_size;    // C (channels)
+  uint output_size;    // norm_weight offset
+  uint lhs_offset;     // conv_state offset
+  uint rhs_offset;     // conv_x offset
+  uint output_offset;  // out offset
+  uint aux_size;       // conv_w offset
+  uint aux_offset;     // b_in offset
+  uint matrix_m;       // Dk (128)
+  uint matrix_n;       // Dv (128)
+  uint matrix_k;       // B * Hv
+  uint flags;          // bit 8: raw gates, bit 9: f32 A_log
+  float alpha;         // norm_eps
+  float beta_f;
+  uint dims;
+  uint shape[4];       // [a_in_off, h0_off, hf_off, norm_gate_off]
+  uint in_strides[4];  // [A_log_off, dt_bias_off, Hv, Hk (0 => equal)]
+  uint out_strides[4]; // [conv_state_out_off, qk_eps_bits, q_scale_bits, k_scale_bits]
+} params;
+
+shared float sq[128];
+shared float sk[128];
+shared float skg[128];
+shared float sv[128];
+shared float so[128];
+shared float s_norm_buf[256];
+shared float s_g_val;
+shared float s_beta_val;
+
+float bf16_load(uint16_t bits) {
+  return uintBitsToFloat(uint(bits) << 16u);
+}
+
+uint16_t bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+uint16_t gdn_conv_bf16_store(float value) {
+  uint bits = floatBitsToUint(value);
+  if (isnan(value)) {
+    return uint16_t((bits >> 16) | 0x40u);
+  }
+  return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
+float gdn_dk_term(float delta, float k_i) {
+  precise float p = delta * k_i;
+  return p;
+}
+
+float tree_reduce32(float v) {
+#ifdef GDN_SG32_FAST
+  return subgroupAdd(v);
+#else
+  v += subgroupShuffleDown(v, 16u);
+  v += subgroupShuffleDown(v, 8u);
+  v += subgroupShuffleDown(v, 4u);
+  v += subgroupShuffleDown(v, 2u);
+  v += subgroupShuffleDown(v, 1u);
+  return subgroupShuffle(v, 0u);
+#endif
+}
+
+uint16_t gdn_conv_channel(uint channel) {
+  const uint km1 = params.lhs_size;
+  const uint channels = params.reduce_size;
+  float accumulator = 0.0;
+  if (params.operation == 4u && km1 == 3u) {
+    uint wb = params.aux_size + channel * 4u;
+    uint sb = params.lhs_offset + channel;
+    accumulator += bf16_load(conv_state.v[sb]) * bf16_load(conv_w.v[wb]);
+    accumulator += bf16_load(conv_state.v[sb + channels]) *
+        bf16_load(conv_w.v[wb + 1u]);
+    accumulator += bf16_load(conv_state.v[sb + 2u * channels]) *
+        bf16_load(conv_w.v[wb + 2u]);
+    accumulator += bf16_load(conv_x.v[params.rhs_offset + channel]) *
+        bf16_load(conv_w.v[wb + 3u]);
+  } else {
+    for (uint tap = 0u; tap < params.operation; ++tap) {
+      float value = tap < km1
+          ? bf16_load(conv_state.v[params.lhs_offset + tap * channels + channel])
+          : bf16_load(conv_x.v[params.rhs_offset + channel]);
+      accumulator += value *
+          bf16_load(conv_w.v[params.aux_size + channel * params.operation + tap]);
+    }
+  }
+  uint16_t conv_out = gdn_conv_bf16_store(accumulator);
+  float value = bf16_load(conv_out);
+  float sigmoid_value = 1.0 / (1.0 + exp(-value));
+  uint16_t sig_b = gdn_conv_bf16_store(sigmoid_value);
+  float silu = value * bf16_load(sig_b);
+  return gdn_conv_bf16_store(silu);
+}
+
+uint16_t gdn_conv_qk_norm(uint16_t activated, float sum_squares, uint scale_bits) {
+  float norm_value = bf16_load(activated);
+  float eps = uintBitsToFloat(params.out_strides[1]);
+  float mean_square = sum_squares / 128.0;
+  float norm = inversesqrt(mean_square + eps);
+  float scale = bf16_load(gdn_conv_bf16_store(uintBitsToFloat(scale_bits)));
+  precise float result = norm_value * (norm * 1.0);
+  float normed = bf16_load(gdn_conv_bf16_store(result));
+  return gdn_conv_bf16_store(normed * scale);
+}
+
+void gdn_conv_state_out(uint channel) {
+  const uint km1 = params.lhs_size;
+  const uint channels = params.reduce_size;
+  for (uint r = 0u; r + 1u < km1; ++r) {
+    conv_state_out.v[params.out_strides[0] + r * channels + channel] =
+        conv_state.v[params.lhs_offset + (r + 1u) * channels + channel];
+  }
+  conv_state_out.v[params.out_strides[0] + (km1 - 1u) * channels + channel] =
+      conv_x.v[params.rhs_offset + channel];
+}
+
+#ifdef GDN_SG32_FAST
+// Fused conv + conv_state_out for K==4 (km1==3): loads conv_state[0..2],
+// conv_x, and conv_w[0..3] once up front, writes shifted conv_state_out from
+// registers (zero redundant global loads/waits), and computes bit-exact SiLU.
+uint16_t gdn_conv_channel_and_state(uint channel, bool write_state) {
+  const uint km1 = params.lhs_size;
+  const uint channels = params.reduce_size;
+  if (params.operation == 4u && km1 == 3u) {
+    uint wb = params.aux_size + channel * 4u;
+    uint sb = params.lhs_offset + channel;
+    uint16_t s0_b = conv_state.v[sb];
+    uint16_t s1_b = conv_state.v[sb + channels];
+    uint16_t s2_b = conv_state.v[sb + 2u * channels];
+    uint16_t x_b = conv_x.v[params.rhs_offset + channel];
+    uint16_t w0_b = conv_w.v[wb];
+    uint16_t w1_b = conv_w.v[wb + 1u];
+    uint16_t w2_b = conv_w.v[wb + 2u];
+    uint16_t w3_b = conv_w.v[wb + 3u];
+    if (write_state) {
+      uint ob = params.out_strides[0] + channel;
+      conv_state_out.v[ob] = s1_b;
+      conv_state_out.v[ob + channels] = s2_b;
+      conv_state_out.v[ob + 2u * channels] = x_b;
+    }
+    float accumulator = 0.0;
+    accumulator += bf16_load(s0_b) * bf16_load(w0_b);
+    accumulator += bf16_load(s1_b) * bf16_load(w1_b);
+    accumulator += bf16_load(s2_b) * bf16_load(w2_b);
+    accumulator += bf16_load(x_b) * bf16_load(w3_b);
+    uint16_t conv_out = gdn_conv_bf16_store(accumulator);
+    float value = bf16_load(conv_out);
+    float sigmoid_value = 1.0 / (1.0 + exp(-value));
+    uint16_t sig_b = gdn_conv_bf16_store(sigmoid_value);
+    float silu = value * bf16_load(sig_b);
+    return gdn_conv_bf16_store(silu);
+  }
+  uint16_t act = gdn_conv_channel(channel);
+  if (write_state) {
+    gdn_conv_state_out(channel);
+  }
+  return act;
+}
+#endif
+
+#ifdef GDN_INPROJ_BA_FUSED
+float gdn_compute_beta_from_b(float b_in) {
+  float beta_f = 1.0f / (1.0f + exp(-b_in));
+  return bf16_load(bf16_store(beta_f));
+}
+
+float gdn_compute_g_from_a(uint head, float a_in) {
+  uint ph = head % params.in_strides[2];
+  float a_log;
+  if ((params.flags & 512u) != 0u) {
+    uint base = params.in_strides[0] + 2u * ph;
+    a_log = uintBitsToFloat(
+        uint(alog_buf.v[base]) | (uint(alog_buf.v[base + 1u]) << 16u));
+  } else {
+    a_log = bf16_load(alog_buf.v[params.in_strides[0] + ph]);
+  }
+  float dt = bf16_load(dt_buf.v[params.in_strides[1] + ph]);
+  float x = bf16_load(bf16_store(a_in + dt));
+  float u = 1.0f + exp(-abs(x));
+  float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+  float sp_raw = max(x, 0.0f) + l1p;
+  float sp = ((params.flags & 512u) != 0u) ? sp_raw
+                                           : bf16_load(bf16_store(sp_raw));
+  return exp(-(exp(a_log) * sp));
+}
+
+// Exact 32-lane Q4/g64 affine projection for one value head's scalar a[head] or
+// b[head], matching qmm_vec.comp QMM_W2 QGROUP=64 QMM_LANES=32 bit-for-bit
+// (K % 512 == 0, N % 8 == 0, 16-byte aligned x_offset). Splitting xa/xb live
+// ranges keeps register pressure minimal while preserving exact FMA order.
+#define GDN_FIELD_UNIT(shift) uintBitsToFloat((150u - (shift)) << 23u)
+#define GDN_Q4_NIB(p, shift) \
+  (uintBitsToFloat(((p) & (0xfu << (shift))) + ((150u - (shift)) << 23u)) - \
+   GDN_FIELD_UNIT(shift))
+
+#define GDN_BA_DOT_BODY(WBUF, SBUF, BBUF) \
+  const uint k = params.shape[0]; \
+  const uint pairs_per_row = k >> 4u; \
+  const uint groups_per_row = k >> 6u; \
+  const uint g0 = lane >> 2u; \
+  uint wp = head * pairs_per_row + lane; \
+  uint sp = head * groups_per_row + g0; \
+  uint xp = (params.aux_offset >> 3u) + (lane << 1u); \
+  const uint iters = pairs_per_row >> 5u; \
+  precise float acc = 0.0; \
+  for (uint wi = 0u; wi < iters; ++wi) { \
+    uvec2 w = WBUF.v[wp]; \
+    wp += 32u; \
+    float sc = bf16_load(SBUF.v[sp]); \
+    float bi = bf16_load(BBUF.v[sp]); \
+    sp += 8u; \
+    precise float input_sum = 0.0; \
+    precise float dot = 0.0; \
+    { \
+      uvec4 xa = ba_x.v[xp]; \
+      { \
+        float x0 = uintBitsToFloat((xa.x & 0xFFFFu) << 16u); \
+        float x1 = uintBitsToFloat(xa.x & 0xFFFF0000u); \
+        float x2 = uintBitsToFloat((xa.y & 0xFFFFu) << 16u); \
+        float x3 = uintBitsToFloat(xa.y & 0xFFFF0000u); \
+        input_sum += ((x0 + x1) + x2) + x3; \
+        uint p = w.x; \
+        dot += fma(x3, GDN_Q4_NIB(p, 12u), \
+            fma(x2, GDN_Q4_NIB(p, 8u), \
+                fma(x1, GDN_Q4_NIB(p, 4u), x0 * GDN_Q4_NIB(p, 0u)))); \
+      } \
+      { \
+        float x0 = uintBitsToFloat((xa.z & 0xFFFFu) << 16u); \
+        float x1 = uintBitsToFloat(xa.z & 0xFFFF0000u); \
+        float x2 = uintBitsToFloat((xa.w & 0xFFFFu) << 16u); \
+        float x3 = uintBitsToFloat(xa.w & 0xFFFF0000u); \
+        input_sum += ((x0 + x1) + x2) + x3; \
+        uint p = w.x >> 16u; \
+        dot += fma(x3, GDN_Q4_NIB(p, 12u), \
+            fma(x2, GDN_Q4_NIB(p, 8u), \
+                fma(x1, GDN_Q4_NIB(p, 4u), x0 * GDN_Q4_NIB(p, 0u)))); \
+      } \
+    } \
+    { \
+      uvec4 xb = ba_x.v[xp + 1u]; \
+      { \
+        float x0 = uintBitsToFloat((xb.x & 0xFFFFu) << 16u); \
+        float x1 = uintBitsToFloat(xb.x & 0xFFFF0000u); \
+        float x2 = uintBitsToFloat((xb.y & 0xFFFFu) << 16u); \
+        float x3 = uintBitsToFloat(xb.y & 0xFFFF0000u); \
+        input_sum += ((x0 + x1) + x2) + x3; \
+        uint p = w.y; \
+        dot += fma(x3, GDN_Q4_NIB(p, 12u), \
+            fma(x2, GDN_Q4_NIB(p, 8u), \
+                fma(x1, GDN_Q4_NIB(p, 4u), x0 * GDN_Q4_NIB(p, 0u)))); \
+      } \
+      { \
+        float x0 = uintBitsToFloat((xb.z & 0xFFFFu) << 16u); \
+        float x1 = uintBitsToFloat(xb.z & 0xFFFF0000u); \
+        float x2 = uintBitsToFloat((xb.w & 0xFFFFu) << 16u); \
+        float x3 = uintBitsToFloat(xb.w & 0xFFFF0000u); \
+        input_sum += ((x0 + x1) + x2) + x3; \
+        uint p = w.y >> 16u; \
+        dot += fma(x3, GDN_Q4_NIB(p, 12u), \
+            fma(x2, GDN_Q4_NIB(p, 8u), \
+                fma(x1, GDN_Q4_NIB(p, 4u), x0 * GDN_Q4_NIB(p, 0u)))); \
+      } \
+    } \
+    xp += 64u; \
+    precise float bias_term = input_sum * bi; \
+    acc += fma(sc, dot, bias_term); \
+  } \
+  float tot = subgroupAdd(acc); \
+  return bf16_load(bf16_store(tot));
+
+float gdn_ba_dot_a(uint head, uint lane) {
+  GDN_BA_DOT_BODY(ba_wa, ba_sa, ba_ba)
+}
+
+float gdn_ba_dot_b(uint head, uint lane) {
+  GDN_BA_DOT_BODY(ba_wb, ba_sb, ba_bb)
+}
+#else
+vec2 gdn_compute_gates(uint head) {
+  float g;
+  float beta;
+  if ((params.flags & 8u) != 0u) {
+    float b_in = bf16_load(b_buf.v[params.aux_offset + head]);
+    float beta_f = 1.0f / (1.0f + exp(-b_in));
+    beta = bf16_load(bf16_store(beta_f));
+    float a_in = bf16_load(g_buf.v[params.shape[0] + head]);
+    uint ph = head % params.in_strides[2];
+    float a_log;
+    if ((params.flags & 512u) != 0u) {
+      uint base = params.in_strides[0] + 2u * ph;
+      a_log = uintBitsToFloat(
+          uint(alog_buf.v[base]) | (uint(alog_buf.v[base + 1u]) << 16u));
+    } else {
+      a_log = bf16_load(alog_buf.v[params.in_strides[0] + ph]);
+    }
+    float dt = bf16_load(dt_buf.v[params.in_strides[1] + ph]);
+    float x = bf16_load(bf16_store(a_in + dt));
+    float u = 1.0f + exp(-abs(x));
+    float l1p = (u == 1.0f) ? exp(-abs(x)) : log(u) * (exp(-abs(x)) / (u - 1.0f));
+    float sp_raw = max(x, 0.0f) + l1p;
+    float sp = ((params.flags & 512u) != 0u) ? sp_raw
+                                             : bf16_load(bf16_store(sp_raw));
+    g = exp(-(exp(a_log) * sp));
+  } else {
+    g = bf16_load(g_buf.v[params.shape[0] + head]);
+    beta = bf16_load(b_buf.v[params.aux_offset + head]);
+  }
+  return vec2(g, beta);
+}
+#endif
+
+void main() {
+  uint head = gl_WorkGroupID.x;
+  uint hv = params.matrix_k;
+  if (head >= hv) {
+    return;
+  }
+
+  uint tid = gl_LocalInvocationID.x;
+  uint sg = tid >> 5u;
+  uint lane = tid & 31u;
+
+  uint khead = head;
+  if (params.in_strides[3] != 0u) {
+    uint hv_b = params.in_strides[2];
+    uint hk_b = params.in_strides[3];
+    khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
+  }
+
+#ifndef GDN_INPROJ_BA_FUSED
+  // Single-thread gate computation (avoids 1023x redundant exp/log SFU traffic).
+  if (tid == 0u) {
+    vec2 gates = gdn_compute_gates(head);
+    s_g_val = gates.x;
+    s_beta_val = gates.y;
+  }
+#endif
+
+  // Phase 1: Parallel Q (0..127), K (128..255), V (256..383) conv + SiLU +
+  // conv_state_out update. With GDN_INPROJ_BA_FUSED, idle subgroups 12 and 13
+  // run in_proj_a -> g and in_proj_b -> beta concurrently before the existing
+  // Phase-1 barrier (zero extra barriers, zero extra shared memory).
+#ifdef GDN_SG32_FAST
+  // Precompute state addresses for all 32 subgroups so idle sg 12..31 (62.5%
+  // of the 1 MB DRAM state) issue all 4 coalesced vec4 loads before barrier 1,
+  // overlapping DRAM latency with sg 0..11's conv+SiLU AND Phase-1b Q/K norm.
+  uint head_base = head * 128u * 128u;
+  uint s_in_base_q = (params.shape[1] + head_base) >> 2u;
+  uint s_out_base_q = (params.shape[2] + head_base) >> 2u;
+  uint r0 = sg;
+  uint r1 = sg + 32u;
+  uint r2 = sg + 64u;
+  uint r3 = sg + 96u;
+  vec4 w0, w1, w2, w3;
+#endif
+  uint16_t act_val = uint16_t(0u);
+  if (tid < 384u) {
+    const uint key_dim = params.rhs_size;
+    const uint c = tid & 127u;
+    bool lead = true;
+    if (params.in_strides[3] != 0u) {
+      lead = (head % params.in_strides[2]) %
+              (params.in_strides[2] / params.in_strides[3]) ==
+          0u;
+    }
+#ifdef GDN_SG32_FAST
+    uint ch;
+    bool write_state;
+    if (tid < 128u) {
+      ch = khead * 128u + c;
+      write_state = lead;
+    } else if (tid < 256u) {
+      ch = key_dim + khead * 128u + c;
+      write_state = lead;
+    } else {
+      ch = 2u * key_dim + head * 128u + c;
+      write_state = true;
+    }
+    act_val = gdn_conv_channel_and_state(ch, write_state);
+    float v_act = bf16_load(act_val);
+    if (tid < 256u) {
+      s_norm_buf[tid] = v_act * v_act;
+    } else {
+      sv[c] = v_act;
+    }
+#else
+    if (tid < 128u) {
+      const uint ch = khead * 128u + c;
+      act_val = gdn_conv_channel(ch);
+      float qv = bf16_load(act_val);
+      s_norm_buf[c] = qv * qv;
+      if (lead) {
+        gdn_conv_state_out(ch);
+      }
+    } else if (tid < 256u) {
+      const uint ch = key_dim + khead * 128u + c;
+      act_val = gdn_conv_channel(ch);
+      float kv = bf16_load(act_val);
+      s_norm_buf[128u + c] = kv * kv;
+      if (lead) {
+        gdn_conv_state_out(ch);
+      }
+    } else {
+      const uint ch = 2u * key_dim + head * 128u + c;
+      act_val = gdn_conv_channel(ch);
+      sv[c] = bf16_load(act_val);
+      gdn_conv_state_out(ch);
+    }
+#endif
+  }
+#ifdef GDN_INPROJ_BA_FUSED
+  else if (sg == 12u) {
+    float a_in = gdn_ba_dot_a(head, lane);
+    if (lane == 0u) {
+      s_g_val = ((params.flags & 8u) != 0u)
+          ? gdn_compute_g_from_a(head, a_in)
+          : a_in;
+    }
+  } else if (sg == 13u) {
+    float b_in = gdn_ba_dot_b(head, lane);
+    if (lane == 0u) {
+      s_beta_val = ((params.flags & 8u) != 0u)
+          ? gdn_compute_beta_from_b(b_in)
+          : b_in;
+    }
+  }
+#elif defined(GDN_SG32_FAST)
+  else {
+    w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+    w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+    w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
+    w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
+  }
+#endif
+  barrier();
+
+#ifdef GDN_SG32_FAST
+  if (tid < 384u) {
+    w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+    w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+    w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
+    w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
+  }
+#endif
+
+  // SGs 0..3 (Q) and SGs 4..7 (K) each compute the exact stride-64..1
+  // tree_reduce32 directly in registers, eliminating an intermediate barrier.
+  float g = s_g_val;
+  float beta = s_beta_val;
+  if (tid < 128u) {
+    float acc = (s_norm_buf[lane] + s_norm_buf[lane + 64u]) +
+        (s_norm_buf[lane + 32u] + s_norm_buf[lane + 96u]);
+    float q_sum = tree_reduce32(acc);
+    sq[tid] = bf16_load(
+        gdn_conv_qk_norm(act_val, q_sum, params.out_strides[2]));
+  } else if (tid < 256u) {
+    float acc = (s_norm_buf[128u + lane] + s_norm_buf[128u + lane + 64u]) +
+        (s_norm_buf[128u + lane + 32u] + s_norm_buf[128u + lane + 96u]);
+    float k_sum = tree_reduce32(acc);
+    float k_norm = bf16_load(
+        gdn_conv_qk_norm(act_val, k_sum, params.out_strides[3]));
+    sk[tid - 128u] = k_norm;
+    skg[tid - 128u] = k_norm * g;
+  }
+  barrier();
+
+  // Phase 2: Coalesced-state gated-delta update (4 Dv rows per 32-lane SG,
+  // pre-fetching all 4 independent state vec4 rows back-to-back before the
+  // first subgroupAdd). Lane 0 rounds o_acc to bf16 and stages both so[r] and
+  // s_norm_buf[r] = ov * ov before the single post-Phase-2 barrier.
+#ifndef GDN_SG32_FAST
+  uint head_base = head * 128u * 128u;
+  uint s_in_base_q = (params.shape[1] + head_base) >> 2u;
+  uint s_out_base_q = (params.shape[2] + head_base) >> 2u;
+#endif
+
+  uint c0 = lane * 4u;
+  float skg0 = skg[c0 + 0u];
+  float skg1 = skg[c0 + 1u];
+  float skg2 = skg[c0 + 2u];
+  float skg3 = skg[c0 + 3u];
+  float sk0 = sk[c0 + 0u];
+  float sk1 = sk[c0 + 1u];
+  float sk2 = sk[c0 + 2u];
+  float sk3 = sk[c0 + 3u];
+  float sq0 = sq[c0 + 0u];
+  float sq1 = sq[c0 + 1u];
+  float sq2 = sq[c0 + 2u];
+  float sq3 = sq[c0 + 3u];
+
+  {
+#ifdef GDN_SG32_FAST
+    // Straight-line 4-row Phase 2: defers lane==0 shared writes to one block
+    // after all 4 rows so all 4 vec4 s_out stores issue without per-row waits.
+    #define GDN_P4_ROW_FAST(wv, r, svr, o_out) { \
+      float kv_part = fma((wv).x, skg0, fma((wv).y, skg1, fma((wv).z, skg2, (wv).w * skg3))); \
+      float kv_acc = subgroupAdd(kv_part); \
+      float delta = ((svr) - kv_acc) * beta; \
+      float n0 = fma((wv).x, g, gdn_dk_term(delta, sk0)); \
+      float n1 = fma((wv).y, g, gdn_dk_term(delta, sk1)); \
+      float n2 = fma((wv).z, g, gdn_dk_term(delta, sk2)); \
+      float n3 = fma((wv).w, g, gdn_dk_term(delta, sk3)); \
+      s_out.v[s_out_base_q + (r) * 32u + lane] = vec4(n0, n1, n2, n3); \
+      float o_part = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3))); \
+      (o_out) = subgroupAdd(o_part); \
+    }
+    float sv0 = sv[r0];
+    float sv1 = sv[r1];
+    float sv2 = sv[r2];
+    float sv3 = sv[r3];
+    float oa0, oa1, oa2, oa3;
+    GDN_P4_ROW_FAST(w0, r0, sv0, oa0)
+    GDN_P4_ROW_FAST(w1, r1, sv1, oa1)
+    GDN_P4_ROW_FAST(w2, r2, sv2, oa2)
+    GDN_P4_ROW_FAST(w3, r3, sv3, oa3)
+    if (lane == 0u) {
+      float ov0 = bf16_load(bf16_store(oa0)); so[r0] = ov0; s_norm_buf[r0] = ov0 * ov0;
+      float ov1 = bf16_load(bf16_store(oa1)); so[r1] = ov1; s_norm_buf[r1] = ov1 * ov1;
+      float ov2 = bf16_load(bf16_store(oa2)); so[r2] = ov2; s_norm_buf[r2] = ov2 * ov2;
+      float ov3 = bf16_load(bf16_store(oa3)); so[r3] = ov3; s_norm_buf[r3] = ov3 * ov3;
+    }
+    #undef GDN_P4_ROW_FAST
+#else
+    uint r0 = sg;
+    uint r1 = sg + 32u;
+    uint r2 = sg + 64u;
+    uint r3 = sg + 96u;
+    vec4 w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+    vec4 w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+    vec4 w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
+    vec4 w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
+    float sv0 = sv[r0];
+    float sv1 = sv[r1];
+    float sv2 = sv[r2];
+    float sv3 = sv[r3];
+    #define GDN_P4_ROW(wv, r, svr) { \
+      float kv_part = fma((wv).x, skg0, fma((wv).y, skg1, fma((wv).z, skg2, (wv).w * skg3))); \
+      float kv_acc = subgroupAdd(kv_part); \
+      float delta = ((svr) - kv_acc) * beta; \
+      float n0 = fma((wv).x, g, gdn_dk_term(delta, sk0)); \
+      float n1 = fma((wv).y, g, gdn_dk_term(delta, sk1)); \
+      float n2 = fma((wv).z, g, gdn_dk_term(delta, sk2)); \
+      float n3 = fma((wv).w, g, gdn_dk_term(delta, sk3)); \
+      s_out.v[s_out_base_q + (r) * 32u + lane] = vec4(n0, n1, n2, n3); \
+      float o_part = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3))); \
+      float o_acc = subgroupAdd(o_part); \
+      if (lane == 0u) { \
+        float ov = bf16_load(bf16_store(o_acc)); \
+        so[r] = ov; \
+        s_norm_buf[r] = ov * ov; \
+      } \
+    }
+    GDN_P4_ROW(w0, r0, sv0)
+    GDN_P4_ROW(w1, r1, sv1)
+    GDN_P4_ROW(w2, r2, sv2)
+    GDN_P4_ROW(w3, r3, sv3)
+    #undef GDN_P4_ROW
+#endif
+  }
+  barrier();
+
+  // Phase 3: Gated RMSNorm epilogue with zero extra barriers (SGs 0..3 each
+  // run the exact stride-64..1 tree_reduce32, bit-identical to gdn_norm_epilogue).
+  if (tid < 128u) {
+#ifdef GDN_SG32_FAST
+    float weight = bf16_load(norm_w.v[params.output_size + tid]);
+    float gate = bf16_load(norm_gate.v[params.shape[3] + head * 128u + tid]);
+    float so_val = so[tid];
+    float acc = (s_norm_buf[lane] + s_norm_buf[lane + 64u]) +
+        (s_norm_buf[lane + 32u] + s_norm_buf[lane + 96u]);
+    float sum = tree_reduce32(acc);
+    float mean_square = sum / 128.0f;
+    float norm = inversesqrt(mean_square + params.alpha);
+    precise float norm_weight = norm * weight;
+    precise float result = so_val * norm_weight;
+    float normed = bf16_load(gdn_conv_bf16_store(result));
+    float sigmoid_value = 1.0f / (1.0f + exp(-gate));
+    precise float silu = gate * sigmoid_value;
+    precise float prod = silu * normed;
+    y_buf.v[params.output_offset + head * 128u + tid] =
+        gdn_conv_bf16_store(prod);
+#else
+    float acc = (s_norm_buf[lane] + s_norm_buf[lane + 64u]) +
+        (s_norm_buf[lane + 32u] + s_norm_buf[lane + 96u]);
+    float sum = tree_reduce32(acc);
+    float mean_square = sum / 128.0f;
+    float norm = inversesqrt(mean_square + params.alpha);
+    float weight = bf16_load(norm_w.v[params.output_size + tid]);
+    precise float norm_weight = norm * weight;
+    precise float result = so[tid] * norm_weight;
+    float normed = bf16_load(gdn_conv_bf16_store(result));
+    float gate = bf16_load(norm_gate.v[params.shape[3] + head * 128u + tid]);
+    float sigmoid_value = 1.0f / (1.0f + exp(-gate));
+    precise float silu = gate * sigmoid_value;
+    precise float prod = silu * normed;
+    y_buf.v[params.output_offset + head * 128u + tid] =
+        gdn_conv_bf16_store(prod);
+#endif
+  }
+}

@@ -282,8 +282,9 @@ def install_models_route(server_module) -> None:
               "route disabled", file=sys.stderr)
         return
 
+    @functools.wraps(original_run)
     def run_with_models(host, port, response_generator, server_class=None,
-                        handler_class=None):
+                        handler_class=None, *args, **kwargs):
         base = handler_class or server_module.APIHandler
 
         class _ModelsHandler(base):
@@ -292,8 +293,13 @@ def install_models_route(server_module) -> None:
             def do_GET(self):  # noqa: N802 (stdlib API)
                 path = self.path.split("?", 1)[0]
                 if path == "/v1/models":
+                    auth = getattr(self, "_authorized", None)
+                    if callable(auth) and not auth():
+                        return base.do_GET(self)
+                    model_name = (getattr(self, "alias", "")
+                                  or self.response_generator.cli_args.model)
                     raw = json.dumps(loaded_models_payload(
-                        self.response_generator.cli_args.model)).encode("utf-8")
+                        model_name)).encode("utf-8")
                     # Upstream answers through _set_completion_headers, which
                     # adds the CORS headers; bypassing it dropped them and
                     # broke cross-origin browser clients (w86 review).
@@ -307,7 +313,7 @@ def install_models_route(server_module) -> None:
         return original_run(host, port, response_generator,
                             server_class=server_class
                             or server_module.ThreadingHTTPServer,
-                            handler_class=_ModelsHandler)
+                            handler_class=_ModelsHandler, *args, **kwargs)
 
     server_module._run_http_server = run_with_models
 
@@ -407,6 +413,13 @@ YIELD_BODY_MAX_BYTES = 1 << 20
 EXPECTED_NEXT_SIGNATURE = ("self",)
 EXPECTED_RUN_SIGNATURE = ("host", "port", "response_generator", "server_class",
                           "handler_class")
+# patches/mlx-lm-server-alias-key.patch appends (alias, api_key) to
+# mlx_lm.server._run_http_server; accept both unpatched and patched forms
+# while still refusing any unknown signature.
+EXPECTED_RUN_SIGNATURES = (
+    EXPECTED_RUN_SIGNATURE,
+    EXPECTED_RUN_SIGNATURE + ("alias", "api_key"),
+)
 
 
 class YieldGate:
@@ -624,10 +637,10 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
             "yield gate")
     run_fn = server_module._run_http_server
     run_params = tuple(inspect.signature(run_fn).parameters)
-    if run_params != EXPECTED_RUN_SIGNATURE:
+    if run_params not in EXPECTED_RUN_SIGNATURES:
         raise RuntimeError(
             "unexpected _run_http_server signature "
-            f"{run_params} != {EXPECTED_RUN_SIGNATURE}; this shim does not "
+            f"{run_params} not in {EXPECTED_RUN_SIGNATURES}; this shim does not "
             "know this mlx-lm build and refuses to launch with the speech "
             "yield gate")
 
@@ -647,8 +660,9 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
 
     server_module.BatchGenerator = _GatedBatchGenerator
 
+    @functools.wraps(run_fn)
     def _run_with_gate(host, port, response_generator, server_class=None,
-                       handler_class=None):
+                       handler_class=None, *args, **kwargs):
         # Build the gated class HERE, on the incoming handler, so a route
         # installed before the gate stays the base (its do_GET survives)
         # and the gate's do_POST routing is always present.
@@ -694,7 +708,7 @@ def install_yield_gate(server_module, gate: YieldGate) -> None:
 
         return run_fn(host, port, response_generator,
                       server_class=server_class or server_module.ThreadingHTTPServer,
-                      handler_class=_GatedHandler)
+                      handler_class=_GatedHandler, *args, **kwargs)
 
     server_module._run_http_server = _run_with_gate
 
@@ -876,8 +890,8 @@ def start_managed() -> None:
         from . import budget
     except ImportError:
         import budget
-    budget.watch_parent_from_env()
     try:
+        budget.watch_parent_from_env()
         budget.claim_from_env()
     except budget.BudgetError as exc:
         print(f"error: {exc}", file=sys.stderr)

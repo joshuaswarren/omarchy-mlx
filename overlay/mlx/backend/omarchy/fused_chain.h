@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -118,11 +119,18 @@ class EagerFusionScope {
 
  private:
   void* previous_;
+  std::chrono::steady_clock::time_point t0_;
 };
 
 // Returns true when the primitive was recorded (or deliberately deferred)
 // by the active eager-fusion scope; false keeps the ordinary eval_gpu path.
 bool try_eval_eager_fusion(array& node, const Stream& stream);
+
+// MLX_OMARCHY_FOLD_TIMING: thread-local phase accumulators shared with
+// eval.cpp's per-node timers; the scope dtor prints and resets them.
+// Slots: 0=eval() total, 1=dispatch block, 2=needs_commit bookkeeping,
+// 3=encoder.commit in eval, 4=finalize total, 5=eval() node count.
+double* eval_phase_slots();
 
 // Producer-direct KV cache write window. When a SliceUpdate pair's new
 // rows can be stored by the row's PRODUCER (the RoPE kernel for keys,
@@ -147,6 +155,9 @@ struct KvDirectWindow {
   // rows straight into |base|'s buffer (|node| shares that storage) and
   // the fresh cache copy disappears entirely.
   bool in_place{false};
+  // True when |node|'s storage was already bound ahead of producer replay
+  // (e.g. a fused SDPA-RoPE plan that fell back after binding k_su).
+  bool prebound{false};
 };
 
 // DecodeFusion: one fused decode GEMV group. Up to kQmmVecMultiWeights
@@ -199,6 +210,83 @@ struct ResNormPlan {
   array out;
   array weight;
   float eps;
+  bool dead_qmm_out{false};
+};
+
+// GDN decode in_proj_a/b prologue fold: the single-consumer Q4/g64 affine
+// QuantizedMatmul nodes producing a and b for fast::GdnConvDeltaUpdate fold
+// into the coalesced Sg32 GDN dispatch's idle Phase-1 subgroups (sg 12/13),
+// eliminating the tiny [Hv, Hv] in_proj_a/b dispatches and CDM barrier with
+// zero extra barriers or shared memory.
+struct GdnInProjBaPlan {
+  array x;
+  array w_a;
+  array s_a;
+  array b_a;
+  array w_b;
+  array s_b;
+  array b_b;
+  uint32_t k;
+  uint32_t hv;
+};
+
+// MLX_OMARCHY_GDN_INPROJ_BA_FOLD=1 opts into folding in_proj_a/b into the
+// coalesced Sg32 fast::gdn_conv_delta_update dispatch (default OFF until
+// hardware-proved).
+bool gdn_inproj_ba_fold_enabled();
+// Lookup, commit, or replay a planned GdnInProjBaPlan for |gdn_out| (any
+// output sibling of GdnConvDeltaUpdate). replay_gdn_inproj_ba_fold evaluates
+// the skipped a/b QuantizedMatmul nodes in place before a dispatch-time
+// fallback.
+GdnInProjBaPlan* find_gdn_inproj_ba_fold(const array& gdn_out);
+void commit_gdn_inproj_ba_fold(const array& gdn_out);
+void replay_gdn_inproj_ba_fold(const array& gdn_out, const Stream& stream);
+
+// Forward epilogue fold: a decode group's member outputs feed the two
+// fused RMSNorm+RoPE nodes (q, k) of one attention head set. The last
+// finishing workgroup of the group's dispatch runs both norms and
+// rotations inline: the query rows store into the rope node's own
+// fresh buffer, the keys rows store through the slice pair's planned
+// producer-direct KV window. Both RoPE nodes and their input view
+// chains are deleted, so every contract item is decided at plan time;
+// a dispatch-time refusal leaves the ropes unmaterialized and is a
+// plan error, never a fallback.
+struct RopeEpiSide {
+  // The fast::RoPE node (3 inputs: view of member out, offset, norm
+  // weight); its eval is deleted. |member_index| picks the group's
+  // member whose raw output row is the norm+rope source. |view_chain|
+  // holds the Reshape/Transpose nodes between the member output and
+  // the rope input, also deleted.
+  array rope;
+  size_t member_index;
+  std::vector<array> view_chain;
+  // The rope input view's LOGICAL layout over the member storage,
+  // composed at plan time: a lazy view node's desc holds contiguous
+  // strides until its own eval writes the real ones via
+  // copy_shared_buffer, and the skip-role'd chain never evals, so the
+  // desc never carries the view geometry. |view_offset| is the
+  // element offset into the member storage (0 for the pure
+  // reshape/transpose chains accepted here).
+  Shape view_shape;
+  Strides view_strides;
+  int64_t view_offset = 0;
+  // Keys side only: the pair's planned producer-direct window; the
+  // epilogue stores the rotated keys rows through it. The query side
+  // leaves |window| empty and writes |rope|'s own buffer.
+  std::optional<KvDirectWindow> window;
+  size_t pair_index;
+};
+
+struct RopeEpiPlan {
+  RopeEpiSide q;
+  RopeEpiSide k;
+  // Rope scalar contract shared by both sides, copied out of the
+  // primitive state at plan time.
+  int dims;
+  bool traditional;
+  float base;
+  float scale;
+  float norm_eps;
 };
 
 
@@ -213,9 +301,11 @@ struct ResNormPlan {
 // the one dispatch reads gate and out directly, reconstructing x per
 // workgroup with the elementwise arithmetic and rounding. |res_norm|
 // plans the trailing fast::RMSNorm epilogue over the single member's
-// Add sum; when it runs, |*res_norm_done| is set true. Returns false
-// having allocated nothing when any member falls outside the contract;
-// the caller then lets every node take its ordinary eval_gpu path.
+// Add sum; when it runs, |*res_norm_done| is set true. |rope_epi|
+// plans the fused RMSNorm+RoPE q/k epilogue over two member outputs;
+// when it runs, |*rope_epi_done| is set true. Returns false having
+// allocated nothing when any member falls outside the contract; the
+// caller then lets every node take its ordinary eval_gpu path.
 // Defined in primitives.cpp beside QuantizedMatmul::eval_gpu.
 bool dispatch_quantized_gemv_group(
     std::vector<GemvFusionMember>& members,
@@ -223,12 +313,14 @@ bool dispatch_quantized_gemv_group(
     const Stream& stream,
     OutgatePlan* outgate = nullptr,
     ResNormPlan* res_norm = nullptr,
-    bool* res_norm_done = nullptr);
+    bool* res_norm_done = nullptr,
+    RopeEpiPlan* rope_epi = nullptr,
+    bool* rope_epi_done = nullptr);
 
 bool dispatch_dense_gemv_group(
     std::vector<array>& nodes,
     const array& input,
-    const std::optional<KvDirectWindow>* sum_windows,
+    std::optional<KvDirectWindow>* sum_windows,
     const Stream& stream);
 
 enum class SliceUpdatePairDispatch : uint8_t { done, not_ready, unsupported };
@@ -263,8 +355,73 @@ bool kv_direct_enabled();
 // MLX_OMARCHY_ROPE_NORM_FOLD=0 keeps the RMSNorm -> RoPE fold off (the
 // MLX_OMARCHY_FUSED_CHAIN gate also covers it); on by default.
 bool rope_norm_fold_enabled();
+// MLX_OMARCHY_ROPE_EPI=1 opts the fused RMSNorm+RoPE q/k epilogue into
+// the group's Token4 dispatch (off by default until measured).
+bool rope_epi_enabled();
+
+// MLX_OMARCHY_ROPE_NORM_PAIR=1 opts the bf16 norm-rope pair scan in
+// (off by default: the default-on route measured -0.81% decode
+// against the solo FastRopeNorm dispatches it replaces). The f16
+// trio pairs are unaffected; the MLX_OMARCHY_FUSED_CHAIN and
+// MLX_OMARCHY_FUSED_TRIO gates still cover the whole scan.
+bool rope_norm_pair_enabled();
+
+// MLX_OMARCHY_SDPA_ONLINE_ROPE=1 opts the fused Q/K RMSNorm+RoPE+KV-write+
+// online-softmax BF16 decode SDPA (HD=128 or HD=256) scan in.
+struct CapabilityReport;
+bool sdpa_online_rope_enabled(
+    const CapabilityReport& caps,
+    uint32_t k_len,
+    int head_dim = 128,
+    bool has_outgate = false);
+
+struct SdpaOnlineRopeCtx {
+  const array* q_raw{nullptr};
+  const array* k_raw{nullptr};
+  const array* offset{nullptr};
+  const array* q_weight{nullptr};
+  const array* k_weight{nullptr};
+  KvDirectWindow* k_window{nullptr};
+  uint32_t q_head_stride{0};
+  uint32_t k_head_stride{0};
+  bool has_norm{false};
+  float norm_eps{0.0f};
+  float rope_base{0.0f};
+  float rope_scale{1.0f};
+  int rope_dims{128};
+};
+
+// Returns the planned fused Q/K RopeNorm+KV-write+SDPA context when the SDPA
+// node has a bound pending plan, or nullptr otherwise.
+const SdpaOnlineRopeCtx* find_sdpa_online_rope(
+    const array& out,
+    const Stream& stream);
+void commit_sdpa_online_rope(const array& out);
+void abort_sdpa_online_rope(const array& out, const Stream& stream);
+
+// find_sdpa_transpose_out returns the materializing Reshape node a
+// decode-rows SDPA should store into directly (the planned
+// (1,H,S,D) -> (1,S,H*D) out-transpose fold), or nullptr when the
+// output has no planned fold or the fold already fired. The caller
+// re-verifies the reshape's shape/stride contract before adopting it.
+// commit marks the fold done so the view chain and reshape evals skip.
+const array* find_sdpa_transpose_out(const array& out);
+void commit_sdpa_transpose_out(const array& out);
+
+// Fused SDPA output-gate epilogue (tail = Reshape(Transpose(SDPA)) *
+// Sigmoid(gate), with optional strided gate Reshape bypass): SDPA writes the
+// gated product directly into tail, skipping the gate copy, sigmoid, and
+// multiply dispatches. Bit-identical to the unfused sequence.
+struct SdpaOutgatePlan {
+  array tail;
+  array gate_src;
+};
+bool sdpa_outgate_enabled(const CapabilityReport& caps);
+const SdpaOutgatePlan* find_sdpa_outgate(const array& out);
+void commit_sdpa_outgate(const array& out);
 
 class Device;
+struct CapabilityReport;
 
 // One fused decode route variable (MLX_OMARCHY_FUSED_GEMV or
 // MLX_OMARCHY_FUSED_TRIO) for a device name: the MLX_OMARCHY_FUSED_CHAIN
@@ -291,23 +448,34 @@ const char* qmm_geometry_name();
 bool qmm_vec_q4_word_enabled();
 
 // Returns the chip-keyed default for the out-gate prologue fold: off on G13
-// parts other than G13C and off on G14C, on elsewhere.
+// and G14C, on elsewhere.
 bool outgate_fold_default_for_device(const std::string& device_name);
 
 // MLX_OMARCHY_OUTGATE_FOLD=0/1 overrides; unset falls back to
 // outgate_fold_default_for_device(device().capabilities().device_name).
 bool outgate_fold_enabled();
 
-// MLX_OMARCHY_QMM_RESIDUAL_NORM=1/0 forces folding the trailing single-row
-// bf16 fast::RMSNorm into a 1-member Qmm + ResidualAdd decode dispatch;
-// unset follows qmm_residual_norm_default_part(device_name) (on for G13C and
-// G14C, off elsewhere). MLX_OMARCHY_FUSED_CHAIN=0 turns it off on every part.
-bool qmm_residual_norm_enabled(const std::string& device_name);
-bool qmm_residual_norm_enabled();
+// Residual-norm decode fold: the default depends on width and on the
+// executing device's subgroup and workgroup limits. The override can
+// bypass the width policy, not hardware limits or the fused-chain switch.
+bool qmm_residual_norm_enabled(
+    const CapabilityReport& caps, int norm_cols, bool outgate);
+
+// Balanced multi-member GEMV groups (3-member QKV and 2-member balanced pairs
+// such as MLP gate/up and split GDN in_proj [6144,2048]+[16,16]) on the
+// epilogue-only route: unset follows gemv_balanced_qkv_part (G14C only) and
+// stays off when MLX_OMARCHY_FUSED_GEMV=0 is explicitly set;
+// MLX_OMARCHY_GEMV_BALANCED_QKV=1 enables on any part with
+// MLX_OMARCHY_QMM_EPILOGUE_GEMV=1 (including alongside
+// MLX_OMARCHY_FUSED_GEMV=0); =0 disables everywhere.
+bool gemv_balanced_qkv_route_enabled(const std::string& device_name);
 
 // MLX_OMARCHY_FUSED_GEMV_SWIGLU=0 keeps the SwiGLU store epilogue
 // (the gate/up GEMV group that stores silu(gate) * up directly) off
-// (the MLX_OMARCHY_FUSED_GEMV gate also covers it); on by default.
+// (explicit MLX_OMARCHY_FUSED_GEMV=0 without MLX_OMARCHY_GEMV_BALANCED_QKV=1
+// and MLX_OMARCHY_FUSED_CHAIN=0 also cover it); on by default where
+// fused_gemv_enabled is on or where gemv_balanced_qkv_route_enabled is on.
+bool fused_gemv_swiglu_route_enabled(const std::string& device_name);
 bool fused_gemv_swiglu_enabled(const Device& device);
 
 // MLX_OMARCHY_QMM_VEC_TOKEN_MULTI=1 opts the grouped GEMV planner into
@@ -332,5 +500,33 @@ bool fused_trio_enabled(const Device& device);
 // nothing when anything refuses; both nodes then take the ordinary
 // RoPE path unchanged. Defined in primitives.cpp beside
 // dispatch_quantized_gemv_group.
+
+// Norm payload for one side of a norm-carrying rope pair: the pre-norm
+// input and the RMSNorm weight the FastRopeNormPair kernels fold in,
+// plus the norm's eps. A null entry means the plain 2-input pair form.
+// The optional view (Transpose/Reshape between the norm output and the
+// rope) replays over x's contiguous buffer the way
+// dispatch_rope_norm_fold composes it.
+struct RopePairNorm {
+  array x;
+  array w;
+  float eps;
+  std::optional<array> view;
+  std::shared_ptr<Primitive> view_prim;
+};
+
+bool dispatch_rope_pair(
+    std::array<array, 2>& nodes,
+    const std::array<const RopePairNorm*, 2>& norms,
+    const Stream& stream);
 bool dispatch_rope_pair(std::array<array, 2>& nodes, const Stream& stream);
+
+// Fused residual Add + RMSNorm pair (M2D-2): one FastAddRmsNormAppleBF16
+// dispatch replaces BinaryVecBF16(Add) -> FastRmsNormAppleBF16 for a
+// same-shape bf16 edge, writing the rounded residual (nodes[0]) and the
+// normed output (nodes[1]) in the composed path's bit-exact order.
+// Returns false having allocated nothing when anything refuses; both
+// nodes then take their ordinary paths unchanged. Defined in
+// primitives.cpp beside dispatch_rope_pair.
+bool dispatch_add_norm_pair(std::array<array, 2>& nodes, const Stream& stream);
 } // namespace mlx::core::omarchy

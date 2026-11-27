@@ -5,6 +5,14 @@ option(MLX_OMARCHY_GPU_PROFILING
        "Compile in the env-gated GPU profiling harness" OFF)
 if(MLX_OMARCHY_GPU_PROFILING)
   target_compile_definitions(mlx PRIVATE MLX_OMARCHY_GPU_PROFILING)
+  # Wheel version + source stamp reach the profiler through compile
+  # definitions so every profile self-identifies its binary.
+  if(NOT DEFINED MLX_OMARCHY_PROFILE_TAG OR MLX_OMARCHY_PROFILE_TAG STREQUAL "")
+    set(MLX_OMARCHY_PROFILE_TAG "$ENV{MLX_OMARCHY_LOCAL_VERSION}")
+  endif()
+  target_compile_definitions(mlx PRIVATE
+    MLX_OMARCHY_PROFILE_VERSION="${MLX_VERSION}"
+    MLX_OMARCHY_PROFILE_TAG="${MLX_OMARCHY_PROFILE_TAG}")
 endif()
 target_compile_definitions(mlx PRIVATE MLX_OMARCHY_BACKEND)
 # System prefix holding the packaged Honeykrisp ICD JSON and Mesa git SHA
@@ -235,6 +243,7 @@ omarchy_shader(slice_update_reduce_f16 shaders/slice_update_reduce.comp -DUSE_FP
 omarchy_shader(slice_update_reduce_bf16 shaders/slice_update_reduce.comp -DUSE_BF16=1)
 omarchy_shader(slice_update_reduce_u32 shaders/slice_update_reduce.comp -DUSE_U32=1)
 omarchy_shader(slice_update_pair_f16 shaders/slice_update_pair.comp)
+omarchy_shader(slice_update_pair_bf16 shaders/slice_update_pair.comp -DUSE_BF16=1)
 omarchy_shader(scatter_triple_u32 shaders/scatter.comp -DUSE_U32=1 -DUSE_TRIPLE_INDEX=1)
 omarchy_shader(scatter_triple_f16 shaders/scatter.comp -DUSE_FP16=1 -DUSE_TRIPLE_INDEX=1)
 omarchy_shader(scatter_triple_bf16 shaders/scatter.comp -DUSE_BF16=1 -DUSE_TRIPLE_INDEX=1)
@@ -377,6 +386,12 @@ omarchy_shader(qmm_vec_q4_word_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_g128 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQGROUP=128 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4)
 # Decode column-geometry variants (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>): same per-column chain, other columns per workgroup and threads per workgroup.
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s8w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_FAST_ONLY=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s4w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_W2=1 -DQMM_W2_UPFRONT=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_W2=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s32w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_W2=1 -DQMM_W2_UPFRONT=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_W2=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1)
 # Decode column-geometry variants (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>): same per-column chain, other columns per workgroup and threads per workgroup.
 # Batch-shared decode GEMV (default on, MLX_OMARCHY_QMV_BATCH=0 disables): up to four x rows
 # against one 2D weight, weight words read once per block.
@@ -385,6 +400,10 @@ omarchy_shader(qmm_vec_q4_word_subgroup_batch4_bf16 shaders/qmm_vec.comp -DUSE_B
 # rows of one [R, K] activation against one 2D weight, weight words read once
 # per block; m in 9..16 runs as two host passes of <= 8.
 omarchy_shader(qmm_vec_q4_word_subgroup_rows8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_ROWS=8)
+# Per-member rope epilogue: the Rows8 single-weight column carrying the
+# same fused RMSNorm+RoPE tail as the multi-token epilogue, one dispatch
+# per group member so the member dot keeps the Rows8 kernel.
+omarchy_shader(qmm_vec_q4_word_subgroup_rows8_rope_epi_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_ROWS=8 -DQMM_VEC_ROPE_EPI=1)
 # Tensor/MMA row routing (default off, MLX_OMARCHY_QMM_MMA_ROWS=1 arms):
 # a non-batched bf16 q4/g64 transposed call with 4..16 rows and
 # K >= 512 % 128 == 0, N >= 512 % 16 == 0, N*K >= 2^21 skips this row
@@ -416,9 +435,26 @@ omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16kcont shaders/qmm_vec.comp -D
 # whose size-control range admits 16.
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16kconts16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_KCONT=1 -DQMM_LANES=16)
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s4w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_VEC_NO_SWIGLU=1)
+omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_VEC_NO_SWIGLU=1 -DQMM_FAST_ONLY=1)
+omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_VEC_NO_SWIGLU=1 -DQMM_W2_UPFRONT=1)
+omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_VEC_NO_SWIGLU=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1)
+omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_W2=1 -DQMM_VEC_NO_SWIGLU=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1)
+omarchy_shader(qmm_vec_q4_swiglu_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_swiglu_bf16_r2s8w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_FAST_ONLY=1)
+omarchy_shader(qmm_vec_q4_swiglu_bf16_r1s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_swiglu_bf16_r1s4w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=4 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_swiglu_bf16_r1s4w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=4 -DQMM_W2=1 -DQMM_FAST_ONLY=1)
 omarchy_shader(qmm_vec_q4_multi_outgate_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_OUTGATE=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1)
+omarchy_shader(qmm_vec_q4_resnorm_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_RESNORM=1 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_resnorm_vec4_bf16_r2s16w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_resnorm_vec4_bf16_r2s32w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1 -DQMM_W2_UPFRONT=1)
+omarchy_shader(qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_VEC_RESNORM=1 -DQMM_RESNORM_VEC4=1 -DQMM_W2=1 -DQMM_W2_UPFRONT=1 -DQMM_FAST_ONLY=1 -DQMM_RESNORM_EPI_HOIST=1 -DQMM_RESNORM_PACK32=1)
+omarchy_shader(qmm_vec_q4_resnorm_bf16_r2s8w2_vec shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_RESNORM=1 -DQMM_W2=1 -DQMM_RESNORM_VEC=1)
+omarchy_shader(qmm_vec_q4_resnorm_bf16_r2s8w2_vec_fast shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_RESNORM=1 -DQMM_W2=1 -DQMM_RESNORM_VEC=1 -DQMM_FAST_ONLY=1 -DQMM_Q4_MIDSB=1)
 omarchy_shader(qmm_vec_q4_outgate_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_OUTGATE=1 -DQMM_VEC_RESNORM=1)
+omarchy_shader(qmm_vec_q4_outgate_resnorm_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_OUTGATE=1 -DQMM_VEC_RESNORM=1 -DQMM_W2=1)
 # Multi-token (verify / small-batch) variants: the multi column with the
 # token dimension inside the k walk; params.matrix_m carries the live
 # token count 1..M_TOKENS. Per-row bit-identical to the single-token
@@ -434,9 +470,26 @@ omarchy_shader(qmm_vec_q4_multi_token16_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -
 # pass, rows 9..16 run two (the token16 unroll miscompiles on AGX).
 omarchy_shader(qmm_vec_q4_multi_token8_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=8)
 omarchy_shader(qmm_vec_q4_multi_token8_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DQMM_VEC_TOKENS=1 -DM_TOKENS=8)
+# Token4 + residual-norm epilogue: the token column's single-member
+# group carries sum0 materialized and the last finishing workgroup
+# norms every live token row (bit-identical to the eager
+# 256-thread-per-row Apple norm via a two-virtual-lane emulation on the
+# 128-thread workgroup). Bindings 25..27 ride above the weight slots.
+omarchy_shader(qmm_vec_q4_multi_token4_resnorm_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=4 -DQMM_VEC_RESNORM=1)
+# Fused RMSNorm+RoPE epilogue on the same token4 multi column: the last
+# finishing workgroup norms and rotates the Q/K member rows for the
+# layer's two fused-norm ropes (bit-identical to the standalone
+# FastRopeNormBF16 row math), storing queries into the rope's buffer
+# and keys through the pair's KV window. Epilogue bindings ride the
+# free weight slots 19..24 of a <=3-member group.
+omarchy_shader(qmm_vec_q4_multi_token4_rope_epi_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_TOKENS=1 -DM_TOKENS=4 -DQMM_VEC_ROPE_EPI=1)
 # Greedy-argmax decode head: bounds, survivors, and flagged full path
 # around the same Q4 word subgroup column (QMM_VEC_GREEDY).
 omarchy_shader(qmm_vec_greedy_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY=1)
+# Fused greedy head on the non-subgroup Q4 word column: per-chunk QMV +
+# logsumexp partials + near-max candidates, one-workgroup final select
+# (QMM_VEC_GREEDY_WORD, operations 0/1).
+omarchy_shader(qmm_vec_greedy_word_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY_WORD=1)
 # Bonsai 1-bit affine decode (M=1, decode), uint8 packed weights
 # (8 values/byte). The Bonsai extension's qmv_fast kernel; omarchy's
 # stock qmm_vec.comp q4 word path reads uint32 and cannot index into
@@ -502,6 +555,7 @@ omarchy_shader(sdpa_decode_split_p1v_g4 shaders/sdpa_decode_split_p1v.comp -DSPL
 omarchy_shader(sdpa_decode_split_p1v_g8 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=8)
 omarchy_shader(sdpa_decode_split_p2 shaders/sdpa_decode_split_p2.comp)
 omarchy_shader(sdpa_decode_split_p1v_bk64 shaders/sdpa_decode_split_p1v_bk64.comp -DSPLIT_R=4)
+omarchy_shader(sdpa_decode_split_p1m_g4 shaders/sdpa_decode_split_p1m.comp -DSPLIT_R=4)
 omarchy_shader(sdpa_decode_split_p2_bk64 shaders/sdpa_decode_split_p2.comp -DBK_KEYS=64)
 omarchy_shader(sdpa_decode_split_p1_hd256_g1 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=1 -DHD=256)
 omarchy_shader(sdpa_decode_split_p1_hd256_g2 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=2 -DHD=256)
@@ -511,6 +565,32 @@ omarchy_shader(sdpa_decode_split_p1_hd256_g4_qrope_apple shaders/sdpa_decode_spl
 omarchy_shader(sdpa_decode_split_p1_hd256_g8 shaders/sdpa_decode_split_p1.comp -DSPLIT_R=8 -DHD=256)
 omarchy_shader(sdpa_decode_split_p2_hd256 shaders/sdpa_decode_split_p2.comp -DHD=256)
 omarchy_shader(sdpa_decode_split_p1v_hd256_g4 shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256)
+omarchy_shader(sdpa_decode_split_p1kv_bk32_g4 shaders/sdpa_decode_split_p1kv.comp -DSPLIT_R=4 -DHD=128 -DBK_KEYS=32)
+omarchy_shader(sdpa_decode_split_p1kv_bk64_g4 shaders/sdpa_decode_split_p1kv.comp -DSPLIT_R=4 -DHD=128 -DBK_KEYS=64)
+omarchy_shader(sdpa_decode_split_p1kv_bk128_g4 shaders/sdpa_decode_split_p1kv.comp -DSPLIT_R=4 -DHD=128 -DBK_KEYS=128)
+omarchy_shader(sdpa_decode_split_p2_bk32 shaders/sdpa_decode_split_p2.comp -DBK_KEYS=32)
+omarchy_shader(sdpa_decode_split_p1kv_hd256_bk32_g4 shaders/sdpa_decode_split_p1kv.comp -DSPLIT_R=4 -DHD=256 -DBK_KEYS=32)
+omarchy_shader(sdpa_decode_split_p1kv_hd256_bk64_g4 shaders/sdpa_decode_split_p1kv.comp -DSPLIT_R=4 -DHD=256 -DBK_KEYS=64)
+omarchy_shader(sdpa_decode_split_p1kv_hd256_bk128_g4 shaders/sdpa_decode_split_p1kv.comp -DSPLIT_R=4 -DHD=256 -DBK_KEYS=128)
+omarchy_shader(sdpa_decode_split_p2_hd256_bk32 shaders/sdpa_decode_split_p2.comp -DHD=256 -DBK_KEYS=32)
+omarchy_shader(sdpa_decode_split_p2_hd256_bk64 shaders/sdpa_decode_split_p2.comp -DHD=256 -DBK_KEYS=64)
+omarchy_shader(sdpa_decode_online_sg32_bf16_hd128 shaders/sdpa_decode_online.comp -DSUBGROUPS=32 -DHD=128)
+omarchy_shader(sdpa_decode_online_rope_sg32_bf16_hd128 shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=128)
+omarchy_shader(sdpa_decode_online_rope_sg32_bf16_hd128_g13c shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=128 -DSDPA_G13C_FAST=1)
+omarchy_shader(sdpa_decode_online_rope_outgate_sg32_bf16_hd128 shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=128 -DSDPA_OUTGATE=1)
+omarchy_shader(sdpa_decode_online_rope_outgate_sg32_bf16_hd128_g13c shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=128 -DSDPA_OUTGATE=1 -DSDPA_G13C_FAST=1)
+omarchy_shader(sdpa_decode_online_rope_sg32_bf16_hd256 shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=256)
+omarchy_shader(sdpa_decode_online_rope_outgate_sg32_bf16_hd256 shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=256 -DSDPA_OUTGATE=1)
+omarchy_shader(sdpa_decode_online_rope_outgate_sg32_bf16_hd256_split shaders/sdpa_decode_online_rope.comp -DSUBGROUPS=32 -DHD=256 -DSDPA_OUTGATE=1 -DSDPA_SPLIT_K=1)
+omarchy_shader(sdpa_decode_online_sg32_bf16_hd256 shaders/sdpa_decode_online.comp -DSUBGROUPS=32 -DHD=256)
+omarchy_shader(sdpa_decode_online_sg16_bf16_hd256 shaders/sdpa_decode_online.comp -DSUBGROUPS=16 -DHD=256)
+omarchy_shader(sdpa_decode_online_outgate_sg32_bf16_hd128 shaders/sdpa_decode_online.comp -DSUBGROUPS=32 -DHD=128 -DSDPA_OUTGATE=1)
+omarchy_shader(sdpa_decode_online_outgate_sg32_bf16_hd256 shaders/sdpa_decode_online.comp -DSUBGROUPS=32 -DHD=256 -DSDPA_OUTGATE=1)
+omarchy_shader(sdpa_decode_online_outgate_sg16_bf16_hd256 shaders/sdpa_decode_online.comp -DSUBGROUPS=16 -DHD=256 -DSDPA_OUTGATE=1)
+omarchy_shader(sdpa_decode_split_p2_outgate_hd128 shaders/sdpa_decode_split_p2.comp -DHD=128 -DSDPA_OUTGATE=1)
+omarchy_shader(sdpa_decode_split_p2_outgate_hd256 shaders/sdpa_decode_split_p2.comp -DHD=256 -DSDPA_OUTGATE=1)
+omarchy_shader(sdpa_decode_split_p2_outgate_hd256_bk32 shaders/sdpa_decode_split_p2.comp -DHD=256 -DBK_KEYS=32 -DSDPA_OUTGATE=1)
+omarchy_shader(sdpa_decode_split_p2_outgate_hd256_bk64 shaders/sdpa_decode_split_p2.comp -DHD=256 -DBK_KEYS=64 -DSDPA_OUTGATE=1)
 # Attn128: one-dispatch small-k wide-row value Partition (the mx.topk route).
 omarchy_shader(partition_smallk_f32 shaders/partition_smallk.comp)
 omarchy_shader(partition_smallk_f16 shaders/partition_smallk.comp -DF16_IO=1)
@@ -525,6 +605,15 @@ omarchy_shader(gated_delta_decode_perrow_pfw_conv_bf16 shaders/gated_delta_decod
 # ... and with the gated-norm (rms_norm_gated) epilogue folded in.
 omarchy_shader(gated_delta_decode_perrow_pf_conv_norm_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1)
 omarchy_shader(gated_delta_decode_perrow_pfw_conv_norm_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_PF_WIDE=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1)
+# ... and for unequal key/value head counts (native GQA key-head index in the conv prologue).
+omarchy_shader(gated_delta_decode_perrow_pf_conv_gqa_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NATIVE_GQA_INDEX=1)
+omarchy_shader(gated_delta_decode_perrow_pf_conv_norm_gqa_bf16 shaders/gated_delta_decode_perrow_pf.comp -DQKV_BF16=1 -DGDN_CONV_FUSED=1 -DGDN_NORM_FUSED=1 -DGDN_NATIVE_GQA_INDEX=1)
+# Coalesced-state fused GDN decode conv + gated-delta + gated-RMSNorm (1024 threads, 32 SGs, 4 rows/SG).
+omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32 shaders/gated_delta_decode_conv_coalesced.comp)
+omarchy_shader(gated_delta_decode_conv_norm_bf16_sg32_fast shaders/gated_delta_decode_conv_coalesced.comp -DGDN_SG32_FAST=1)
+omarchy_shader(gated_delta_decode_conv_norm_ba_bf16_sg32 shaders/gated_delta_decode_conv_coalesced.comp -DGDN_INPROJ_BA_FUSED=1)
+# Coalesced-state standalone GDN decode (Dk == Dv == 128, f32 state, bf16/f32 A_log, native GQA; 1024 threads, 32 SGs).
+omarchy_shader(gated_delta_decode_bf16_sg32 shaders/gated_delta_decode_coalesced.comp)
 omarchy_shader(gated_delta_decode_composed_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_COMPOSED_ORDER=1)
 omarchy_shader(gated_delta_decode_gqa_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DGDN_NATIVE_GQA_INDEX=1)
 omarchy_shader(gated_delta_decode_state_bf16 shaders/gated_delta_decode.comp -DQKV_BF16=1 -DSTATE_BF16=1)
@@ -593,6 +682,11 @@ omarchy_shader(qmm_coopmat_m16_f16 shaders/qmm_coopmat.comp -DTILE_ROWS=16)
 # accumulation order as the f16 kernels.
 omarchy_shader(qmm_coopmat_bf16 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1)
 omarchy_shader(qmm_coopmat_m16_bf16 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1 -DTILE_ROWS=16)
+# fp16-operand 16x16x16 twin for devices whose coopmat list has no fp32
+# 8x8x8 shape (NVIDIA lists only 16-wide f16/bf16 entries): bf16 x is
+# staged as fp16 and the dequantized B stores fp16; the accumulator
+# stays fp32. Selected only when the fp32 8x8x8 shape is absent.
+omarchy_shader(qmm_coopmat_c16_bf16 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1 -DCMAT16=1)
 # Direct-global-load A twins: the host widens bf16 x to f32 once (exact),
 # so the shader coopMatLoads A tiles straight from the f32 buffer and the
 # x_s staging disappears; same fp32 coopmat k chain, RNE bfloat16 drain.
@@ -661,6 +755,10 @@ omarchy_shader(qmm_coopmat_sg4_x32_fn_g4_pad ${_QDQ_BASE} -DTILE_ROWS=64 -DSG4=1
 omarchy_shader(qmm_coopmat_sg4_x32_fn_g4_pad_cheap ${_QDQ_BASE} -DTILE_ROWS=64 -DSG4=1 -DCHEAP_DEQ=1)
 omarchy_shader(qmm_coopmat_sg4_x32_fn_g4_pad_k32 ${_QDQ_BASE} -DTILE_ROWS=64 -DSG4=1 -DSTEP_K_VAL=32)
 omarchy_shader(qmm_coopmat_sg4_x32_fn_g4_pad_k32_cheap ${_QDQ_BASE} -DTILE_ROWS=64 -DSG4=1 -DSTEP_K_VAL=32 -DCHEAP_DEQ=1)
+omarchy_shader(qmm_coopmat_sg4_x32_fn_g4_pad_k64 ${_QDQ_BASE} -DTILE_ROWS=64 -DSG4=1 -DSTEP_K_VAL=64 -DCOALESCED_W=1)
+omarchy_shader(qmm_coopmat_sg4_x32_fn_g4_pad_k64_fm ${_QDQ_BASE} -DTILE_ROWS=64 -DSG4=1 -DSTEP_K_VAL=64 -DCOALESCED_W=1 -DFULL_M=1)
+omarchy_shader(qmm_coopmat_sg8_x32_fn_g4_pad_k64 ${_QDQ_BASE} -DTILE_ROWS=128 -DSG8=1 -DSTEP_K_VAL=64 -DCOALESCED_W=1)
+omarchy_shader(qmm_coopmat_sg8_x32_fn_g4_pad_k64_fm ${_QDQ_BASE} -DTILE_ROWS=128 -DSG8=1 -DSTEP_K_VAL=64 -DCOALESCED_W=1 -DFULL_M=1)
 omarchy_shader(qmm_fma_f16 shaders/qmm_fma.comp)
 omarchy_shader(qmm_fma_precise_f16 shaders/qmm_fma.comp -DPRECISE_ACCUM=1)
 omarchy_shader(qmm_fma_bf16 shaders/qmm_fma.comp -DUSE_BF16=1)
@@ -669,6 +767,9 @@ omarchy_shader(matmul_fma_bf16 shaders/matmul_fma_bf16.comp)
 omarchy_shader(matmul_bm32_bf16 shaders/matmul_bm32_bf16.comp)
 omarchy_shader(binary_vec_f16 shaders/binary_vec.comp -DUSE_FP16=1)
 omarchy_shader(binary_vec_bf16 shaders/binary_vec.comp -DUSE_BF16=1)
+omarchy_shader(binary_simple_f32 shaders/binary_simple.comp)
+omarchy_shader(binary_simple_f16 shaders/binary_simple.comp -DUSE_FP16=1)
+omarchy_shader(binary_simple_bf16 shaders/binary_simple.comp -DUSE_BF16=1)
 omarchy_shader(unary_vec_f16 shaders/unary_vec.comp -DUSE_FP16=1)
 omarchy_shader(unary_vec_bf16 shaders/unary_vec.comp -DUSE_BF16=1)
 omarchy_shader(matmul_rb_f16 shaders/matmul_rb.comp)
@@ -686,17 +787,29 @@ omarchy_shader(matmul_direct_f16_nt_k4s8 shaders/matmul_coopmat_direct.comp -DB_
 omarchy_shader(matmul_direct_f16_nt_k2s8 shaders/matmul_coopmat_direct.comp -DB_T=1 -DK_UNROLL=2 -DSWIZZLE_ROWS=8)
 omarchy_shader(matmul_direct_f32_nt_k4s8 shaders/matmul_coopmat_direct.comp -DUSE_F32=1 -DB_T=1 -DK_UNROLL=4 -DSWIZZLE_ROWS=8)
 omarchy_shader(matmul_direct_f32_tn_ws8 shaders/matmul_coopmat_direct.comp -DUSE_F32=1 -DA_T=1 -DWIDE_N=1 -DSWIZZLE_ROWS=8)
+omarchy_shader(matmul_direct_f16_c16_nn shaders/matmul_coopmat_direct.comp -DCMAT16=1)
+omarchy_shader(matmul_direct_f16_c16_nt shaders/matmul_coopmat_direct.comp -DCMAT16=1 -DB_T=1)
+omarchy_shader(matmul_direct_f16_c16_tn shaders/matmul_coopmat_direct.comp -DCMAT16=1 -DA_T=1)
+omarchy_shader(matmul_direct_f16_c16_tt shaders/matmul_coopmat_direct.comp -DCMAT16=1 -DA_T=1 -DB_T=1)
 if(OMARCHY_BF16_DIRECT)
   omarchy_shader(matmul_direct_bf16_nn shaders/matmul_coopmat_direct.comp -DUSE_BF16=1)
   omarchy_shader(matmul_direct_bf16_nt shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DB_T=1)
   omarchy_shader(matmul_direct_bf16_tn shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DA_T=1)
   omarchy_shader(matmul_direct_bf16_tt shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DA_T=1 -DB_T=1)
+  omarchy_shader(matmul_direct_bf16_c16_nn shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DCMAT16=1)
+  omarchy_shader(matmul_direct_bf16_c16_nt shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DCMAT16=1 -DB_T=1)
+  omarchy_shader(matmul_direct_bf16_c16_tn shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DCMAT16=1 -DA_T=1)
+  omarchy_shader(matmul_direct_bf16_c16_tt shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DCMAT16=1 -DA_T=1 -DB_T=1)
   omarchy_shader(matmul_direct_bf16_tn_ws8 shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DA_T=1 -DWIDE_N=1 -DSWIZZLE_ROWS=8)
   omarchy_shader(matmul_direct_bf16_nt_k4s8 shaders/matmul_coopmat_direct.comp -DUSE_BF16=1 -DB_T=1 -DK_UNROLL=4 -DSWIZZLE_ROWS=8)
   omarchy_shader(sdpa_prefill_flash_causal_coopmat_bf16 shaders/sdpa_prefill_flash_causal_coopmat.comp)
   omarchy_shader(sdpa_prefill_flash_causal_coopmat_bf16_qchunk8 shaders/sdpa_prefill_flash_causal_coopmat.comp -DQ_CHUNK=8)
   omarchy_shader(sdpa_prefill_flash_causal_coopmat_bf16_qchunk8_heads2 shaders/sdpa_prefill_flash_causal_coopmat.comp -DQ_CHUNK=8 -DKV_HEADS=2)
   omarchy_shader(qmm_intel_bf16 shaders/qmm_intel_bf16.comp)
+  omarchy_shader(matmul_bf16_coopmat_xe16 shaders/matmul_coopmat_xe16.comp)
+  omarchy_shader(qmm_coopmat16_xe shaders/qmm_coopmat16_xe.comp)
+  omarchy_shader(qmm_coopmat16_bf16 shaders/qmm_coopmat16_bf16.comp)
+  omarchy_shader(sdpa_prefill_flash_causal_coopmat16_bf16 shaders/sdpa_prefill_flash_causal_coopmat16.comp)
 endif()
 omarchy_shader(swiglu_f16 shaders/swiglu.comp -DUSE_FP16=1)
 omarchy_shader(swiglu_bf16 shaders/swiglu.comp -DUSE_BF16=1)
@@ -914,6 +1027,7 @@ omarchy_shader(fast_rms_norm_f32 shaders/fast_norm.comp)
 omarchy_shader(fast_rms_norm_f16 shaders/fast_norm.comp -DUSE_FP16=1)
 omarchy_shader(fast_rms_norm_bf16 shaders/fast_norm.comp -DUSE_BF16=1)
 omarchy_shader(fast_rms_norm_apple_bf16 shaders/fast_norm_apple.comp -DUSE_BF16=1)
+omarchy_shader(fast_add_norm_apple_bf16 shaders/fast_add_norm_apple.comp -DUSE_BF16=1)
 omarchy_shader(fast_norm_gated_bf16 shaders/fast_norm_gated.comp -DUSE_BF16=1)
 omarchy_shader(fast_norm_gated_only_bf16 shaders/fast_norm_gated.comp -DUSE_BF16=1 -DGATED_ONLY=1)
 omarchy_shader(gdn_conv_decode_bf16 shaders/gdn_conv_decode.comp -DUSE_BF16=1)
@@ -956,6 +1070,11 @@ omarchy_shader(fast_rope_freqs_f16 shaders/fast_rope.comp -DUSE_FREQS=1 -DUSE_FP
 omarchy_shader(fast_rope_freqs_bf16 shaders/fast_rope.comp -DUSE_FREQS=1 -DUSE_BF16=1)
 omarchy_shader(fast_rope_norm_bf16 shaders/fast_rope_norm.comp -DUSE_BF16=1)
 omarchy_shader(fast_rope_norm_apple_bf16 shaders/fast_rope_norm.comp -DUSE_BF16=1 -DAPPLE_REDUCTION=1)
+omarchy_shader(fast_rope_norm_pair_bf16 shaders/fast_rope_norm_pair.comp)
+omarchy_shader(fast_rope_norm_pair_apple_bf16 shaders/fast_rope_norm_pair.comp -DAPPLE_REDUCTION=1)
+omarchy_shader(fast_rope_norm_bf16_w128 shaders/fast_rope_norm.comp -DUSE_BF16=1 -DROPE_NORM_THREADS=128)
+omarchy_shader(fast_rope_norm_apple_bf16_w128 shaders/fast_rope_norm.comp -DUSE_BF16=1 -DAPPLE_REDUCTION=1 -DROPE_NORM_THREADS=128)
+
 omarchy_shader(fp8_to_f32 shaders/fp8.comp -DFP8_TO_FLOAT=1)
 omarchy_shader(fp8_to_f16 shaders/fp8.comp -DFP8_TO_FLOAT=1 -DUSE_FP16=1)
 omarchy_shader(fp8_to_bf16 shaders/fp8.comp -DFP8_TO_FLOAT=1 -DUSE_BF16=1)
@@ -1002,6 +1121,22 @@ omarchy_shader(fill_c64 shaders/fill.comp -DUSE_COMPLEX64=1)
 omarchy_shader(copy_general_c64 shaders/copy_general.comp -DUSE_COMPLEX64=1)
 omarchy_shader(fill_u64 shaders/fill.comp -DUSE_U64=1)
 omarchy_shader(fill_u16 shaders/fill.comp -DUSE_U16=1)
+# Kernel-name table: the profiler records kernel names from the loaded
+# library at dispatch time, not an enum index mapped against a possibly
+# different compute.h later. Regenerates whenever compute.h changes.
+add_custom_command(
+  OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/shaders/kernel_names.h"
+  COMMAND
+    "${CMAKE_COMMAND}"
+    -DCOMPUTE_H=${CMAKE_CURRENT_SOURCE_DIR}/compute.h
+    -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/shaders/kernel_names.h
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/gen_kernel_names.cmake"
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/compute.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/gen_kernel_names.cmake"
+  VERBATIM)
+list(APPEND OMARCHY_SHADER_HEADERS
+     "${CMAKE_CURRENT_BINARY_DIR}/shaders/kernel_names.h")
+
 add_custom_target(omarchy_shaders DEPENDS ${OMARCHY_SHADER_HEADERS})
 add_dependencies(mlx omarchy_shaders)
 
@@ -1052,7 +1187,7 @@ endif()
 # cached GLSL from the previous binary. Generated into the same shaders/
 # include dir as the embedded SPIR-V headers.
 set(MLX_OMARCHY_TRANSLATOR_SOURCE_HASH "")
-foreach(source custom_kernel.cpp custom_kernel_cbq.h cbq_msl.inc custom_kernel_bm32.h bm32_msl.inc)
+foreach(source custom_kernel.cpp custom_kernel_cbq.h cbq_msl.inc custom_kernel_bm32.h bm32_msl.inc custom_kernel_ssm.h ssm_msl.inc)
   set(path "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
   file(SHA256 "${path}" hash)

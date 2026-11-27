@@ -2,22 +2,36 @@
 // SPDX-License-Identifier: MIT
 //
 // Split-K pass 2 of the bf16 single-query decode SDPA, head width 128 (default) or 256 (-DHD=256; see sdpa_decode_split_p1.comp). One workgroup per query
-// head, one thread per output element: folds the per-block (max, exp sum, weighted values) with the global max, divides by the
-// global exp sum and stores the bf16 result (round to nearest even, NaN kept as in cast.comp).
+// head: folds the per-block (max, exp sum, weighted values) with the global max, divides by the global exp sum and stores the bf16 result (round to
+// nearest even, NaN kept as in cast.comp).
+//
+// Block stride is D+4 floats: the D weighted-value floats sit at offset 0 so each block's value row is 16-byte aligned, then (block max, block exp
+// sum, two pad floats). The workgroup splits into BLOCK_LANES lane groups of D/4 threads; a thread owns one uvec4 of four output dimensions and
+// walks every BLOCK_LANES-th block, so pass 2 reads each value row with 16-byte loads and each lane group's partial lands in shared memory for
+// the first LANES threads to fold. The global max and the exp-sum denominator are scalar per head: every thread strides the blocks once for a
+// partial, the subgroup folds it (NaN maps to +inf, which poisons the output the same way the old serial walk did), and a shared broadcast hands
+// every thread the pair.
 
 #version 460
 
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer Scratch {
-  float values[];
+  vec4 values4[];
 } scratch_data;
 layout(set = 0, binding = 1, std430) writeonly buffer Output {
   uint16_t values[];
 } output_data;
+#ifdef SDPA_OUTGATE
+layout(set = 0, binding = 2, std430) readonly buffer Gate {
+  uint16_t values[];
+} gate_data;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -47,11 +61,17 @@ layout(push_constant) uniform Params {
 #define HD 128
 #endif
 const uint D = uint(HD);
-const uint DPT = D / 128u;
 #ifndef BK_KEYS
 #define BK_KEYS 128
 #endif
 const uint BK = uint(BK_KEYS);
+const uint STRIDE = D + 4u;
+const uint LANES = D / 4u;          // uvec4 lanes covering one block's value row
+const uint BLOCK_LANES = 128u / LANES;  // lane groups, each walking a strided block subset
+
+shared float s_part[8u];
+shared float s_head[2u];
+shared vec4 s_acc[128u];
 
 uint16_t bf16_store(float value) {
   uint bits = floatBitsToUint(value);
@@ -61,45 +81,87 @@ uint16_t bf16_store(float value) {
   return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
 
+#ifdef SDPA_OUTGATE
+float bf16_load(uint16_t raw) {
+  return uintBitsToFloat(uint(raw) << 16u);
+}
+
+uint16_t apply_outgate(float val, uint gate_idx) {
+  uint16_t raw_out = bf16_store(val);
+  float g = bf16_load(gate_data.values[gate_idx]);
+  uint16_t raw_sig = bf16_store(1.0 / (1.0 + exp(-g)));
+  return bf16_store(bf16_load(raw_out) * bf16_load(raw_sig));
+}
+#endif
+
 void main() {
   uint t = gl_LocalInvocationID.x;
   uint head = gl_WorkGroupID.x;
   uint nblocks = (params.matrix_k + BK - 1u) / BK;
-  uint base = head * nblocks * (D + 2u);
+  uint base = head * nblocks * STRIDE;
   uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
-  float global_max = uintBitsToFloat(0xff800000u);
-  for (uint b = 0u; b < nblocks; ++b) {
-    float m = scratch_data.values[base + b * (D + 2u)];
-    if (isnan(m) || m > global_max) {
-      global_max = m;
-    }
+  uint sg = gl_SubgroupID;
+  // Global max over all block headers: NaN folds to +inf so a poisoned block still poisons the answer.
+  float part_max = uintBitsToFloat(0xff800000u);
+  for (uint b = t; b < nblocks; b += 128u) {
+    float m = scratch_data.values4[(base + b * STRIDE) / 4u + D / 4u].x;
+    part_max = isnan(m) ? uintBitsToFloat(0x7f800000u) : max(part_max, m);
   }
-#if HD == 128
-  float denominator = 0.0;
-  float acc = 0.0;
-  for (uint b = 0u; b < nblocks; ++b) {
-    uint at = base + b * (D + 2u);
-    float w = exp(scratch_data.values[at] - global_max);
-    denominator += scratch_data.values[at + 1u] * w;
-    acc += scratch_data.values[at + 2u + t] * w;
+  part_max = subgroupMax(part_max);
+  if (gl_SubgroupInvocationID == 0u) {
+    s_part[sg] = part_max;
   }
-  output_data.values[params.output_offset + head * out_head + t] = bf16_store(acc / denominator);
+  barrier();
+  if (t == 0u) {
+    s_head[0] = max(max(s_part[0u], s_part[1u]), max(s_part[2u], s_part[3u]));
+  }
+  barrier();
+  float global_max = s_head[0];
+  // Denominator = sum_b exp_sum_b * w_b, w_b = exp(max_b - global_max); same cooperative stride.
+  float part_den = 0.0;
+  for (uint b = t; b < nblocks; b += 128u) {
+    vec4 hdr = scratch_data.values4[(base + b * STRIDE) / 4u + D / 4u];
+    part_den += hdr.y * exp(hdr.x - global_max);
+  }
+  part_den = subgroupAdd(part_den);
+  if (gl_SubgroupInvocationID == 0u) {
+    s_part[4u + sg] = part_den;
+  }
+  barrier();
+  if (t == 0u) {
+    s_head[1] = s_part[4u] + s_part[5u] + s_part[6u] + s_part[7u];
+  }
+  barrier();
+  float denominator = s_head[1];
+  // Merge: this thread's vec4 of output dims, over its strided block subset. Each (b_lane, dim4) thread's acc covers only
+  // its own block subset, so the partials gather in shared memory and the first LANES threads fold them before storing.
+  uint b_lane = t / LANES;
+  uint dim4 = t % LANES;
+  vec4 acc = vec4(0.0);
+  for (uint b = b_lane; b < nblocks; b += BLOCK_LANES) {
+    uint at4 = (base + b * STRIDE) / 4u;
+    vec4 hdr = scratch_data.values4[at4 + D / 4u];
+    acc += scratch_data.values4[at4 + dim4] * exp(hdr.x - global_max);
+  }
+  s_acc[t] = acc;
+  barrier();
+  if (t >= LANES) {
+    return;
+  }
+  vec4 total = s_acc[t];
+  for (uint l = 1u; l < BLOCK_LANES; ++l) {
+    total += s_acc[l * LANES + t];
+  }
+  uint out_base = params.output_offset + head * out_head + t * 4u;
+#ifdef SDPA_OUTGATE
+  uint gate_base = params.out_strides[1] + head * params.out_strides[2] + t * 4u;
+  for (uint d = 0u; d < 4u; ++d) {
+    output_data.values[out_base + d] =
+        apply_outgate(total[d] / denominator, gate_base + d);
+  }
 #else
-  float denominator = 0.0;
-  float acc[DPT];
-  for (uint d = 0u; d < DPT; ++d) {
-    acc[d] = 0.0;
-  }
-  for (uint b = 0u; b < nblocks; ++b) {
-    uint at = base + b * (D + 2u);
-    float w = exp(scratch_data.values[at] - global_max);
-    denominator += scratch_data.values[at + 1u] * w;
-    for (uint d = 0u; d < DPT; ++d) {
-      acc[d] += scratch_data.values[at + 2u + d * 128u + t] * w;
-    }
-  }
-  for (uint d = 0u; d < DPT; ++d) {
-    output_data.values[params.output_offset + head * out_head + d * 128u + t] = bf16_store(acc[d] / denominator);
+  for (uint d = 0u; d < 4u; ++d) {
+    output_data.values[out_base + d] = bf16_store(total[d] / denominator);
   }
 #endif
 }
