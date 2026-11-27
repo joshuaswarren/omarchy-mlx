@@ -1803,6 +1803,10 @@ def _xlog1py(a, b):
     return _ar(mx.where(mx.equal(a, 0), mx.where(mx.isnan(b), nan, mx.zeros_like(r)), r))
 
 
+def _l2_clamped(a, dim, eps):
+    return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2011,6 +2015,9 @@ _FUNC_SPECS = {
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
     "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
+    # aten.cosine_similarity clamps each l2 norm at eps separately, not
+    # their product (device-checked against torch 2.15 CPU).
+    "cosine_similarity": lambda x1, x2, dim=1, eps=1e-8: mx.sum(_mx(x1) * _mx(x2), axis=dim) / (_l2_clamped(x1, dim, eps) * _l2_clamped(x2, dim, eps)),
     "embedding": _embedding_any,
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
