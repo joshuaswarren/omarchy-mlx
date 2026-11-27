@@ -92,9 +92,9 @@ plus Laya, and it needs a 96 GB machine.
 
 | Chip | GPU | ANE |
 |---|---|---|
-| M1 | Tested on Linux: MacBook Pro 13-inch, 8-core GPU, Mesa Honeykrisp `1650fc1a33`; Qwen3-4B 4-bit decode 24.23 tok/s ([matched table](#how-close-to-macos)) | Parakeet islands |
-| M1 Max | Tested on Linux: MacBook Pro 16-inch, 32-core GPU, Mesa Honeykrisp `1650fc1a33`; Qwen3-4B 4-bit decode 100.69 tok/s ([matched table](#how-close-to-macos)) | Whole encoder |
-| M2 Max | [Tested on Linux](receipts/2026-11-21-m2-mesa-1650fc1-qualification/README.md): MacBook Pro 14-inch, 38-core GPU, Mesa Honeykrisp `1650fc1a33` — suite clean against the M1 Max reference, kit decode 80.75 tok/s; Qwen3.8-2B 4-bit decode 202.71 tok/s ([matched table](#how-close-to-macos)) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](docs/ANE-LINUX.md#m2-max-ane-measured)) ([results](receipts/2026-10-10-m2-max-ane.md)) |
+| M1 | Tested on Linux: MacBook Pro 13-inch, 8-core GPU, Mesa Honeykrisp `53ad9af196f5`; Qwen3-4B 4-bit decode 24.27 tok/s ([matched table](#how-close-to-macos)) | Parakeet islands |
+| M1 Max | Tested on Linux: MacBook Pro 16-inch, 32-core GPU, Mesa Honeykrisp `53ad9af196f5`; Qwen3-4B 4-bit decode 107.16 tok/s ([matched table](#how-close-to-macos)) | Whole encoder |
+| M2 Max | [Tested on Linux](receipts/2026-11-21-m2-mesa-1650fc1-qualification/README.md): MacBook Pro 14-inch, 38-core GPU, Mesa Honeykrisp `1650fc1a33` — suite clean against the M1 Max reference, kit decode 80.75 tok/s; Qwen3.8-2B 4-bit decode 215.41 tok/s on Mesa `53ad9af196f5` ([matched table](#how-close-to-macos)) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](docs/ANE-LINUX.md#m2-max-ane-measured)) ([results](receipts/2026-10-10-m2-max-ane.md)) |
 | M1 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 16-core GPU, release wheel on Mesa Borealis `be147e3625`, Qwen3-4B 4-bit decode 31.5 tok/s | Untested |
 | M2 | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Air 13-inch, 8-core GPU, release wheel on Mesa Borealis `be147e3625`, Qwen3-4B 4-bit decode 19.4 tok/s | Untested |
 | M1 Ultra, M2 Pro, M2 Ultra | Untested | Untested |
@@ -189,20 +189,6 @@ run record in [receipts/2026-10-11-non-apple-gpu-run/README.md](receipts/2026-10
 AMD (RADV) has no qualifying run.
 
 ## How close to macOS
-
-### Matched decode parity (November 2026, `MLX_OMARCHY_DEFER_TOKENS=0`)
-
-Same MacBook Pro on both sides, same quantized model snapshot, same prompt, and identical greedy token output verified by SHA-256 hash on every run. Every Linux cell below ran on shipped Mesa Honeykrisp commit `1650fc1a33` with `MLX_OMARCHY_DEFER_TOKENS=0` (each token synchronizes on the GPU before advancing the timer, matching macOS Metal). Every macOS cell ran macOS 27.0 with stock `mlx 0.32.2` and `mlx-lm 0.31.3` on Metal. The ratio column is Linux as a share of macOS: 100% means parity, higher is faster on Linux.
-
-| Machine | Model (snapshot) | Context / decode | Linux (Vulkan, Mesa `1650fc1a33`) | macOS (Metal, `mlx 0.32.2`) | Linux / macOS | Greedy SHA-256 (12 hex) |
-|---|---|---:|---:|---:|---:|---|
-| 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 / 64 | **24.23 tok/s** (`#1067` defaults, 3 rounds / 15 runs) | 23.17 tok/s (5 pairs / 25 runs) | **104.6% (+4.6%)** | `a6fad159dfa9` |
-| 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 / 64 | **21.06 tok/s** (5 pairs / 25 runs) | 20.18 tok/s (5 pairs / 25 runs) | **104.3% (+4.3%)** | `9115b5280c1d` |
-| 13-inch M1 MacBook Pro (8-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 / 64 | 45.38 tok/s (`#1067` defaults, 5 pairs / 25 runs) | 49.06 tok/s (5 pairs / 25 runs) | 92.5% | `4784df039da0` |
-| 13-inch M1 MacBook Pro (8-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 / 64 | 44.81 tok/s (`#1067` defaults, 5 pairs / 25 runs) | 48.02 tok/s (5 pairs / 25 runs) | 93.3% | `c5fb4074d0b5` |
-| 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 / 64 | 202.71 tok/s (`819625f8`, 5 pairs) | 212.82 tok/s (5 runs) | 95.2% | `4784df039da0` |
-| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 / 128 | 100.69 tok/s (`#1059` / `#1063`, 5 pairs) | 104.53 tok/s (5 runs) | 96.3% | `efb521ae04af` |
-
 
 ### Parity card (November 2026, Mesa `53ad9af196f5`)
 
