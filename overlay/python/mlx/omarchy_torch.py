@@ -351,6 +351,31 @@ def _coerce_index(v):
     return v
 
 
+def _elu(a, alpha=1.0, scale=1.0, input_scale=1.0):
+    # aten.elu(input, alpha=1, scale=1, input_scale=1):
+    #   scale*x when x > 0, else alpha*scale*(exp(input_scale*x) - 1);
+    # fp16/bf16 inputs compute in fp32 opmath and round once.
+    a = _mx(a)
+    f = a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a
+    out = mx.where(mx.greater(f, 0.0), scale * f,
+                   scale * alpha * (mx.exp(input_scale * f) - 1.0))
+    return out.astype(a.dtype)
+
+
+def _selu(a):
+    # aten.selu is elu at the published constants (scale
+    # 1.0507009873554805, alpha 1.6732632423543772, input_scale 1).
+    return _elu(a, alpha=1.6732632423543772, scale=1.0507009873554805)
+
+
+def _celu(a, alpha=1.0):
+    # aten.celu(input, alpha=1): max(0,x) + min(0, alpha*(exp(x/alpha)-1)).
+    a = _mx(a)
+    f = a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a
+    out = mx.maximum(f, 0.0) + mx.minimum(alpha * (mx.exp(f / alpha) - 1.0), 0.0)
+    return out.astype(a.dtype)
+
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -407,6 +432,13 @@ _FUNC_SPECS = {
     "gelu": lambda a, approximate="none": a * mx.sigmoid(1.702 * a) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0))),
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
+    # the elu family (ViT, Conformer, speech models), PT-AL-a
+    "elu": _elu,
+    "elu_": _elu,
+    "selu": _selu,
+    "selu_": _selu,
+    "celu": _celu,
+    "celu_": _celu,
     # the piecewise activation family (MobileNetV3 et al.), PT-AL-b
     "hardsigmoid": lambda a, inplace=False: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
     "hardswish": lambda a, inplace=False: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),

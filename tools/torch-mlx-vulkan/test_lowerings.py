@@ -1049,6 +1049,51 @@ def test_fft():
     print("test_fft PASS")
 
 
+def test_rfft():
+    # PT-AU-b: aten.fft_rfft / aten.fft_irfft -> mx.fft — the
+    # real<->complex transforms (Parakeet mel-spectrogram). Parity vs
+    # torch CPU: rfft on fp32 input (promotes to complex64), irfft on
+    # complex64 input (fp32 out), exercising n, dim and norm.
+    rng = np.random.RandomState(29)
+    xr = rng.randn(4, 6, 10).astype(np.float32)
+    xc = (rng.randn(4, 6, 10) + 1j * rng.randn(4, 6, 10)).astype(np.complex64)
+    for name, torch_op, x_np in (
+            ("fft_rfft", torch.ops.aten.fft_rfft, xr),
+            ("fft_irfft", torch.ops.aten.fft_irfft, xc)):
+        low = mlx_vulkan._FUNC_SPECS[name]
+        tx = torch.tensor(x_np)
+        a = mx.array(x_np)
+        for pos, kw in [
+            ((), {}),                              # all defaults
+            ((10,), {}),                           # positional n
+            ((), {"n": 16}),                       # pad with zeros
+            ((), {"n": 4}),                        # truncate
+            ((), {"dim": 1}),                      # middle axis
+            ((), {"dim": -1, "norm": "ortho"}),    # normalization
+            ((), {"dim": 0, "norm": "forward"}),   # axis 0 + forward
+        ]:
+            exp = torch_op(tx, *pos, **kw).resolve_conj().numpy()
+            got = low(a, *pos, **kw)
+            assert np.allclose(_np(got), exp, rtol=2e-4, atol=2e-5), \
+                (name, x_np.dtype, pos, kw)
+        if name == "fft_rfft":
+            t = torch.randn(4, 12)
+        else:
+            t = (torch.randn(4, 7) + 1j * torch.randn(4, 7))
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(torch_op, (ph,), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(mx.array(t.numpy()))
+        exp = torch_op(t).resolve_conj().numpy()
+        assert np.allclose(_np(out), exp, rtol=2e-4, atol=2e-5), name
+        assert name in stats["mlx"], stats
+        assert name not in stats["cpu"], stats
+    print("test_rfft PASS")
+
+
 def test_transpose_expand():
     # PT-Z: aten.transpose.int (PAR-41 census rank 4, 59592 receipts) and
     # aten.expand.default (rank 33, 233 receipts) — broadcast glue around
@@ -2410,6 +2455,71 @@ def test_softplus_mish():
     print("test_softplus_mish PASS")
 
 
+
+def test_elu_selu_celu():
+    # PT-AL-a: the elu family (ViT, Conformer, speech models).
+    # aten.elu(input, alpha=1, scale=1, input_scale=1):
+    #   scale*x for x > 0, else alpha*scale*(exp(input_scale*x) - 1).
+    # aten.selu is elu at the published constants (scale
+    # 1.0507009873554805, alpha 1.6732632423543772). aten.celu(input,
+    # alpha=1) is max(0,x) + min(0, alpha*(exp(x/alpha) - 1)). The inputs
+    # straddle zero and run deep negative so the exp branch saturates to
+    # -alpha*scale.
+    x = torch.tensor([[-8.0, -2.5, -0.3, 0.0], [0.25, 1.5, 6.0, -0.001]])
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        xd = x.to(dtype)
+        cases = [
+            (torch.ops.aten.elu.default, (xd,), {},
+             torch.ops.aten.elu.default(xd, 1.0, 1.0, 1.0), "elu"),
+            (torch.ops.aten.elu.default, (xd,), {"alpha": 2.0},
+             torch.ops.aten.elu.default(xd, 2.0, 1.0, 1.0), "elu"),
+            (torch.ops.aten.elu.default, (xd, 1.5, 1.2, 0.8), {},
+             torch.ops.aten.elu.default(xd, 1.5, 1.2, 0.8), "elu"),
+            (torch.ops.aten.selu.default, (xd,), {},
+             torch.ops.aten.selu.default(xd), "selu"),
+            (torch.ops.aten.celu.default, (xd,), {},
+             torch.ops.aten.celu.default(xd, 1.0), "celu"),
+            (torch.ops.aten.celu.default, (xd,), {"alpha": 2.5},
+             torch.ops.aten.celu.default(xd, 2.5), "celu"),
+            (torch.nn.functional.elu, (xd,), {"alpha": 0.5},
+             torch.nn.functional.elu(xd, alpha=0.5), "elu"),
+            (torch.nn.functional.selu, (xd,), {},
+             torch.nn.functional.selu(xd), "selu"),
+            (torch.nn.functional.celu, (xd,), {"alpha": 1.5},
+             torch.nn.functional.celu(xd, alpha=1.5), "celu"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert any(name in s for s in stats["mlx"]), (stats, str(target))
+            got = out.float().numpy()
+            assert np.allclose(got, ref.float().numpy(), atol=tol), \
+                (str(target), kw, dtype, got, ref.float().numpy())
+    # the in-place aten names share the table entries — parity at the table.
+    F = torch.nn.functional
+    for name, ref, params in (("elu_", F.elu(x, alpha=1.7), (1.7,)),
+                              ("selu_", F.selu(x), ()),
+                              ("celu_", F.celu(x, alpha=2.2), (2.2,))):
+        lowering = mlx_vulkan.ATEN_TABLE[name]
+        m = mx.array(x.numpy())
+        got = torch.from_numpy(
+            np.array(lowering(m, *params).astype(mx.float32)))
+        assert torch.allclose(got, ref.float(), atol=1e-5), \
+            (name, (got - ref.float()).abs().max())
+    # exact-zero pin: all three give 0 at x = 0 under any parameters.
+    z = mx.zeros((2,))
+    for name in ("elu", "selu", "celu"):
+        got = np.array(mlx_vulkan.ATEN_TABLE[name](z))
+        assert np.all(np.array(got) == 0.0), (name, got)
+    print("test_elu_selu_celu PASS")
+
+
 def test_cosine_similarity():
     # PT-NORM-a: aten.cosine_similarity.default (embedding-eval family).
     # sum(x1*x2, dim) / (clamp(norm1,eps) * clamp(norm2,eps)) - eps clamps
@@ -2478,6 +2588,7 @@ if __name__ == "__main__":
     test_numel()
     test_slice()
     test_fft()
+    test_rfft()
     test_transpose_expand()
     test_cat_clone()
     test_sum()
@@ -2497,6 +2608,7 @@ if __name__ == "__main__":
     test_mv_addmv()
     test_xlogy_xlog1py()
     test_softplus_mish()
+    test_elu_selu_celu()
     test_cosine_similarity()
     print("ALL PASS")
 
