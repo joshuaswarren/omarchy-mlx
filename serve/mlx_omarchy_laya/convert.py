@@ -260,9 +260,7 @@ def _validate_weights(path: Path, enc_cfg_json: dict, head_layers: int):
 
 
 def _emit_weights(src: Path, dst: Path) -> tuple:
-    """Write a canonical-key safetensors; returns (aliases_applied, output_sha256)."""
-    import hashlib
-
+    """Write a canonical-key safetensors atomically; returns (aliases_applied, output_sha256)."""
     from safetensors.numpy import load_file, save_file
 
     from .model import _canonical_key
@@ -274,11 +272,27 @@ def _emit_weights(src: Path, dst: Path) -> tuple:
         ck = _canonical_key(k)
         aliases |= ck != k
         renamed[ck] = v
-    save_file(renamed, str(dst))
     h = hashlib.sha256()
-    with open(dst, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    with _replace_file(dst) as f:
+        mode = stat.S_IMODE(os.fstat(f.fileno()).st_mode)
+        os.fchmod(f.fileno(), mode | stat.S_IRUSR | stat.S_IWUSR)
+        part = f.name
+        save_file(renamed, part)
+        with open(
+            part,
+            "rb",
+            opener=lambda p, flags: os.open(p, flags | os.O_NOFOLLOW | os.O_NONBLOCK),
+        ) as written:
+            st = os.fstat(written.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                raise SystemExit(
+                    "convert: staged weights file %s is not a regular file"
+                    % os.path.basename(part)
+                )
+            if stat.S_IMODE(st.st_mode) != mode:
+                os.fchmod(written.fileno(), mode)
+            for chunk in iter(lambda: written.read(1 << 20), b""):
+                h.update(chunk)
     return aliases, h.hexdigest()
 
 
