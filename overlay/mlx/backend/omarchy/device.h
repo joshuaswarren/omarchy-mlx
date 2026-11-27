@@ -1052,6 +1052,29 @@ inline bool sdpa_g13c_fast_default_part(const std::string& device_name) {
   return device_name.find("G13C") != std::string::npos;
 }
 
+// G14C-gated HD=256 non-split SdpaOnlineRope fast path (parallel Phase-A
+// sg 16..19 RoPE trig + 2-barrier subgroupShuffleDown K pack via disjoint
+// s_q[256] + single 1/denom epilogue). Bit-identical (0 ULP) to the default
+// HD=256 kernel. Default on strictly for G14C; MLX_OMARCHY_SDPA_HD256_FAST=0/1
+// overrides on any part. Pure.
+inline bool sdpa_g14c_hd256_fast_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_HD256_FAST")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G14C") != std::string::npos;
+}
+
+// G14C-gated fused GatherDequantBF16 + FastRmsNormAppleBF16 prologue (1 WG,
+// 256 threads; eliminates 1 serial CDM barrier + 1-WG gather on token 0).
+// Bit-identical to the composed sequence. Default on strictly for G14C;
+// MLX_OMARCHY_PROLOGUE_NORM=0/1 overrides on any part. Pure.
+inline bool prologue_norm_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_PROLOGUE_NORM")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G14C") != std::string::npos;
+}
+
 inline bool vocab_tail_chunked_default(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_VOCAB_TAIL_CHUNKED")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
@@ -1305,8 +1328,10 @@ inline uint32_t sdpa_split_wide_min_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_WIDE_MIN_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
-  // G14C head width 256: 5-pair ABBA Qwen3.8-2B decode loses at ctx 192 (-1.56%, 0/5) and wins at ctx 256 (+1.07%, 5/5), bit-identical tokens. G17C keeps 320 until M5 calibration.
-  if (device_name.find("G14C") != std::string::npos) return 256;
+  // G14C head width 256: with SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast,
+  // non-split beats Split-K through ctx=512 (+0.19% 4/5 on Qwen3.8-2B, bit-exact)
+  // while Split-K stays active at ctx=2048. G17C keeps 320 until M5 calibration.
+  if (device_name.find("G14C") != std::string::npos) return 768;
   if (device_name.find("G17C") != std::string::npos) return 320;
   if (device_name.find("G16S") != std::string::npos) return 768;
   if (device_name.find("G15S") != std::string::npos) return 1408;
