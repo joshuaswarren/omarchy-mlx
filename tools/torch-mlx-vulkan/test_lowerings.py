@@ -447,7 +447,57 @@ def test_linear():
         assert "linear" not in stats["cpu"], stats
         exp = torch.nn.functional.linear(tx, tw, tb if len(ins) == 3 else None)
         assert np.allclose(_np(out), exp.numpy(), atol=1e-4)
+    # PAR-41 census rerun @d08a7e37f: aten.linear's 1-D-input OpInfo sample
+    # decomposes to t + unsqueeze + mm + squeeze_.dim - the missing squeeze_
+    # spec sent that node to CPU, counting `linear` as the census's top
+    # fallback. The whole 1-D graph must lower end to end.
+    t1, w1 = torch.randn(8), torch.randn(6, 8)
+    g = torch.fx.Graph()
+    pw, px = g.placeholder("w"), g.placeholder("x")
+    n_t = g.call_function(torch.ops.aten.t.default, (pw,), {})
+    n_u = g.call_function(torch.ops.aten.unsqueeze.default, (px, 0), {})
+    n_mm = g.call_function(torch.ops.aten.mm.default, (n_u, n_t), {})
+    n_sq = g.call_function(torch.ops.aten.squeeze_.dim, (n_mm, 0), {})
+    g.output(n_sq)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(w1, t1)
+    assert stats["cpu"] == [], stats
+    exp = torch.nn.functional.linear(t1, w1)
+    assert np.allclose(_np(out), exp.numpy(), atol=1e-4)
     print("test_linear PASS")
+
+
+def test_squeeze_inplace():
+    # squeeze_ covers aten.squeeze_.default / .dim / .dims via _opname's
+    # first-component mapping; the executor's inplace rebinding gives the
+    # input node the squeezed value, matching torch's in-place semantics.
+    x = torch.randn(1, 4, 1, 3)
+    for target, args in ((torch.ops.aten.squeeze_.default, ()),
+                         (torch.ops.aten.squeeze_.dim, (0,)),
+                         (torch.ops.aten.squeeze_.dim, (2,))):
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(target, (ph,) + args, {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(x)
+        assert stats["cpu"] == [], (target, stats)
+        exp = x.clone()
+        target(exp, *args) if args else exp.squeeze_()
+        assert np.allclose(_np(out), exp.numpy(), atol=0)
+    # squeeze.dims takes an int[] dim list positionally
+    g = torch.fx.Graph()
+    ph = g.placeholder("x")
+    n = g.call_function(torch.ops.aten.squeeze.dims, (ph, [0, 2]), {})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(x)
+    assert stats["cpu"] == [], stats
+    assert np.allclose(_np(out), x.squeeze().numpy(), atol=0)
+    print("test_squeeze_inplace PASS")
 
 
 def test_cat_clone():

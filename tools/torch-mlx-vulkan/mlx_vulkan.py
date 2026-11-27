@@ -177,6 +177,11 @@ def _linear(x, w, bias=None):
     y = mx.matmul(x, _wt(w))
     return y + _mx(bias) if bias is not None else y
 
+def _squeeze(a, dim=None):
+    if isinstance(dim, (list, tuple)):
+        dim = tuple(dim)
+    return mx.squeeze(a, axis=dim) if dim is not None else mx.squeeze(a)
+
 def _reshape(a, *s):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
         s = tuple(s[0])
@@ -1807,7 +1812,7 @@ _FUNC_SPECS = {
     "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
     "flatten": lambda a, start=0, end=-1: mx.reshape(a, (*a.shape[:start], int(np.prod(a.shape[start:end + 1])), *a.shape[end + 1:]) if end != -1 else (*a.shape[:start], int(np.prod(a.shape[start:])))),
     "unsqueeze": lambda a, d: mx.expand_dims(a, axis=d),
-    "squeeze": lambda a, d=None: mx.squeeze(a, axis=d) if d is not None else mx.squeeze(a),
+    "squeeze": _squeeze, "squeeze_": _squeeze,
     "expand": _expand, "expand_as": lambda a, o: mx.broadcast_to(a, o.shape),
     "cat": _cat_impl,
     "concat": _cat_impl,
