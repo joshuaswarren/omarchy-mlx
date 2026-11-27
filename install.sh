@@ -907,9 +907,12 @@ stage_silero_vad() {
           rm -f -- "$f"
         fi
       }
-      trap 'cleanup_vad_tmp' EXIT
+      # Install INT/TERM before EXIT: bash 5.2.x applies its deferred
+      # async-subshell SIGINT ignore on the first trap call, so registering
+      # EXIT first causes a subsequent INT trap to be silently ignored.
       trap 'cleanup_vad_tmp; exit 130' INT
       trap 'cleanup_vad_tmp; exit 143' TERM
+      trap 'cleanup_vad_tmp' EXIT
       mkdir -p -- "$vad_dir" || exit 1
       [[ ! -L "$vad_dir" && -d "$vad_dir" ]] || exit 1
       vad_tmp="$(mktemp -- "$vad_dir/.silero_vad.onnx.part.XXXXXX")" || exit 1

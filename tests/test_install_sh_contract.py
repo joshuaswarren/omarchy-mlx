@@ -1461,6 +1461,13 @@ class SileroVadStagingTests(unittest.TestCase):
             payload = root / "cancel_payload.bin"
             payload.write_bytes(self.DATA)
             defs = extract_vad_staging_defs()
+            # Bash 5.2.x applies its deferred async-subshell SIGINT ignore on
+            # the first trap call, so INT and TERM must be registered before EXIT.
+            int_trap_pos = defs.index("trap 'cleanup_vad_tmp; exit 130' INT")
+            term_trap_pos = defs.index("trap 'cleanup_vad_tmp; exit 143' TERM")
+            exit_trap_pos = defs.index("trap 'cleanup_vad_tmp' EXIT")
+            self.assertLess(int_trap_pos, exit_trap_pos)
+            self.assertLess(term_trap_pos, exit_trap_pos)
 
             for target, sig in (
                 ("subshell", signal.SIGINT),
