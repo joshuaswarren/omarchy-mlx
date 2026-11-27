@@ -78,6 +78,10 @@ uint16_t bf16_store(float value) {
 // load-bearing part of this codepath.
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#if defined(QMM_VEC_GREEDY_WORD)
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+#endif
 #endif
 #include "omarchy_half.h"
 #if defined(QMM_VEC_ROPE_EPI)
@@ -538,9 +542,18 @@ layout(set = 0, binding = 8, std430) writeonly buffer GToken {
 layout(set = 0, binding = 9, std430) writeonly buffer GStats {
   uint values[];
 } gstats;
+#ifdef USE_SUBGROUP
+layout(set = 0, binding = 10, std430) readonly buffer Logits {
+  STORAGE_TYPE values[];
+} logits;
+layout(set = 0, binding = 11, std430) readonly buffer LogitsV4 {
+  uvec4 values[];
+} logits_v4;
+#else
 layout(set = 0, binding = 10, std430) buffer Logits {
   STORAGE_TYPE values[];
 } logits;
+#endif
 #else
 #if defined(QMM_VEC_ROPE_EPI)
 // The per-member rope epilogue reads the member's materialized output
@@ -3794,7 +3807,14 @@ void main() {
 // infinite row maxima take the composed path's edge answers. An
 // overflow of the bounded candidate buffer writes the 0xFFFFFFFF
 // sentinel so the host can fall back to the composed expression.
+#ifdef USE_SUBGROUP
+shared float s_sg_max[8];
+shared float s_sg_sum[8];
+shared uint s_sg_u0[8];
+shared uint s_sg_u1[8];
+#else
 shared uint g_reduce_u[256];
+#endif
 
 #define GREEDY_CHUNK 4096u
 #define GREEDY_CAND_DELTA 0.5
@@ -3804,6 +3824,237 @@ float nan_max(float a, float b) {
   return isnan(a) ? a : (isnan(b) ? b : (b > a ? b : a));
 }
 
+#ifdef USE_SUBGROUP
+float sg_nan_max_32(float v) {
+  v = nan_max(v, subgroupShuffleDown(v, 16u));
+  v = nan_max(v, subgroupShuffleDown(v, 8u));
+  v = nan_max(v, subgroupShuffleDown(v, 4u));
+  v = nan_max(v, subgroupShuffleDown(v, 2u));
+  v = nan_max(v, subgroupShuffleDown(v, 1u));
+  return v;
+}
+
+float sg_nan_max_8(float v) {
+  v = nan_max(v, subgroupShuffleDown(v, 4u));
+  v = nan_max(v, subgroupShuffleDown(v, 2u));
+  v = nan_max(v, subgroupShuffleDown(v, 1u));
+  return v;
+}
+
+float sg_sum_32(float v) {
+  v += subgroupShuffleDown(v, 16u);
+  v += subgroupShuffleDown(v, 8u);
+  v += subgroupShuffleDown(v, 4u);
+  v += subgroupShuffleDown(v, 2u);
+  v += subgroupShuffleDown(v, 1u);
+  return v;
+}
+
+float sg_sum_8(float v) {
+  v += subgroupShuffleDown(v, 4u);
+  v += subgroupShuffleDown(v, 2u);
+  v += subgroupShuffleDown(v, 1u);
+  return v;
+}
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint sg_id = lane >> 5u;
+  uint sg_lane = lane & 31u;
+  uint n = params.matrix_n;
+  if (params.operation == 1u) {
+    uint chunk = gl_WorkGroupID.x;
+    uint begin = chunk * GREEDY_CHUNK;
+    uint end = min(begin + GREEDY_CHUNK, n);
+    uint full_quads = (end - begin) >> 3u;
+    uint base0 = begin + (lane << 3u);
+    uint base1 = begin + ((lane + 256u) << 3u);
+    float v[16];
+    if (lane < full_quads) {
+      uvec4 a = logits_v4.values[(begin >> 3u) + lane];
+      v[0] = uintBitsToFloat((a.x & 0xFFFFu) << 16u);
+      v[1] = uintBitsToFloat(a.x & 0xFFFF0000u);
+      v[2] = uintBitsToFloat((a.y & 0xFFFFu) << 16u);
+      v[3] = uintBitsToFloat(a.y & 0xFFFF0000u);
+      v[4] = uintBitsToFloat((a.z & 0xFFFFu) << 16u);
+      v[5] = uintBitsToFloat(a.z & 0xFFFF0000u);
+      v[6] = uintBitsToFloat((a.w & 0xFFFFu) << 16u);
+      v[7] = uintBitsToFloat(a.w & 0xFFFF0000u);
+    } else {
+      for (uint j = 0u; j < 8u; ++j) {
+        uint idx = base0 + j;
+        v[j] = (idx < end) ? LOAD_VALUE(logits.values[idx]) : NEG_INF;
+      }
+    }
+    if (lane + 256u < full_quads) {
+      uvec4 b = logits_v4.values[(begin >> 3u) + lane + 256u];
+      v[8] = uintBitsToFloat((b.x & 0xFFFFu) << 16u);
+      v[9] = uintBitsToFloat(b.x & 0xFFFF0000u);
+      v[10] = uintBitsToFloat((b.y & 0xFFFFu) << 16u);
+      v[11] = uintBitsToFloat(b.y & 0xFFFF0000u);
+      v[12] = uintBitsToFloat((b.z & 0xFFFFu) << 16u);
+      v[13] = uintBitsToFloat(b.z & 0xFFFF0000u);
+      v[14] = uintBitsToFloat((b.w & 0xFFFFu) << 16u);
+      v[15] = uintBitsToFloat(b.w & 0xFFFF0000u);
+    } else {
+      for (uint j = 0u; j < 8u; ++j) {
+        uint idx = base1 + j;
+        v[8u + j] = (idx < end) ? LOAD_VALUE(logits.values[idx]) : NEG_INF;
+      }
+    }
+    float local_max = NEG_INF;
+    for (uint k = 0u; k < 16u; ++k) {
+      local_max = nan_max(local_max, v[k]);
+    }
+    float m_sg = sg_nan_max_32(local_max);
+    if (sg_lane == 0u) {
+      s_sg_max[sg_id] = m_sg;
+    }
+    barrier();
+    float m_wg = sg_nan_max_8((sg_lane < 8u) ? s_sg_max[sg_lane] : NEG_INF);
+    float chunk_max = subgroupShuffle(m_wg, 0u);
+    float local_sum = 0.0;
+    uint local_at_max = 0xFFFFFFFFu;
+    uint local_nan = 0xFFFFFFFFu;
+    float cand_thresh = chunk_max - GREEDY_CAND_DELTA;
+    for (uint j = 0u; j < 8u; ++j) {
+      float vj = v[j];
+      local_sum += exp(vj - chunk_max);
+      uint idx = base0 + j;
+      if (idx < end) {
+        if (vj == chunk_max) {
+          local_at_max = min(local_at_max, idx);
+        }
+        if (isnan(vj)) {
+          local_nan = min(local_nan, idx);
+        }
+        if (vj >= cand_thresh) {
+          uint pos = atomicAdd(gstate.values[0], 1u);
+          if (pos < params.output_size) {
+            candidates.values[pos] = uvec2(idx, floatBitsToUint(vj));
+          } else {
+            gstate.values[1] = 1u;
+          }
+        }
+      }
+    }
+    for (uint j = 0u; j < 8u; ++j) {
+      float vj = v[8u + j];
+      local_sum += exp(vj - chunk_max);
+      uint idx = base1 + j;
+      if (idx < end) {
+        if (vj == chunk_max) {
+          local_at_max = min(local_at_max, idx);
+        }
+        if (isnan(vj)) {
+          local_nan = min(local_nan, idx);
+        }
+        if (vj >= cand_thresh) {
+          uint pos = atomicAdd(gstate.values[0], 1u);
+          if (pos < params.output_size) {
+            candidates.values[pos] = uvec2(idx, floatBitsToUint(vj));
+          } else {
+            gstate.values[1] = 1u;
+          }
+        }
+      }
+    }
+    float s_sg = sg_sum_32(local_sum);
+    uint am_sg = subgroupMin(local_at_max);
+    uint nm_sg = subgroupMin(local_nan);
+    if (sg_lane == 0u) {
+      s_sg_sum[sg_id] = s_sg;
+      s_sg_u0[sg_id] = am_sg;
+      s_sg_u1[sg_id] = nm_sg;
+    }
+    barrier();
+    if (sg_id == 0u) {
+      float s_wg = sg_sum_8((sg_lane < 8u) ? s_sg_sum[sg_lane] : 0.0);
+      uint am_wg = subgroupMin((sg_lane < 8u) ? s_sg_u0[sg_lane] : 0xFFFFFFFFu);
+      uint nm_wg = subgroupMin((sg_lane < 8u) ? s_sg_u1[sg_lane] : 0xFFFFFFFFu);
+      if (sg_lane == 0u) {
+        partials.values[chunk] = vec2(chunk_max, s_wg);
+        partial_ext.values[chunk] = uvec2(am_wg, nm_wg);
+      }
+    }
+  } else {
+    uint chunks = (n + GREEDY_CHUNK - 1u) / GREEDY_CHUNK;
+    vec2 pair = vec2(NEG_INF, 0.0);
+    uvec2 ext = uvec2(0xFFFFFFFFu, 0xFFFFFFFFu);
+    if (lane < chunks) {
+      pair = partials.values[lane];
+      ext = partial_ext.values[lane];
+    }
+    float m_sg = sg_nan_max_32(pair.x);
+    if (sg_lane == 0u) {
+      s_sg_max[sg_id] = m_sg;
+    }
+    barrier();
+    float m_wg = sg_nan_max_8((sg_lane < 8u) ? s_sg_max[sg_lane] : NEG_INF);
+    float row_max = subgroupShuffle(m_wg, 0u);
+    bool finite_max = !isinf(row_max) && !isnan(row_max);
+    float term = 0.0;
+    if (finite_max && !isinf(pair.x)) {
+      term = pair.y * exp(pair.x - row_max);
+    }
+    float s_sg = sg_sum_32(term);
+    if (sg_lane == 0u) {
+      s_sg_sum[sg_id] = s_sg;
+    }
+    barrier();
+    float s_wg = sg_sum_8((sg_lane < 8u) ? s_sg_sum[sg_lane] : 0.0);
+    float total_sum = subgroupShuffle(s_wg, 0u);
+    float lse_value = finite_max ? row_max + log(total_sum) : row_max;
+    float lse = uintBitsToFloat(uint(bf16_store(lse_value)) << 16u);
+    uint token_idx = 0u;
+    bool overflow = gstate.values[1] != 0u;
+    if (isnan(row_max) || row_max == NEG_INF) {
+      token_idx = 0u;
+    } else if (isinf(row_max)) {
+      uint at_max = (pair.x == row_max) ? ext.x : 0xFFFFFFFFu;
+      uint am_sg = subgroupMin(at_max);
+      if (sg_lane == 0u) {
+        s_sg_u0[sg_id] = am_sg;
+      }
+      barrier();
+      if (sg_id == 0u) {
+        token_idx = subgroupMin((sg_lane < 8u) ? s_sg_u0[sg_lane] : 0xFFFFFFFFu);
+      }
+    } else {
+      float t_norm = uintBitsToFloat(
+          uint(bf16_store(row_max - lse)) << 16u);
+      uint count = min(gstate.values[0], params.output_size);
+      uint best = 0xFFFFFFFFu;
+      for (uint i = lane; i < count; i += 256u) {
+        uvec2 c = candidates.values[i];
+        float x_norm = uintBitsToFloat(
+            uint(bf16_store(uintBitsToFloat(c.y) - lse)) << 16u);
+        if (x_norm == t_norm) {
+          best = min(best, c.x);
+        }
+      }
+      uint b_sg = subgroupMin(best);
+      if (sg_lane == 0u) {
+        s_sg_u0[sg_id] = b_sg;
+      }
+      barrier();
+      if (sg_id == 0u) {
+        uint best_wg =
+            subgroupMin((sg_lane < 8u) ? s_sg_u0[sg_lane] : 0xFFFFFFFFu);
+        token_idx = (overflow || best_wg == 0xFFFFFFFFu)
+            ? 0xFFFFFFFFu
+            : best_wg;
+      }
+    }
+    if (lane == 0u) {
+      gtoken.values[0] = token_idx;
+      gstats.values[0] = n;
+      gstats.values[1] = overflow ? 1u : 0u;
+      gstats.values[2] = floatBitsToUint(row_max);
+    }
+  }
+}
+#else
 void main() {
   uint lane = gl_LocalInvocationID.x;
   uint n = params.matrix_n;
@@ -3972,6 +4223,7 @@ void main() {
     }
   }
 }
+#endif
 #else
 void main() {
   uint lane = gl_LocalInvocationID.x;

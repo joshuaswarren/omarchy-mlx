@@ -937,3 +937,117 @@ TEST_CASE("fused greedy word head: LM_R2S32=1 matches LM_R2S32=0 and composed ar
   CHECK_EQ(r0.token, r1.token);
   CHECK_EQ(r1.token, composed_argmax(in, stream));
 }
+
+TEST_CASE("fused greedy word head: GREEDY_WORD_SG=1 coalesced uvec4 + subgroup tree matches composed and edge cases") {
+  if (!compute_available() || !word_caps() || !subgroup_ready()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  constexpr VkSubgroupFeatureFlags kSgOps =
+      VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+  if ((caps.subgroup_operations & kSgOps) != kSgOps ||
+      omarchy::device(0).compute().binding_limit() < 12u) {
+    return;
+  }
+  struct EnvGuard {
+    EnvGuard() {
+      setenv("MLX_OMARCHY_GREEDY_WORD", "1", 1);
+      setenv("MLX_OMARCHY_GREEDY_WORD_SG", "1", 1);
+    }
+    ~EnvGuard() {
+      unsetenv("MLX_OMARCHY_GREEDY_WORD_SG");
+      unsetenv("MLX_OMARCHY_GREEDY_WORD");
+    }
+  } guard;
+  Stream stream = gpu_stream();
+  // Normal vocabs including non-multiple-of-8 tail (12289) and multi-chunk.
+  for (int k : {kGreedyK, 2560}) {
+    for (int n : {2048, 8192, 12289}) {
+      if (!greedy_bindings_fit(k, n)) {
+        continue;
+      }
+      auto in = make_greedy_inputs(
+          n, 0xdec60 + n + k, kScales, kBiases, {}, {}, false, stream, k);
+      setenv("MLX_OMARCHY_GREEDY_WORD_SG", "0", 1);
+      auto r0 = fused_argmax(in, stream);
+      setenv("MLX_OMARCHY_GREEDY_WORD_SG", "1", 1);
+      auto r1 = fused_argmax(in, stream);
+      CHECK_EQ(r1.launched, 3u);
+      CHECK_EQ(
+          omarchy::trace::counters().last_dispatched_kernel.load(),
+          static_cast<int64_t>(
+              omarchy::ComputeKernel::QmmVecGreedyWordSubgroupBF16));
+      CHECK_EQ(r1.token, r0.token);
+      CHECK_EQ(r1.token, composed_argmax(in, stream));
+      CHECK_EQ(r1.stats[0], static_cast<uint32_t>(n));
+      CHECK_EQ(r1.stats[1], 0u);
+    }
+  }
+  // Equal-max cross-chunk tie picks first index.
+  {
+    const int n = 12289;
+    auto base = make_greedy_inputs(
+        n, 0xdec61, kScales, kBiases, {}, {}, false, stream, kGreedyK);
+    uint32_t arg = composed_argmax(base, stream);
+    std::vector<int> targets;
+    uint32_t expected = arg;
+    if (arg == static_cast<uint32_t>(n - 1)) {
+      targets = {0};
+      expected = 0;
+    } else {
+      if (arg + 4096 < static_cast<uint32_t>(n)) {
+        targets.push_back(static_cast<int>(arg) + 4096);
+      }
+      if (targets.empty() || targets.back() != n - 1) {
+        targets.push_back(n - 1);
+      }
+    }
+    std::vector<int> sources(targets.size(), static_cast<int>(arg));
+    auto tied = make_greedy_inputs(
+        n, 0xdec61, kScales, kBiases, sources, targets, false, stream, kGreedyK);
+    CHECK_EQ(fused_argmax(tied, stream).token, expected);
+  }
+  // NaN row yields index 0.
+  {
+    const int n = 8192;
+    const int groups = kGreedyK / 64;
+    auto in = make_greedy_inputs(
+        n, 0xdec62, kScales, kBiases, {}, {}, false, stream, kGreedyK);
+    std::vector<float> nan_scales(n * groups, 0.5f);
+    nan_scales[37 * groups] = kNan;
+    array sf(nan_scales.data(), Shape{n, groups}, float32);
+    GreedyInputs nan_in{
+        in.x, in.w, astype(sf, bfloat16, stream), in.biases, in.high};
+    CHECK_EQ(fused_argmax(nan_in, stream).token, 0u);
+  }
+  // +inf rows pick first +inf index.
+  {
+    const int n = 8192;
+    const int groups = kGreedyK / 64;
+    auto in = make_greedy_inputs(
+        n, 0xdec63, {0.5f}, {0.1f}, {}, {}, true, stream, kGreedyK);
+    std::vector<float> inf_scales(n * groups, 0.5f);
+    std::vector<float> inf_biases(n * groups, 0.1f);
+    for (int r : {100, 2300}) {
+      for (int g = 0; g < groups; ++g) {
+        inf_scales[r * groups + g] = kInf;
+        inf_biases[r * groups + g] = kInf;
+      }
+    }
+    array sf(inf_scales.data(), Shape{n, groups}, float32);
+    array bf(inf_biases.data(), Shape{n, groups}, float32);
+    GreedyInputs inf_in{
+        in.x, in.w, astype(sf, bfloat16, stream), astype(bf, bfloat16, stream),
+        in.high};
+    CHECK_EQ(fused_argmax(inf_in, stream).token, 100u);
+  }
+  // All -inf logits pick index 0.
+  {
+    const int n = 8192;
+    auto in = make_greedy_inputs(
+        n, 0xdec64, {0.0f}, {-kInf}, {}, {}, true, stream, kGreedyK);
+    CHECK_EQ(fused_argmax(in, stream).token, 0u);
+  }
+}

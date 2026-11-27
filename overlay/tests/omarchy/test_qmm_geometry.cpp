@@ -403,23 +403,76 @@ int main(int argc, char** argv) {
       ++failures;
     }
   }
-  // Low-register SwiGLU (R1S8W2) must be bit-identical to 2x4 and R2S8W2.
+  // Low-register SwiGLU (R1S8W2 and R1S1W2) must be bit-identical to 2x4.
   {
     std::string base = "/tmp/w7p-geom-base.bin";
     std::string other = "/tmp/w7p-geom-other.bin";
     setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
     unsetenv("MLX_OMARCHY_SWIGLU_R1");
+    unsetenv("MLX_OMARCHY_SWIGLU_R1S1");
     int rc = run_child("swiglu", base.c_str());
     setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
     setenv("MLX_OMARCHY_SWIGLU_R1", "1", 1);
+    setenv("MLX_OMARCHY_SWIGLU_R1S1", "0", 1);
     int rc2 = run_child("swiglu", other.c_str());
-    unsetenv("MLX_OMARCHY_QMM_GEOM");
-    unsetenv("MLX_OMARCHY_SWIGLU_R1");
     if (rc != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
       std::cout << "FAIL: swiglu R1S8W2 differed from 2x4 (rc " << rc << "/" << rc2 << ")\n";
       ++failures;
     } else {
       std::cout << "ok: swiglu R1S8W2 identical\n";
+    }
+    setenv("MLX_OMARCHY_SWIGLU_R1S1", "1", 1);
+    int rc3 = run_child("swiglu", other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    unsetenv("MLX_OMARCHY_SWIGLU_R1");
+    unsetenv("MLX_OMARCHY_SWIGLU_R1S1");
+    if (rc != 0 || rc3 != 0 || fnv(base) != fnv(other)) {
+      std::cout << "FAIL: swiglu R1S1W2 differed from 2x4 (rc " << rc << "/" << rc3 << ")\n";
+      ++failures;
+    } else {
+      std::cout << "ok: swiglu R1S1W2 identical\n";
+    }
+  }
+  // 64-thread Q4 word decode GEMV (R2S2W2) must be bit-identical to 2x4.
+  {
+    std::string base = "/tmp/w7p-geom-base.bin";
+    std::string other = "/tmp/w7p-geom-other.bin";
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
+    setenv("MLX_OMARCHY_WORD_R2S2", "0", 1);
+    int rc = run_child("single", base.c_str());
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+    setenv("MLX_OMARCHY_WORD_R2S2", "1", 1);
+    int rc2 = run_child("single", other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    unsetenv("MLX_OMARCHY_WORD_R2S2");
+    if (rc != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+      std::cout << "FAIL: word R2S2W2 differed from 2x4 (rc " << rc << "/" << rc2 << ")\n";
+      ++failures;
+    } else {
+      std::cout << "ok: word R2S2W2 identical\n";
+    }
+  }
+  // 128-thread Multi-GEMV (R2S4W2 via MLX_OMARCHY_MULTI_R2S4=1 under 2x8w2)
+  // must be bit-identical to 2x4 on fused multi-member GEMV groups.
+  for (const char* name : {"k1024", "group"}) {
+    std::string base = "/tmp/w7p-geom-base.bin";
+    std::string other = "/tmp/w7p-geom-other.bin";
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
+    setenv("MLX_OMARCHY_MULTI_R2S4", "0", 1);
+    int rc = run_child(name, base.c_str());
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+    setenv("MLX_OMARCHY_MULTI_R2S4", "1", 1);
+    int rc2 = run_child(name, other.c_str());
+    unsetenv("MLX_OMARCHY_FUSED_GEMV");
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    unsetenv("MLX_OMARCHY_MULTI_R2S4");
+    if (rc != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+      std::cout << "FAIL: multi R2S4W2 " << name << " differed from 2x4 (rc "
+                << rc << "/" << rc2 << ")\n";
+      ++failures;
+    } else {
+      std::cout << "ok: multi R2S4W2 " << name << " identical\n";
     }
   }
   // Coalesced uvec4 ResNorm (R2S16W2) must be bit-identical to unfused and

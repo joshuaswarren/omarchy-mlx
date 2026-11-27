@@ -9699,10 +9699,20 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     uint32_t qmm_groups = n_groups_qmm_vec;
     if (vec_kernel == omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16) {
       const auto& geometry = qmm_geometry();
-      if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u &&
-          (params.shape[1] % 2u == 0u))) {
+      const bool w2_aligned =
+          params.rhs_offset % 2u == 0u && params.shape[1] % 2u == 0u;
+      if (!geometry.word_w2 || w2_aligned) {
         vec_kernel = geometry.word;
         qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+      }
+      const char* word_s2_env = omarchy::env_str("MLX_OMARCHY_WORD_R2S2");
+      const bool word_s2_on =
+          (word_s2_env != nullptr && word_s2_env[0] != '\0' &&
+           std::strcmp(word_s2_env, "0") != 0);
+      if (word_s2_on && w2_aligned &&
+          (params.matrix_n + 3u) / 4u <= omarchy::kMaxComputeGroupCountX) {
+        vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S2W2;
+        qmm_groups = (params.matrix_n + 3u) / 4u;
       }
     }
     encoder.dispatch_compute(
@@ -11125,13 +11135,22 @@ bool dispatch_quantized_gemv_group(
   ComputeKernel swiglu_kernel = geom.swiglu;
   uint32_t swiglu_cols = geom.swiglu_columns;
   if (dedicated_swiglu_active) {
-    const char* sw_r1_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_R1");
-    const bool sw_r1_on = (sw_r1_env != nullptr && sw_r1_env[0] != '\0')
-        ? (std::strcmp(sw_r1_env, "0") != 0)
-        : omarchy::qmm_swiglu_r1_default(qmm_dev_name);
-    if (sw_r1_on) {
-      swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
-      swiglu_cols = 8u;
+    const char* sw_r1s1_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_R1S1");
+    const bool sw_r1s1_on =
+        (sw_r1s1_env != nullptr && sw_r1s1_env[0] != '\0' &&
+         std::strcmp(sw_r1s1_env, "0") != 0);
+    if (sw_r1s1_on) {
+      swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S1W2;
+      swiglu_cols = 1u;
+    } else {
+      const char* sw_r1_env = omarchy::env_str("MLX_OMARCHY_SWIGLU_R1");
+      const bool sw_r1_on = (sw_r1_env != nullptr && sw_r1_env[0] != '\0')
+          ? (std::strcmp(sw_r1_env, "0") != 0)
+          : omarchy::qmm_swiglu_r1_default(qmm_dev_name);
+      if (sw_r1_on) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
+        swiglu_cols = 8u;
+      }
     }
   }
   ComputeKernel resnorm_kernel = geom.resnorm;
@@ -11162,6 +11181,23 @@ bool dispatch_quantized_gemv_group(
       resnorm_vec4_active = true;
     }
   }
+  const bool multi_bf16_single_token = !res_norm_active &&
+      !dedicated_swiglu_active && !token_route && outgate == nullptr &&
+      dtype == bfloat16 && subgroup_ready;
+  ComputeKernel multi_kernel = geom.multi;
+  uint32_t multi_cols = geom.columns;
+  if (multi_bf16_single_token) {
+    const char* multi_s4_env = omarchy::env_str("MLX_OMARCHY_MULTI_R2S4");
+    const bool multi_s4_on =
+        (multi_s4_env != nullptr && multi_s4_env[0] != '\0' &&
+         std::strcmp(multi_s4_env, "0") != 0);
+    if (multi_s4_on &&
+        encoder.device().capabilities().max_compute_work_group_invocations >= 128u &&
+        encoder.device().capabilities().max_compute_work_group_size[0] >= 128u) {
+      multi_kernel = ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4W2;
+      multi_cols = 8u;
+    }
+  }
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
   // resnorm epilogue kernels.
@@ -11172,10 +11208,7 @@ bool dispatch_quantized_gemv_group(
                                    : resnorm_cols))
       : dedicated_swiglu_active
       ? swiglu_cols
-      : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
-          subgroup_ready)
-             ? geom.columns
-             : 8u);
+      : (multi_bf16_single_token ? multi_cols : 8u);
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
     if (node.inputs().size() != 4 || node.inputs()[0].id() != x.id() ||
@@ -11857,7 +11890,7 @@ bool dispatch_quantized_gemv_group(
             dtype,
             ComputeKernel::QmmVecQ4MultiSubgroupF32,
             ComputeKernel::QmmVecQ4MultiSubgroupF16,
-            qmm_geometry().multi)
+            multi_kernel)
       : select_float_kernel(
             dtype,
             ComputeKernel::QmmVecQ4MultiF32,
@@ -17458,6 +17491,60 @@ void GreedyQuantizedArgmax::eval_gpu(
         gemv_groups,
         1u,
         1u);
+    const char* greedy_sg_env = omarchy::env_str("MLX_OMARCHY_GREEDY_WORD_SG");
+    const bool greedy_sg_want =
+        (greedy_sg_env != nullptr && greedy_sg_env[0] != '\0' &&
+         std::strcmp(greedy_sg_env, "0") != 0);
+    constexpr VkSubgroupFeatureFlags kGreedySgOps =
+        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+        VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+    const bool greedy_sg_caps = subgroup_ready &&
+        (caps.subgroup_operations & kGreedySgOps) == kGreedySgOps &&
+        encoder.device().compute().binding_limit() >= 12u;
+    if (greedy_sg_want) {
+      omarchy::capsim::require_backed(
+          encoder.device(),
+          caps,
+          greedy_sg_caps,
+          "QmmVecGreedyWordSubgroupBF16",
+          "subgroup_size==32+subgroup_ops_mask[ARITHMETIC|SHUFFLE|SHUFFLE_RELATIVE]",
+          (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+           (encoder.device().hardware_capabilities().subgroup_operations &
+            kGreedySgOps) == kGreedySgOps));
+    }
+    if (greedy_sg_want && greedy_sg_caps) {
+      std::array<omarchy::ComputeBinding, 12> sg_bindings{
+          binding(x_d),
+          binding(w_d),
+          binding(scales_d),
+          binding(biases_d),
+          binding(partials),
+          binding(partial_ext),
+          binding(candidates),
+          binding(gstate),
+          binding(token),
+          binding(stats),
+          binding(logits),
+          binding(logits)};
+      params.operation = 1u;
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::QmmVecGreedyWordSubgroupBF16,
+          sg_bindings,
+          params,
+          chunks,
+          1u,
+          1u);
+      params.operation = 2u;
+      encoder.dispatch_compute(
+          omarchy::ComputeKernel::QmmVecGreedyWordSubgroupBF16,
+          sg_bindings,
+          params,
+          1u,
+          1u,
+          1u);
+      return;
+    }
     params.operation = 1u;
     encoder.dispatch_compute(
         omarchy::ComputeKernel::QmmVecGreedyWordBF16,

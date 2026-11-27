@@ -387,6 +387,7 @@ omarchy_shader(qmm_vec_q4_word_subgroup_bf16_g128 shaders/qmm_vec.comp -DUSE_BF1
 # Decode column-geometry variants (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>): same per-column chain, other columns per workgroup and threads per workgroup.
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16)
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s2w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=2 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_word_subgroup_bf16_r2s32w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=32 -DQMM_W2=1)
 # Decode column-geometry variants (MLX_OMARCHY_QMM_GEOM=<rows>x<slots>): same per-column chain, other columns per workgroup and threads per workgroup.
 # Batch-shared decode GEMV (default on, MLX_OMARCHY_QMV_BATCH=0 disables): up to four x rows
@@ -434,6 +435,7 @@ omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s4w2 shaders/qmm_vec.comp -DUSE_
 omarchy_shader(qmm_vec_q4_multi_subgroup_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1 -DQMM_VEC_NO_SWIGLU=1)
 omarchy_shader(qmm_vec_q4_swiglu_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_swiglu_bf16_r1s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=8 -DQMM_W2=1)
+omarchy_shader(qmm_vec_q4_swiglu_bf16_r1s1w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_SWIGLU=1 -DROWS_PER_SLOT=1 -DSLOTS_PER_GROUP=1 -DQMM_W2=1)
 omarchy_shader(qmm_vec_q4_multi_outgate_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_MULTI=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=4 -DQMM_VEC_OUTGATE=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=16 -DQMM_VEC_RESNORM=1)
 omarchy_shader(qmm_vec_q4_resnorm_bf16_r2s8w2 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DROWS_PER_SLOT=2 -DSLOTS_PER_GROUP=8 -DQMM_VEC_RESNORM=1 -DQMM_W2=1)
@@ -476,6 +478,9 @@ omarchy_shader(qmm_vec_greedy_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGR
 # logsumexp partials + near-max candidates, one-workgroup final select
 # (QMM_VEC_GREEDY_WORD, operations 0/1).
 omarchy_shader(qmm_vec_greedy_word_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY_WORD=1)
+# Subgroup-shuffle + coalesced uvec4 logit-load variant of QMM_VEC_GREEDY_WORD
+# (env-gated via MLX_OMARCHY_GREEDY_WORD_SG=1; 2 barriers op1, 2-3 barriers op2).
+omarchy_shader(qmm_vec_greedy_word_subgroup_bf16 shaders/qmm_vec.comp -DUSE_BF16=1 -DUSE_SUBGROUP=1 -DQMM_VEC_Q4_WORD=1 -DQMM_VEC_GREEDY_WORD=1)
 # Bonsai 1-bit affine decode (M=1, decode), uint8 packed weights
 # (8 values/byte). The Bonsai extension's qmv_fast kernel; omarchy's
 # stock qmm_vec.comp q4 word path reads uint32 and cannot index into
