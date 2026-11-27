@@ -385,6 +385,7 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
   const EnvVar no_tile{"MLX_OMARCHY_GDN_DECODE_TILE", nullptr};
   const EnvVar no_flag{"MLX_OMARCHY_GDN_PF_GQA", nullptr};
   const EnvVar no_bf16a{"MLX_OMARCHY_GDN_GQA_BF16A", nullptr};
+  const EnvVar no_coal{"MLX_OMARCHY_GDN_DECODE_COALESCED", "0"};
 
   Shape27 sh;
   sh.Hv = 32;
@@ -395,10 +396,10 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
   const int64_t default_kernel =
       measured ? prefetch_gqa : kind(legacy ? K::GatedDeltaDecodeBF16PfComposed : K::GatedDeltaDecodeBF16Composed);
 
-  EnvRun def = run_env(in, in.q, in.k, {no_tile, no_flag}, s);
-  EnvRun tiled = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, no_flag}, s);
-  EnvRun untiled = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, no_flag}, s);
-  EnvRun flag_off = run_env(in, in.q, in.k, {no_tile, {"MLX_OMARCHY_GDN_PF_GQA", "0"}}, s);
+  EnvRun def = run_env(in, in.q, in.k, {no_tile, no_flag, no_coal}, s);
+  EnvRun tiled = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, no_flag, no_coal}, s);
+  EnvRun untiled = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, no_flag, no_coal}, s);
+  EnvRun flag_off = run_env(in, in.q, in.k, {no_tile, {"MLX_OMARCHY_GDN_PF_GQA", "0"}, no_coal}, s);
   std::cout << "[gdn_pf_gqa_default] device \"" << device << "\" measured " << measured << " legacy " << legacy << ": default "
             << def.run.dispatches << " dispatches kernel " << def.kernel << ", tiled " << tiled.run.dispatches << ", untiled "
             << untiled.run.dispatches << "\n";
@@ -412,7 +413,7 @@ TEST_CASE("gdn raw decode f32 A_log: the default kernel by part, the switches an
   CHECK_EQ(tiled.run.dispatches + 2, untiled.run.dispatches);
   // The global GQA kill switch is read once per process (a static, like MLX_OMARCHY_GDN_PF), so the case below
   // re-runs the binary with it set at launch; here the opt-in alone selects the native kernel.
-  EnvRun opt_in = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", "1"}}, s);
+  EnvRun opt_in = run_env(in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "0"}, {"MLX_OMARCHY_GDN_PF_GQA", "1"}, no_coal}, s);
   CHECK_EQ(opt_in.kernel, prefetch_gqa);
   CHECK(same(opt_in.run, def.run, s));
   CHECK_EQ(def.run.dispatches, measured ? tiled.run.dispatches : (legacy ? untiled.run.dispatches : tiled.run.dispatches));
@@ -759,6 +760,107 @@ TEST_CASE("gdn raw decode bf16 A_log: per-op fp64 error of the untiled and wide 
     if (hv == hk) {
       CHECK_MESSAGE(wide_err <= tiled.first + 1e-6, "Hk ", hk, " Hv ", hv, ": wide fp64 error ", wide_err,
                     " exceeds the tiled kernel's ", tiled.first);
+    }
+  }
+}
+
+TEST_CASE("gdn raw decode f32 A_log: coalesced Sg32 kernel default, off-switch and accuracy") {
+  CHECK(omarchy::gdn_decode_coalesced_default("Apple M2 Max (G14C B1)", 16, 32));
+  CHECK(omarchy::gdn_decode_coalesced_default("Apple M2 Max (G14C B1)", 16, 48));
+  CHECK_FALSE(omarchy::gdn_decode_coalesced_default("Apple M2 Max (G14C B1)", 16, 16));
+  CHECK_FALSE(omarchy::gdn_decode_coalesced_default("Apple M1 Max (G13C C0)", 16, 32));
+  CHECK_FALSE(omarchy::gdn_decode_coalesced_default("Apple M4 Pro (G16S B1)", 16, 32));
+  CHECK_FALSE(omarchy::gdn_decode_coalesced_default("Apple M6 (G18G B1)", 16, 32));
+  CHECK_FALSE(omarchy::gdn_decode_coalesced_default("llvmpipe (LLVM 15.0.6, 256 bits)", 16, 32));
+  if (!compute_available()) return;
+  Stream s = gpu_stream();
+  provenance("gdn_decode_coalesced_sg32");
+  const auto& caps = omarchy::device(0).capabilities();
+  constexpr VkSubgroupFeatureFlags kGdnSgFeatures =
+      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+  const bool sg32_ok = caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & kGdnSgFeatures) == kGdnSgFeatures &&
+      caps.max_compute_work_group_invocations >= 1024u &&
+      caps.max_compute_work_group_size[0] >= 1024u;
+  if (!sg32_ok) {
+    std::cout << "Skipping Sg32 execution checks: device lacks subgroup_size=32 or 1024 invocations\n";
+    return;
+  }
+  using K = omarchy::ComputeKernel;
+  const EnvVar no_tile{"MLX_OMARCHY_GDN_DECODE_TILE", nullptr};
+  const EnvVar no_pf_gqa{"MLX_OMARCHY_GDN_PF_GQA", nullptr};
+  const EnvVar coal_on{"MLX_OMARCHY_GDN_DECODE_COALESCED", "1"};
+  const EnvVar coal_off{"MLX_OMARCHY_GDN_DECODE_COALESCED", "0"};
+  const EnvVar coal_unset{"MLX_OMARCHY_GDN_DECODE_COALESCED", nullptr};
+
+  struct Case {
+    int B;
+    int Hk;
+    int Hv;
+    int pad;
+  };
+  for (const Case& c : std::vector<Case>{{1, 16, 32, 0}, {1, 16, 32, 2}, {3, 16, 32, 0}, {1, 16, 16, 0}}) {
+    Shape27 sh;
+    sh.B = c.B;
+    sh.Hk = c.Hk;
+    sh.Hv = c.Hv;
+    Inputs in = make_inputs(sh, /*a_log_f32=*/true, s, c.pad);
+    eval(std::vector<array>{in.q, in.k, in.v, in.a, in.b, in.a_log, in.dt_bias, in.h0});
+    omarchy::get_command_encoder(s).synchronize("gdn_decode_sg32_inputs");
+
+    EnvRun ref = run_env(in, in.q, in.k, {no_tile, no_pf_gqa, coal_off}, s);
+    EnvRun sg32 = run_env(in, in.q, in.k, {no_tile, no_pf_gqa, coal_on}, s);
+    CHECK_EQ(sg32.kernel, kind(K::GatedDeltaDecodeBF16Sg32));
+    CHECK_EQ(sg32.run.dispatches, 1u);
+    const auto y_ref = read_f32(ref.run.out[0], s);
+    const auto y_sg32 = read_f32(sg32.run.out[0], s);
+    size_t y_diffs = 0;
+    double max_out_diff = 0.0;
+    for (size_t i = 0; i < y_ref.size(); ++i) {
+      if (y_sg32[i] != y_ref[i]) {
+        ++y_diffs;
+        max_out_diff = std::max(max_out_diff, std::abs(double(y_sg32[i]) - double(y_ref[i])));
+      }
+    }
+    const auto st_ref = read_f32(ref.run.out[1], s);
+    const auto st_sg32 = read_f32(sg32.run.out[1], s);
+    double max_state_diff = 0.0;
+    for (size_t i = 0; i < st_ref.size(); ++i) {
+      max_state_diff = std::max(max_state_diff, std::abs(double(st_sg32[i]) - double(st_ref[i])));
+    }
+    std::cout << "[gdn_decode_coalesced_sg32] B=" << c.B << " Hk=" << c.Hk
+              << " Hv=" << c.Hv << " pad=" << c.pad << " y_diffs=" << y_diffs
+              << "/" << y_ref.size() << " max_out_diff=" << max_out_diff
+              << " max_state_diff=" << max_state_diff << "\n";
+    CHECK_MESSAGE(
+        max_out_diff < 1e-2,
+        "B=", c.B, " Hk=", c.Hk, " Hv=", c.Hv, " pad=", c.pad, " bf16 out diff=", max_out_diff);
+    CHECK_MESSAGE(
+        max_state_diff < 1e-5,
+        "B=", c.B, " Hk=", c.Hk, " Hv=", c.Hv, " pad=", c.pad, " f32 state diff=", max_state_diff);
+    if (c.B == 1 && c.pad == 0) {
+      auto qd = read_f32(in.q, s), kd = read_f32(in.k, s), vd = read_f32(in.v, s),
+           ad = read_f32(in.a, s), bd = read_f32(in.b, s), lgd = read_f32(in.a_log, s),
+           dbd = read_f32(in.dt_bias, s), h0d = read_f32(in.h0, s);
+      const RefOut fp64 = fp64_reference(qd, kd, vd, ad, bd, lgd, dbd, h0d, c.Hk, c.Hv, sh.Dk, sh.Dv);
+      const double ref_err = std::max(max_abs(y_ref, fp64.y), max_abs(st_ref, fp64.state));
+      const double sg32_err = std::max(max_abs(y_sg32, fp64.y), max_abs(st_sg32, fp64.state));
+      CHECK_MESSAGE(
+          sg32_err <= ref_err + 1e-3,
+          "B=", c.B, " Hk=", c.Hk, " Hv=", c.Hv, " sg32 fp64 err ", sg32_err, " > ref ", ref_err);
+    }
+
+    if (c.B == 1 && c.Hk == 16 && c.Hv == 32 && c.pad == 0) {
+      EnvRun def = run_env(in, in.q, in.k, {no_tile, no_pf_gqa, coal_unset}, s);
+      const bool expect_coal =
+          omarchy::gdn_decode_coalesced_default(caps.device_name, c.Hk, c.Hv);
+      CHECK_EQ(
+          def.kernel,
+          kind(expect_coal ? K::GatedDeltaDecodeBF16Sg32
+                           : K::GatedDeltaDecodeBF16PfComposedGqa));
+      EnvRun tile_win = run_env(
+          in, in.q, in.k, {{"MLX_OMARCHY_GDN_DECODE_TILE", "1"}, no_pf_gqa, coal_unset}, s);
+      CHECK_EQ(tile_win.kernel, kind(K::GatedDeltaDecodeBF16Composed));
     }
   }
 }

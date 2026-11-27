@@ -15920,12 +15920,40 @@ void GatedDeltaUpdate::eval_gpu(
           break;
       }
     }
+    uint32_t gdn_grid_y = decode_tile ? static_cast<uint32_t>(Dv / 32) : 1u;
+    const char* gdn_dec_coal_env =
+        omarchy::env_str("MLX_OMARCHY_GDN_DECODE_COALESCED");
+    const bool gdn_dec_coal_set =
+        gdn_dec_coal_env != nullptr && gdn_dec_coal_env[0] != '\0';
+    const bool gdn_dec_coal_on = gdn_dec_coal_set
+        ? (std::strcmp(gdn_dec_coal_env, "0") != 0)
+        : (pf_gqa &&
+           decode_path_override("MLX_OMARCHY_GDN_DECODE_TILE") < 0 &&
+           !pf_gqa_off &&
+           omarchy::gdn_decode_coalesced_default(
+               encoder.device().capabilities().device_name, Hk, Hv));
+    const bool gdn_dec_coal_gates_ok =
+        raw_gates_mode || (g.dtype() == bfloat16 && beta.dtype() == bfloat16);
+    if (gdn_dec_coal_on && gdn_dec_coal_gates_ok && h0.dtype() == float32 &&
+        Dk == 128 && Dv == 128 && (params.shape[1] % 4u) == 0u &&
+        (params.shape[2] % 4u) == 0u) {
+      const auto& gdn_caps = encoder.device().capabilities();
+      constexpr VkSubgroupFeatureFlags kGdnSgFeatures =
+          VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+      if (gdn_caps.subgroup_size == 32u &&
+          (gdn_caps.subgroup_operations & kGdnSgFeatures) == kGdnSgFeatures &&
+          gdn_caps.max_compute_work_group_invocations >= 1024u &&
+          gdn_caps.max_compute_work_group_size[0] >= 1024u) {
+        kernel = omarchy::ComputeKernel::GatedDeltaDecodeBF16Sg32;
+        gdn_grid_y = 1u;
+      }
+    }
     encoder.dispatch_compute(
         kernel,
         bindings,
         params,
         static_cast<uint32_t>(B * Hv),
-        decode_tile ? static_cast<uint32_t>(Dv / 32) : 1u,
+        gdn_grid_y,
         1);
     return;
   }

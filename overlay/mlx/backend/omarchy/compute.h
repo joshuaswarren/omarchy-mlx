@@ -1351,6 +1351,9 @@ enum class ComputeKernel : uint16_t {
   // (Dk == Dv == 128, f32 state, bf16 qkv/gates/out; 1024 threads, 32 SGs).
   // Appended to keep profile kernel ids stable.
   GatedDeltaDecodeConvNormBF16Sg32,
+  // Coalesced-state standalone GDN decode (Dk == Dv == 128, f32 state, bf16
+  // q/k/v/out, bf16 or f32 A_log, native GQA; 1024 threads, 32 SGs).
+  GatedDeltaDecodeBF16Sg32,
   Count,
 };
 
