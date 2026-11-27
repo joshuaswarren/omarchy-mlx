@@ -337,7 +337,7 @@ def _refused_nodes(nodes, strided):
                 stack.append(a)
     return refused
 
-def _slice(a, dim, start, end, step=1):
+def _slice(a, dim=0, start=None, end=None, step=1):
     dim = dim % a.ndim
     n = a.shape[dim]
     # aten clamps out-of-range bounds; mlx requires int32. None = open bound.
@@ -1020,10 +1020,14 @@ def _convolution_backward(gout, x, w, bias_sizes, stride, padding, dilation,
 
 
 def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
-    # torch: a NCL, w OIK ; mlx.conv1d: x NLC, w (K, I/groups, O)
+    # torch: a NCL (or CL unbatched), w OIK ; mlx.conv1d: x NLC, w (K, I/groups, O)
     if groups != 1:
         return _raise("grouped conv1d")
-    x = _mx(a).transpose(0, 2, 1)
+    unbatched = _mx(a).ndim == 2
+    x = _mx(a)
+    if unbatched:
+        x = x.reshape(1, *x.shape)
+    x = x.transpose(0, 2, 1)
     wt = _mx(w).transpose(0, 2, 1)  # torch O,I,K -> mlx O,K,I
     st = stride[0] if isinstance(stride, (list, tuple)) else stride
     p = padding[0] if isinstance(padding, (list, tuple)) else padding
@@ -1031,7 +1035,8 @@ def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     y = mx.conv1d(x, wt, stride=st, padding=p, dilation=dl)
     if b is not None:
         y = y + _mx(b).reshape(1, 1, -1)
-    return y.transpose(0, 2, 1)
+    y = y.transpose(0, 2, 1)
+    return y[0] if unbatched else y
 
 def _diff(a, n=1, dim=-1, prepend=None, append=None):
     x = _mx(a)
@@ -2077,7 +2082,11 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "threshold_backward", "native_batch_norm_backward",
                  "Float",
                  "add", "sub", "mul", "div", "truediv", "true_divide",
-                 "remainder"}
+                 "remainder",
+                 # comparison ops: the aten .default overloads are
+                 # (Scalar, Scalar) -> bool — no mx operand, same gate as
+                 # the scalar arith forms above.
+                 "eq", "ne", "lt", "le", "gt", "ge"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}

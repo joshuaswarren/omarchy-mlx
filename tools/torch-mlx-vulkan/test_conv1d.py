@@ -137,9 +137,42 @@ def test_conv1d_census_lowered():
     print("test_conv1d_census_lowered PASS")
 
 
+def test_conv1d_unbatched():
+    """PT-U5 residual: aten conv1d accepts 2D (C,L) unbatched input and
+    returns 2D (O,L'); the lowering must not assume NCL."""
+    import mlx.core as mx
+    rng = np.random.RandomState(7)
+    a = rng.randn(4, 16).astype(np.float32)   # (C, L) unbatched
+    w = rng.randn(3, 4, 5).astype(np.float32)  # (O, I, K)
+    b = rng.randn(3).astype(np.float32)
+    for stride, padding, dilation in ((1, 0, 1), (2, 2, 1), (1, 0, 2)):
+        want = F.conv1d(torch.tensor(a), torch.tensor(w), torch.tensor(b),
+                        stride=stride, padding=padding, dilation=dilation)
+        assert want.ndim == 2, want.shape
+        got = mlx_vulkan._conv1d(mx.array(a), mx.array(w), mx.array(b),
+                                 stride=stride, padding=padding,
+                                 dilation=dilation)
+        assert np.asarray(got).shape == want.shape, (got.shape, want.shape)
+        np.testing.assert_allclose(np.asarray(got), want.numpy(),
+                                   rtol=1e-4, atol=1e-5)
+    # executor path: unbatched form must land in stats["mlx"], not fallback
+    g = torch.fx.Graph()
+    px, pw = g.placeholder("x"), g.placeholder("w")
+    g.output(g.call_function(torch.ops.aten.conv1d.default, (px, pw)))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(torch.tensor(a), torch.tensor(w))
+    exp = torch.ops.aten.conv1d.default(torch.tensor(a), torch.tensor(w))
+    np.testing.assert_allclose(_np(out), exp.numpy(), rtol=1e-4, atol=1e-5)
+    assert "conv1d" in stats["mlx"], stats
+    assert "conv1d" not in stats["cpu"], stats
+    print("test_conv1d_unbatched PASS")
+
+
 if __name__ == "__main__":
     test_conv1d_fp32_configs()
     test_conv1d_fp32_shapes()
     test_conv1d_bf16()
     test_conv1d_refuses_groups()
     test_conv1d_census_lowered()
+    test_conv1d_unbatched()
