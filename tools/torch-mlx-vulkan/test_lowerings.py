@@ -500,6 +500,42 @@ def test_squeeze_inplace():
     print("test_squeeze_inplace PASS")
 
 
+def test_clamp_bounds():
+    # PAR-41 census rerun (w7R, true main): clamp_min.clamp_max had no specs
+    # (plain FALLBACK). Scalar bounds pass python numbers, .Tensor bounds pass
+    # broadcastable tensors; the in-place variants share the lowerings.
+    x = torch.randn(4, 5)
+    lo = torch.full((5,), -0.5)
+    hi = torch.full((5,), 0.5)
+    cases = (
+        (torch.ops.aten.clamp_min.default, (x,), {"min": 0.2},
+         torch.clamp_min(x, 0.2)),
+        (torch.ops.aten.clamp_min.Tensor, (x, lo), {},
+         torch.clamp_min(x, lo)),
+        (torch.ops.aten.clamp_max.default, (x,), {"max": -0.2},
+         torch.clamp_max(x, -0.2)),
+        (torch.ops.aten.clamp_max.Tensor, (x, hi), {},
+         torch.clamp_max(x, hi)),
+        (torch.ops.aten.clamp_min_.default, (x,), {"min": 0.0},
+         x.clone().clamp_min_(0.0)),
+        (torch.ops.aten.clamp_max_.default, (x,), {"max": 0.0},
+         x.clone().clamp_max_(0.0)),
+        (torch.ops.aten.clamp.Tensor, (x, lo, hi), {},
+         torch.clamp(x, lo, hi)),
+    )
+    for target, ins, kw, ref in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (target, stats)
+        assert np.allclose(_np(out), ref.numpy(), atol=1e-6), target
+    print("test_clamp_bounds PASS")
+
+
 def test_cat_clone():
     # PT-AC: aten.cat.default (PAR-41 rank 13, 16,632 receipts) and
     # aten.clone.default (rank 97, op_db-only) were already registered —
