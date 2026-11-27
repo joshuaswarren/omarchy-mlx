@@ -987,6 +987,65 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 // pointers once outside the K walk and advances by constant strides (32, 8,
 // 64), eliminating per-iteration imad/shift address math so all device_loads
 // issue back-to-back. Bit-identical to the generic Q4_ROWS chain.
+#ifdef QMM_W2_UNROLL2
+#define Q4_ROWS_UNROLL2_BODY(W, S, B) \
+    for (; wi_ + 1u < iters; wi_ += 2u) { \
+      precise float dot0[ROWS_PER_SLOT]; \
+      precise float dot1[ROWS_PER_SLOT]; \
+      precise float input_sum = 0.0; \
+      uvec2 wv0[ROWS_PER_SLOT]; \
+      uvec2 wv1[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot0[r] = 0.0; \
+        dot1[r] = 0.0; \
+        wv0[r] = W.values[wp[r]]; \
+        wv1[r] = W.values[wp[r] + 32u]; \
+        wp[r] += 64u; \
+      } \
+      float sc0[ROWS_PER_SLOT], bi0[ROWS_PER_SLOT]; \
+      float sc1[ROWS_PER_SLOT], bi1[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        sc0[r] = LOAD_VALUE(S.values[sp[r]]); \
+        bi0[r] = LOAD_VALUE(B.values[bp[r]]); \
+        sc1[r] = LOAD_VALUE(S.values[sp[r] + 8u]); \
+        bi1[r] = LOAD_VALUE(B.values[bp[r] + 8u]); \
+        sp[r] += 16u; \
+        bp[r] += 16u; \
+      } \
+      uvec4 xa0 = OUTGATE_XQUAD(xp); \
+      uvec4 xb0 = OUTGATE_XQUAD(xp + 1u); \
+      uvec4 xa1 = OUTGATE_XQUAD(xp + 64u); \
+      uvec4 xb1 = OUTGATE_XQUAD(xp + 65u); \
+      xp += 128u; \
+      { \
+        precise float dot[ROWS_PER_SLOT]; \
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { dot[r] = 0.0; } \
+        Q4_QUAD_ROWS(wv0[r].x, xa0.x, xa0.y) \
+        Q4_QUAD_ROWS(wv0[r].x >> 16u, xa0.z, xa0.w) \
+        Q4_QUAD_ROWS(wv0[r].y, xb0.x, xb0.y) \
+        Q4_QUAD_ROWS(wv0[r].y >> 16u, xb0.z, xb0.w) \
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+          precise float bt0 = input_sum * bi0[r]; \
+          acc[r] += fma(sc0[r], dot[r], bt0); \
+        } \
+      } \
+      input_sum = 0.0; \
+      { \
+        precise float dot[ROWS_PER_SLOT]; \
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { dot[r] = 0.0; } \
+        Q4_QUAD_ROWS(wv1[r].x, xa1.x, xa1.y) \
+        Q4_QUAD_ROWS(wv1[r].x >> 16u, xa1.z, xa1.w) \
+        Q4_QUAD_ROWS(wv1[r].y, xb1.x, xb1.y) \
+        Q4_QUAD_ROWS(wv1[r].y >> 16u, xb1.z, xb1.w) \
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+          precise float bt1 = input_sum * bi1[r]; \
+          acc[r] += fma(sc1[r], dot[r], bt1); \
+        } \
+      } \
+    }
+#else
+#define Q4_ROWS_UNROLL2_BODY(W, S, B)
+#endif
 #define Q4_ROWS(W, S, B) { \
   uint row_base[ROWS_PER_SLOT]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
@@ -1006,7 +1065,9 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     } \
     uint xp = (x_row >> 3u) + (lane_in_slot << 1u); \
     uint iters = pairs_per_row >> 5u; \
-    for (uint wi_ = 0u; wi_ < iters; ++wi_) { \
+    uint wi_ = 0u; \
+    Q4_ROWS_UNROLL2_BODY(W, S, B) \
+    for (; wi_ < iters; ++wi_) { \
       precise float dot[ROWS_PER_SLOT]; \
       precise float input_sum = 0.0; \
       uvec2 wv[ROWS_PER_SLOT]; \
@@ -1513,7 +1574,9 @@ void main() {
     ticket.done = 0u;
   }
   memoryBarrierBuffer();
+#ifndef QMM_RESNORM_FAST_BAR
   barrier();
+#endif
   {
     uint sub_id = lane / LANES;
     uint sub_lane = lane % LANES;
@@ -2154,7 +2217,9 @@ void main() {
     ticket.done = 0u;
   }
   memoryBarrierBuffer();
+#ifndef QMM_RESNORM_FAST_BAR
   barrier();
+#endif
 
   // Single-row Apple RMSNorm (mirrors shaders/fast_norm_apple.comp bit-for-bit)
   // over sum0.values[0..n-1] on threads 0..255; barriers stay workgroup-uniform.
@@ -2198,6 +2263,12 @@ void main() {
         }
       }
       barrier();
+#ifdef QMM_RESNORM_FAST_BAR
+      if (lane < 256u) {
+        float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+        float total_sq = subgroupAdd(v);
+        float mean_square = total_sq / float(row_length);
+#else
       if (sub_id == 0u) {
         float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
         float total_sq = subgroupAdd(v);
@@ -2208,6 +2279,7 @@ void main() {
       barrier();
       if (lane < 256u) {
         float mean_square = s_resnorm_partial[0] / float(row_length);
+#endif
         float norm = inversesqrt(mean_square + eps);
         uvec4 wv0 = norm_weight_v4.values[nw_base + lane];
         #define RN_PACK_PAIR(sv_w, wv_w, out_u) { \
@@ -2263,6 +2335,12 @@ void main() {
         }
       }
       barrier();
+#ifdef QMM_RESNORM_FAST_BAR
+      if (lane < 256u) {
+        float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+        float total_sq = subgroupAdd(v);
+        float mean_square = total_sq / float(row_length);
+#else
       if (sub_id == 0u) {
         float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
         float total_sq = subgroupAdd(v);
@@ -2273,6 +2351,7 @@ void main() {
       barrier();
       if (lane < 256u) {
         float mean_square = s_resnorm_partial[0] / float(row_length);
+#endif
         float norm = inversesqrt(mean_square + eps);
         uvec4 wv0 = norm_weight_v4.values[nw_base + vidx];
         uvec4 wv1 = norm_weight_v4.values[nw_base + vidx + 1u];
@@ -2419,7 +2498,69 @@ void main() {
       }
       uint xp = (x_row >> 3u) + (lane_in_slot << 1u);
       uint iters = pairs_per_row >> 5u;
-      for (uint wi_ = 0u; wi_ < iters; ++wi_) {
+      uint wi_ = 0u;
+#ifdef QMM_W2_UNROLL2
+      for (; wi_ + 1u < iters; wi_ += 2u) {
+        uvec2 wvg0[ROWS_PER_SLOT], wvu0[ROWS_PER_SLOT];
+        uvec2 wvg1[ROWS_PER_SLOT], wvu1[ROWS_PER_SLOT];
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+          wvg0[r] = input_w0.values[wp[r]];
+          wvu0[r] = input_w1.values[wp[r]];
+          wvg1[r] = input_w0.values[wp[r] + 32u];
+          wvu1[r] = input_w1.values[wp[r] + 32u];
+          wp[r] += 64u;
+        }
+        float sg0[ROWS_PER_SLOT], bg0[ROWS_PER_SLOT], su0[ROWS_PER_SLOT], bu0[ROWS_PER_SLOT];
+        float sg1[ROWS_PER_SLOT], bg1[ROWS_PER_SLOT], su1[ROWS_PER_SLOT], bu1[ROWS_PER_SLOT];
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+          sg0[r] = LOAD_VALUE(scales0.values[sp[r]]);
+          bg0[r] = LOAD_VALUE(biases0.values[sp[r]]);
+          su0[r] = LOAD_VALUE(scales1.values[sp[r]]);
+          bu0[r] = LOAD_VALUE(biases1.values[sp[r]]);
+          sg1[r] = LOAD_VALUE(scales0.values[sp[r] + 8u]);
+          bg1[r] = LOAD_VALUE(biases0.values[sp[r] + 8u]);
+          su1[r] = LOAD_VALUE(scales1.values[sp[r] + 8u]);
+          bu1[r] = LOAD_VALUE(biases1.values[sp[r] + 8u]);
+          sp[r] += 16u;
+        }
+        uvec4 xa0 = input_x.values[xp];
+        uvec4 xb0 = input_x.values[xp + 1u];
+        uvec4 xa1 = input_x.values[xp + 64u];
+        uvec4 xb1 = input_x.values[xp + 65u];
+        xp += 128u;
+        {
+          precise float dot_g[ROWS_PER_SLOT], dot_u[ROWS_PER_SLOT];
+          precise float input_sum = 0.0;
+          for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { dot_g[r] = 0.0; dot_u[r] = 0.0; }
+          Q4_QUAD_SWIGLU(wvg0[r].x, wvu0[r].x, xa0.x, xa0.y)
+          Q4_QUAD_SWIGLU(wvg0[r].x >> 16u, wvu0[r].x >> 16u, xa0.z, xa0.w)
+          Q4_QUAD_SWIGLU(wvg0[r].y, wvu0[r].y, xb0.x, xb0.y)
+          Q4_QUAD_SWIGLU(wvg0[r].y >> 16u, wvu0[r].y >> 16u, xb0.z, xb0.w)
+          for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+            precise float bg_t = input_sum * bg0[r];
+            acc_g[r] += fma(sg0[r], dot_g[r], bg_t);
+            precise float bu_t = input_sum * bu0[r];
+            acc_u[r] += fma(su0[r], dot_u[r], bu_t);
+          }
+        }
+        {
+          precise float dot_g[ROWS_PER_SLOT], dot_u[ROWS_PER_SLOT];
+          precise float input_sum = 0.0;
+          for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { dot_g[r] = 0.0; dot_u[r] = 0.0; }
+          Q4_QUAD_SWIGLU(wvg1[r].x, wvu1[r].x, xa1.x, xa1.y)
+          Q4_QUAD_SWIGLU(wvg1[r].x >> 16u, wvu1[r].x >> 16u, xa1.z, xa1.w)
+          Q4_QUAD_SWIGLU(wvg1[r].y, wvu1[r].y, xb1.x, xb1.y)
+          Q4_QUAD_SWIGLU(wvg1[r].y >> 16u, wvu1[r].y >> 16u, xb1.z, xb1.w)
+          for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+            precise float bg_t = input_sum * bg1[r];
+            acc_g[r] += fma(sg1[r], dot_g[r], bg_t);
+            precise float bu_t = input_sum * bu1[r];
+            acc_u[r] += fma(su1[r], dot_u[r], bu_t);
+          }
+        }
+      }
+#endif
+      for (; wi_ < iters; ++wi_) {
         precise float dot_g[ROWS_PER_SLOT];
         precise float dot_u[ROWS_PER_SLOT];
         precise float input_sum = 0.0;

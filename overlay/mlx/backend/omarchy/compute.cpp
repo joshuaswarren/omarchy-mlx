@@ -778,6 +778,15 @@
 #include "matmul_direct_f16_c16_tn.h"
 #include "matmul_direct_f16_c16_tt.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s32w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s4w2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s8w2u2.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s32w2u2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s4w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s2w2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s8w2u2.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s4w2u2.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2b2.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2b2u2.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
@@ -2571,6 +2580,42 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_word_subgroup_bf16_r2s32w2,
           qmm_vec_q4_word_subgroup_bf16_r2s32w2_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2,
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2U2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s8w2u2,
+          qmm_vec_q4_word_subgroup_bf16_r2s8w2u2_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2U2:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2u2,
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2u2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S4W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s4w2,
+          qmm_vec_q4_swiglu_bf16_r1s4w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S2W2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s2w2,
+          qmm_vec_q4_swiglu_bf16_r1s2w2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S8W2U2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s8w2u2,
+          qmm_vec_q4_swiglu_bf16_r1s8w2u2_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S4W2U2:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s4w2u2,
+          qmm_vec_q4_swiglu_bf16_r1s4w2u2_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2B2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2b2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2b2_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2B2U2:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2b2u2,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2b2u2_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

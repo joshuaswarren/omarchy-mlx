@@ -9703,6 +9703,19 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           (params.shape[1] % 2u == 0u))) {
         vec_kernel = geometry.word;
         qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+        if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u) &&
+            params.matrix_n >= 2048u) {
+          if (const char* w3w = omarchy::env_str("MLX_OMARCHY_WORD_3W");
+              w3w != nullptr && w3w[0] != '\0') {
+            if (std::strcmp(w3w, "r2s4") == 0) {
+              vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2;
+              qmm_groups = (params.matrix_n + 7u) / 8u;
+            } else if (std::strcmp(w3w, "r2s8u2") == 0) {
+              vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2U2;
+              qmm_groups = (params.matrix_n + 15u) / 16u;
+            }
+          }
+        }
       }
     }
     encoder.dispatch_compute(
@@ -11132,6 +11145,22 @@ bool dispatch_quantized_gemv_group(
     if (sw_r1_on) {
       swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
       swiglu_cols = 8u;
+      if (const char* sw3w = omarchy::env_str("MLX_OMARCHY_SWIGLU_3W");
+          sw3w != nullptr && sw3w[0] != '\0') {
+        if (std::strcmp(sw3w, "r1s4") == 0) {
+          swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S4W2;
+          swiglu_cols = 4u;
+        } else if (std::strcmp(sw3w, "r1s2") == 0) {
+          swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S2W2;
+          swiglu_cols = 2u;
+        } else if (std::strcmp(sw3w, "r1s8u2") == 0) {
+          swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2U2;
+          swiglu_cols = 8u;
+        } else if (std::strcmp(sw3w, "r1s4u2") == 0) {
+          swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S4W2U2;
+          swiglu_cols = 4u;
+        }
+      }
     }
   }
   ComputeKernel resnorm_kernel = geom.resnorm;
@@ -11155,6 +11184,14 @@ bool dispatch_quantized_gemv_group(
           encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2;
         resnorm_cols = 64u;
+        if (const char* rn3w = omarchy::env_str("MLX_OMARCHY_RESNORM_3W");
+            rn3w != nullptr && rn3w[0] != '\0') {
+          if (std::strcmp(rn3w, "b2") == 0) {
+            resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2B2;
+          } else if (std::strcmp(rn3w, "b2u2") == 0) {
+            resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2B2U2;
+          }
+        }
       } else {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
         resnorm_cols = 32u;
@@ -17418,7 +17455,9 @@ void GreedyQuantizedArgmax::eval_gpu(
         if (lm_r2s32_want && n >= 65536u && (params.rhs_offset % 2u == 0u) &&
             caps.max_compute_work_group_invocations >= 1024u &&
             caps.max_compute_work_group_size[0] >= 1024u) {
-          gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
+          gemv_kernel = omarchy::env_flag("MLX_OMARCHY_LM_UNROLL")
+              ? omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2U2
+              : omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
           gemv_groups = (n + 63u) / 64u;
         }
       } else {

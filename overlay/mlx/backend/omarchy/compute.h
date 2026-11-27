@@ -1374,6 +1374,15 @@ enum class ComputeKernel : uint16_t {
   // 1024-thread (32 subgroups, 64 cols/WG) Q4 word subgroup decode GEMV for
   // large-vocabulary lm_head (Appended to keep profile kernel ids stable).
   QmmVecQ4WordSubgroupBF16R2S32W2,
+  QmmVecQ4WordSubgroupBF16R2S4W2,
+  QmmVecQ4WordSubgroupBF16R2S8W2U2,
+  QmmVecQ4WordSubgroupBF16R2S32W2U2,
+  QmmVecQ4SwigluBF16R1S4W2,
+  QmmVecQ4SwigluBF16R1S2W2,
+  QmmVecQ4SwigluBF16R1S8W2U2,
+  QmmVecQ4SwigluBF16R1S4W2U2,
+  QmmVecQ4ResNormVec4BF16R2S32W2B2,
+  QmmVecQ4ResNormVec4BF16R2S32W2B2U2,
   Count,
 };
 
