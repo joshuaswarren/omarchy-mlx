@@ -124,13 +124,16 @@ layout(push_constant) uniform Params {
 
 const uint D = uint(HD);
 const uint TILE_D = 128u;
+const uint S_O_STRIDE = TILE_D + 1u;
+const uint D_PER_SG = TILE_D / uint(SUBGROUPS);
 const uint HALF_D = uint(HD) >> 1u;
 const float LOG2E = 1.4426950408889634;
 
-// 16,896 B (HD=128) or 17,152 B (HD=256) total shared memory.
+// 17,024 B (HD=128) or 17,280 B (HD=256, SG=32) total shared memory.
+// Odd stride 129 eliminates 32-bank conflicts in the parallel subgroupAdd epilogue.
 shared float s_max[SUBGROUPS];
 shared float s_sum[SUBGROUPS];
-shared float s_o[SUBGROUPS * TILE_D];
+shared float s_o[SUBGROUPS * S_O_STRIDE];
 shared uint s_k_words[HALF_D];
 
 float load_q_raw(uint abs_index) {
@@ -403,7 +406,7 @@ void main() {
       s_max[sg] = m_i;
       s_sum[sg] = l_i;
     }
-    uint obase = sg * TILE_D + lane * 4u;
+    uint obase = sg * S_O_STRIDE + lane * 4u;
     s_o[obase + 0u] = o0;
     s_o[obase + 1u] = o1;
     s_o[obase + 2u] = o2;
@@ -412,28 +415,33 @@ void main() {
 
   barrier();
 
-  if (t < D) {
+  {
     uint active_sg = min(uint(SUBGROUPS), k_len);
-    float m = (lane < active_sg) ? s_max[lane] : uintBitsToFloat(0xff800000u);
-    float ls = (lane < active_sg) ? s_sum[lane] : 0.0;
+    bool lane_active = lane < active_sg;
+    float m = lane_active ? s_max[lane] : uintBitsToFloat(0xff800000u);
+    float ls = lane_active ? s_sum[lane] : 0.0;
     float gmax = subgroupMax(m);
-    float w = (lane < active_sg) ? exp2(m - gmax) : 0.0;
+    float w = lane_active ? exp2(m - gmax) : 0.0;
     float denom = subgroupAdd(ls * w);
 
-    float acc = 0.0;
-    for (uint s = 0u; s < active_sg; ++s) {
-      acc = fma(s_o[s * TILE_D + t], subgroupShuffle(w, s), acc);
-    }
-
+    uint d0 = sg * D_PER_SG;
+    uint rbase = (lane_active ? lane : 0u) * S_O_STRIDE + d0;
     uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
+    uint out_base = params.output_offset + head * out_head + d0;
 #ifdef SDPA_OUTGATE
-    uint gate_idx = params.out_strides[1] + head * params.out_strides[2] + t;
-    output_data.values[params.output_offset + head * out_head + t] =
-        apply_outgate(acc / denom, gate_idx);
-#else
-    output_data.values[params.output_offset + head * out_head + t] =
-        bf16_store(acc / denom);
+    uint gate_base = params.out_strides[1] + head * params.out_strides[2] + d0;
 #endif
+    for (uint k = 0u; k < D_PER_SG; ++k) {
+      float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
+      if (lane == 0u) {
+#ifdef SDPA_OUTGATE
+        output_data.values[out_base + k] =
+            apply_outgate(acc / denom, gate_base + k);
+#else
+        output_data.values[out_base + k] = bf16_store(acc / denom);
+#endif
+      }
+    }
   }
 #else
   // HD == 256
@@ -735,7 +743,7 @@ void main() {
       s_sum[sg] = l_i;
     }
     if (lane < 16u) {
-      uint obase = sg * TILE_D + lane * 8u;
+      uint obase = sg * S_O_STRIDE + lane * 8u;
       s_o[obase + 0u] = o0;
       s_o[obase + 1u] = o1;
       s_o[obase + 2u] = o2;
@@ -752,43 +760,45 @@ void main() {
   uint active_sg = (k_len > split_id * uint(SUBGROUPS))
       ? min(uint(SUBGROUPS), k_len - split_id * uint(SUBGROUPS))
       : 0u;
-  float w = 0.0;
-  float denom = 1.0;
+  bool lane_active = lane < active_sg;
+  float m = lane_active ? s_max[lane] : uintBitsToFloat(0xff800000u);
+  float ls = lane_active ? s_sum[lane] : 0.0;
+  float gmax = subgroupMax(m);
+  float w = lane_active ? exp2(m - gmax) : 0.0;
+  float denom = subgroupAdd(ls * w);
+
+  uint d0 = sg * D_PER_SG;
+  uint rbase = (lane_active ? lane : 0u) * S_O_STRIDE + d0;
   uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
   uint out_base = params.output_offset + head * out_head;
 #ifdef SDPA_SPLIT_K
   uint sb = (head * splits + split_id) * 260u;
-#endif
-
-  if (t < TILE_D) {
-    float m = (lane < active_sg) ? s_max[lane] : uintBitsToFloat(0xff800000u);
-    float ls = (lane < active_sg) ? s_sum[lane] : 0.0;
-    float gmax = subgroupMax(m);
-    w = (lane < active_sg) ? exp2(m - gmax) : 0.0;
-    denom = subgroupAdd(ls * w);
-
-    float acc = 0.0;
-    for (uint s = 0u; s < active_sg; ++s) {
-      acc = fma(s_o[s * TILE_D + t], subgroupShuffle(w, s), acc);
-    }
-#ifdef SDPA_SPLIT_K
-    if (t == 0u) {
-      split_scratch.values[sb + 0u] = gmax;
-      split_scratch.values[sb + 1u] = denom;
-    }
-    split_scratch.values[sb + 2u + t] = acc;
+  if (t == 0u) {
+    split_scratch.values[sb + 0u] = gmax;
+    split_scratch.values[sb + 1u] = denom;
+  }
 #elif defined(SDPA_OUTGATE)
-    uint gate_base = params.out_strides[1] + head * params.out_strides[2];
-    output_data.values[out_base + t] = apply_outgate(acc / denom, gate_base + t);
-#else
-    output_data.values[out_base + t] = bf16_store(acc / denom);
+  uint gate_base = params.out_strides[1] + head * params.out_strides[2];
 #endif
+
+  for (uint k = 0u; k < D_PER_SG; ++k) {
+    float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
+    if (lane == 0u) {
+#ifdef SDPA_SPLIT_K
+      split_scratch.values[sb + 2u + d0 + k] = acc;
+#elif defined(SDPA_OUTGATE)
+      output_data.values[out_base + d0 + k] =
+          apply_outgate(acc / denom, gate_base + d0 + k);
+#else
+      output_data.values[out_base + d0 + k] = bf16_store(acc / denom);
+#endif
+    }
   }
 
   barrier();
 
   if (global_sg < k_len && lane >= 16u) {
-    uint obase = sg * TILE_D + (lane - 16u) * 8u;
+    uint obase = sg * S_O_STRIDE + (lane - 16u) * 8u;
     s_o[obase + 0u] = o0;
     s_o[obase + 1u] = o1;
     s_o[obase + 2u] = o2;
@@ -801,20 +811,18 @@ void main() {
 
   barrier();
 
-  if (t < TILE_D) {
-    float acc = 0.0;
-    for (uint s = 0u; s < active_sg; ++s) {
-      acc = fma(s_o[s * TILE_D + t], subgroupShuffle(w, s), acc);
-    }
+  for (uint k = 0u; k < D_PER_SG; ++k) {
+    float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
+    if (lane == 0u) {
 #ifdef SDPA_SPLIT_K
-    split_scratch.values[sb + 2u + TILE_D + t] = acc;
+      split_scratch.values[sb + 2u + TILE_D + d0 + k] = acc;
 #elif defined(SDPA_OUTGATE)
-    uint gate_base = params.out_strides[1] + head * params.out_strides[2];
-    output_data.values[out_base + TILE_D + t] =
-        apply_outgate(acc / denom, gate_base + TILE_D + t);
+      output_data.values[out_base + TILE_D + d0 + k] =
+          apply_outgate(acc / denom, gate_base + TILE_D + d0 + k);
 #else
-    output_data.values[out_base + TILE_D + t] = bf16_store(acc / denom);
+      output_data.values[out_base + TILE_D + d0 + k] = bf16_store(acc / denom);
 #endif
+    }
   }
 #ifdef SDPA_SPLIT_K
   barrier();

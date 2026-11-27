@@ -983,10 +983,10 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   } \
 }
 #elif defined(QMM_W2) && !defined(QMM_KCONT) && QGROUP == 64 && QMM_LANES == 32
-// Hoisted uvec2 fast-tile loop: precomputes per-row weight/scale/bias/x
-// pointers once outside the K walk and advances by constant strides (32, 8,
-// 64), eliminating per-iteration imad/shift address math so all device_loads
-// issue back-to-back. Bit-identical to the generic Q4_ROWS chain.
+// Hoisted uvec2 fast-tile loop with low register footprint: replaces bp[] with
+// uniform sb_delta, splits xa/xb live ranges across the two halves of each
+// weight uvec2, and sinks L1-hot scale/bias loads after Q4_QUAD_ROWS so live
+// 32-bit GPRs drop by 10 across the inner dot body. Bit-identical to Q4_ROWS.
 #define Q4_ROWS(W, S, B) { \
   uint row_base[ROWS_PER_SLOT]; \
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
@@ -997,12 +997,11 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     uint w_base_pair = w_base >> 1u; \
     uint wp[ROWS_PER_SLOT]; \
     uint sp[ROWS_PER_SLOT]; \
-    uint bp[ROWS_PER_SLOT]; \
+    uint sb_delta = b_base - s_base; \
     uint g0 = lane_in_slot >> 2u; \
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
       wp[r] = w_base_pair + row_base[r] * pairs_per_row + lane_in_slot; \
       sp[r] = s_base + row_base[r] * groups_per_row + g0; \
-      bp[r] = b_base + row_base[r] * groups_per_row + g0; \
     } \
     uint xp = (x_row >> 3u) + (lane_in_slot << 1u); \
     uint iters = pairs_per_row >> 5u; \
@@ -1015,24 +1014,24 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
         wv[r] = W.values[wp[r]]; \
         wp[r] += 32u; \
       } \
-      float scale_r[ROWS_PER_SLOT]; \
-      float bias_r[ROWS_PER_SLOT]; \
-      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        scale_r[r] = LOAD_VALUE(S.values[sp[r]]); \
-        bias_r[r] = LOAD_VALUE(B.values[bp[r]]); \
-        sp[r] += 8u; \
-        bp[r] += 8u; \
+      { \
+        uvec4 xa = OUTGATE_XQUAD(xp); \
+        Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
+        Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
       } \
-      uvec4 xa = OUTGATE_XQUAD(xp); \
-      uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
-      xp += 64u; \
-      Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
-      Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
-      Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
-      Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
+      { \
+        uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
+        xp += 64u; \
+        Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
+        Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
+      } \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        precise float bias_term = input_sum * bias_r[r]; \
-        acc[r] += fma(scale_r[r], dot[r], bias_term); \
+        uint spr = sp[r]; \
+        sp[r] = spr + 8u; \
+        float scale_r = LOAD_VALUE(S.values[spr]); \
+        float bias_r = LOAD_VALUE(B.values[spr + sb_delta]); \
+        precise float bias_term = input_sum * bias_r; \
+        acc[r] += fma(scale_r, dot[r], bias_term); \
       } \
     } \
   } else { \

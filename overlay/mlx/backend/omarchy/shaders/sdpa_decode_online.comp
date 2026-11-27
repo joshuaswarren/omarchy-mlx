@@ -24,7 +24,6 @@
 
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
-#extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 
@@ -99,11 +98,13 @@ layout(push_constant) uniform Params {
 
 const uint D = uint(HD);
 const uint HALF_D = 128u;
+const uint S_O_STRIDE = HALF_D + 1u;
+const uint D_PER_SG = HALF_D / uint(SUBGROUPS);
 const float LOG2E = 1.4426950408889634;
 
 shared float s_max[SUBGROUPS];
 shared float s_sum[SUBGROUPS];
-shared float s_o[SUBGROUPS * HALF_D];
+shared float s_o[SUBGROUPS * S_O_STRIDE];
 
 float bf16_load(uint16_t raw) {
   return uintBitsToFloat(uint(raw) << 16u);
@@ -211,7 +212,7 @@ void main() {
       s_max[sg] = m_i;
       s_sum[sg] = l_i;
     }
-    uint obase = sg * HALF_D + lane * 4u;
+    uint obase = sg * S_O_STRIDE + lane * 4u;
     s_o[obase + 0u] = o0;
     s_o[obase + 1u] = o1;
     s_o[obase + 2u] = o2;
@@ -220,28 +221,33 @@ void main() {
 
   barrier();
 
-  if (t < D) {
+  {
     uint active_sg = min(uint(SUBGROUPS), k_len);
-    float m = (lane < active_sg) ? s_max[lane] : uintBitsToFloat(0xff800000u);
-    float ls = (lane < active_sg) ? s_sum[lane] : 0.0;
+    bool lane_active = lane < active_sg;
+    float m = lane_active ? s_max[lane] : uintBitsToFloat(0xff800000u);
+    float ls = lane_active ? s_sum[lane] : 0.0;
     float gmax = subgroupMax(m);
-    float w = (lane < active_sg) ? exp2(m - gmax) : 0.0;
+    float w = lane_active ? exp2(m - gmax) : 0.0;
     float denom = subgroupAdd(ls * w);
 
-    float acc = 0.0;
-    for (uint s = 0u; s < active_sg; ++s) {
-      acc = fma(s_o[s * HALF_D + t], subgroupShuffle(w, s), acc);
-    }
-
+    uint d0 = sg * D_PER_SG;
+    uint rbase = (lane_active ? lane : 0u) * S_O_STRIDE + d0;
     uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
+    uint out_base = params.output_offset + head * out_head + d0;
 #ifdef SDPA_OUTGATE
-    uint gate_idx = params.out_strides[1] + head * params.out_strides[2] + t;
-    output_data.values[params.output_offset + head * out_head + t] =
-        apply_outgate(acc / denom, gate_idx);
-#else
-    output_data.values[params.output_offset + head * out_head + t] =
-        bf16_store(acc / denom);
+    uint gate_base = params.out_strides[1] + head * params.out_strides[2] + d0;
 #endif
+    for (uint k = 0u; k < D_PER_SG; ++k) {
+      float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
+      if (lane == 0u) {
+#ifdef SDPA_OUTGATE
+        output_data.values[out_base + k] =
+            apply_outgate(acc / denom, gate_base + k);
+#else
+        output_data.values[out_base + k] = bf16_store(acc / denom);
+#endif
+      }
+    }
   }
 #else
   uint q_base = params.lhs_offset + head * params.shape[0] + lane * 8u;
@@ -332,7 +338,7 @@ void main() {
       s_sum[sg] = l_i;
     }
     if (lane < 16u) {
-      uint obase = sg * HALF_D + lane * 8u;
+      uint obase = sg * S_O_STRIDE + lane * 8u;
       s_o[obase + 0u] = o0;
       s_o[obase + 1u] = o1;
       s_o[obase + 2u] = o2;
@@ -347,34 +353,37 @@ void main() {
   barrier();
 
   uint active_sg = min(uint(SUBGROUPS), k_len);
-  float w = 0.0;
-  float denom = 1.0;
+  bool lane_active = lane < active_sg;
+  float m = lane_active ? s_max[lane] : uintBitsToFloat(0xff800000u);
+  float ls = lane_active ? s_sum[lane] : 0.0;
+  float gmax = subgroupMax(m);
+  float w = lane_active ? exp2(m - gmax) : 0.0;
+  float denom = subgroupAdd(ls * w);
+
+  uint d0 = sg * D_PER_SG;
+  uint rbase = (lane_active ? lane : 0u) * S_O_STRIDE + d0;
   uint out_head = params.out_strides[0] != 0u ? params.out_strides[0] : D;
   uint out_base = params.output_offset + head * out_head;
-
-  if (t < HALF_D) {
-    float m = (lane < active_sg) ? s_max[lane] : uintBitsToFloat(0xff800000u);
-    float ls = (lane < active_sg) ? s_sum[lane] : 0.0;
-    float gmax = subgroupMax(m);
-    w = (lane < active_sg) ? exp2(m - gmax) : 0.0;
-    denom = subgroupAdd(ls * w);
-
-    float acc = 0.0;
-    for (uint s = 0u; s < active_sg; ++s) {
-      acc = fma(s_o[s * HALF_D + t], subgroupShuffle(w, s), acc);
-    }
 #ifdef SDPA_OUTGATE
-    uint gate_base = params.out_strides[1] + head * params.out_strides[2];
-    output_data.values[out_base + t] = apply_outgate(acc / denom, gate_base + t);
-#else
-    output_data.values[out_base + t] = bf16_store(acc / denom);
+  uint gate_base = params.out_strides[1] + head * params.out_strides[2];
 #endif
+
+  for (uint k = 0u; k < D_PER_SG; ++k) {
+    float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
+    if (lane == 0u) {
+#ifdef SDPA_OUTGATE
+      output_data.values[out_base + d0 + k] =
+          apply_outgate(acc / denom, gate_base + d0 + k);
+#else
+      output_data.values[out_base + d0 + k] = bf16_store(acc / denom);
+#endif
+    }
   }
 
   barrier();
 
   if (sg < k_len && lane >= 16u) {
-    uint obase = sg * HALF_D + (lane - 16u) * 8u;
+    uint obase = sg * S_O_STRIDE + (lane - 16u) * 8u;
     s_o[obase + 0u] = o0;
     s_o[obase + 1u] = o1;
     s_o[obase + 2u] = o2;
@@ -387,18 +396,16 @@ void main() {
 
   barrier();
 
-  if (t < HALF_D) {
-    float acc = 0.0;
-    for (uint s = 0u; s < active_sg; ++s) {
-      acc = fma(s_o[s * HALF_D + t], subgroupShuffle(w, s), acc);
-    }
+  for (uint k = 0u; k < D_PER_SG; ++k) {
+    float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
+    if (lane == 0u) {
 #ifdef SDPA_OUTGATE
-    uint gate_base = params.out_strides[1] + head * params.out_strides[2];
-    output_data.values[out_base + HALF_D + t] =
-        apply_outgate(acc / denom, gate_base + HALF_D + t);
+      output_data.values[out_base + HALF_D + d0 + k] =
+          apply_outgate(acc / denom, gate_base + HALF_D + d0 + k);
 #else
-    output_data.values[out_base + HALF_D + t] = bf16_store(acc / denom);
+      output_data.values[out_base + HALF_D + d0 + k] = bf16_store(acc / denom);
 #endif
+    }
   }
 #endif
 }
