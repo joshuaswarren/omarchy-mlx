@@ -805,6 +805,48 @@ def test_slice():
     print("test_slice PASS")
 
 
+def test_fft():
+    # PT-AU-a: aten.fft_fft / aten.fft_ifft -> mx.fft — audio-model ops
+    # (Parakeet, Whisper). Parity vs torch CPU over fp32 (promotes to
+    # complex64) and complex64 inputs, exercising n (pad/truncate), dim
+    # and norm; then the executor must lower both aten nodes.
+    rng = np.random.RandomState(17)
+    xr = rng.randn(4, 6, 10).astype(np.float32)
+    xc = (rng.randn(4, 6, 10) + 1j * rng.randn(4, 6, 10)).astype(np.complex64)
+    for name, torch_op in (("fft_fft", torch.ops.aten.fft_fft),
+                           ("fft_ifft", torch.ops.aten.fft_ifft)):
+        low = mlx_vulkan._FUNC_SPECS[name]
+        for x_np in (xr, xc):
+            tx = torch.tensor(x_np)
+            a = mx.array(x_np)
+            for pos, kw in [
+                ((), {}),                              # all defaults
+                ((10,), {}),                           # positional n
+                ((), {"n": 16}),                       # pad with zeros
+                ((), {"n": 4}),                        # truncate
+                ((), {"dim": 1}),                      # middle axis
+                ((), {"dim": -1, "norm": "ortho"}),    # normalization
+                ((), {"dim": 0, "norm": "forward"}),   # axis 0 + forward
+            ]:
+                exp = torch_op(tx, *pos, **kw).resolve_conj().numpy()
+                got = low(a, *pos, **kw)
+                assert np.allclose(_np(got), exp, rtol=2e-4, atol=2e-5), \
+                    (name, x_np.dtype, pos, kw)
+        t = torch.randn(4, 12)
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(torch_op, (ph,), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(mx.array(t.numpy()))
+        exp = torch_op(t).resolve_conj().numpy()
+        assert np.allclose(_np(out), exp, rtol=2e-4, atol=2e-5), name
+        assert name in stats["mlx"], stats
+        assert name not in stats["cpu"], stats
+    print("test_fft PASS")
+
+
 def test_transpose_expand():
     # PT-Z: aten.transpose.int (PAR-41 census rank 4, 59592 receipts) and
     # aten.expand.default (rank 33, 233 receipts) — broadcast glue around
@@ -2061,6 +2103,7 @@ if __name__ == "__main__":
     test_dispatch_registered()
     test_numel()
     test_slice()
+    test_fft()
     test_transpose_expand()
     test_cat_clone()
     test_sum()
