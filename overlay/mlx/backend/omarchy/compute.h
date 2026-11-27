@@ -1450,6 +1450,10 @@ enum class ComputeKernel : uint16_t {
   // bit-identical). Appended to keep profile kernel ids stable.
   QmmVecQ4SwigluBF16R1S8W2Fast,
   QmmVecQ4ResNormVec4BF16R2S16W2Fast,
+  // G13C-gated 3-weight fast-tile-only FIFO-upfront Multi GEMV (drops dead
+  // which==3 loop/store when members.size() <= 3 and orders wv -> xa,xb -> s,b
+  // before quads; 0-ULP bit-identical). Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiSubgroupBF16R2S8W2Fast3w,
   Count,
 };
 
