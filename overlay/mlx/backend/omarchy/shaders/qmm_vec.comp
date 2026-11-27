@@ -177,7 +177,11 @@ uint16_t bf16_store(float value) {
 #define OUTGATE_XWORDS(x_base) input_x.values[(x_base) / 8u]
 #define OUTGATE_XQUAD(q_idx) input_x.values[q_idx]
 #endif
-#ifdef QMM_W2
+#ifdef QMM_W4
+#define WVEC_T uvec4
+#define WLOAD(W, I) (W.values[(I) >> 2u][(I) & 3u])
+#define WLOAD_PAIR(W, I, A, B) { (A) = WLOAD(W, I); (B) = WLOAD(W, (I) + 1u); }
+#elif defined(QMM_W2)
 // uvec2 weight words: the fast tile's adjacent w/w+1 pair rides one load.
 #define WVEC_T uvec2
 #define WLOAD(W, I) (W.values[(I) >> 1u][(I) & 1u])
@@ -402,14 +406,24 @@ layout(set = 0, binding = 8, std430) writeonly buffer NormOutput {
 } norm_output;
 layout(set = 0, binding = 9, std430) coherent buffer Ticket {
   uint done;
+#ifdef QMM_RESNORM_WGSQ
+  uint partials[63u];
+#endif
 } ticket;
 #if defined(QMM_RESNORM_VEC4) && !defined(QMM_VEC_OUTGATE)
 // 128-bit uvec4 aliases (8 bf16 elements/lane) for coalesced RMSNorm epilogue
 // on row_length == 2048 or 4096. Host binds the exact same backing buffers as
 // bindings 6, 7, 8 (sum0, norm_weight, norm_output).
+#ifdef QMM_RESNORM_COSTORE
+layout(set = 0, binding = 10, std430) coherent buffer Sum0V4 {
+  uvec4 values[];
+} sum0_v4;
+shared uint16_t s_rn_sum[64u];
+#else
 layout(set = 0, binding = 10, std430) readonly coherent buffer Sum0V4 {
   uvec4 values[];
 } sum0_v4;
+#endif
 layout(set = 0, binding = 11, std430) readonly buffer NormWeightV4 {
   uvec4 values[];
 } norm_weight_v4;
@@ -2129,6 +2143,45 @@ void main() {
   for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
     total[r] = subgroupAdd(acc[r]);
   }
+#if defined(QMM_RESNORM_COSTORE) && defined(QMM_RESNORM_VEC4) && !defined(QMM_VEC_OUTGATE)
+  const bool co_v4 = (n == 2048u || n == 4096u) && COLUMNS_PER_GROUP == 64u &&
+      params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u;
+  if (lane_in_slot == 0u) {
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      uint col = column + r;
+      if (col < n) {
+        float rounded = ROUND_STORAGE(total[r]);
+        output0.values[col] = STORE_VALUE(rounded);
+        uint16_t sv_b = STORE_VALUE(rounded + LOAD_VALUE(addend0.values[col]));
+        if (co_v4) {
+          s_rn_sum[column_slot * uint(ROWS_PER_SLOT) + r] = sv_b;
+        } else {
+          sum0.values[col] = sv_b;
+        }
+      }
+    }
+  }
+  barrier();
+  if (co_v4 && lane < 8u) {
+    uint base = lane * 8u;
+    uint w0 = uint(s_rn_sum[base + 0u]) | (uint(s_rn_sum[base + 1u]) << 16u);
+    uint w1 = uint(s_rn_sum[base + 2u]) | (uint(s_rn_sum[base + 3u]) << 16u);
+    uint w2 = uint(s_rn_sum[base + 4u]) | (uint(s_rn_sum[base + 5u]) << 16u);
+    uint w3 = uint(s_rn_sum[base + 6u]) | (uint(s_rn_sum[base + 7u]) << 16u);
+    sum0_v4.values[gl_WorkGroupID.x * 8u + lane] = uvec4(w0, w1, w2, w3);
+  }
+#ifdef QMM_RESNORM_WGSQ
+  if (co_v4 && n == 2048u && gl_NumWorkGroups.x <= 63u && lane < 32u) {
+    float a = LOAD_VALUE(s_rn_sum[lane]);
+    float b = LOAD_VALUE(s_rn_sum[lane + 32u]);
+    float wg_sq = subgroupAdd(a * a + b * b);
+    if (lane == 0u) {
+      ticket.partials[gl_WorkGroupID.x] = floatBitsToUint(wg_sq);
+    }
+  }
+#endif
+  barrier();
+#else
   if (lane_in_slot == 0u) {
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
       uint col = column + r;
@@ -2141,6 +2194,7 @@ void main() {
     }
   }
   barrier();
+#endif
   memoryBarrierBuffer();
   if (lane == 0u) {
     uint prev = atomicAdd(ticket.done, 1u);
@@ -2179,6 +2233,33 @@ void main() {
       params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
     uint nw_base = params.rhs_offset >> 3u;
     if (row_length == 2048u) {
+#ifdef QMM_RESNORM_WGSQ
+      // Zero-barrier RMSNorm using per-WG partial sums stored in ticket.partials[0..31].
+      if (gl_NumWorkGroups.x == 32u) {
+        if (lane < 256u) {
+          float wg_v = uintBitsToFloat(ticket.partials[sub_lane]);
+          float total_sq = subgroupAdd(wg_v);
+          float norm = inversesqrt(total_sq / 2048.0 + eps);
+          uvec4 sv0 = sum0_v4.values[lane];
+          uvec4 wv0 = norm_weight_v4.values[nw_base + lane];
+          #define RNW_PACK(sv_w, wv_w, out_u) { \
+            precise float _nw0 = norm * uintBitsToFloat(((wv_w) & 0xFFFFu) << 16u); \
+            precise float _nw1 = norm * uintBitsToFloat((wv_w) & 0xFFFF0000u); \
+            precise float _r0 = uintBitsToFloat(((sv_w) & 0xFFFFu) << 16u) * _nw0; \
+            precise float _r1 = uintBitsToFloat((sv_w) & 0xFFFF0000u) * _nw1; \
+            (out_u) = uint(STORE_VALUE(_r0)) | (uint(STORE_VALUE(_r1)) << 16u); \
+          }
+          uvec4 o0;
+          RNW_PACK(sv0.x, wv0.x, o0.x)
+          RNW_PACK(sv0.y, wv0.y, o0.y)
+          RNW_PACK(sv0.z, wv0.z, o0.z)
+          RNW_PACK(sv0.w, wv0.w, o0.w)
+          #undef RNW_PACK
+          norm_output_v4.values[lane] = o0;
+        }
+        return;
+      }
+#endif
       uvec4 sv0 = uvec4(0u);
       if (lane < 256u) {
         sv0 = sum0_v4.values[lane];
@@ -2408,7 +2489,83 @@ void main() {
       row_base[r] = min(column + r, n - 1u);
     }
     if (params.matrix_k % 512u == 0u && n % 8u == 0u) {
-#ifdef QMM_W2
+#if defined(QMM_W4) && ROWS_PER_SLOT == 1
+      if (params.matrix_k % 1024u == 0u) {
+        uint quads_per_row = words_per_row >> 2u;
+        uint wp = row_base[0] * quads_per_row + lane_in_slot;
+        uint sp = row_base[0] * groups_per_row + (lane_in_slot >> 1u);
+        uint xp = (x_row >> 3u) + (lane_in_slot << 2u);
+        uint iters = quads_per_row >> 5u;
+        for (uint wi_ = 0u; wi_ < iters; ++wi_) {
+          precise float dot_g[1];
+          precise float dot_u[1];
+          dot_g[0] = 0.0;
+          dot_u[0] = 0.0;
+          precise float input_sum = 0.0;
+          uvec4 wvg = input_w0.values[wp];
+          uvec4 wvu = input_w1.values[wp];
+          wp += 32u;
+          float sg = LOAD_VALUE(scales0.values[sp]);
+          float bg = LOAD_VALUE(biases0.values[sp]);
+          float su = LOAD_VALUE(scales1.values[sp]);
+          float bu = LOAD_VALUE(biases1.values[sp]);
+          sp += 16u;
+          {
+            uvec4 xa = input_x.values[xp];
+            Q4_QUAD_SWIGLU(wvg.x, wvu.x, xa.x, xa.y)
+            Q4_QUAD_SWIGLU(wvg.x >> 16u, wvu.x >> 16u, xa.z, xa.w)
+          }
+          {
+            uvec4 xb = input_x.values[xp + 1u];
+            Q4_QUAD_SWIGLU(wvg.y, wvu.y, xb.x, xb.y)
+            Q4_QUAD_SWIGLU(wvg.y >> 16u, wvu.y >> 16u, xb.z, xb.w)
+          }
+          {
+            uvec4 xc = input_x.values[xp + 2u];
+            Q4_QUAD_SWIGLU(wvg.z, wvu.z, xc.x, xc.y)
+            Q4_QUAD_SWIGLU(wvg.z >> 16u, wvu.z >> 16u, xc.z, xc.w)
+          }
+          {
+            uvec4 xd = input_x.values[xp + 3u];
+            Q4_QUAD_SWIGLU(wvg.w, wvu.w, xd.x, xd.y)
+            Q4_QUAD_SWIGLU(wvg.w >> 16u, wvu.w >> 16u, xd.z, xd.w)
+          }
+          xp += 128u;
+          precise float bg_term = input_sum * bg;
+          acc_g[0] += fma(sg, dot_g[0], bg_term);
+          precise float bu_term = input_sum * bu;
+          acc_u[0] += fma(su, dot_u[0], bu_term);
+        }
+      } else {
+        for (uint w = lane_in_slot * 2u; w < words_per_row; w += LANES * 2u) {
+          precise float dot_g[1];
+          precise float dot_u[1];
+          dot_g[0] = 0.0;
+          dot_u[0] = 0.0;
+          precise float input_sum = 0.0;
+          uint idx = row_base[0] * words_per_row + w;
+          uint wag = WLOAD(input_w0, idx);
+          uint wbg = WLOAD(input_w0, idx + 1u);
+          uint wau = WLOAD(input_w1, idx);
+          uint wbu = WLOAD(input_w1, idx + 1u);
+          uvec4 xa = input_x.values[(x_row + w * 8u) / 8u];
+          uvec4 xb = input_x.values[(x_row + w * 8u + 8u) / 8u];
+          Q4_QUAD_SWIGLU(wag, wau, xa.x, xa.y)
+          Q4_QUAD_SWIGLU(wag >> 16u, wau >> 16u, xa.z, xa.w)
+          Q4_QUAD_SWIGLU(wbg, wbu, xb.x, xb.y)
+          Q4_QUAD_SWIGLU(wbg >> 16u, wbu >> 16u, xb.z, xb.w)
+          uint group = w / 8u;
+          float sg = LOAD_VALUE(scales0.values[row_base[0] * groups_per_row + group]);
+          float bg = LOAD_VALUE(biases0.values[row_base[0] * groups_per_row + group]);
+          float su = LOAD_VALUE(scales1.values[row_base[0] * groups_per_row + group]);
+          float bu = LOAD_VALUE(biases1.values[row_base[0] * groups_per_row + group]);
+          precise float bg_term = input_sum * bg;
+          acc_g[0] += fma(sg, dot_g[0], bg_term);
+          precise float bu_term = input_sum * bu;
+          acc_u[0] += fma(su, dot_u[0], bu_term);
+        }
+      }
+#elif defined(QMM_W2)
       uint pairs_per_row = words_per_row >> 1u;
       uint wp[ROWS_PER_SLOT];
       uint sp[ROWS_PER_SLOT];

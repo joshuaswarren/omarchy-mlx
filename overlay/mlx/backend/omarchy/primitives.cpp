@@ -9703,6 +9703,21 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           (params.shape[1] % 2u == 0u))) {
         vec_kernel = geometry.word;
         qmm_groups = (params.matrix_n + geometry.columns - 1u) / geometry.columns;
+        if (params.rhs_offset % 2u == 0u && (params.shape[1] % 2u == 0u) &&
+            encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
+            encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
+          if (const char* wr = omarchy::env_str("MLX_OMARCHY_WORD_R2S32");
+              wr != nullptr && wr[0] != '\0') {
+            bool use_s32 = false;
+            if (std::strcmp(wr, "1") == 0 && params.matrix_n >= 2048u) use_s32 = true;
+            else if (std::strcmp(wr, "2") == 0 && params.matrix_n >= 4096u) use_s32 = true;
+            else if (std::strcmp(wr, "3") == 0 && params.matrix_n == 2048u) use_s32 = true;
+            if (use_s32) {
+              vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
+              qmm_groups = (params.matrix_n + 63u) / 64u;
+            }
+          }
+        }
       }
     }
     encoder.dispatch_compute(
@@ -11132,6 +11147,10 @@ bool dispatch_quantized_gemv_group(
     if (sw_r1_on) {
       swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
       swiglu_cols = 8u;
+      if (omarchy::env_flag("MLX_OMARCHY_SWIGLU_W4")) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W4;
+        swiglu_cols = 8u;
+      }
     }
   }
   ComputeKernel resnorm_kernel = geom.resnorm;
@@ -11155,6 +11174,14 @@ bool dispatch_quantized_gemv_group(
           encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2;
         resnorm_cols = 64u;
+        if (const char* rv = omarchy::env_str("MLX_OMARCHY_RESNORM_3T");
+            rv != nullptr && rv[0] != '\0') {
+          if (std::strcmp(rv, "cs") == 0) {
+            resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Cs;
+          } else if (std::strcmp(rv, "wgsq") == 0) {
+            resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2WgSq;
+          }
+        }
       } else {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
         resnorm_cols = 32u;
