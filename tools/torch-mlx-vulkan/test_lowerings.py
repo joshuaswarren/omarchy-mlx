@@ -1049,6 +1049,51 @@ def test_fft():
     print("test_fft PASS")
 
 
+def test_rfft():
+    # PT-AU-b: aten.fft_rfft / aten.fft_irfft -> mx.fft — the
+    # real<->complex transforms (Parakeet mel-spectrogram). Parity vs
+    # torch CPU: rfft on fp32 input (promotes to complex64), irfft on
+    # complex64 input (fp32 out), exercising n, dim and norm.
+    rng = np.random.RandomState(29)
+    xr = rng.randn(4, 6, 10).astype(np.float32)
+    xc = (rng.randn(4, 6, 10) + 1j * rng.randn(4, 6, 10)).astype(np.complex64)
+    for name, torch_op, x_np in (
+            ("fft_rfft", torch.ops.aten.fft_rfft, xr),
+            ("fft_irfft", torch.ops.aten.fft_irfft, xc)):
+        low = mlx_vulkan._FUNC_SPECS[name]
+        tx = torch.tensor(x_np)
+        a = mx.array(x_np)
+        for pos, kw in [
+            ((), {}),                              # all defaults
+            ((10,), {}),                           # positional n
+            ((), {"n": 16}),                       # pad with zeros
+            ((), {"n": 4}),                        # truncate
+            ((), {"dim": 1}),                      # middle axis
+            ((), {"dim": -1, "norm": "ortho"}),    # normalization
+            ((), {"dim": 0, "norm": "forward"}),   # axis 0 + forward
+        ]:
+            exp = torch_op(tx, *pos, **kw).resolve_conj().numpy()
+            got = low(a, *pos, **kw)
+            assert np.allclose(_np(got), exp, rtol=2e-4, atol=2e-5), \
+                (name, x_np.dtype, pos, kw)
+        if name == "fft_rfft":
+            t = torch.randn(4, 12)
+        else:
+            t = (torch.randn(4, 7) + 1j * torch.randn(4, 7))
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(torch_op, (ph,), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(mx.array(t.numpy()))
+        exp = torch_op(t).resolve_conj().numpy()
+        assert np.allclose(_np(out), exp, rtol=2e-4, atol=2e-5), name
+        assert name in stats["mlx"], stats
+        assert name not in stats["cpu"], stats
+    print("test_rfft PASS")
+
+
 def test_transpose_expand():
     # PT-Z: aten.transpose.int (PAR-41 census rank 4, 59592 receipts) and
     # aten.expand.default (rank 33, 233 receipts) — broadcast glue around
@@ -2543,6 +2588,7 @@ if __name__ == "__main__":
     test_numel()
     test_slice()
     test_fft()
+    test_rfft()
     test_transpose_expand()
     test_cat_clone()
     test_sum()
