@@ -930,7 +930,10 @@ inline bool qmm_swiglu_r1s4_default(const std::string& device_name) {
 // bit-identical to R2S8W2). Default on G14C and G13G; MLX_OMARCHY_WORD_R2S4=0
 // restores geometry.word. Pure.
 inline bool qmm_word_r2s4_default(const std::string& device_name) {
+  // G18G (Apple M6): the 128-lane workgroup sits entirely below the
+  // mesa#737 lanes-128-255 uniform-load defect; guarded by the M6 ABBA.
   return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G18G") != std::string::npos ||
       device_name.find("G13G") != std::string::npos;
 }
 
@@ -1691,9 +1694,11 @@ inline bool gemv_balanced_qkv_part(const std::string& device_name) {
 // apple_norm_shape_selected), so this predicate is consulted only where
 // RoPE::eval_gpu fuses the norm. G13C (16-inch M1 Max): measured for
 // receipts/20261125T-w7T-m1md5. G13G (13-inch M1): +0.30% on 4B ctx512 and
-// stacks in +8.19%/+8.23% 5/5 ABBA on 2B. Discrete GPUs admit it by
-// capability (DEC-18): the subgroup probe at the call site still gates,
-// and on a subgroup-64 part the pipeline pins requiredSubgroupSize = 32.
+// stacks in +8.19%/+8.23% 5/5 ABBA on 2B. G18G (Apple M6): the 128-lane
+// class sits below the mesa#737 lanes 128-255 uniform-load defect; the G18G
+// enablement is guarded by the M6 ABBA in this branch. Discrete GPUs admit
+// it by capability (DEC-18): the subgroup probe at the call site still
+// gates, and on a subgroup-64 part the pipeline pins requiredSubgroupSize = 32.
 // MLX_OMARCHY_NORM_APPLE_128=1/0 overrides on any part. Pure.
 inline bool norm_apple_128_default_part(
     const std::string& device_name,
@@ -1701,7 +1706,8 @@ inline bool norm_apple_128_default_part(
         VK_PHYSICAL_DEVICE_TYPE_OTHER) {
   return device_name.find("G13C") != std::string::npos ||
       device_name.find("G13G") != std::string::npos ||
-      physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+      device_name.find("G18G") != std::string::npos ||
+      physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU; (omarchy: enable 128-lane fast-decode kernels on G18G (Apple M6))
 }
 
 inline bool gemv_balanced_qkv_widths_ok(const std::vector<int64_t>& widths) {
