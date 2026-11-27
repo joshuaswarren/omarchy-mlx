@@ -238,8 +238,11 @@ def _im2col(a, kernel_size, dilation=1, padding=0, stride=1, **k):
 
 def _col2im(cols, output_size, kernel_size, dilation=1, padding=0, stride=1, **k):
     """aten.col2im: (N, C*kh*kw, L) -> NCHW canvas; overlapping positions sum
-    (the conv-backward scatter). Reversed slicing of the im2col pattern with
-    slice_update accumulation in the same (kh, kw) order."""
+    (the conv-backward scatter). Zero-stuff the patch grid to the strided
+    layout with a concatenate/reshape interleave (dense ops only — this
+    wheel's slice_update cannot stride), then add the clipped shifted
+    window per kernel offset with a dense read-modify-write: exact for any
+    stride/dilation/padding, overlaps sum."""
     kh, kw = kernel_size
     dl = (dilation, dilation) if isinstance(dilation, int) else tuple(dilation)
     pd = (padding, padding) if isinstance(padding, int) else tuple(padding)
@@ -248,21 +251,31 @@ def _col2im(cols, output_size, kernel_size, dilation=1, padding=0, stride=1, **k
     ow = (output_size[1] + 2 * pd[1] - dl[1] * (kw - 1) - 1) // sw + 1
     n = cols.shape[0]
     c = cols.shape[1] // (kh * kw)
-    x = _mx(cols).reshape(n, c, kh, kw, oh, ow)
-    canvas = mx.zeros((n, c, output_size[0], output_size[1]), dtype=x.dtype)
+    h, w = output_size
+    x = _mx(cols).reshape(n, c, kh, kw, oh, ow, 1)
+    if sw > 1:
+        x = mx.concatenate([x, mx.zeros((n, c, kh, kw, oh, ow, sw - 1), dtype=x.dtype)],
+                           axis=6)
+    x = x.reshape(n, c, kh, kw, oh, ow * sw)
+    x = x.reshape(n, c, kh, kw, oh, 1, ow * sw)
+    if sh > 1:
+        x = mx.concatenate([x, mx.zeros((n, c, kh, kw, oh, sh - 1, ow * sw), dtype=x.dtype)],
+                           axis=5)
+    x = x.reshape(n, c, kh, kw, oh * sh, ow * sw)
+    stuffed = x.reshape(n, c, kh, kw, oh * sh, ow * sw)
+    canvas = mx.zeros((n, c, h, w), dtype=x.dtype)
     for i in range(kh):
         for j in range(kw):
-            patch = x[:, :, i, j]
-            r, cl = i * dl[0] - pd[0], j * dl[1] - pd[1]
+            r = i * dl[0] - pd[0]
+            cl = j * dl[1] - pd[1]
             r0, c0 = max(r, 0), max(cl, 0)
-            r1, c1 = min(r + oh, output_size[0]), min(cl + ow, output_size[1])
+            r1, c1 = min(r + oh * sh, h), min(cl + ow * sw, w)
             if r1 <= r0 or c1 <= c0:
                 continue
-            pr0, pc0 = r0 - r, c0 - cl
+            grid = stuffed[:, :, i, j, r0 - r:r1 - r, c0 - cl:c1 - cl]
             canvas = mx.slice_update(
-                canvas,
-                canvas[:, :, r0:r1, c0:c1] + patch[:, :, pr0:pr0 + r1 - r0, pc0:pc0 + c1 - c0],
-                (0, 0, r0, c0))
+                canvas, canvas[:, :, r0:r1, c0:c1] + grid,
+                mx.array((0, 0, r0, c0)), mx.array((0, 1, 2, 3)))
     return canvas
 
 
