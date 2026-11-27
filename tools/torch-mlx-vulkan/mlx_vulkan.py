@@ -455,6 +455,12 @@ def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mas
     w = _mx(weight) if weight is not None else None
     ndim = len(tuple(normalized_shape))
     axes = tuple(range(x.ndim - ndim, x.ndim))
+    # aten returns mean/rstd with keepdims, but callers through aot_autograd
+    # and the OpInfo graph can hand them squeezed (shape x.shape[:-ndim]);
+    # restore the trailing singletons so they broadcast over normalized dims.
+    if mean.ndim < x.ndim:
+        shp = mean.shape + (1,) * (x.ndim - mean.ndim)
+        mean, rstd = mx.reshape(mean, shp), mx.reshape(rstd, shp)
     xhat = (x - mean) * rstd
     g = gout * w if w is not None else gout
     dx = rstd * (g - mx.mean(g, axis=axes, keepdims=True)
