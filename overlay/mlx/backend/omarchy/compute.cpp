@@ -799,6 +799,16 @@
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_hoist.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s4w2_hoist.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_hoist.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyp1_hoist.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyp1_swarf16.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyfused_hoist.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyfused_swarf16.h"
+#include "gated_delta_decode_conv_norm_bf16_sg32_fast.h"
+#include "qmm_vec_q4_swiglu_bf16_r2s4w2_swarf16.h"
+#include "qmm_vec_q4_swiglu_bf16_r2s2w2_swarf16.h"
+#include "qmm_vec_q4_swiglu_bf16_r2s8w2_swarf16.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_epifast.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_swarf16_epifast.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
@@ -2682,6 +2692,46 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_hoist,
           qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_hoist_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1Hoist:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyp1_hoist,
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyp1_hoist_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1SwarF16:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyp1_swarf16,
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyp1_swarf16_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2GreedyFusedHoist:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyfused_hoist,
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyfused_hoist_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2GreedyFusedSwarF16:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyfused_swarf16,
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_greedyfused_swarf16_size};
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast:
+      return {
+          gated_delta_decode_conv_norm_bf16_sg32_fast,
+          gated_delta_decode_conv_norm_bf16_sg32_fast_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R2S4W2SwarF16:
+      return {
+          qmm_vec_q4_swiglu_bf16_r2s4w2_swarf16,
+          qmm_vec_q4_swiglu_bf16_r2s4w2_swarf16_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R2S2W2SwarF16:
+      return {
+          qmm_vec_q4_swiglu_bf16_r2s2w2_swarf16,
+          qmm_vec_q4_swiglu_bf16_r2s2w2_swarf16_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R2S8W2SwarF16:
+      return {
+          qmm_vec_q4_swiglu_bf16_r2s8w2_swarf16,
+          qmm_vec_q4_swiglu_bf16_r2s8w2_swarf16_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2EpiFast:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_epifast,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_epifast_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2SwarF16EpiFast:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_swarf16_epifast,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_swarf16_epifast_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

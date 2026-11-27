@@ -1418,6 +1418,23 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4MultiSubgroupBF16R2S8W2Hoist,
   QmmVecQ4SwigluBF16R1S4W2Hoist,
   QmmVecQ4ResNormVec4BF16R2S32W2Hoist,
+  // Fused lm_head + GreedyWord P1 (2-dispatch and 1-dispatch inline merge,
+  // env-gated via MLX_OMARCHY_LM_GREEDY_FUSED). Appended to keep profile ids stable.
+  QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1Hoist,
+  QmmVecQ4WordSubgroupBF16R2S32W2GreedyP1SwarF16,
+  QmmVecQ4WordSubgroupBF16R2S32W2GreedyFusedHoist,
+  QmmVecQ4WordSubgroupBF16R2S32W2GreedyFusedSwarF16,
+  // GDN ConvNorm Sg32 with subgroupAdd + hoisted 4x vec4 state burst +
+  // merged Phase-2 epilogue (env-gated via MLX_OMARCHY_GDN_SG32_FAST).
+  GatedDeltaDecodeConvNormBF16Sg32Fast,
+  // 2-row-per-SG SwiGLU SWAR FP16 variants (env-gated via MLX_OMARCHY_SWIGLU_SWAR_R2).
+  QmmVecQ4SwigluBF16R2S4W2SwarF16,
+  QmmVecQ4SwigluBF16R2S2W2SwarF16,
+  QmmVecQ4SwigluBF16R2S8W2SwarF16,
+  // ResNormVec4 R2S32W2 with hoisted pair addend + pre-barrier norm_weight
+  // (env-gated via MLX_OMARCHY_RESNORM_EPI_FAST).
+  QmmVecQ4ResNormVec4BF16R2S32W2EpiFast,
+  QmmVecQ4ResNormVec4BF16R2S32W2SwarF16EpiFast,
   Count,
 };
 

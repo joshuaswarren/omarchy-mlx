@@ -110,12 +110,16 @@ float gdn_dk_term(float delta, float k_i) {
 }
 
 float tree_reduce32(float v) {
+#ifdef GDN_SG32_FAST
+  return subgroupAdd(v);
+#else
   v += subgroupShuffleDown(v, 16u);
   v += subgroupShuffleDown(v, 8u);
   v += subgroupShuffleDown(v, 4u);
   v += subgroupShuffleDown(v, 2u);
   v += subgroupShuffleDown(v, 1u);
   return subgroupShuffle(v, 0u);
+#endif
 }
 
 uint16_t gdn_conv_channel(uint channel) {
@@ -287,6 +291,22 @@ void main() {
   }
   barrier();
 
+#ifdef GDN_SG32_FAST
+  // Hoist all 4 coalesced vec4 state loads right after barrier 1 so AGX2
+  // issues them in a single 4-load burst (killing the Phase-2 w0 stall).
+  uint head_base = head * 128u * 128u;
+  uint s_in_base_q = (params.shape[1] + head_base) >> 2u;
+  uint s_out_base_q = (params.shape[2] + head_base) >> 2u;
+  uint r0 = row_start + sg;
+  uint r1 = row_start + sg + uint(GDN_SG);
+  uint r2 = row_start + sg + 2u * uint(GDN_SG);
+  uint r3 = row_start + sg + 3u * uint(GDN_SG);
+  vec4 w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+  vec4 w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+  vec4 w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
+  vec4 w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
+#endif
+
   // SGs 0..3 (Q) and SGs 4..7 (K) each compute the exact stride-64..1
   // tree_reduce32 directly in registers, eliminating an intermediate barrier.
   float g = s_g_val;
@@ -309,9 +329,11 @@ void main() {
   barrier();
 
   // Phase 2: Coalesced-state gated-delta update (2 or 4 Dv rows per 32-lane SG).
+#ifndef GDN_SG32_FAST
   uint head_base = head * 128u * 128u;
   uint s_in_base_q = (params.shape[1] + head_base) >> 2u;
   uint s_out_base_q = (params.shape[2] + head_base) >> 2u;
+#endif
 
   uint c0 = lane * 4u;
   float skg0 = skg[c0 + 0u];
@@ -333,6 +355,38 @@ void main() {
 #else
     #define GDN_STORE_O(r, ov) { so[(r)] = (ov); s_norm_buf[(r)] = (ov) * (ov); }
 #endif
+#ifdef GDN_SG32_FAST
+    // Straight-line 4-row Phase 2: defers lane==0 shared writes to one block
+    // after all 4 rows so all 4 vec4 s_out stores issue without per-row waits.
+    #define GDN_P4_ROW_FAST(wv, r, svr, o_out) { \
+      float kv_part = fma((wv).x, skg0, fma((wv).y, skg1, fma((wv).z, skg2, (wv).w * skg3))); \
+      float kv_acc = subgroupAdd(kv_part); \
+      float delta = ((svr) - kv_acc) * beta; \
+      float n0 = fma((wv).x, g, gdn_dk_term(delta, sk0)); \
+      float n1 = fma((wv).y, g, gdn_dk_term(delta, sk1)); \
+      float n2 = fma((wv).z, g, gdn_dk_term(delta, sk2)); \
+      float n3 = fma((wv).w, g, gdn_dk_term(delta, sk3)); \
+      s_out.v[s_out_base_q + (r) * 32u + lane] = vec4(n0, n1, n2, n3); \
+      float o_part = fma(n0, sq0, fma(n1, sq1, fma(n2, sq2, n3 * sq3))); \
+      (o_out) = subgroupAdd(o_part); \
+    }
+    float sv0 = sv[r0];
+    float sv1 = sv[r1];
+    float sv2 = sv[r2];
+    float sv3 = sv[r3];
+    float oa0, oa1, oa2, oa3;
+    GDN_P4_ROW_FAST(w0, r0, sv0, oa0)
+    GDN_P4_ROW_FAST(w1, r1, sv1, oa1)
+    GDN_P4_ROW_FAST(w2, r2, sv2, oa2)
+    GDN_P4_ROW_FAST(w3, r3, sv3, oa3)
+    if (lane == 0u) {
+      float ov0 = bf16_load(bf16_store(oa0)); GDN_STORE_O(r0, ov0)
+      float ov1 = bf16_load(bf16_store(oa1)); GDN_STORE_O(r1, ov1)
+      float ov2 = bf16_load(bf16_store(oa2)); GDN_STORE_O(r2, ov2)
+      float ov3 = bf16_load(bf16_store(oa3)); GDN_STORE_O(r3, ov3)
+    }
+    #undef GDN_P4_ROW_FAST
+#else
     #define GDN_P4_ROW(wv, r, svr) { \
       float kv_part = fma((wv).x, skg0, fma((wv).y, skg1, fma((wv).z, skg2, (wv).w * skg3))); \
       float kv_acc = subgroupAdd(kv_part); \
@@ -379,6 +433,7 @@ void main() {
 #error "GDN rows per SG must be 2 or 4"
 #endif
     #undef GDN_P4_ROW
+#endif
     #undef GDN_STORE_O
   }
   barrier();
