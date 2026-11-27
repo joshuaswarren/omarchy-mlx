@@ -75,4 +75,41 @@ class TestOmarchyTorchBackend(unittest.TestCase):
 
 
 if __name__ == "__main__":
+
+
+    def test_im2col_col2im_parity(self):
+        """PT-IM-a: the explicit im2col path — fp32 parity vs the aten CPU ops
+        across stride/padding/dilation, then col2im round-trip."""
+        import mlx.core as mx
+        import torch
+        import torch.nn.functional as F
+
+        from mlx.omarchy_torch import _col2im, _im2col
+
+        cases = [
+            dict(n=2, c=3, h=7, w=8, kh=3, kw=3, stride=1, padding=0, dilation=1),
+            dict(n=1, c=4, h=9, w=9, kh=2, kw=2, stride=2, padding=1, dilation=1),
+            dict(n=2, c=2, h=10, w=8, kh=3, kw=2, stride=2, padding=2, dilation=2),
+        ]
+        for case in cases:
+            torch.manual_seed(7)
+            x = torch.randn(case["n"], case["c"], case["h"], case["w"], dtype=torch.float32)
+            want = F.unfold(x, (case["kh"], case["kw"]), dilation=case["dilation"],
+                            padding=case["padding"], stride=case["stride"])
+            got = _im2col(mx.array(x.numpy()), (case["kh"], case["kw"]),
+                          dilation=case["dilation"], padding=case["padding"],
+                          stride=case["stride"])
+            self.assertTrue(mx.allclose(got, mx.array(want.numpy()), atol=0, rtol=0),
+                            (case, got.shape))
+            back = _col2im(got, (case["h"], case["w"]), (case["kh"], case["kw"]),
+                           dilation=case["dilation"], padding=case["padding"],
+                           stride=case["stride"])
+            want_back = F.fold(mx.array(want.numpy()), (case["h"], case["w"]),
+                               (case["kh"], case["kw"]), dilation=case["dilation"],
+                               padding=case["padding"], stride=case["stride"])
+            self.assertTrue(mx.allclose(back, mx.array(want_back.numpy()), atol=0, rtol=0),
+                            (case, back.shape))
+
+
+if __name__ == "__main__":
     unittest.main()

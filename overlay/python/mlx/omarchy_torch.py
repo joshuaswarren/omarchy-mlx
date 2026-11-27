@@ -210,6 +210,62 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
         y = y + _mx(b).reshape(1, 1, 1, -1)
     return y.transpose(0, 3, 1, 2)
 
+def _im2col(a, kernel_size, dilation=1, padding=0, stride=1, **k):
+    """aten.im2col: NCHW -> (N, C*kh*kw, oh*ow); block order c, kh, kw; the
+    L dimension enumerates (oh, ow) row-major. Built from pad + strided
+    slices + one transpose: every element is a copy, no scatter."""
+    x = _mx(a)
+    n, c, h, w = x.shape
+    kh, kw = kernel_size
+    dl = (dilation, dilation) if isinstance(dilation, int) else tuple(dilation)
+    pd = (padding, padding) if isinstance(padding, int) else tuple(padding)
+    sh, sw = (stride, stride) if isinstance(stride, int) else tuple(stride)
+    oh = (h + 2 * pd[0] - dl[0] * (kh - 1) - 1) // sh + 1
+    ow = (w + 2 * pd[1] - dl[1] * (kw - 1) - 1) // sw + 1
+    if oh <= 0 or ow <= 0:
+        return _raise(f"im2col shape {h}x{w} k {kh}x{kw}")
+    if pd[0] or pd[1]:
+        x = mx.pad(x, ((0, 0), (0, 0), (pd[0], pd[0]), (pd[1], pd[1])))
+    patches = [
+        x[:, :, i * dl[0]: i * dl[0] + sh * (oh - 1) + 1: sh,
+          j * dl[1]: j * dl[1] + sw * (ow - 1) + 1: sw]
+        for i in range(kh) for j in range(kw)
+    ]
+    # (kh*kw, N, C, oh, ow) -> (N, C, kh, kw, oh, ow) -> (N, C*kh*kw, oh*ow)
+    cols = mx.stack(patches).transpose(1, 2, 0, 3, 4).reshape(n, c * kh * kw, oh * ow)
+    return cols
+
+
+def _col2im(cols, output_size, kernel_size, dilation=1, padding=0, stride=1, **k):
+    """aten.col2im: (N, C*kh*kw, L) -> NCHW canvas; overlapping positions sum
+    (the conv-backward scatter). Reversed slicing of the im2col pattern with
+    slice_update accumulation in the same (kh, kw) order."""
+    kh, kw = kernel_size
+    dl = (dilation, dilation) if isinstance(dilation, int) else tuple(dilation)
+    pd = (padding, padding) if isinstance(padding, int) else tuple(padding)
+    sh, sw = (stride, stride) if isinstance(stride, int) else tuple(stride)
+    oh = (output_size[0] + 2 * pd[0] - dl[0] * (kh - 1) - 1) // sh + 1
+    ow = (output_size[1] + 2 * pd[1] - dl[1] * (kw - 1) - 1) // sw + 1
+    n = cols.shape[0]
+    c = cols.shape[1] // (kh * kw)
+    x = _mx(cols).reshape(n, c, kh, kw, oh, ow)
+    canvas = mx.zeros((n, c, output_size[0], output_size[1]), dtype=x.dtype)
+    for i in range(kh):
+        for j in range(kw):
+            patch = x[:, :, i, j]
+            r, cl = i * dl[0] - pd[0], j * dl[1] - pd[1]
+            r0, c0 = max(r, 0), max(cl, 0)
+            r1, c1 = min(r + oh, output_size[0]), min(cl + ow, output_size[1])
+            if r1 <= r0 or c1 <= c0:
+                continue
+            pr0, pc0 = r0 - r, c0 - cl
+            canvas = mx.slice_update(
+                canvas,
+                canvas[:, :, r0:r1, c0:c1] + patch[:, :, pr0:pr0 + r1 - r0, pc0:pc0 + c1 - c0],
+                (0, 0, r0, c0), (n, c, r1, c1))
+    return canvas
+
+
 def _group_norm(a, num_groups, w=None, b=None, eps=1e-5):
     # torch NCHW; mlx 0.32 has no fast.group_norm - normalize per group.
     x = _mx(a)
@@ -318,6 +374,8 @@ _FUNC_SPECS = {
     "native_layer_norm_backward": _ln_backward,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     "conv2d": _conv2d,
+    "im2col": _im2col,
+    "col2im": _col2im,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
