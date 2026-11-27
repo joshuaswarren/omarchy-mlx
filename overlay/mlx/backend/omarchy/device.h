@@ -894,6 +894,14 @@ inline bool qmm_lm_r2s32_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
 }
 
+// Upfront 8-load Q4_ROWS Multi GEMV (QmmVecQ4MultiSubgroupBF16R2S8W2Upfront):
+// preserves 1-wave load coalescing (2 waits) on G14C where register headroom
+// sits well below the 104 half-reg cliff, while leaving G13C on the low-reg
+// split-load variant. Default on G14C; MLX_OMARCHY_Q4_UPFRONT=0 disables. Pure.
+inline bool qmm_multi_upfront_default(const std::string& device_name) {
+  return device_name.find("G14C") != std::string::npos;
+}
+
 // Fused GatedDeltaUpdate on G18G (Apple M6): the fused update and raw
 // decode routes miscompute there. On the 2026-11-24 PAR-35 A/B the fused
 // path diverged from the ops reference from layer 1 prefill on, while the

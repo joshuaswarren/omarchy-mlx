@@ -414,6 +414,12 @@ int main(int argc, char** argv) {
       std::cout << "FAIL: qmm_word_r2s4_default part check\n";
       ++failures;
     }
+    if (!mlx::core::omarchy::qmm_multi_upfront_default("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_multi_upfront_default("Apple M1 Max (G13C C0)") ||
+        mlx::core::omarchy::qmm_multi_upfront_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: qmm_multi_upfront_default part check\n";
+      ++failures;
+    }
   }
   // Low-register SwiGLU (R1S8W2 and R1S4W2) must be bit-identical to 2x4.
   {
@@ -461,6 +467,25 @@ int main(int argc, char** argv) {
       ++failures;
     } else {
       std::cout << "ok: word R2S4W2 identical\n";
+    }
+  }
+  // Upfront 8-load Multi R2S8W2Upfront must be bit-identical to 2x4.
+  {
+    std::string base = "/tmp/w7p-geom-base.bin";
+    std::string other = "/tmp/w7p-geom-other.bin";
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
+    setenv("MLX_OMARCHY_Q4_UPFRONT", "0", 1);
+    int rc = run_child("multi", base.c_str());
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+    setenv("MLX_OMARCHY_Q4_UPFRONT", "1", 1);
+    int rc2 = run_child("multi", other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    unsetenv("MLX_OMARCHY_Q4_UPFRONT");
+    if (rc != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+      std::cout << "FAIL: multi R2S8W2Upfront differed from 2x4 (rc " << rc << "/" << rc2 << ")\n";
+      ++failures;
+    } else {
+      std::cout << "ok: multi R2S8W2Upfront identical\n";
     }
   }
   // Coalesced uvec4 ResNorm (R2S16W2) must be bit-identical to unfused and
