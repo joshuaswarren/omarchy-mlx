@@ -1469,6 +1469,19 @@ enum class ComputeKernel : uint16_t {
   // specialization (64 WGs = 2 full waves on 32 cores; 0-ULP bit-identical).
   // Appended to keep profile kernel ids stable.
   QmmVecQ4ResNormVec4BF16R2S32W2FastD4096Midsb,
+  // CMAT16 wide-tile / staged-K twins of QmmPrefillCoopmat16BF16
+  // (shaders/qmm_coopmat.comp -DCMAT16, DEC-20): 64- and 128-row tiles
+  // at 64/128/256 lanes with STEP_K 32/64 staging for the fp16-operand
+  // 16x16x16 route. Same staged values and per-output ascending-k
+  // chain. Appended to keep profile kernel ids stable.
+  QmmPrefillCoopmat16BF16M64,
+  QmmPrefillCoopmat16BF16M64K32,
+  QmmPrefillCoopmat16BF16M64K64,
+  QmmPrefillCoopmat16BF16SG4,
+  QmmPrefillCoopmat16BF16SG4K32,
+  QmmPrefillCoopmat16BF16SG4K64,
+  QmmPrefillCoopmat16BF16SG8K32,
+  QmmPrefillCoopmat16BF16SG8K64,
   Count,
 };
 

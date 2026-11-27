@@ -10065,6 +10065,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           omarchy::cooperative_matrix_advertises(
               c16_hw.cooperative_matrix_shapes,
               omarchy::qmm_prefill_coopmat_shape_f16x16()));
+      // DEC-20: the env-gated 64/128-row + K=32/64 twins share the base
+      // kernel's axis claim; the pick is one kernel for the whole call
+      // (dispatch_qmm_out_rows chunks share it).
+      const auto c16_kernel = omarchy::qmm_coopmat16_kernel(coopmat_caps);
+      const uint32_t c16_rows =
+          omarchy::qmm_coopmat16_tile_rows(c16_kernel);
       dispatch_qmm_out_rows(
           encoder,
           out,
@@ -10073,12 +10079,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           [&](std::span<const omarchy::ComputeBinding> cb,
               const omarchy::ComputeParams& cp) {
             encoder.dispatch_compute(
-                omarchy::ComputeKernel::QmmPrefillCoopmat16BF16,
+                c16_kernel,
                 cb,
                 cp,
                 std::min((cp.matrix_n + 31u) / 32u,
                          omarchy::kMaxComputeGroupCountX),
-                std::min((cp.matrix_m + 31u) / 32u,
+                std::min((cp.matrix_m + c16_rows - 1u) / c16_rows,
                          omarchy::kMaxComputeGroupCountX),
                 1u);
           });
