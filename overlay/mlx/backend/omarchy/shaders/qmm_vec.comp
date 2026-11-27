@@ -455,6 +455,11 @@ layout(set = 0, binding = 6, std430) readonly buffer Biases1 {
 layout(set = 0, binding = 7, std430) writeonly buffer Output0 {
   STORAGE_TYPE values[];
 } output0;
+#ifdef QMM_VEC_DUAL
+layout(set = 0, binding = 8, std430) writeonly buffer Output1 {
+  STORAGE_TYPE values[];
+} output1;
+#endif
 #else
 layout(set = 0, binding = 1, std430) readonly buffer InputW {
 #if defined(QMM_VEC_Q4_WORD) && \
@@ -2538,12 +2543,17 @@ void main() {
   if (lane_in_slot == 0u) {
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
       if (column + r < n) {
+#ifdef QMM_VEC_DUAL
+        output0.values[column + r] = STORE_VALUE(ROUND_STORAGE(total_g[r]));
+        output1.values[column + r] = STORE_VALUE(ROUND_STORAGE(total_u[r]));
+#else
         float gate_rounded = ROUND_STORAGE(total_g[r]);
         float up_rounded = ROUND_STORAGE(total_u[r]);
         float sig = ROUND_STORAGE(1.0 / (1.0 + exp(-gate_rounded)));
         float silu = ROUND_STORAGE(gate_rounded * sig);
         output0.values[column + r] =
             STORE_VALUE(ROUND_STORAGE(silu * up_rounded));
+#endif
       }
     }
   }

@@ -3613,7 +3613,7 @@ TEST_CASE("sdpa outgate and online-rope hd256: bit-exact output and k_cache") {
   const int KVH = 2;
   const int D = 256;
   const int ROPE_DIMS = 64;
-  const int CAP = 64;
+  const int CAP = 512;
   const float scale = 1.0f / std::sqrt(static_cast<float>(D));
   std::vector<float> xv_float(128, 0.125f);
   array xv = astype(array(xv_float.data(), {1, 128}, float32), bfloat16, stream);
@@ -3707,7 +3707,7 @@ TEST_CASE("sdpa outgate and online-rope hd256: bit-exact output and k_cache") {
     int64_t last_k = counters().last_dispatched_kernel.load();
     return std::make_tuple(gated, keys_out, launched, last_k);
   };
-  for (int pos : {0, 36}) {
+  for (int pos : {0, 36, 319}) {
     // 1. Online HD=256 + Outgate only (deletes CopyGeneral + Sigmoid + Multiply).
     auto [g_base, k_base, n_base, lk_base] = run(pos, "32", "0", "0");
     auto [g_og, k_og, n_og, lk_og] = run(pos, "32", "0", "1");
@@ -3733,6 +3733,23 @@ TEST_CASE("sdpa outgate and online-rope hd256: bit-exact output and k_cache") {
     }
     expect_bit_exact(g_base, g_or, stream);
     expect_bit_exact(k_base, k_or, stream);
+    if (pos == 319 && online_ready) {
+      for (const char* sp : {"2", "4", "8"}) {
+        setenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_SPLIT", sp, 1);
+        auto [g_sp, k_sp, n_sp, lk_sp] = run(pos, "32", "1", "1");
+        unsetenv("MLX_OMARCHY_SDPA_ONLINE_ROPE_SPLIT");
+        INFO("online-rope-split=" << sp << " pos=" << pos);
+        CHECK_EQ(n_sp + 5, n_base);
+        CHECK_EQ(
+            lk_sp,
+            static_cast<int64_t>(
+                omarchy::ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split));
+        expect_bit_exact(k_base, k_sp, stream);
+        auto md = max(abs(astype(g_base, float32, stream) - astype(g_sp, float32, stream)), stream);
+        eval({md});
+        CHECK_MESSAGE(md.item<float>() <= 2e-2f, "split=", sp, " max_diff=", md.item<float>());
+      }
+    }
     // 3. Split-K HD=256 + Outgate (online disabled).
     auto [g_sp_base, k_sp_base, n_sp_base, lk_sp_base] = run(pos, "0", "0", "0");
     auto [g_sp_og, k_sp_og, n_sp_og, lk_sp_og] = run(pos, "0", "0", "1");

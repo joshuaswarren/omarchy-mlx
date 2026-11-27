@@ -1835,7 +1835,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           for (const auto& m : group.members) {
             widths.push_back(m.node.inputs()[1].shape(0));
           }
-          balanced_qkv = group.members.size() == 3 &&
+          const char* bqkv_env = omarchy::env_str("MLX_OMARCHY_BALANCED_QKV");
+          const bool bqkv_allow = !(bqkv_env != nullptr && bqkv_env[0] == '0' && bqkv_env[1] == '\0');
+          balanced_qkv = bqkv_allow && group.members.size() == 3 &&
               gemv_balanced_qkv_widths_ok(widths);
           if (!balanced_qkv) {
             // Split-pair admission: each consecutive member pair whose
@@ -1843,14 +1845,36 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
             // so an asymmetric window never folds as one group while
             // its balanced pairs still fuse (members outside a passing
             // pair stay on the per-node path).
+            std::vector<bool> paired(group.members.size(), false);
             for (size_t p = 0; p + 1 < group.members.size(); p += 2) {
               if (!gemv_balanced_pair_widths_ok(widths[p], widths[p + 1])) {
                 continue;
               }
+              paired[p] = paired[p + 1] = true;
               GemvGroup pair;
               pair.members.push_back(std::move(group.members[p]));
               pair.members.push_back(std::move(group.members[p + 1]));
               pair_groups.push_back(std::move(pair));
+            }
+            if (omarchy::env_flag("MLX_OMARCHY_DUAL_SMALL")) {
+              // Also pair tiny equal-width projections (e.g. GDN in_proj_a/b
+              // width 16 or 32) regardless of tape order without disturbing
+              // wide projections (6144/2048) or MLP gate+up pairs above.
+              for (size_t i = 0; i < group.members.size(); ++i) {
+                if (paired[i] || widths[i] > 64) {
+                  continue;
+                }
+                for (size_t j = i + 1; j < group.members.size(); ++j) {
+                  if (!paired[j] && widths[j] == widths[i]) {
+                    paired[i] = paired[j] = true;
+                    GemvGroup pair;
+                    pair.members.push_back(std::move(group.members[i]));
+                    pair.members.push_back(std::move(group.members[j]));
+                    pair_groups.push_back(std::move(pair));
+                    break;
+                  }
+                }
+              }
             }
           }
         }

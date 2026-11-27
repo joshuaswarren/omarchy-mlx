@@ -1365,6 +1365,10 @@ enum class ComputeKernel : uint16_t {
   // the fp16-operand CMAT16 build. Appended to keep profile kernel ids
   // stable.
   QmmPrefillCoopmatBF16x16,
+  SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split,
+  GatedDeltaDecodeConvNormBF16Sg32Fast,
+  QmmVecQ4DualBF16R1S8W2,
+  QmmVecQ4ResNormVec4BF16R2S32W2,
   Count,
 };
 

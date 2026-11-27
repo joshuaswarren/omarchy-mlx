@@ -65,7 +65,12 @@ shared float sk[128];
 shared float skg[128];
 shared float sv[128];
 shared float so[128];
+#ifdef GDN_TWO_BARRIER
+shared float s_g;
+shared float s_beta;
+#else
 shared float s_norm_buf[256];
+#endif
 
 float bf16_load(uint16_t bits) {
   return uintBitsToFloat(uint(bits) << 16u);
@@ -192,6 +197,104 @@ void main() {
     khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
   }
 
+#ifdef GDN_TWO_BARRIER
+  // 2-barrier fast path: sg 0 computes Q + norm + gates, sg 1 computes K + norm + skg,
+  // sg 2 computes V in parallel -> 1 single barrier before Phase 2; Phase 3 runs on
+  // sg 0 with zero extra barriers (6 barriers -> 2 barriers, 1024x gates -> 2x).
+  const uint key_dim = params.rhs_size;
+  if (sg == 0u) {
+    if (lane == 0u) {
+      vec2 gates = gdn_compute_gates(head);
+      s_g = gates.x;
+      s_beta = gates.y;
+    }
+    bool lead = true;
+    if (params.in_strides[3] != 0u) {
+      lead = (head % params.in_strides[2]) %
+              (params.in_strides[2] / params.in_strides[3]) == 0u;
+    }
+    uint qbase = khead * 128u;
+    uint c0 = qbase + lane;
+    uint c1 = c0 + 32u;
+    uint c2 = c0 + 64u;
+    uint c3 = c0 + 96u;
+    uint16_t qa0 = gdn_conv_channel(c0);
+    uint16_t qa1 = gdn_conv_channel(c1);
+    uint16_t qa2 = gdn_conv_channel(c2);
+    uint16_t qa3 = gdn_conv_channel(c3);
+    float q0 = bf16_load(qa0);
+    float q1 = bf16_load(qa1);
+    float q2 = bf16_load(qa2);
+    float q3 = bf16_load(qa3);
+    float sum_q = tree_reduce32((q0 * q0 + q2 * q2) + (q1 * q1 + q3 * q3));
+    sq[lane] = bf16_load(gdn_conv_qk_norm(qa0, sum_q, params.out_strides[2]));
+    sq[lane + 32u] = bf16_load(gdn_conv_qk_norm(qa1, sum_q, params.out_strides[2]));
+    sq[lane + 64u] = bf16_load(gdn_conv_qk_norm(qa2, sum_q, params.out_strides[2]));
+    sq[lane + 96u] = bf16_load(gdn_conv_qk_norm(qa3, sum_q, params.out_strides[2]));
+    if (lead) {
+      gdn_conv_state_out(c0);
+      gdn_conv_state_out(c1);
+      gdn_conv_state_out(c2);
+      gdn_conv_state_out(c3);
+    }
+  } else if (sg == 1u) {
+    float g_loc = 0.0f;
+    if (lane == 0u) {
+      g_loc = gdn_compute_gates(head).x;
+    }
+    g_loc = subgroupShuffle(g_loc, 0u);
+    bool lead = true;
+    if (params.in_strides[3] != 0u) {
+      lead = (head % params.in_strides[2]) %
+              (params.in_strides[2] / params.in_strides[3]) == 0u;
+    }
+    uint kbase = key_dim + khead * 128u;
+    uint c0 = kbase + lane;
+    uint c1 = c0 + 32u;
+    uint c2 = c0 + 64u;
+    uint c3 = c0 + 96u;
+    uint16_t ka0 = gdn_conv_channel(c0);
+    uint16_t ka1 = gdn_conv_channel(c1);
+    uint16_t ka2 = gdn_conv_channel(c2);
+    uint16_t ka3 = gdn_conv_channel(c3);
+    float k0 = bf16_load(ka0);
+    float k1 = bf16_load(ka1);
+    float k2 = bf16_load(ka2);
+    float k3 = bf16_load(ka3);
+    float sum_k = tree_reduce32((k0 * k0 + k2 * k2) + (k1 * k1 + k3 * k3));
+    float kn0 = bf16_load(gdn_conv_qk_norm(ka0, sum_k, params.out_strides[3]));
+    float kn1 = bf16_load(gdn_conv_qk_norm(ka1, sum_k, params.out_strides[3]));
+    float kn2 = bf16_load(gdn_conv_qk_norm(ka2, sum_k, params.out_strides[3]));
+    float kn3 = bf16_load(gdn_conv_qk_norm(ka3, sum_k, params.out_strides[3]));
+    sk[lane] = kn0;       skg[lane] = kn0 * g_loc;
+    sk[lane + 32u] = kn1; skg[lane + 32u] = kn1 * g_loc;
+    sk[lane + 64u] = kn2; skg[lane + 64u] = kn2 * g_loc;
+    sk[lane + 96u] = kn3; skg[lane + 96u] = kn3 * g_loc;
+    if (lead) {
+      gdn_conv_state_out(c0);
+      gdn_conv_state_out(c1);
+      gdn_conv_state_out(c2);
+      gdn_conv_state_out(c3);
+    }
+  } else if (sg == 2u) {
+    uint vbase = 2u * key_dim + head * 128u;
+    uint c0 = vbase + lane;
+    uint c1 = c0 + 32u;
+    uint c2 = c0 + 64u;
+    uint c3 = c0 + 96u;
+    sv[lane] = bf16_load(gdn_conv_channel(c0));
+    sv[lane + 32u] = bf16_load(gdn_conv_channel(c1));
+    sv[lane + 64u] = bf16_load(gdn_conv_channel(c2));
+    sv[lane + 96u] = bf16_load(gdn_conv_channel(c3));
+    gdn_conv_state_out(c0);
+    gdn_conv_state_out(c1);
+    gdn_conv_state_out(c2);
+    gdn_conv_state_out(c3);
+  }
+  barrier();
+  float g = s_g;
+  float beta = s_beta;
+#else
   vec2 gates = gdn_compute_gates(head);
   float g = gates.x;
   float beta = gates.y;
@@ -255,6 +358,7 @@ void main() {
     skg[tid] = k_norm * g;
   }
   barrier();
+#endif
 
   // Phase 2: Coalesced-state gated-delta update (4 Dv rows per 32-lane SG).
   uint head_base = head * 128u * 128u;
@@ -297,6 +401,32 @@ void main() {
   }
   barrier();
 
+#ifdef GDN_TWO_BARRIER
+  if (sg == 0u) {
+    float o0 = bf16_load(bf16_store(so[lane]));
+    float o1 = bf16_load(bf16_store(so[lane + 32u]));
+    float o2 = bf16_load(bf16_store(so[lane + 64u]));
+    float o3 = bf16_load(bf16_store(so[lane + 96u]));
+    float sum = tree_reduce32((o0 * o0 + o2 * o2) + (o1 * o1 + o3 * o3));
+    float norm = inversesqrt(sum / 128.0f + params.alpha);
+    uint obase = params.output_offset + head * 128u;
+    uint gbase = params.shape[3] + head * 128u;
+    uint wbase = params.output_size;
+    float ov[4] = float[4](o0, o1, o2, o3);
+    for (uint k = 0u; k < 4u; ++k) {
+      uint d = lane + k * 32u;
+      float weight = bf16_load(norm_w.v[wbase + d]);
+      precise float norm_weight = norm * weight;
+      precise float result = ov[k] * norm_weight;
+      float normed = bf16_load(gdn_conv_bf16_store(result));
+      float gate = bf16_load(norm_gate.v[gbase + d]);
+      float sigmoid_value = 1.0f / (1.0f + exp(-gate));
+      precise float silu = gate * sigmoid_value;
+      precise float prod = silu * normed;
+      y_buf.v[obase + d] = gdn_conv_bf16_store(prod);
+    }
+  }
+#else
   // Phase 3: Gated RMSNorm epilogue (exact stride-64..1 reduction via 1-SG
   // tree_reduce32, bit-identical to gdn_norm_epilogue).
   float out_val = 0.0f;
@@ -330,4 +460,5 @@ void main() {
     y_buf.v[params.output_offset + head * 128u + tid] =
         gdn_conv_bf16_store(prod);
   }
+#endif
 }

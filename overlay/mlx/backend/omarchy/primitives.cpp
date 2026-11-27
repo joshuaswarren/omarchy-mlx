@@ -11146,11 +11146,27 @@ bool dispatch_quantized_gemv_group(
         ? (std::strcmp(rn_vec4_env, "0") != 0)
         : omarchy::qmm_resnorm_vec4_default(qmm_dev_name);
     if (rn_vec4_on) {
-      resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
-      resnorm_cols = 32u;
+      if (omarchy::env_flag("MLX_OMARCHY_RESNORM_R2S32") &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
+        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2;
+        resnorm_cols = 64u;
+      } else {
+        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
+        resnorm_cols = 32u;
+      }
       resnorm_vec4_active = true;
     }
   }
+  const bool dedicated_dual_active = !swiglu_out && !res_norm_active &&
+      !token_route && outgate == nullptr && dtype == bfloat16 &&
+      subgroup_ready && members.size() == 2 &&
+      !members[0].epilogue && !members[1].epilogue &&
+      !members[0].sum_window && !members[1].sum_window &&
+      !members[0].out_view && !members[1].out_view &&
+      members[0].node.inputs()[1].shape(0) ==
+          members[1].node.inputs()[1].shape(0) &&
+      omarchy::env_flag("MLX_OMARCHY_DUAL_SMALL");
   // Columns per workgroup of the kernel selected below: the geometry applies
   // to the bf16 subgroup single-token multi, dedicated SwiGLU, and fused
   // resnorm epilogue kernels.
@@ -11161,6 +11177,8 @@ bool dispatch_quantized_gemv_group(
                                    : resnorm_cols))
       : dedicated_swiglu_active
       ? swiglu_cols
+      : dedicated_dual_active
+      ? 8u
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
              ? geom.columns
@@ -11246,6 +11264,8 @@ bool dispatch_quantized_gemv_group(
     // of both weights, so the gate count is weight 0's alone.
     total_groups = (params.shape[0] + group_columns - 1u) / group_columns;
     params.flags |= 65536u;
+  } else if (dedicated_dual_active) {
+    total_groups = (params.shape[0] + group_columns - 1u) / group_columns;
   }
   if (total_groups > kMaxComputeGroupCountX) {
     return false;
@@ -11783,6 +11803,26 @@ bool dispatch_quantized_gemv_group(
     encoder.dispatch_compute(
         swiglu_kernel,
         sw_bindings,
+        params,
+        total_groups,
+        1u,
+        1u);
+    return true;
+  }
+  if (dedicated_dual_active) {
+    std::array<ComputeBinding, 9> dual_bindings{
+        binding(x),
+        binding(members[0].node.inputs()[1]),
+        binding(members[0].node.inputs()[2]),
+        binding(members[0].node.inputs()[3]),
+        binding(members[1].node.inputs()[1]),
+        binding(members[1].node.inputs()[2]),
+        binding(members[1].node.inputs()[3]),
+        binding(members[0].node),
+        binding(members[1].node)};
+    encoder.dispatch_compute(
+        ComputeKernel::QmmVecQ4DualBF16R1S8W2,
+        dual_bindings,
         params,
         total_groups,
         1u,
@@ -18140,7 +18180,9 @@ void GdnConvDeltaUpdate::eval_gpu(
                  : omarchy::ComputeKernel::GatedDeltaDecodeConvBF16Pf);
   if (gdn_coal_sg32_ok &&
       (params.shape[1] % 4u) == 0u && (params.shape[2] % 4u) == 0u) {
-    kernel = omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
+    kernel = omarchy::env_flag("MLX_OMARCHY_GDN_FAST2B")
+        ? omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast
+        : omarchy::ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32;
   }
   encoder.dispatch_compute(
       kernel,
@@ -19195,11 +19237,53 @@ void ScaledDotProductAttention::eval_gpu(
               binding(kw),
               binding(off),
               binding(*og->gate)};
-          const auto og_kernel = is_hd256
-              ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256
-              : omarchy::ComputeKernel::
-                    SdpaDecodeOnlineRopeOutgateSg32BF16Hd128;
-          encoder.dispatch_compute(og_kernel, rb_og, rp, rp.matrix_m);
+          uint32_t split_k = 1u;
+          if (is_hd256 && rp.matrix_m <= 64u &&
+              encoder.device().compute().binding_limit() >= 11u) {
+            const char* sp_env = omarchy::env_str("MLX_OMARCHY_SDPA_ONLINE_ROPE_SPLIT");
+            if (sp_env != nullptr) {
+              if (std::strcmp(sp_env, "2") == 0 && rp.matrix_k >= 64u) {
+                split_k = 2u;
+              } else if (std::strcmp(sp_env, "4") == 0 && rp.matrix_k >= 128u) {
+                split_k = 4u;
+              } else if (std::strcmp(sp_env, "8") == 0 && rp.matrix_k >= 256u) {
+                split_k = 8u;
+              }
+            }
+          }
+          if (split_k > 1u) {
+            array split_scratch(
+                Shape{static_cast<int>(rp.matrix_m * split_k * 260u)},
+                float32,
+                nullptr,
+                {});
+            split_scratch.set_data(allocate_omarchy(split_scratch.nbytes()));
+            encoder.add_temporary(split_scratch);
+            rp.out_strides[3] = split_k;
+            std::array<omarchy::ComputeBinding, 11> rb_og_split{
+                binding(q_raw),
+                binding(k),
+                binding(v),
+                binding(tail_out),
+                binding(k_raw),
+                binding(qw),
+                binding(kw),
+                binding(off),
+                binding(*og->gate),
+                binding(split_scratch),
+                encoder.resnorm_ticket_binding()};
+            encoder.dispatch_compute(
+                omarchy::ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split,
+                rb_og_split,
+                rp,
+                rp.matrix_m * split_k);
+          } else {
+            const auto og_kernel = is_hd256
+                ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256
+                : omarchy::ComputeKernel::
+                      SdpaDecodeOnlineRopeOutgateSg32BF16Hd128;
+            encoder.dispatch_compute(og_kernel, rb_og, rp, rp.matrix_m);
+          }
           omarchy::commit_sdpa_online_rope(out);
           omarchy::commit_sdpa_outgate(out);
           dispatched = true;
