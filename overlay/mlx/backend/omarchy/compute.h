@@ -1460,6 +1460,11 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4ResNormVec4BF16R2S16W2FastD2048,
   QmmVecQ4ResNormVec4BF16R2S16W2FastD4096,
   QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast3M,
+  // G13C-gated HD=128 SdpaOnlineRope with 4-key K-first branchless blocked
+  // online softmax (dispatched for k_len >= 1024; k_len < 1024 uses the 2-key
+  // blocked path in SdpaDecodeOnlineRopeSg32BF16Hd128G13C). Appended to keep
+  // profile kernel ids stable.
+  SdpaDecodeOnlineRopeSg32BF16Hd128G13CB4,
   Count,
 };
 
