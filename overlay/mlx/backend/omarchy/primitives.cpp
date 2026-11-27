@@ -1084,7 +1084,7 @@ void dispatch_matmul(
   const bool xe16 = !matmul_xe16_disabled && !sdpa && !coopmat && !use_c &&
       kernel == omarchy::ComputeKernel::MatmulBF16 &&
       caps.cooperative_matrix_bf16 && xe16_shape_advertised &&
-      caps.subgroup_size == 32u &&
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_admitted) &&
       caps.max_compute_work_group_invocations >= 64u &&
       caps.max_compute_work_group_size[0] >= 64u &&
       !coopmat_disabled && params.matrix_m > 1u && params.matrix_k > 0u &&
@@ -1103,7 +1103,10 @@ void dispatch_matmul(
                     .hardware_capabilities()
                     .cooperative_matrix_shapes,
                 omarchy::matmul_xe16_bf16_shape()) &&
-            encoder.device().hardware_capabilities().subgroup_size == 32u &&
+            (encoder.device().hardware_capabilities().subgroup_size == 32u ||
+             encoder.device()
+                 .hardware_capabilities()
+                 .subgroup_size_32_admitted) &&
             encoder.device()
                     .hardware_capabilities()
                     .max_compute_work_group_invocations >= 64u &&
@@ -9330,7 +9333,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       x.ndim() >= 2 && x.shape(-2) > 1 &&
       x.shape(-1) % 64 == 0 &&
       coopmat_caps.cooperative_matrix_bf16 && qmm_xe16_shape_advertised &&
-      coopmat_caps.subgroup_size == 32u &&
+      (coopmat_caps.subgroup_size == 32u ||
+       coopmat_caps.subgroup_size_32_admitted) &&
       coopmat_caps.max_compute_work_group_invocations >= 64u &&
       coopmat_caps.max_compute_work_group_size[0] >= 64u &&
       !coopmat_disabled &&
@@ -10082,12 +10086,13 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           coopmat_caps,
           qmm_xe16_reachable,
           "QmmPrefillCoopmat16XeBF16",
-          "cooperative_matrix_bf16+cooperative_matrix_bf16_8x16x16+subgroup_size==32",
+          "cooperative_matrix_bf16+cooperative_matrix_bf16_8x16x16+subgroup_size==32|32_admitted",
           xe16_hw.cooperative_matrix_bf16 &&
               omarchy::cooperative_matrix_advertises(
                   xe16_hw.cooperative_matrix_shapes,
                   omarchy::qmm_prefill_coopmat16_xe_shape()) &&
-              xe16_hw.subgroup_size == 32u &&
+              (xe16_hw.subgroup_size == 32u ||
+               xe16_hw.subgroup_size_32_admitted) &&
               xe16_hw.max_compute_work_group_invocations >= 64u &&
               xe16_hw.max_compute_work_group_size[0] >= 64u);
       dispatch_qmm_out_rows(

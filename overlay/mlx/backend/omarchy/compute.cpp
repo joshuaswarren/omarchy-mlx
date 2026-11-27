@@ -2972,6 +2972,32 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
         nullptr,
         pin);
   }
+  if (kernel == ComputeKernel::MatmulBF16CoopmatXe16 ||
+      kernel == ComputeKernel::QmmPrefillCoopmat16XeBF16) {
+    // DEC-19: the ANV xe16 builds need 32-lane subgroups (their workgroup
+    // is two 32-lane subgroups). ANV reports 16 natively, so the route is
+    // only legal through a requiredSubgroupSize=32 pin the hardware
+    // admitted (VK_EXT_subgroup_size_control). Same fail-closed rule as
+    // the CMAT16 dense builds.
+    if (required_subgroup_size_ != 0u &&
+        required_subgroup_size_ != 32u &&
+        !subgroup_size_32_admitted_) {
+      throw std::runtime_error(
+          "[omarchy] xe16 coopmat kernels require 32-lane subgroups, "
+          "which this device cannot legally pin.");
+    }
+    const uint32_t pin =
+        required_subgroup_size_ != 0u && required_subgroup_size_ != 32u
+        ? 32u
+        : required_subgroup_size_;
+    return create_pipeline(
+        std::span<const uint32_t>{
+            reinterpret_cast<const uint32_t*>(bytes),
+            size / sizeof(uint32_t)},
+        "main",
+        nullptr,
+        pin);
+  }
   if (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16 ||
       kernel == ComputeKernel::SdpaCausalFlashCoopmat16BF16) {
     // Same fail-closed rule as the 16-lane build, one wave up: the kernel

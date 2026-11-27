@@ -550,6 +550,40 @@ int run_child_scenario(const std::string& mode) {
       std::_Exit(32);
     }
   }
+  if (mode == "xe16_prefill_wedge") {
+    // DEC-19 hang-safety: a Qwen3-4B prefill-shaped bf16 dense matmul on
+    // the Xe16 coopmat route (MatmulBF16CoopmatXe16). The 2026-11-25 B60
+    // receipt records GuC killing a ubatch>64 large-tile submit at
+    // ~16-19 s with ErrorDeviceLost; this child submits m=512 (64 x 8
+    // rows per 32-row tile, 16 tiles of workgroups) which is exactly the
+    // wedge geometry if the route mis-sizes. A healthy pass finishes in
+    // seconds; a wedge throws inside synchronize and exits 33.
+    const auto& caps = omarchy::device(0).capabilities();
+    const bool xe16_route = caps.cooperative_matrix_bf16 &&
+        (caps.subgroup_size == 32u || caps.subgroup_size_32_admitted) &&
+        caps.max_compute_work_group_invocations >= 64u &&
+        omarchy::cooperative_matrix_advertises(
+            caps.cooperative_matrix_shapes,
+            omarchy::matmul_xe16_bf16_shape());
+    if (!xe16_route) {
+      std::_Exit(77);
+    }
+    Stream s = new_stream(Device::gpu);
+    set_default_device(Device::gpu);
+    set_default_stream(s);
+    try {
+      auto x = ones({512, 2560}, bfloat16, s);
+      auto y = matmul(x, x, s);
+      y.eval();
+      omarchy::get_command_encoder(s).synchronize();
+      std::cout << "[child/xe16_prefill_wedge] m=512 bf16 matmul completed"
+                << std::endl;
+      std::_Exit(0);
+    } catch (const std::exception& ex) {
+      std::cout << "[child/xe16_prefill_wedge] " << ex.what() << std::endl;
+      std::_Exit(33);
+    }
+  }
   if (mode == "stuck_warning") {
     // Fresh process: the two env knobs are read lazily on this child's
     // first wait, so the 1 s stuck interval and the 3 s wall deadline are
@@ -3359,6 +3393,27 @@ TEST_CASE("an executing long matmul is not mistaken for a stalled queue") {
   CHECK_MESSAGE(
       r.code == 0,
       "child long_matmul_progress scenario failed with code " << r.code);
+}
+
+TEST_CASE("a prefill-sized Xe16 coopmat matmul completes without a wedge") {
+  if (!gpu::is_available()) {
+    skip("no qualifying Vulkan device.");
+    return;
+  }
+  // DEC-19: the child runs a Qwen3-4B prefill-shaped bf16 dense matmul
+  // through MatmulBF16CoopmatXe16 and must return inside the wall bound.
+  // The B60 tile-wedge receipt's failure mode (GuC kill ~16-19 s,
+  // ErrorDeviceLost) surfaces as a nonzero child code, so the bound only
+  // needs to cover a healthy pass plus that window.
+  auto r = run_child("xe16_prefill_wedge", 90);
+  REQUIRE_FALSE(r.timed_out);
+  if (r.code == 77) {
+    skip("no Xe16 bf16 coopmat route on this device.");
+    return;
+  }
+  CHECK_MESSAGE(
+      r.code == 0,
+      "child xe16_prefill_wedge scenario failed with code " << r.code);
 }
 
 TEST_CASE("a watchdog throw unwinds cleanly through process teardown") {

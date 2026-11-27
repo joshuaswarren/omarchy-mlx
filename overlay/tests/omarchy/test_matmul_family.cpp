@@ -1458,7 +1458,7 @@ TEST_CASE("dense bf16 matmul matches host on every row across coopmat shapes") {
   // dispatch pin below.
   const bool xe16_device =
       !coopmat_device && caps.cooperative_matrix_bf16 &&
-      caps.subgroup_size == 32u &&
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_admitted) &&
       caps.max_compute_work_group_invocations >= 64u &&
       caps.max_compute_work_group_size[0] >= 64u &&
       omarchy::cooperative_matrix_advertises(
@@ -7997,7 +7997,7 @@ TEST_CASE("bf16 Q4 prefill runs the scalar-FMA build without the cooperative rou
   // device-level terms; the m {5,77,1030}, k=192 shapes below all
   // satisfy the call-level terms.
   const bool qmm_xe16_reachable = caps.cooperative_matrix_bf16 &&
-      caps.subgroup_size == 32u &&
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_admitted) &&
       caps.max_compute_work_group_invocations >= 64u &&
       caps.max_compute_work_group_size[0] >= 64u &&
       !omarchy::env_flag("MLX_OMARCHY_NO_QMM_XE16") &&
@@ -8130,7 +8130,7 @@ TEST_CASE("bf16 Q4 prefill dispatches the Xe16 coopmat build on ragged rows") {
   }
   const auto& caps = omarchy::device(0).capabilities();
   const bool xe16_reachable = caps.cooperative_matrix_bf16 &&
-      caps.subgroup_size == 32u &&
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_admitted) &&
       caps.max_compute_work_group_invocations >= 64u &&
       caps.max_compute_work_group_size[0] >= 64u &&
       !omarchy::env_flag("MLX_OMARCHY_NO_QMM_XE16") &&
