@@ -1834,6 +1834,53 @@ def test_where_masked_fill():
     print("test_where_masked_fill PASS")
 
 
+def test_mv_addmv():
+    # PT-U9: aten.mv.default and aten.addmv.default are the matvec census
+    # rows. #825's glue block added the _FUNC_SPECS entries; this pins that
+    # both reach stats["mlx"] (not the torch fallback) and match eager,
+    # including addmv's beta/alpha kwargs and the degenerate beta=0 arm.
+    import numpy as np
+    m32 = torch.randn(4, 3)
+    v32 = torch.randn(3)
+    b32 = torch.randn(4)
+    cases = [
+        (torch.ops.aten.mv.default, (m32, v32), {}, "mv"),
+        (torch.ops.aten.mv.default, (m32.bfloat16(), v32.bfloat16()), {}, "mv"),
+        (torch.ops.aten.mv.default, (m32.half(), v32.half()), {}, "mv"),
+        (torch.ops.aten.addmv.default, (b32, m32, v32), {}, "addmv"),
+        (torch.ops.aten.addmv.default, (b32, m32, v32), {"beta": 0.5, "alpha": 2.0}, "addmv"),
+        (torch.ops.aten.addmv.default, (b32, m32, v32), {"beta": 0, "alpha": 1}, "addmv"),
+        (torch.ops.aten.addmv.default, (b32.bfloat16(), m32.bfloat16(), v32.bfloat16()), {}, "addmv"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        # "mv" is a substring of "addmv": match the spec name exactly.
+        assert fam in stats["mlx"], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert got.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and got.dtype == torch.float32), (
+            str(target), got.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            # Same dtype-fidelity contract as test_mul: _torch widens bf16
+            # to fp32 at the executor boundary (numpy has no bf16 buffer);
+            # the lowering itself must still produce bf16.
+            low = mlx_vulkan._FUNC_SPECS[fam](*(
+                mlx_vulkan._mx(a) if torch.is_tensor(a) else a for a in ins),
+                **kwargs)
+            assert low.dtype == mx.bfloat16, low.dtype
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=3e-2), (
+            str(target), kwargs, got, ref)
+    print("test_mv_addmv PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -1869,6 +1916,7 @@ if __name__ == "__main__":
     test_meshgrid()
     test_group_norm()
     test_where_masked_fill()
+    test_mv_addmv()
     print("ALL PASS")
 
 
