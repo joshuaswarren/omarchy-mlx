@@ -9714,6 +9714,17 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
               (std::strcmp(wgeom, "r2s2w2_small") == 0 && params.matrix_n <= 8192u)) {
             vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S2W2;
             cols = 4u;
+          } else if (
+              std::strcmp(wgeom, "r1s8w2") == 0 ||
+              (std::strcmp(wgeom, "r1s8w2_small") == 0 && params.matrix_n <= 8192u)) {
+            vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R1S8W2;
+            cols = 8u;
+          } else if (
+              (std::strcmp(wgeom, "r1s8w4") == 0 ||
+               (std::strcmp(wgeom, "r1s8w4_small") == 0 && params.matrix_n <= 8192u)) &&
+              (params.rhs_offset % 4u == 0u) && (params.shape[1] % 4u == 0u)) {
+            vec_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R1S8W4;
+            cols = 8u;
           }
         }
         qmm_groups = (params.matrix_n + cols - 1u) / cols;
@@ -11077,6 +11088,12 @@ bool dispatch_quantized_gemv_group(
       } else if (std::strcmp(sgeom, "r1s2w2") == 0) {
         swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S2W2;
         swiglu_cols = 2u;
+      } else if (std::strcmp(sgeom, "r1s8w4") == 0) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W4;
+        swiglu_cols = 8u;
+      } else if (std::strcmp(sgeom, "r1s2w4") == 0) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S2W4;
+        swiglu_cols = 2u;
       }
     }
   }
@@ -11090,6 +11107,17 @@ bool dispatch_quantized_gemv_group(
       if (std::strcmp(rn_vec4, "r2s8w2") == 0 || std::strcmp(rn_vec4, "1") == 0) {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S8W2;
         resnorm_cols = 16u;
+        resnorm_vec4_active = true;
+      } else if (std::strcmp(rn_vec4, "r1s8w2") == 0) {
+        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R1S8W2;
+        resnorm_cols = 8u;
+        resnorm_vec4_active = true;
+      } else if (
+          std::strcmp(rn_vec4, "r2s16w2") == 0 &&
+          encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
+          encoder.device().capabilities().max_compute_work_group_size[0] >= 512u) {
+        resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2;
+        resnorm_cols = 32u;
         resnorm_vec4_active = true;
       } else if (
           std::strcmp(rn_vec4, "r2s4w2") == 0 &&

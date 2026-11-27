@@ -1362,6 +1362,12 @@ enum class ComputeKernel : uint16_t {
   QmmVecQ4ResNormVec4BF16R2S8W2,
   QmmVecQ4ResNormVec4BF16R2S4W2,
   GatedDeltaDecodeBF16Sg32,
+  QmmVecQ4WordSubgroupBF16R1S8W2,
+  QmmVecQ4WordSubgroupBF16R1S8W4,
+  QmmVecQ4SwigluBF16R1S8W4,
+  QmmVecQ4SwigluBF16R1S2W4,
+  QmmVecQ4ResNormVec4BF16R1S8W2,
+  QmmVecQ4ResNormVec4BF16R2S16W2,
   Count,
 };
 
