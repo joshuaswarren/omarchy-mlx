@@ -1390,6 +1390,34 @@ enum class ComputeKernel : uint16_t {
   // bit-identical to QmmVecQ4ResNormBF16R2S8W2). Appended to keep profile ids
   // stable.
   QmmVecQ4ResNormBF16R2S8W2Vec,
+  // Small-WG and 2x-KV-unrolled/order-key-umax HD=256 split-K online-RoPE SDPA
+  // variants (env-gated via MLX_OMARCHY_SDPA_ONLINE_ROPE_SG). Appended to keep
+  // profile kernel ids stable.
+  SdpaDecodeOnlineRopeOutgateSg32U2BF16Hd256Split,
+  SdpaDecodeOnlineRopeOutgateSg8BF16Hd256Split,
+  SdpaDecodeOnlineRopeOutgateSg4BF16Hd256Split,
+  // Dv-split coalesced-state GDN conv+delta+norm variants (2x/4x WGs per head,
+  // env-gated via MLX_OMARCHY_GDN_CONV_SPLIT). Appended to keep profile ids stable.
+  GatedDeltaDecodeConvNormBF16Split2Sg16,
+  GatedDeltaDecodeConvNormBF16Split4Sg8,
+  GatedDeltaDecodeConvNormBF16Split4Sg16,
+  // SWAR FP16 + upfront-hoisted Q4 nibble-unpack variants (bit-exact, env-gated
+  // via MLX_OMARCHY_Q4_SWAR_F16). Appended to keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S4W2SwarF16,
+  QmmVecQ4WordSubgroupBF16R2S8W2SwarF16,
+  QmmVecQ4WordSubgroupBF16R2S32W2SwarF16,
+  QmmVecQ4MultiSubgroupBF16R2S8W2SwarF16,
+  QmmVecQ4SwigluBF16R1S4W2SwarF16,
+  QmmVecQ4ResNormVec4BF16R2S32W2SwarF16,
+  // Upfront 8-load hoisted Q4 variants without SWAR FP16 (1-wave load
+  // coalescing control, env-gated via MLX_OMARCHY_Q4_HOIST_LOADS). Appended to
+  // keep profile kernel ids stable.
+  QmmVecQ4WordSubgroupBF16R2S4W2Hoist,
+  QmmVecQ4WordSubgroupBF16R2S8W2Hoist,
+  QmmVecQ4WordSubgroupBF16R2S32W2Hoist,
+  QmmVecQ4MultiSubgroupBF16R2S8W2Hoist,
+  QmmVecQ4SwigluBF16R1S4W2Hoist,
+  QmmVecQ4ResNormVec4BF16R2S32W2Hoist,
   Count,
 };
 

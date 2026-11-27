@@ -20,7 +20,17 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 
-layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+#ifndef GDN_SPLITS
+#define GDN_SPLITS 1
+#endif
+#ifndef GDN_SG
+#define GDN_SG 32
+#endif
+#if (128 % (GDN_SPLITS * GDN_SG)) != 0
+#error "128 must be divisible by GDN_SPLITS * GDN_SG"
+#endif
+
+layout(local_size_x = GDN_SG * 32, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer ConvState { uint16_t v[]; } conv_state;
 layout(set = 0, binding = 1, std430) readonly buffer ConvX     { uint16_t v[]; } conv_x;
@@ -35,6 +45,11 @@ layout(set = 0, binding = 9, std430) readonly buffer DtBuf     { uint16_t v[]; }
 layout(set = 0, binding = 10, std430) buffer ConvStateOut      { uint16_t v[]; } conv_state_out;
 layout(set = 0, binding = 11, std430) readonly buffer NormGate { uint16_t v[]; } norm_gate;
 layout(set = 0, binding = 12, std430) readonly buffer NormWeight { uint16_t v[]; } norm_w;
+#if GDN_SPLITS > 1
+layout(set = 0, binding = 13, std430) coherent buffer GdnScratch { float v[]; } gdn_scratch;
+layout(set = 0, binding = 14, std430) coherent buffer GdnTicket  { uint done[]; } gdn_ticket;
+shared uint s_split_is_last;
+#endif
 
 layout(push_constant) uniform Params {
   uint count;
@@ -189,7 +204,17 @@ vec2 gdn_compute_gates(uint head) {
 }
 
 void main() {
+#if GDN_SPLITS > 1
+  uint head = gl_WorkGroupID.x / uint(GDN_SPLITS);
+  uint split_id = gl_WorkGroupID.x % uint(GDN_SPLITS);
+  const uint ROWS_PER_SPLIT = 128u / uint(GDN_SPLITS);
+  uint row_start = split_id * ROWS_PER_SPLIT;
+#else
   uint head = gl_WorkGroupID.x;
+  const uint split_id = 0u;
+  const uint ROWS_PER_SPLIT = 128u;
+  const uint row_start = 0u;
+#endif
   uint hv = params.matrix_k;
   if (head >= hv) {
     return;
@@ -206,34 +231,34 @@ void main() {
     khead = (head / hv_b) * hk_b + (head % hv_b) / (hv_b / hk_b);
   }
 
-  // Single-thread gate computation (avoids 1023x redundant exp/log SFU traffic).
+  // Single-thread gate computation (avoids redundant exp/log SFU traffic).
   if (tid == 0u) {
     vec2 gates = gdn_compute_gates(head);
     s_g_val = gates.x;
     s_beta_val = gates.y;
   }
 
-  // Phase 1: Parallel Q (0..127), K (128..255), V (256..383) conv + SiLU +
-  // conv_state_out update.
+  // Phase 1: Parallel Q (0..127), K (128..255), and this split's V channels
+  // conv + SiLU + conv_state_out update.
   uint16_t act_val = uint16_t(0u);
-  if (tid < 384u) {
+  {
     const uint key_dim = params.rhs_size;
-    const uint c = tid & 127u;
-    bool lead = true;
-    if (params.in_strides[3] != 0u) {
+    bool lead = (split_id == 0u);
+    if (lead && params.in_strides[3] != 0u) {
       lead = (head % params.in_strides[2]) %
               (params.in_strides[2] / params.in_strides[3]) ==
           0u;
     }
     if (tid < 128u) {
-      const uint ch = khead * 128u + c;
+      const uint ch = khead * 128u + tid;
       act_val = gdn_conv_channel(ch);
       float qv = bf16_load(act_val);
-      s_norm_buf[c] = qv * qv;
+      s_norm_buf[tid] = qv * qv;
       if (lead) {
         gdn_conv_state_out(ch);
       }
     } else if (tid < 256u) {
+      const uint c = tid - 128u;
       const uint ch = key_dim + khead * 128u + c;
       act_val = gdn_conv_channel(ch);
       float kv = bf16_load(act_val);
@@ -241,12 +266,24 @@ void main() {
       if (lead) {
         gdn_conv_state_out(ch);
       }
-    } else {
-      const uint ch = 2u * key_dim + head * 128u + c;
-      act_val = gdn_conv_channel(ch);
-      sv[c] = bf16_load(act_val);
+    }
+#if GDN_SG * 32 >= 256 + (128 / GDN_SPLITS)
+    else if (tid < 256u + ROWS_PER_SPLIT) {
+      const uint r = row_start + (tid - 256u);
+      const uint ch = 2u * key_dim + head * 128u + r;
+      uint16_t v_act = gdn_conv_channel(ch);
+      sv[r] = bf16_load(v_act);
       gdn_conv_state_out(ch);
     }
+#else
+    if (tid < ROWS_PER_SPLIT) {
+      const uint r = row_start + tid;
+      const uint ch = 2u * key_dim + head * 128u + r;
+      uint16_t v_act = gdn_conv_channel(ch);
+      sv[r] = bf16_load(v_act);
+      gdn_conv_state_out(ch);
+    }
+#endif
   }
   barrier();
 
@@ -271,10 +308,7 @@ void main() {
   }
   barrier();
 
-  // Phase 2: Coalesced-state gated-delta update (4 Dv rows per 32-lane SG,
-  // pre-fetching all 4 independent state vec4 rows back-to-back before the
-  // first subgroupAdd). Lane 0 rounds o_acc to bf16 and stages both so[r] and
-  // s_norm_buf[r] = ov * ov before the single post-Phase-2 barrier.
+  // Phase 2: Coalesced-state gated-delta update (2 or 4 Dv rows per 32-lane SG).
   uint head_base = head * 128u * 128u;
   uint s_in_base_q = (params.shape[1] + head_base) >> 2u;
   uint s_out_base_q = (params.shape[2] + head_base) >> 2u;
@@ -294,18 +328,11 @@ void main() {
   float sq3 = sq[c0 + 3u];
 
   {
-    uint r0 = sg;
-    uint r1 = sg + 32u;
-    uint r2 = sg + 64u;
-    uint r3 = sg + 96u;
-    vec4 w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
-    vec4 w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
-    vec4 w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
-    vec4 w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
-    float sv0 = sv[r0];
-    float sv1 = sv[r1];
-    float sv2 = sv[r2];
-    float sv3 = sv[r3];
+#if GDN_SPLITS > 1
+    #define GDN_STORE_O(r, ov) { gdn_scratch.v[head * 128u + (r)] = (ov); }
+#else
+    #define GDN_STORE_O(r, ov) { so[(r)] = (ov); s_norm_buf[(r)] = (ov) * (ov); }
+#endif
     #define GDN_P4_ROW(wv, r, svr) { \
       float kv_part = fma((wv).x, skg0, fma((wv).y, skg1, fma((wv).z, skg2, (wv).w * skg3))); \
       float kv_acc = subgroupAdd(kv_part); \
@@ -319,17 +346,63 @@ void main() {
       float o_acc = subgroupAdd(o_part); \
       if (lane == 0u) { \
         float ov = bf16_load(bf16_store(o_acc)); \
-        so[r] = ov; \
-        s_norm_buf[r] = ov * ov; \
+        GDN_STORE_O(r, ov) \
       } \
     }
+#if (128 / (GDN_SPLITS * GDN_SG)) == 4
+    uint r0 = row_start + sg;
+    uint r1 = row_start + sg + uint(GDN_SG);
+    uint r2 = row_start + sg + 2u * uint(GDN_SG);
+    uint r3 = row_start + sg + 3u * uint(GDN_SG);
+    vec4 w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+    vec4 w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+    vec4 w2 = s_in.v[s_in_base_q + r2 * 32u + lane];
+    vec4 w3 = s_in.v[s_in_base_q + r3 * 32u + lane];
+    float sv0 = sv[r0];
+    float sv1 = sv[r1];
+    float sv2 = sv[r2];
+    float sv3 = sv[r3];
     GDN_P4_ROW(w0, r0, sv0)
     GDN_P4_ROW(w1, r1, sv1)
     GDN_P4_ROW(w2, r2, sv2)
     GDN_P4_ROW(w3, r3, sv3)
+#elif (128 / (GDN_SPLITS * GDN_SG)) == 2
+    uint r0 = row_start + sg;
+    uint r1 = row_start + sg + uint(GDN_SG);
+    vec4 w0 = s_in.v[s_in_base_q + r0 * 32u + lane];
+    vec4 w1 = s_in.v[s_in_base_q + r1 * 32u + lane];
+    float sv0 = sv[r0];
+    float sv1 = sv[r1];
+    GDN_P4_ROW(w0, r0, sv0)
+    GDN_P4_ROW(w1, r1, sv1)
+#else
+#error "GDN rows per SG must be 2 or 4"
+#endif
     #undef GDN_P4_ROW
+    #undef GDN_STORE_O
   }
   barrier();
+#if GDN_SPLITS > 1
+  memoryBarrierBuffer();
+  if (tid == 0u) {
+    uint prev = atomicAdd(gdn_ticket.done[head], 1u);
+    s_split_is_last = (prev == uint(GDN_SPLITS) - 1u) ? 1u : 0u;
+  }
+  barrier();
+  if (s_split_is_last == 0u) {
+    return;
+  }
+  if (tid == 0u) {
+    gdn_ticket.done[head] = 0u;
+  }
+  memoryBarrierBuffer();
+  if (tid < 128u) {
+    float ov = gdn_scratch.v[head * 128u + tid];
+    so[tid] = ov;
+    s_norm_buf[tid] = ov * ov;
+  }
+  barrier();
+#endif
 
   // Phase 3: Gated RMSNorm epilogue with zero extra barriers (SGs 0..3 each
   // run the exact stride-64..1 tree_reduce32, bit-identical to gdn_norm_epilogue).

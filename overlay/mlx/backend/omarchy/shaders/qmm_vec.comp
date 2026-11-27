@@ -54,6 +54,9 @@
 #elif defined(USE_BF16)
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#ifdef QMM_SWAR_F16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#endif
 #define STORAGE_TYPE uint16_t
 #define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
 uint16_t bf16_store(float value) {
@@ -812,6 +815,23 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
 #define Q4_NIB(p, shift) \
   (uintBitsToFloat(((p) & (0xfu << (shift))) + ((150u - (shift)) << 23u)) - \
    FIELD_UNIT(shift))
+#ifdef QMM_SWAR_F16
+// SWAR FP16 Q4 nibble unpack (8 nibbles / 32-bit word): packs pairs (n0,n4),
+// (n1,n5), (n2,n6), (n3,n7) into f16vec2 via 4x and + 4x iadd (zero inter-lane
+// carry since bit 15 is 0), subtracts 1024.0h/64.0h in 16-bit fp16 ALU, and
+// feeds fp16 nibbles directly into f32 fma/fmul with zero conversion ops.
+// Bit-exact for every bf16 input since n0..n7 in [0,15] are exact in fp16.
+#define Q4_WORD_SWAR_F16_ACC(dot_var, w, x0, x1, x2, x3, x4, x5, x6, x7) { \
+  uint _w = (w); \
+  uint _wh = _w >> 8u; \
+  f16vec2 _n04 = unpackFloat2x16((_w & 0x000f000fu) + 0x64006400u) - f16vec2(1024.0); \
+  f16vec2 _n15 = unpackFloat2x16((_w & 0x00f000f0u) + 0x54005400u) - f16vec2(64.0); \
+  f16vec2 _n26 = unpackFloat2x16((_wh & 0x000f000fu) + 0x64006400u) - f16vec2(1024.0); \
+  f16vec2 _n37 = unpackFloat2x16((_wh & 0x00f000f0u) + 0x54005400u) - f16vec2(64.0); \
+  (dot_var) += fma((x3), float(_n37.x), fma((x2), float(_n26.x), fma((x1), float(_n15.x), (x0) * float(_n04.x)))); \
+  (dot_var) += fma((x7), float(_n37.y), fma((x6), float(_n26.y), fma((x5), float(_n15.y), (x4) * float(_n04.y)))); \
+}
+#endif
 #define Q4_QUAD(packed, a, b) { \
   Q4_QUAD_LOAD(a, b) \
   uint p = (packed); \
@@ -992,6 +1012,121 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   } \
 }
 #elif defined(QMM_W2) && !defined(QMM_KCONT) && QGROUP == 64 && QMM_LANES == 32
+#ifdef QMM_SWAR_F16
+#define Q4_W2_WORD_ROWS(W_EXPR, XQ) { \
+  float x0 = uintBitsToFloat(((XQ).x & 0xFFFFu) << 16u); \
+  float x1 = uintBitsToFloat((XQ).x & 0xFFFF0000u); \
+  float x2 = uintBitsToFloat(((XQ).y & 0xFFFFu) << 16u); \
+  float x3 = uintBitsToFloat((XQ).y & 0xFFFF0000u); \
+  float x4 = uintBitsToFloat(((XQ).z & 0xFFFFu) << 16u); \
+  float x5 = uintBitsToFloat((XQ).z & 0xFFFF0000u); \
+  float x6 = uintBitsToFloat(((XQ).w & 0xFFFFu) << 16u); \
+  float x7 = uintBitsToFloat((XQ).w & 0xFFFF0000u); \
+  input_sum += ((x0 + x1) + x2) + x3; \
+  input_sum += ((x4 + x5) + x6) + x7; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    Q4_WORD_SWAR_F16_ACC(dot[r], (W_EXPR), x0, x1, x2, x3, x4, x5, x6, x7) \
+  } \
+}
+#else
+#define Q4_W2_WORD_ROWS(W_EXPR, XQ) \
+  Q4_QUAD_ROWS(W_EXPR, (XQ).x, (XQ).y) \
+  Q4_QUAD_ROWS((W_EXPR) >> 16u, (XQ).z, (XQ).w)
+#endif
+#ifdef QMM_HOIST_LOADS
+// Upfront 8-load fast-tile loop (pre-#1050 1-wave coalescing for G14C where
+// register headroom is >=26 half-regs): issues both weight uvec2s, all 4
+// scale/bias loads, and both x uvec4s before the first wait (waits=2).
+#if defined(QMM_SWAR_F16) && !defined(QMM_VEC_RESNORM)
+// Under SWAR_F16 on Word/Multi, issuing xa/xb before wv and s/b keeps all 4
+// large loads (xa, xb, wv[0..1]) in wave 1 and overlaps s/b behind dot ALU,
+// cutting AGX2 gprs 98/102->76/78 and waits 4->3 (ResNorm keeps all 8 loads
+// in wave 1 with w, s/b, x at gprs=78, waits=2).
+#define Q4_HOIST_LOAD_BODY(W, S, B) \
+      uvec4 xa = OUTGATE_XQUAD(xp); \
+      uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
+      xp += 64u; \
+      uvec2 wv[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot[r] = 0.0; \
+        wv[r] = W.values[wp[r]]; \
+        wp[r] += 32u; \
+      } \
+      float scale_r[ROWS_PER_SLOT]; \
+      float bias_r[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        scale_r[r] = LOAD_VALUE(S.values[sp[r]]); \
+        bias_r[r] = LOAD_VALUE(B.values[bp[r]]); \
+        sp[r] += 8u; \
+        bp[r] += 8u; \
+      }
+#else
+#define Q4_HOIST_LOAD_BODY(W, S, B) \
+      uvec2 wv[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot[r] = 0.0; \
+        wv[r] = W.values[wp[r]]; \
+        wp[r] += 32u; \
+      } \
+      float scale_r[ROWS_PER_SLOT]; \
+      float bias_r[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        scale_r[r] = LOAD_VALUE(S.values[sp[r]]); \
+        bias_r[r] = LOAD_VALUE(B.values[bp[r]]); \
+        sp[r] += 8u; \
+        bp[r] += 8u; \
+      } \
+      uvec4 xa = OUTGATE_XQUAD(xp); \
+      uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
+      xp += 64u;
+#endif
+#define Q4_ROWS(W, S, B) { \
+  uint row_base[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    row_base[r] = min(column + r, n - 1u); \
+  } \
+  if (params.matrix_k % 512u == 0u && n % 8u == 0u && (w_base & 1u) == 0u) { \
+    uint pairs_per_row = words_per_row >> 1u; \
+    uint w_base_pair = w_base >> 1u; \
+    uint wp[ROWS_PER_SLOT]; \
+    uint sp[ROWS_PER_SLOT]; \
+    uint bp[ROWS_PER_SLOT]; \
+    uint g0 = lane_in_slot >> 2u; \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      wp[r] = w_base_pair + row_base[r] * pairs_per_row + lane_in_slot; \
+      sp[r] = s_base + row_base[r] * groups_per_row + g0; \
+      bp[r] = b_base + row_base[r] * groups_per_row + g0; \
+    } \
+    uint xp = (x_row >> 3u) + (lane_in_slot << 1u); \
+    uint iters = pairs_per_row >> 5u; \
+    for (uint wi_ = 0u; wi_ < iters; ++wi_) { \
+      precise float dot[ROWS_PER_SLOT]; \
+      precise float input_sum = 0.0; \
+      Q4_HOIST_LOAD_BODY(W, S, B) \
+      Q4_W2_WORD_ROWS(wv[r].x, xa) \
+      Q4_W2_WORD_ROWS(wv[r].y, xb) \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        precise float bias_term = input_sum * bias_r[r]; \
+        acc[r] += fma(scale_r[r], dot[r], bias_term); \
+      } \
+    } \
+  } else { \
+    for (uint w = lane_in_slot; w < words_per_row; w += LANES) { \
+      precise float dot[ROWS_PER_SLOT]; \
+      precise float input_sum = 0.0; \
+      uint wa[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        dot[r] = 0.0; \
+        wa[r] = WLOAD(W, w_base + row_base[r] * words_per_row + w); \
+      } \
+      uvec4 xa = OUTGATE_XWORDS(x_row + w * 8u); \
+      Q4_QUAD_ROWS(wa[r], xa.x, xa.y) \
+      Q4_QUAD_ROWS(wa[r] >> 16u, xa.z, xa.w) \
+      Q4_ROWS_FINISH(w, S, B) \
+    } \
+  } \
+}
+#else
 // Hoisted uvec2 fast-tile loop with low register footprint: replaces bp[] with
 // uniform sb_delta, splits xa/xb live ranges across the two halves of each
 // weight uvec2, and sinks L1-hot scale/bias loads after Q4_QUAD_ROWS so live
@@ -1025,14 +1160,12 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
       } \
       { \
         uvec4 xa = OUTGATE_XQUAD(xp); \
-        Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
-        Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
+        Q4_W2_WORD_ROWS(wv[r].x, xa) \
       } \
       { \
         uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
         xp += 64u; \
-        Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
-        Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
+        Q4_W2_WORD_ROWS(wv[r].y, xb) \
       } \
       for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
         uint spr = sp[r]; \
@@ -1059,6 +1192,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
     } \
   } \
 }
+#endif
 #else
 #define Q4_ROWS(W, S, B) { \
   uint row_base[ROWS_PER_SLOT]; \
@@ -2492,6 +2626,79 @@ void main() {
         precise float dot_g[ROWS_PER_SLOT];
         precise float dot_u[ROWS_PER_SLOT];
         precise float input_sum = 0.0;
+#ifdef QMM_HOIST_LOADS
+        // Upfront x-first + hoisted gate/up weights and scales/biases: keeps
+        // xa, xb, wvg, wvu in wave 1 before wait(a) and overlaps scales/biases
+        // behind the entire dot body (drops gprs 96->64 and kills 3-wave stall).
+        uvec4 xa = input_x.values[xp];
+        uvec4 xb = input_x.values[xp + 1u];
+        xp += 64u;
+        uvec2 wvg[ROWS_PER_SLOT];
+        uvec2 wvu[ROWS_PER_SLOT];
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+          dot_g[r] = 0.0;
+          dot_u[r] = 0.0;
+          wvg[r] = input_w0.values[wp[r]];
+          wvu[r] = input_w1.values[wp[r]];
+          wp[r] += 32u;
+        }
+        float sg[ROWS_PER_SLOT];
+        float bg[ROWS_PER_SLOT];
+        float su[ROWS_PER_SLOT];
+        float bu[ROWS_PER_SLOT];
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+          sg[r] = LOAD_VALUE(scales0.values[sp[r]]);
+          bg[r] = LOAD_VALUE(biases0.values[sp[r]]);
+          su[r] = LOAD_VALUE(scales1.values[sp[r]]);
+          bu[r] = LOAD_VALUE(biases1.values[sp[r]]);
+          sp[r] += 8u;
+        }
+#ifdef QMM_SWAR_F16
+        {
+          float x0 = uintBitsToFloat(((xa.x) & 0xFFFFu) << 16u);
+          float x1 = uintBitsToFloat((xa.x) & 0xFFFF0000u);
+          float x2 = uintBitsToFloat(((xa.y) & 0xFFFFu) << 16u);
+          float x3 = uintBitsToFloat((xa.y) & 0xFFFF0000u);
+          float x4 = uintBitsToFloat(((xa.z) & 0xFFFFu) << 16u);
+          float x5 = uintBitsToFloat((xa.z) & 0xFFFF0000u);
+          float x6 = uintBitsToFloat(((xa.w) & 0xFFFFu) << 16u);
+          float x7 = uintBitsToFloat((xa.w) & 0xFFFF0000u);
+          input_sum += ((x0 + x1) + x2) + x3;
+          input_sum += ((x4 + x5) + x6) + x7;
+          for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+            Q4_WORD_SWAR_F16_ACC(dot_g[r], wvg[r].x, x0, x1, x2, x3, x4, x5, x6, x7)
+            Q4_WORD_SWAR_F16_ACC(dot_u[r], wvu[r].x, x0, x1, x2, x3, x4, x5, x6, x7)
+          }
+        }
+        {
+          float x0 = uintBitsToFloat(((xb.x) & 0xFFFFu) << 16u);
+          float x1 = uintBitsToFloat((xb.x) & 0xFFFF0000u);
+          float x2 = uintBitsToFloat(((xb.y) & 0xFFFFu) << 16u);
+          float x3 = uintBitsToFloat((xb.y) & 0xFFFF0000u);
+          float x4 = uintBitsToFloat(((xb.z) & 0xFFFFu) << 16u);
+          float x5 = uintBitsToFloat((xb.z) & 0xFFFF0000u);
+          float x6 = uintBitsToFloat(((xb.w) & 0xFFFFu) << 16u);
+          float x7 = uintBitsToFloat((xb.w) & 0xFFFF0000u);
+          input_sum += ((x0 + x1) + x2) + x3;
+          input_sum += ((x4 + x5) + x6) + x7;
+          for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+            Q4_WORD_SWAR_F16_ACC(dot_g[r], wvg[r].y, x0, x1, x2, x3, x4, x5, x6, x7)
+            Q4_WORD_SWAR_F16_ACC(dot_u[r], wvu[r].y, x0, x1, x2, x3, x4, x5, x6, x7)
+          }
+        }
+#else
+        Q4_QUAD_SWIGLU(wvg[r].x, wvu[r].x, xa.x, xa.y)
+        Q4_QUAD_SWIGLU(wvg[r].x >> 16u, wvu[r].x >> 16u, xa.z, xa.w)
+        Q4_QUAD_SWIGLU(wvg[r].y, wvu[r].y, xb.x, xb.y)
+        Q4_QUAD_SWIGLU(wvg[r].y >> 16u, wvu[r].y >> 16u, xb.z, xb.w)
+#endif
+        for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+          precise float bg_term = input_sum * bg[r];
+          acc_g[r] += fma(sg[r], dot_g[r], bg_term);
+          precise float bu_term = input_sum * bu[r];
+          acc_u[r] += fma(su[r], dot_u[r], bu_term);
+        }
+#else
         uvec2 wvg[ROWS_PER_SLOT];
         uvec2 wvu[ROWS_PER_SLOT];
         for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
@@ -2522,6 +2729,7 @@ void main() {
           precise float bu_term = input_sum * bur;
           acc_u[r] += fma(sur, dot_u[r], bu_term);
         }
+#endif
       }
 #else
       for (uint w = lane_in_slot * 2u; w < words_per_row; w += LANES * 2u) {
