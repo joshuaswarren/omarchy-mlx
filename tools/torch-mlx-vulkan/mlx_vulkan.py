@@ -1965,6 +1965,9 @@ _FUNC_SPECS = {
     # torch's norm=None means "backward", same as mx's default
     "fft_fft": lambda a, n=None, dim=-1, norm=None: mx.fft.fft(_mx(a), n, axis=dim, norm=norm or "backward"),
     "fft_ifft": lambda a, n=None, dim=-1, norm=None: mx.fft.ifft(_mx(a), n, axis=dim, norm=norm or "backward"),
+    # PT-AU-c: 2-D transforms (vision, spectrogram models)
+    "fft_fft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.fft2(_mx(a), s, axes=dim, norm=norm or "backward"),
+    "fft_ifft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.ifft2(_mx(a), s, axes=dim, norm=norm or "backward"),
     "select": lambda a, dim, i: _slice(a, dim, i % a.shape[dim % a.ndim], i % a.shape[dim % a.ndim] + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
     "slice": _slice, "narrow": lambda a, dim, s, n: _slice(a, dim, s, s + n, 1),
     "mean": _mean, "sum": _sum,
