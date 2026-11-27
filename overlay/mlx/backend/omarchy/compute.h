@@ -1371,6 +1371,9 @@ enum class ComputeKernel : uint16_t {
   SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split,
   // 1024-thread (32 subgroups, 64 cols/WG) coalesced uvec4 ResNormVec4.
   QmmVecQ4ResNormVec4BF16R2S32W2,
+  // 1024-thread (32 subgroups, 64 cols/WG) Q4 word subgroup decode GEMV for
+  // large-vocabulary lm_head (Appended to keep profile kernel ids stable).
+  QmmVecQ4WordSubgroupBF16R2S32W2,
   Count,
 };
 

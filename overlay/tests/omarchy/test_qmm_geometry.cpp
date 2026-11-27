@@ -396,6 +396,12 @@ int main(int argc, char** argv) {
       std::cout << "FAIL: qmm_resnorm_r2s32_default part check\n";
       ++failures;
     }
+    if (!mlx::core::omarchy::qmm_lm_r2s32_default("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_lm_r2s32_default("Apple M1 Max (G13C C0)") ||
+        mlx::core::omarchy::qmm_lm_r2s32_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: qmm_lm_r2s32_default part check\n";
+      ++failures;
+    }
   }
   // Low-register SwiGLU (R1S8W2) must be bit-identical to 2x4 and R2S8W2.
   {

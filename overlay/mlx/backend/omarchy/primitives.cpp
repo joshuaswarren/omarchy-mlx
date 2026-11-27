@@ -17409,6 +17409,18 @@ void GreedyQuantizedArgmax::eval_gpu(
       if (!geometry.word_w2 || (params.rhs_offset % 2u == 0u)) {
         gemv_kernel = geometry.word;
         gemv_groups = (n + geometry.columns - 1u) / geometry.columns;
+        const auto& caps = encoder.device().capabilities();
+        const char* lm_r2s32_env = omarchy::env_str("MLX_OMARCHY_LM_R2S32");
+        const bool lm_r2s32_want =
+            (lm_r2s32_env != nullptr && lm_r2s32_env[0] != '\0')
+                ? (std::strcmp(lm_r2s32_env, "0") != 0)
+                : omarchy::qmm_lm_r2s32_default(caps.device_name);
+        if (lm_r2s32_want && n >= 65536u && (params.rhs_offset % 2u == 0u) &&
+            caps.max_compute_work_group_invocations >= 1024u &&
+            caps.max_compute_work_group_size[0] >= 1024u) {
+          gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2;
+          gemv_groups = (n + 63u) / 64u;
+        }
       } else {
         gemv_kernel = omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16;
       }
