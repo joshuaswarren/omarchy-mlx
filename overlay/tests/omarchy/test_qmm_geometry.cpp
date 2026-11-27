@@ -117,6 +117,19 @@ int scenario(const std::string& name, const std::string& out) {
     outs.push_back(oa);
     outs.push_back(ob);
     outs.push_back(oc);
+  } else if (name == "qkv3m") {
+    auto x = make_x(2048, rng);
+    auto a = make_lin(4096, 2048, rng);
+    auto b = make_lin(512, 2048, rng);
+    auto c = make_lin(512, 2048, rng);
+    eval(x, a.w, a.s, a.b, b.w, b.s, b.b, c.w, c.s, c.b);
+    auto oa = qmm(x, a);
+    auto ob = qmm(x, b);
+    auto oc = qmm(x, c);
+    eval(oa, ob, oc);
+    outs.push_back(oa);
+    outs.push_back(ob);
+    outs.push_back(oc);
   } else if (name == "swiglu") {
     auto x = make_x(2048, rng);
     auto gate = make_lin(6144, 2048, rng);
@@ -420,27 +433,49 @@ int main(int argc, char** argv) {
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_word_r2s4_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_word_r2s4_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_word_r2s4_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_word_r2s4_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_word_r2s4_default part check\n";
       ++failures;
     }
     if (!mlx::core::omarchy::qmm_multi_upfront_default("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_multi_upfront_default("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_multi_upfront_default("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_multi_upfront_default("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_multi_upfront_default part check\n";
       ++failures;
     }
+    unsetenv("MLX_OMARCHY_QMM_FAST_ONLY");
+    if (!mlx::core::omarchy::qmm_fast_only_default_part("Apple M1 Max (G13C C0)") ||
+        !mlx::core::omarchy::qmm_fast_only_default_part("Apple M1 (G13G B1)") ||
+        mlx::core::omarchy::qmm_fast_only_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_fast_only_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: qmm_fast_only_default_part part check\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_QMM_FAST_ONLY", "0", 1);
+    if (mlx::core::omarchy::qmm_fast_only_default_part("Apple M1 (G13G B1)")) {
+      std::cout << "FAIL: qmm_fast_only_default_part =0 override\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_QMM_FAST_ONLY", "1", 1);
+    if (!mlx::core::omarchy::qmm_fast_only_default_part("Apple M2 Max (G14C B1)")) {
+      std::cout << "FAIL: qmm_fast_only_default_part =1 override\n";
+      ++failures;
+    }
+    unsetenv("MLX_OMARCHY_QMM_FAST_ONLY");
     unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
     if (!mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)") ||
+        !mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 Max (G13C C0)") ||
-        mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_g14c_fast_only_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_g14c_fast_only_default_part part check\n";
       ++failures;
     }
     setenv("MLX_OMARCHY_G14C_FAST_ONLY", "0", 1);
-    if (mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)")) {
+    if (mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_g14c_fast_only_default_part("Apple M1 (G13G B1)")) {
       std::cout << "FAIL: qmm_g14c_fast_only_default_part =0 override\n";
       ++failures;
     }
@@ -609,14 +644,19 @@ int main(int argc, char** argv) {
       const char* label;
       const char* scenario;
       const char* extra_env;
+      const char* extra_val;
     };
     const FoCase cases[] = {
-        {"word_r2s4_fast", "single", "MLX_OMARCHY_WORD_R2S4"},
-        {"multi_up_fast", "group", "MLX_OMARCHY_Q4_UPFRONT"},
-        {"swiglu_r1s4_fast", "swiglu", "MLX_OMARCHY_SWIGLU_R1S4"},
-        {"resnorm2048_fast", "resnorm2048", "MLX_OMARCHY_RESNORM_R2S32"},
-        {"resnorm2048_liveqmm_fast", "resnorm2048_liveqmm", "MLX_OMARCHY_RESNORM_R2S32"},
-        {"resnorm4096_fast", "resnorm4096", "MLX_OMARCHY_RESNORM_R2S32"},
+        {"word_r2s4_fast", "single", "MLX_OMARCHY_WORD_R2S4", "1"},
+        {"multi_up_fast", "group", "MLX_OMARCHY_Q4_UPFRONT", "1"},
+        {"swiglu_r1s4_fast", "swiglu", "MLX_OMARCHY_SWIGLU_R1S4", "1"},
+        {"swiglu_r1s8_fast", "swiglu", "MLX_OMARCHY_SWIGLU_R1S4", "0"},
+        {"resnorm2048_fast", "resnorm2048", "MLX_OMARCHY_RESNORM_R2S32", "1"},
+        {"resnorm2048_liveqmm_fast", "resnorm2048_liveqmm", "MLX_OMARCHY_RESNORM_R2S32", "1"},
+        {"resnorm4096_fast", "resnorm4096", "MLX_OMARCHY_RESNORM_R2S32", "1"},
+        {"resnorm2048_r2s16_fast", "resnorm2048", "MLX_OMARCHY_RESNORM_R2S32", "0"},
+        {"resnorm2048_r2s16_liveqmm_fast", "resnorm2048_liveqmm", "MLX_OMARCHY_RESNORM_R2S32", "0"},
+        {"resnorm4096_r2s16_fast", "resnorm4096", "MLX_OMARCHY_RESNORM_R2S32", "0"},
     };
     for (const auto& c : cases) {
       std::string base = "/tmp/w7p-geom-base.bin";
@@ -626,7 +666,7 @@ int main(int argc, char** argv) {
       setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
       setenv("MLX_OMARCHY_RESNORM_VEC4", "1", 1);
       setenv("MLX_OMARCHY_MULTI_R2S16", "0", 1);
-      setenv(c.extra_env, "1", 1);
+      setenv(c.extra_env, c.extra_val, 1);
       setenv("MLX_OMARCHY_G14C_FAST_ONLY", "0", 1);
       int rc1 = run_child(c.scenario, base.c_str());
       setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
@@ -735,6 +775,93 @@ int main(int argc, char** argv) {
         ++failures;
       } else {
         std::cout << "ok: word_r2s4_fast_b1 identical\n";
+      }
+    }
+    // G13C ResNormVec Fast (QMM_RESNORM_PACK32 + dead output0 +
+    // QMM_RESNORM_VEC_REG_V4) must be 0-ULP bit-identical to ResNormVec
+    // fallback across dead and live qmm_out paths (D=2048 and D=4096).
+    for (const char* name : {"resnorm2048", "resnorm2048_liveqmm", "resnorm4096"}) {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_VEC4", "0", 1);
+      setenv("MLX_OMARCHY_RESNORM_VEC", "1", 1);
+      setenv("MLX_OMARCHY_QMM_FAST_ONLY", "0", 1);
+      int rc1 = run_child(name, base.c_str());
+      setenv("MLX_OMARCHY_QMM_FAST_ONLY", "1", 1);
+      int rc2 = run_child(name, other.c_str());
+      unsetenv("MLX_OMARCHY_QMM_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_RESNORM_VEC");
+      unsetenv("MLX_OMARCHY_RESNORM_VEC4");
+      unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: " << name
+                  << "_g13c_resnorm_vec_fast differed from fallback (rc "
+                  << rc1 << "/" << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: " << name << "_g13c_resnorm_vec_fast identical\n";
+      }
+    }
+    // Compile-time ResNormVec4 R2S16W2Fast D2048/D4096 specializations must be
+    // 0-ULP bit-identical to the non-specialized R2S16W2Fast variant (including
+    // live QMM output).
+    for (const char* name :
+         {"resnorm2048", "resnorm2048_liveqmm", "resnorm4096"}) {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_QMM_RESIDUAL_NORM", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_VEC4", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_R2S32", "0", 1);
+      setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
+      setenv("MLX_OMARCHY_RESNORM_SPEC", "0", 1);
+      int rc1 = run_child(name, base.c_str());
+      setenv("MLX_OMARCHY_RESNORM_SPEC", "1", 1);
+      int rc2 = run_child(name, other.c_str());
+      unsetenv("MLX_OMARCHY_RESNORM_SPEC");
+      unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_RESNORM_R2S32");
+      unsetenv("MLX_OMARCHY_RESNORM_VEC4");
+      unsetenv("MLX_OMARCHY_QMM_RESIDUAL_NORM");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: " << name
+                  << "_r2s16_spec differed from non-spec R2S16W2Fast (rc "
+                  << rc1 << "/" << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: " << name << "_r2s16_spec identical\n";
+      }
+    }
+    // 16-binding 3-member plain+KV trimmed Multi R2S8W2UpfrontFast3M must be
+    // 0-ULP bit-identical to 25-binding R2S8W2UpfrontFast across 2-member and
+    // 3-member plain groups.
+    for (const char* name : {"k512", "qkv3m"}) {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_MULTI_R2S16", "0", 1);
+      setenv("MLX_OMARCHY_Q4_UPFRONT", "1", 1);
+      setenv("MLX_OMARCHY_G14C_FAST_ONLY", "1", 1);
+      setenv("MLX_OMARCHY_MULTI_3M", "0", 1);
+      int rc1 = run_child(name, base.c_str());
+      setenv("MLX_OMARCHY_MULTI_3M", "1", 1);
+      int rc2 = run_child(name, other.c_str());
+      unsetenv("MLX_OMARCHY_MULTI_3M");
+      unsetenv("MLX_OMARCHY_G14C_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_Q4_UPFRONT");
+      unsetenv("MLX_OMARCHY_MULTI_R2S16");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: multi_r2s8_up_fast_3m_" << name
+                  << " differed from R2S8W2UpfrontFast (rc " << rc1 << "/"
+                  << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: multi_r2s8_up_fast_3m_" << name << " identical\n";
       }
     }
   }
