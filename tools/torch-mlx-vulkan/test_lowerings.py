@@ -2391,6 +2391,54 @@ def test_meshgrid():
     print("test_meshgrid PASS")
 
 
+def test_im2col_col2im():
+    # PT-IM-a: aten.im2col / aten.col2im lower via reshape+transpose over the
+    # strided window field; fp32 parity vs torch CPU across kernel, stride,
+    # dilation and padding, including a pad-start window and overlap summing.
+    torch.manual_seed(0)
+    x = torch.randn(2, 3, 8, 9)
+
+    def fx_aten(target, args, kw):
+        ref = target(*args, **kw)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i, a in enumerate(args)
+               if isinstance(a, torch.Tensor)]
+        call_args = tuple(
+            phs.pop(0) if isinstance(a, torch.Tensor) else a for a in args)
+        n = g.call_function(target, call_args, kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        ins = [a for a in args if isinstance(a, torch.Tensor)]
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target))
+        assert tuple(out.shape) == tuple(ref.shape), (out.shape, ref.shape)
+        got = out.float().numpy() if hasattr(out, "float") else _np(out)
+        assert np.allclose(got, ref.float().numpy(), atol=1e-5), (
+            str(target), float(abs(got - ref.float().numpy()).max()))
+
+    a = torch.ops.aten
+    for ks, dl, pd, st in [((3, 3), (1, 1), (1, 1), (1, 1)),
+                           ((2, 3), (1, 1), (0, 0), (2, 2)),
+                           ((3, 2), (2, 1), (1, 0), (2, 1)),
+                           ((3, 3), (1, 1), (2, 2), (4, 4)),
+                           ((1, 1), (1, 1), (3, 3), (1, 1))]:
+        fx_aten(a.im2col.default, (x, list(ks), list(dl), list(pd), list(st)), {})
+        oh = max((8 + 2 * pd[0] - dl[0] * (ks[0] - 1) - 1) // st[0] + 1, 0)
+        ow = max((9 + 2 * pd[1] - dl[1] * (ks[1] - 1) - 1) // st[1] + 1, 0)
+        cols = torch.ops.aten.im2col.default(
+            x, list(ks), list(dl), list(pd), list(st))
+        assert cols.shape[2] == oh * ow
+        fx_aten(a.col2im.default,
+                (cols, [8, 9], list(ks), list(dl), list(pd), list(st)), {})
+
+    # overlap: stride<kernel sums window contributions (round-trip not identity)
+    cols = a.im2col.default(x, [3, 3], [1, 1], [1, 1], [1, 1])
+    fx_aten(a.col2im.default, (cols, [8, 9], [3, 3], [1, 1], [1, 1], [1, 1]), {})
+    print("test_im2col_col2im PASS")
+
+
+
 def test_where_masked_fill():
     # PT-AA: aten.where.self (PAR-41 census rank 25, 900 uses, already
     # lowered) and aten.masked_fill.Tensor/Scalar/_ (registered but no
@@ -3010,6 +3058,7 @@ if __name__ == "__main__":
     test_sum_aot_dim_input()
     test_bmm_matmul()
     test_blas_accum()
+    test_im2col_col2im()
     test_meshgrid()
     test_group_norm()
     test_where_masked_fill()

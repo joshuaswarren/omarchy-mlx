@@ -1720,6 +1720,54 @@ def _avg_pool2d_backward(grad_output, a, kernel_size, stride=None, padding=0,
     return acc[:, :, ph:ph + h, pw:pw + w]
 
 
+def _fold_out(in_sz, k, s, p, dil):
+    # torch unfold/fold output-size formula (plain floor; no ceil_mode or
+    # drop-start rule - a window beginning inside the pad still counts)
+    return max((in_sz + 2 * p - dil * (k - 1) - 1) // s + 1, 0)
+
+
+def _im2col(a, kernel_size, dilation, padding, stride):
+    # aten.im2col (F.unfold): (N,C,H,W) -> (N, C*kh*kw, oh*ow); each column is
+    # the (c, i, j)-row-major flattened window at its strided position.
+    x = _mx(a)
+    if x.ndim != 4:
+        return _raise("im2col non-4D input")
+    kh, kw = _pool_hw(kernel_size)
+    dh, dw = _pool_hw(dilation)
+    ph, pw = _pool_hw(padding)
+    sh, sw = _pool_hw(stride)
+    n, c, h, w = x.shape
+    oh = _fold_out(h, kh, sh, ph, dh)
+    ow = _fold_out(w, kw, sw, pw, dw)
+    xp = mx.pad(x, ((0, 0), (0, 0), (ph, ph), (pw, pw)))
+    win = _pool_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw)
+    return mx.reshape(mx.transpose(win, (0, 1, 4, 2, 3)),
+                      (n, c * kh * kw, oh * ow))
+
+
+def _col2im(a, output_size, kernel_size, dilation, padding, stride):
+    # aten.col2im (F.fold): (N, C*kh*kw, L) -> (N,C,H,W); overlapping window
+    # contributions sum. L must equal the oh*ow implied by output_size.
+    x = _mx(a)
+    if x.ndim != 3:
+        return _raise("col2im non-3D input")
+    h, w = _pool_hw(output_size)
+    kh, kw = _pool_hw(kernel_size)
+    dh, dw = _pool_hw(dilation)
+    ph, pw = _pool_hw(padding)
+    sh, sw = _pool_hw(stride)
+    oh = _fold_out(h, kh, sh, ph, dh)
+    ow = _fold_out(w, kw, sw, pw, dw)
+    n, ck, l = x.shape
+    if ck % (kh * kw) != 0 or l != oh * ow:
+        return _raise("col2im column/length mismatch")
+    c = ck // (kh * kw)
+    # (N, C*K, oh*ow) -> (N,C,K,oh,ow) -> (N,C,oh,ow,K)
+    win = mx.transpose(mx.reshape(x, (n, c, kh * kw, oh, ow)), (0, 1, 3, 4, 2))
+    acc = _pool_scatter(win, h + 2 * ph, w + 2 * pw, kh, kw, sh, sw, dh, dw)
+    return acc[:, :, ph:ph + h, pw:pw + w]
+
+
 def _adaptive_avg_pool2d(a, output_size):
     x = _mx(a)
     n, c, h, w = x.shape
@@ -2318,6 +2366,8 @@ _FUNC_SPECS = {
     "native_batch_norm_backward": _bn_backward,
     "native_group_norm": _gn_native,
     "conv2d": _conv2d,
+    "im2col": _im2col,
+    "col2im": _col2im,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
     "max_pool2d_with_indices": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices=True),
     "max_pool2d_with_indices_backward": _max_pool2d_bwd,

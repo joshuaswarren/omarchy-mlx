@@ -510,6 +510,79 @@ def _rot90(a, k=1, dims=(0, 1)):
         return _flip(m, (d0, d1))
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
+def _im_hw(v):
+    t = tuple(v) if isinstance(v, (list, tuple)) else (v, v)
+    return (int(t[0]), int(t[1]))
+
+
+def _im_fold_out(in_sz, k, s, p, dil):
+    # torch unfold/fold output-size formula (plain floor)
+    return max((in_sz + 2 * p - dil * (k - 1) - 1) // s + 1, 0)
+
+
+def _im_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw):
+    # (N,C,Hp,Wp) -> (N,C,oh,ow,kh*kw) row-major window offsets
+    cols = [xp[:, :, i * dh: i * dh + (oh - 1) * sh + 1: sh,
+               j * dw: j * dw + (ow - 1) * sw + 1: sw]
+            for i in range(kh) for j in range(kw)]
+    return mx.stack(cols, axis=-1)
+
+
+def _im_unstride(g, oh, ow, sh, sw):
+    # (N,C,oh,ow) -> (N,C,(oh-1)*sh+1,(ow-1)*sw+1): values at strided spots
+    n, c = g.shape[0], g.shape[1]
+    g = mx.pad(mx.reshape(g, (n, c, oh, ow, 1)),
+               ((0, 0), (0, 0), (0, 0), (0, 0), (0, sw - 1)))
+    g = mx.reshape(g, (n, c, oh, ow * sw))
+    g = mx.pad(mx.reshape(g, (n, c, oh, 1, ow * sw)),
+               ((0, 0), (0, 0), (0, 0), (0, sh - 1), (0, 0)))
+    g = mx.reshape(g, (n, c, oh * sh, ow * sw))
+    return g[:, :, : (oh - 1) * sh + 1, : (ow - 1) * sw + 1]
+
+
+def _im2col(a, kernel_size, dilation, padding, stride):
+    x = _mx(a)
+    if x.ndim != 4:
+        _raise("im2col non-4D input")
+    kh, kw = _im_hw(kernel_size)
+    dh, dw = _im_hw(dilation)
+    ph, pw = _im_hw(padding)
+    sh, sw = _im_hw(stride)
+    n, c, h, w = x.shape
+    oh = _im_fold_out(h, kh, sh, ph, dh)
+    ow = _im_fold_out(w, kw, sw, pw, dw)
+    xp = mx.pad(x, ((0, 0), (0, 0), (ph, ph), (pw, pw)))
+    win = _im_windows(xp, oh, ow, kh, kw, sh, sw, dh, dw)
+    return mx.reshape(mx.transpose(win, (0, 1, 4, 2, 3)),
+                      (n, c * kh * kw, oh * ow))
+
+
+def _col2im(a, output_size, kernel_size, dilation, padding, stride):
+    x = _mx(a)
+    if x.ndim != 3:
+        _raise("col2im non-3D input")
+    h, w = _im_hw(output_size)
+    kh, kw = _im_hw(kernel_size)
+    dh, dw = _im_hw(dilation)
+    ph, pw = _im_hw(padding)
+    sh, sw = _im_hw(stride)
+    oh = _im_fold_out(h, kh, sh, ph, dh)
+    ow = _im_fold_out(w, kw, sw, pw, dw)
+    n, ck, l = x.shape
+    if ck % (kh * kw) != 0 or l != oh * ow:
+        _raise("col2im column/length mismatch")
+    c = ck // (kh * kw)
+    win = mx.transpose(mx.reshape(x, (n, c, kh * kw, oh, ow)), (0, 1, 3, 4, 2))
+    hp, wp = h + 2 * ph, w + 2 * pw
+    acc = mx.zeros((n, c, hp, wp), dtype=x.dtype)
+    for i in range(kh):
+        for j in range(kw):
+            g = _im_unstride(win[..., i * kw + j], oh, ow, sh, sw)
+            g = mx.pad(g, ((0, 0), (0, 0), (i * dh, hp), (j * dw, wp)))
+            acc = acc + g[:, :, :hp, :wp]
+    return acc[:, :, ph:ph + h, pw:pw + w]
+
+
 
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
@@ -565,6 +638,8 @@ _FUNC_SPECS = {
     "unfold": _unfold,
     "fold": _fold,
     "dropout": lambda a, p=0.5, training=False, *k: a,
+    "im2col": _im2col,
+    "col2im": _col2im,
     "conv2d": _conv2d,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
