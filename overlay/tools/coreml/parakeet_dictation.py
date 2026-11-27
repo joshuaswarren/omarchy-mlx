@@ -248,6 +248,45 @@ def _is_pinned_samples(samples, fixture_samples_sha: str | None) -> bool:
 
 
 # ------------------------------------------------------------------
+# Tail retry for fragment decodes on clipped utterances.
+#
+# The whole-encoder .anec runs fp16; at knife-edge attention margins a
+# recording cut mid-word resolves differently than the fp32 reference and
+# the decoder emits an empty string or a filler fragment ("oh", "mm",
+# "why") instead of the spoken word.  A silence tail restores the natural
+# ending the utterance lost to the cut, so a speech-bearing clip whose
+# decode is a fragment gets one re-encode with padding appended.
+# ------------------------------------------------------------------
+
+_TAIL_RETRY_PAD_SAMPLES = SAMPLE_RATE  # 1.0 s of silence
+
+_FRAGMENT_WORDS = frozenset({
+    "a", "fine", "hey", "i've been", "mm", "oh", "por", "si", "to", "v",
+    "why", "yeah",
+})
+
+
+def _fragmentary(text: str) -> bool:
+    """True when the transcript cannot be what the clip said.
+
+    Covers empty decodes, sub-word fragments (a single word of two
+    letters or fewer), and the short hallucination vocabulary the fp16
+    encoder emits on clipped input.
+    """
+    words = text.lower().replace(".", " ").replace(",", " ").split()
+    return (not words
+            or (len(words) == 1 and len(words[0]) <= 2)
+            or " ".join(words) in _FRAGMENT_WORDS)
+
+
+def _speech_bearing(waveform) -> bool:
+    """True when the clip carries energy a fragment decode cannot explain."""
+    import numpy as np
+
+    return bool(np.abs(waveform).max() > 0.01)
+
+
+# ------------------------------------------------------------------
 # Resampling on the accelerator path. Filter taps are host-designed
 # constants uploaded to the device; all sample arithmetic is MLX.
 # ------------------------------------------------------------------
@@ -472,62 +511,14 @@ class DictationTranscriber:
 
         with self._lock:
             self._start()
-            mx = self._mx
             np = self._np
-            tokens: list[int] = []
-            hidden = None
-            cell = None
             samples = np.ascontiguousarray(waveform)
             duration_aware = not _is_pinned_samples(
                 samples, self._fixture_samples_sha)
             session_errors = _session_error_kinds()
             try:
-                if os.environ.get("MLX_OMARCHY_LONGFORM_PREFETCH") == "1":
-                    plan = plan_chunks(int(samples.size))
-                    chunk_parts = []
-                    offset = 0
-                    for length in plan:
-                        chunk_parts.append(samples[offset:offset + length])
-                        offset += length
-                    with concurrent.futures.ThreadPoolExecutor(
-                            max_workers=1) as pool:
-                        pending = pool.submit(
-                            self._encode_chunk, chunk_parts[0],
-                            duration_aware)
-                        for i in range(len(chunk_parts)):
-                            if self._cancelled(cancel):
-                                raise DictationCancelled(
-                                    "cancelled at a chunk boundary")
-                            if (time.monotonic() - started
-                                    > deadline / 1000.0):
-                                raise DictationTimedOut(
-                                    f"transcription exceeded its "
-                                    f"{deadline} ms deadline")
-                            decode_hidden, decode_frames = pending.result()
-                            if i + 1 < len(chunk_parts):
-                                pending = pool.submit(
-                                    self._encode_chunk, chunk_parts[i + 1],
-                                    duration_aware)
-                            chunk_tokens, hidden, cell = self._decode_chunk(
-                                decode_hidden, decode_frames, hidden, cell,
-                                cancel)
-                            tokens.extend(chunk_tokens)
-                else:
-                    for length in plan_chunks(int(samples.size)):
-                        if self._cancelled(cancel):
-                            raise DictationCancelled(
-                                "cancelled at a chunk boundary")
-                        if time.monotonic() - started > deadline / 1000.0:
-                            raise DictationTimedOut(
-                                f"transcription exceeded its "
-                                f"{deadline} ms deadline"
-                            )
-                        chunk = samples[:length]
-                        samples = samples[length:]
-                        chunk_tokens, hidden, cell = self._transcribe_chunk(
-                            chunk, hidden, cell, cancel, duration_aware
-                        )
-                        tokens.extend(chunk_tokens)
+                tokens = self._transcribe_tokens(
+                    samples, duration_aware, cancel, started, deadline)
             except session_errors as error:
                 # The resident session (or its worker/daemon) ended
                 # under this request. Refusing this one request keeps
@@ -535,7 +526,78 @@ class DictationTranscriber:
                 # session, so the next request rebuilds it instead of
                 # failing on the corpse.
                 raise DictationRefusal(str(error)) from error
-            return self._tokenizer.decode(tokens)
+            text = self._tokenizer.decode(tokens)
+            if (_fragmentary(text) and _speech_bearing(samples)
+                    and samples.size < _CHUNK_SAMPLES):
+                # A speech-bearing clip that decoded to a fragment was
+                # likely cut mid-word; give the encoder the tail silence
+                # the cut removed and decode once more.
+                tailed = np.concatenate([
+                    samples,
+                    np.zeros(_TAIL_RETRY_PAD_SAMPLES, np.float32)])
+                try:
+                    tokens = self._transcribe_tokens(
+                        tailed, duration_aware, cancel, started, deadline)
+                except session_errors as error:
+                    raise DictationRefusal(str(error)) from error
+                retry = self._tokenizer.decode(tokens)
+                if retry.strip():
+                    text = retry
+            return text
+
+    def _transcribe_tokens(self, samples, duration_aware, cancel, started,
+                           deadline):
+        """Run every planned chunk through encode and decode."""
+        tokens: list[int] = []
+        hidden = None
+        cell = None
+        if os.environ.get("MLX_OMARCHY_LONGFORM_PREFETCH") == "1":
+            plan = plan_chunks(int(samples.size))
+            chunk_parts = []
+            offset = 0
+            for length in plan:
+                chunk_parts.append(samples[offset:offset + length])
+                offset += length
+            with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1) as pool:
+                pending = pool.submit(
+                    self._encode_chunk, chunk_parts[0],
+                    duration_aware)
+                for i in range(len(chunk_parts)):
+                    if self._cancelled(cancel):
+                        raise DictationCancelled(
+                            "cancelled at a chunk boundary")
+                    if (time.monotonic() - started
+                            > deadline / 1000.0):
+                        raise DictationTimedOut(
+                            f"transcription exceeded its "
+                            f"{deadline} ms deadline")
+                    decode_hidden, decode_frames = pending.result()
+                    if i + 1 < len(chunk_parts):
+                        pending = pool.submit(
+                            self._encode_chunk, chunk_parts[i + 1],
+                            duration_aware)
+                    chunk_tokens, hidden, cell = self._decode_chunk(
+                        decode_hidden, decode_frames, hidden, cell,
+                        cancel)
+                    tokens.extend(chunk_tokens)
+        else:
+            for length in plan_chunks(int(samples.size)):
+                if self._cancelled(cancel):
+                    raise DictationCancelled(
+                        "cancelled at a chunk boundary")
+                if time.monotonic() - started > deadline / 1000.0:
+                    raise DictationTimedOut(
+                        f"transcription exceeded its "
+                        f"{deadline} ms deadline"
+                    )
+                chunk = samples[:length]
+                samples = samples[length:]
+                chunk_tokens, hidden, cell = self._transcribe_chunk(
+                    chunk, hidden, cell, cancel, duration_aware
+                )
+                tokens.extend(chunk_tokens)
+        return tokens
 
     def _transcribe_chunk(self, chunk_waveform, hidden, cell, cancel,
                           duration_aware: bool):
