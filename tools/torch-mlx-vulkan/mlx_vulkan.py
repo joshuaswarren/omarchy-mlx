@@ -1344,6 +1344,50 @@ def _atan2(y, x):
     return mx.where(x_neg0 & (y == 0), fix, r)
 
 
+def _hypot(a, b):
+    # Scaled form: hi * sqrt(1 + (lo/hi)^2) never squares a large input,
+    # so 1e200-scale values do not overflow (aten.hypot contract). The
+    # where keeps hypot(0, 0) = 0 instead of 0/0 NaN; the isinf mask
+    # keeps hypot(inf, inf) = inf instead of the inf/inf NaN.
+    a, b = mx.abs(_mx(a)), mx.abs(_mx(b))
+    hi, lo = mx.maximum(a, b), mx.minimum(a, b)
+    scaled = mx.where(hi == 0, hi, hi * mx.sqrt(1.0 + (lo / hi) ** 2))
+    return mx.where(mx.isinf(hi), hi, scaled)
+
+
+def _logaddexp2(a, b):
+    # Base-2 logaddexp: max + log2(1 + 2^-|a-b|). Asymmetric infinities
+    # fall out exactly (logaddexp2(inf, -inf) = inf), and any infinite
+    # max is already the answer - equal +infs would otherwise NaN on
+    # |inf - inf|, equal -infs are -inf either way.
+    a, b = _mx(a), _mx(b)
+    m = mx.maximum(a, b)
+    return mx.where(mx.isinf(m), m,
+                    m + mx.log1p(mx.exp2(-mx.abs(a - b))) / mx.log(2.0))
+
+
+def _logcumsumexp(a, dim=-1):
+    # Stable cumulative logsumexp: shift by the row max over the finite
+    # prefix, then map the all--inf row (max = -inf makes x - m NaN)
+    # back to -inf. aten ends the prefix at the first non-finite entry:
+    # +inf gives +inf from there on, NaN gives NaN - neither poisons
+    # the positions before it.
+    x = _mx(a)
+    if mx.issubdtype(x.dtype, mx.floating):
+        pos = mx.isposinf(x)
+        nan = mx.isnan(x)
+    else:
+        pos = nan = mx.zeros(x.shape, mx.bool_)
+    xf = mx.where(pos | nan, mx.array(float("-inf"), x.dtype), x)
+    m = mx.stop_gradient(mx.max(xf, axis=dim, keepdims=True))
+    c = mx.log(mx.cumsum(mx.exp(xf - m), axis=dim)) + m
+    c = mx.where(mx.isnan(c), m, c)
+    seen_pos = mx.cummax(pos.astype(mx.int32), dim) > 0
+    seen_nan = mx.cummax(nan.astype(mx.int32), dim) > 0
+    c = mx.where(seen_pos, mx.array(float("inf"), c.dtype), c)
+    return mx.where(seen_nan, mx.array(float("nan"), c.dtype), c)
+
+
 def _astype(v, dt):
     v = _mx(v)
     return v.astype(dt) if isinstance(v, mx.array) else v
@@ -2322,6 +2366,14 @@ _FUNC_SPECS = {
     # must match so traced graphs lower them too.
     "expm1": mx.expm1, "expm1_": mx.expm1,
     "logaddexp": lambda a, b: mx.logaddexp(_mx(a), _mx(b)),
+    # Q-16: the logaddexp family beyond the wheel's logaddexp. hypot uses
+    # the scaled form so 1e200-scale inputs do not overflow the squares;
+    # logcumsumexp shifts by the row max and maps the all--inf row's NaN
+    # back to -inf (aten semantics); logaddexp2 is base-2 logaddexp via
+    # max + log2(1 + 2^-|a-b|), exact at inf/-inf asymmetry.
+    "hypot": _hypot, "hypot_": _hypot,
+    "logaddexp2": _logaddexp2,
+    "logcumsumexp": _logcumsumexp,
     "xlogy": _xlogy, "xlog1py": _xlog1py,
     # aten registers torch.special.xlog1py as special_xlog1py
     "special_xlog1py": _xlog1py,
