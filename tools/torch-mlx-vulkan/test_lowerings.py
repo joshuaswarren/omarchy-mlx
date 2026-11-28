@@ -3014,6 +3014,55 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_im2col_unfold():
+    # piece 16: im2col/col2im/unfold — pure indexing (gather + at.add
+    # scatter). Executor parity vs torch CPU, no fallback.
+    rng = np.random.RandomState(0)
+
+    def run_aten(target, args, kwargs=None):
+        kwargs = kwargs or {}
+        ins = [a for a in list(args) + list(kwargs.values()) if torch.is_tensor(a)]
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        n = g.call_function(target,
+                            tuple(next(it) if torch.is_tensor(a) else a for a in args),
+                            {k: next(it) if torch.is_tensor(v) else v for k, v in kwargs.items()})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, target)
+        return out
+
+    x = torch.tensor(rng.randn(2, 5, 4).astype(np.float32))
+    for dim, size, step in ((1, 2, 2), (1, 3, 1), (0, 1, 1), (2, 2, 2)):
+        out = run_aten(torch.ops.aten.unfold.default, (x, dim, size, step))
+        ref = torch.ops.aten.unfold(x, dim, size, step)
+        assert np.array_equal(np.array(out), ref.numpy()), ("unfold", dim, size, step)
+        out2 = run_aten(torch.ops.aten.unfold_copy.default, (x, dim, size, step))
+        assert np.array_equal(np.array(out2), ref.numpy()), ("unfold_copy", dim, size, step)
+
+    img = torch.tensor(rng.randn(2, 3, 5, 6).astype(np.float32))
+    for k, d, p, s in (((2, 2), (1, 1), (0, 0), (1, 1)),
+                       ((3, 2), (1, 1), (1, 0), (2, 1)),
+                       ((2, 3), (2, 1), (0, 1), (1, 2)),
+                       ((3, 3), (1, 1), (1, 1), (2, 2))):
+        kw = {"kernel_size": k, "dilation": d, "padding": p, "stride": s}
+        out = run_aten(torch.ops.aten.im2col.default, (img,), kw)
+        ref = torch.ops.aten.im2col(img, *k, *d, *p, *s) if False else \
+            torch.nn.functional.unfold(img, k, dilation=d, padding=p, stride=s)
+        assert np.allclose(np.array(out), ref.numpy(), atol=1e-5), ("im2col", k, d, p, s)
+        # round-trip: col2im reconstitutes with overlap-sum
+        cols = torch.ops.aten.im2col(img, k, d, p, s)
+        oh, ow = img.shape[2], img.shape[3]
+        back = run_aten(torch.ops.aten.col2im.default,
+                        (cols,), {"output_size": [oh, ow], **kw})
+        ref_back = torch.ops.aten.col2im(cols, [oh, ow], k, d, p, s)
+        assert np.allclose(np.array(back), ref_back.numpy(), atol=1e-4), ("col2im", k, d, p, s)
+    print("test_im2col_unfold PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3123,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_im2col_unfold()
     print("ALL PASS")
 
 
