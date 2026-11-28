@@ -8953,7 +8953,7 @@ void dispatch_qmm_tile(
               std::min(chunk_m_groups, omarchy::kMaxComputeGroupCountX),
               1u);
           if (begin + count < n_groups) {
-            encoder.commit();
+            encoder.commit("group_chunk_budget");
           }
         }
       });
@@ -20806,7 +20806,7 @@ void ScaledDotProductAttention::eval_gpu(
       // dispatch_qmm_tile): the tiles then stay in one submission.
       if (!encoder.in_tape_recording && open_macs >= kFlashSubmitMacs &&
           tile + 1 < q_tiles) {
-        encoder.commit();
+        encoder.commit("flash_submit_macs");
         open_macs = 0.0;
       }
     }

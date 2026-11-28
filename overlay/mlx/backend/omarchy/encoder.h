@@ -670,7 +670,7 @@ class MLX_API CommandEncoder
   // noncoherent host mappings. Guarantees the newest command buffer has
   // left the pending state.
   void join_last_completion(const char* reason);
-  void submit();
+  void submit(const char* reason = "commit");
 
   // Dependency-gated barrier state (MLX_OMARCHY_GATED_BARRIERS, default
   // ON since 2026-09-29; set 0 to restore the unconditional pre+post

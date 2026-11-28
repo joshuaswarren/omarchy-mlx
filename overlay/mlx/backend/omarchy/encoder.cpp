@@ -1574,7 +1574,7 @@ void CommandEncoder::emit_pending() {
   pending_.clear();
 }
 
-void CommandEncoder::commit() {
+void CommandEncoder::commit(const char* reason) {
     std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
 
   if (!recording_ && pending_.empty() && wait_semaphores_.empty() &&
@@ -1586,7 +1586,7 @@ void CommandEncoder::commit() {
     return;
   }
   trace::counters().commit_calls_with_work++;
-  submit();
+  submit(reason);
 }
 
 void CommandEncoder::synchronize(const char* reason) {
@@ -1595,7 +1595,7 @@ void CommandEncoder::synchronize(const char* reason) {
       timeline::SubKind::Synchronize,
       encoder_id_,
       static_cast<uint64_t>(node_count_));
-  commit();
+  commit(reason);
   join_last_completion(reason);
 }
 
@@ -1637,7 +1637,7 @@ ComputeBinding CommandEncoder::sdpa_merge_counters(uint32_t heads) {
       vb->buffer, 0u, static_cast<VkDeviceSize>(sdpa_counter_words_) * sizeof(uint32_t), vb};
 }
 
-void CommandEncoder::submit() {
+void CommandEncoder::submit(const char* reason) {
   // The submitting thread may predate Runtime::init (the MLX stream thread).
   raise_cpu_clamp_this_thread();
   // Deferred signals let another thread queue (or this flush commit) wait/
@@ -1988,12 +1988,13 @@ void CommandEncoder::submit() {
     trace::counters().vk_submissions++;
     if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
       fprintf(stderr,
-              "[rtmod] SUBMIT tid=%lu cv=%lu waits=%lu sigs=%lu cmds=%u\n",
+              "[rtmod] SUBMIT tid=%lu cv=%lu waits=%lu sigs=%lu cmds=%u reason=%s\n",
               (unsigned long)syscall(SYS_gettid),
               (unsigned long)completion_value,
               (unsigned long)wait_sems.size(),
               (unsigned long)signal_values.size(),
-              (unsigned)si.commandBufferCount);
+              (unsigned)si.commandBufferCount,
+              reason);
     }
   }
 
@@ -2096,7 +2097,7 @@ void flush_deferred_signal_encoders() {
   for (auto& weak : pending) {
     std::shared_ptr<CommandEncoder> enc = weak.lock();
     if (enc && enc->deferred_signals_pending()) {
-      enc->commit();
+      enc->commit("deferred_signal_flush");
     }
   }
 }
