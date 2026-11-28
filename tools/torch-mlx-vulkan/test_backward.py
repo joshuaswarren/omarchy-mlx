@@ -519,6 +519,113 @@ def test_relu_inplace_and_boolean_dispatch():
     assert np.array_equal(np.array(my_idx), idx.numpy())
 
 
+def test_norm_dist_backward_family():
+    """PT-AL-nb: norm/dist/dropout/rrelu backward + helpers vs CPU aten."""
+    T = mlx_vulkan.ATEN_TABLE
+    torch.manual_seed(0)
+    a = torch.ops.aten
+
+    # batch_norm_backward: train (save stats) and eval (running stats)
+    x = torch.randn(2, 3, 4, 5); w = torch.randn(3)
+    go = torch.randn(2, 3, 4, 5)
+    rm = torch.randn(3); rv = torch.rand(3) + 0.5
+    sm = torch.randn(3); siv = torch.rand(3) + 0.5
+    for upd in (True, False):
+        ref = a.batch_norm_backward(go, x, w, rm, rv, sm, siv, upd, 1e-5,
+                                    [True, True, True], torch.empty(0))
+        got = T["batch_norm_backward"](_am(go), _am(x), _am(w), _am(rm), _am(rv),
+                                       _am(sm), _am(siv), upd, 1e-5,
+                                       [True, True, True], None)
+        for i, tag in enumerate(("dx", "dw", "db")):
+            _cmp(f"bn_bw_{tag}_u{upd}", got[i], ref[i])
+
+    # native_group_norm_backward
+    N, C, HW, G = 2, 6, 20, 3
+    xg = torch.randn(N, C, HW); gog = torch.randn(N, C, HW)
+    mean = torch.randn(N, G); rstd = torch.rand(N, G) + 0.5
+    gam = torch.randn(C)
+    ref = a.native_group_norm_backward(gog, xg, mean, rstd, gam, N, C, HW, G,
+                                       [True, True, True])
+    got = T["native_group_norm_backward"](_am(gog), _am(xg), _am(mean),
+                                          _am(rstd), _am(gam), N, C, HW, G,
+                                          [True, True, True])
+    for i, tag in enumerate(("dx", "dg", "db")):
+        _cmp(f"gn_bw_{tag}", got[i], ref[i])
+
+    # triangular_solve: 4 flag combos
+    A = torch.randn(4, 4).triu() + torch.eye(4) * 2
+    B = torch.randn(4, 3)
+    for up, tr, un in ((True, False, False), (False, False, False),
+                       (True, True, False), (True, False, True)):
+        ref = a.triangular_solve(B, A, upper=up, transpose=tr,
+                                 unitriangular=un)
+        got = T["triangular_solve"](_am(B), _am(A), up, tr, un)
+        _cmp(f"tsol_{up}{tr}{un}", got[0], ref[0])
+        _cmp(f"tsolA_{up}{tr}{un}", got[1], ref[1])
+
+    # rrelu_with_noise family (eval only for forward)
+    xr = torch.randn(3, 8) - 0.5
+    noise = torch.rand(3, 8)
+    _cmp("rrelu_ev", T["rrelu_with_noise"](_am(xr), _am(noise), 0.125, 0.333,
+                                           False, None),
+         a.rrelu_with_noise(xr, noise.clone(), 0.125, 0.333, False))
+    got = T["rrelu_with_noise_functional"](_am(xr), _am(noise), 0.125, 0.333,
+                                           False, None)
+    ref = a.rrelu_with_noise_functional(xr, noise.clone(), 0.125, 0.333,
+                                        False, None)
+    _cmp("rrelu_fn", got[0], ref[0])
+    _cmp("rrelu_fn_noise", got[1], ref[1])
+    gr = torch.randn(3, 8)
+    for tr in (True, False):
+        _cmp(f"rrelu_bw_{tr}",
+             T["rrelu_with_noise_backward"](_am(gr), _am(xr), _am(noise),
+                                            0.125, 0.333, tr, False),
+             a.rrelu_with_noise_backward(gr, xr, noise, 0.125, 0.333, tr, False))
+
+    # dropout eval paths
+    xi = torch.randn(3, 4)
+    _cmp("adrop_ev", T["alpha_dropout"](_am(xi), 0.3, False),
+         a.alpha_dropout(xi, 0.3, False))
+    got = T["native_dropout"](_am(xi), 0.3, False)
+    ref = a.native_dropout(xi, 0.3, False)
+    _cmp("ndrop_ev", got[0], ref[0])
+    assert bool(np.all(np.array(got[1]) == ref[1].numpy())), "ndrop mask"
+
+    # distance family
+    x1 = torch.randn(2, 4, 3); x2 = torch.randn(2, 5, 3)
+    _cmp("euc", T["_euclidean_dist"](_am(x1), _am(x2)),
+         a._euclidean_dist(x1, x2))
+    for p_ in (1.0, 2.0, 0.5, float("inf"), 0.0):
+        _cmp(f"cdist_p{p_}", T["_cdist_forward"](_am(x1), _am(x2), p_, None),
+             a._cdist_forward(x1, x2, p_, None))
+    gd = torch.randn(2, 4, 5)
+    for p_ in (1.0, 2.0, 0.5, float("inf")):
+        d = a._cdist_forward(x1, x2, p_, None)
+        _cmp(f"cdist_bw_p{p_}",
+             T["_cdist_backward"](_am(gd), _am(x1), _am(x2), p_, _am(d)),
+             a._cdist_backward(gd, x1, x2, p_, d))
+    xp = torch.randn(6, 4)
+    for p_ in (2.0, float("inf")):
+        ref = a._pdist_forward(xp, p_)
+        _cmp(f"pdist_p{p_}", T["_pdist_forward"](_am(xp), p_), ref)
+    gp = torch.randn(15)
+    pd = a._pdist_forward(xp, 2.0)
+    _cmp("pdist_bw", T["_pdist_backward"](_am(gp), _am(xp), 2.0, _am(pd)),
+         a._pdist_backward(gp, xp, 2.0, pd))
+
+    # _batch_norm functional helpers
+    ref = a._batch_norm_no_update(x, w, None, rm, rv, 0.1, 1e-5)
+    got = T["_batch_norm_no_update"](_am(x), _am(w), None, _am(rm), _am(rv),
+                                     0.1, 1e-5)
+    _cmp("bn_nu", got[0], ref[0])
+    ref = a._batch_norm_with_update_functional(x, w, None, rm, rv, 0.1, 1e-5)
+    got = T["_batch_norm_with_update_functional"](_am(x), _am(w), None,
+                                                  _am(rm), _am(rv), 0.1, 1e-5)
+    for i, tag in enumerate(("out", "sm", "siv", "", "rm", "rv")):
+        if tag:
+            _cmp(f"bn_wu_{tag}", got[i], ref[i])
+
+
 if __name__ == "__main__":
     test_native_layer_norm_backward()
     test_embedding_dense_backward()
@@ -539,6 +646,7 @@ if __name__ == "__main__":
     test_relu_inplace_and_boolean_dispatch()
     test_native_layer_norm_backward_bf16_and_fp32()
     test_native_layer_norm_backward_lowered_in_training_graph()
+    test_norm_dist_backward_family()
     print("ALL PASS")
 
 

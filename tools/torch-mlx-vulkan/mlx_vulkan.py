@@ -962,6 +962,105 @@ def _tanh_backward(g, out):
     return (g32 * (1.0 - o32 * o32)).astype(d)
 
 
+
+def _gn_backward(go, x, mean, rstd, w, N, C, HxW, group, mask):
+    """aten.native_group_norm_backward: per-(N,group) norm grads."""
+    if mask != [True, True, True]:
+        return _raise("native_group_norm_backward mask")
+    go, x = _mx(go), _mx(x)
+    G = int(group)
+    cp = C // G
+    xhat = (_mx(x).reshape(N, G, cp * HxW) - _mx(mean).reshape(N, G, 1)) \
+        * _mx(rstd).reshape(N, G, 1)
+    gam = mx.ones((G, cp, 1)) if w is None else \
+        mx.broadcast_to(_mx(w).reshape(G, cp, 1), (G, cp, HxW))
+    gg = go.reshape(N, G, cp * HxW) * gam.reshape(1, G, cp * HxW)
+    m1 = mx.mean(gg, axis=2, keepdims=True)
+    m2 = mx.mean(gg * xhat, axis=2, keepdims=True)
+    dx = ((gg - m1 - xhat * m2) * _mx(rstd).reshape(N, G, 1)).reshape(x.shape)
+    dg = mx.sum(go.reshape(N, G, cp, HxW) * xhat.reshape(N, G, cp, HxW),
+                axis=(0, 3)).reshape(C)
+    db = mx.sum(go, axis=(0,) + tuple(range(2, go.ndim)))
+    return dx, dg, db
+
+
+def _rrelu_noise(a, noise, lower, upper, training):
+    if training:
+        return _raise("rrelu_with_noise training (random)")
+    x = _mx(a)
+    slope = (float(lower) + float(upper)) / 2.0
+    return mx.where(x > 0, x, x * slope)
+
+
+def _rrelu_noise_bw(go, a, noise, lower, upper, training):
+    # training: noise already holds 1 at positive positions (written by the
+    # forward), so the backward is just go * noise. eval: fixed slope.
+    x = _mx(a)
+    if training:
+        return _mx(go) * _mx(noise).astype(x.dtype)
+    slope = mx.array((float(lower) + float(upper)) / 2.0, dtype=x.dtype)
+    return _mx(go) * mx.where(x > 0, mx.ones_like(x), slope)
+
+
+def _triangular_solve(b, am, upper=True, transpose=False, unitriangular=False):
+    A, B = _mx(am), _mx(b)
+    if unitriangular:
+        eye = mx.eye(A.shape[-1], dtype=A.dtype)
+        A = (mx.triu(A, 1) if upper else mx.tril(A, -1)) + eye
+    if transpose:
+        A = mx.swapaxes(A, -1, -2)
+        upper = not upper
+    return mx.linalg.solve_triangular(A, B, upper=upper), _mx(am)
+
+
+def _cdist_backward(go, x1, x2, p, cdist):
+    if p < 0:
+        return _raise("_cdist_backward p")
+    g, diff = _mx(go)[..., None], _mx(x1)[..., :, None, :] - _mx(x2)[..., None, :, :]
+    if p == 0:
+        return mx.zeros_like(_mx(x1))
+    ad = mx.abs(diff)
+    if p == float("inf"):
+        m = ad.max(axis=-1, keepdims=True)
+        tie = (ad == m).astype(ad.dtype)
+        tie = tie / tie.sum(axis=-1, keepdims=True)
+        num = mx.sign(diff) * tie
+    else:
+        num = mx.sign(diff) * mx.power(ad, p - 1) / \
+            mx.power(_mx(cdist)[..., None], p - 1)
+    return mx.sum(g * num, axis=-2)
+
+
+def _pdist_pairs(n):
+    ij = [(i, j) for i in range(n) for j in range(i + 1, n)]
+    return (mx.array([i for i, _ in ij], dtype=mx.int32),
+            mx.array([j for _, j in ij], dtype=mx.int32))
+
+
+def _pdist_backward(go, x, p, pdist):
+    x = _mx(x)
+    if x.ndim != 2 or p < 0:
+        return _raise("_pdist_backward")
+    g, dist = _mx(go), _mx(pdist)
+    ii, jj = _pdist_pairs(x.shape[0])
+    diff = x[ii] - x[jj]
+    if p == 0:
+        return mx.zeros_like(x)
+    ad = mx.abs(diff)
+    if p == float("inf"):
+        m = ad.max(axis=-1, keepdims=True)
+        tie = (ad == m).astype(ad.dtype)
+        tie = tie / tie.sum(axis=-1, keepdims=True)
+        u = mx.sign(diff) * tie
+    else:
+        u = mx.sign(diff) * mx.power(ad, p - 1) / \
+            mx.power(dist[:, None], p - 1)
+    gg = g[:, None] * u
+    oh_i = mx.eye(x.shape[0])[ii]
+    oh_j = mx.eye(x.shape[0])[jj]
+    return mx.sum(oh_i[..., None] * gg[:, None, :], axis=0) - \
+        mx.sum(oh_j[..., None] * gg[:, None, :], axis=0)
+
 def _nll_loss_backward(gout, a, target, weight, reduction, ignore_index, tw):
     if weight is not None:
         return _raise("nll_loss_backward weight")
@@ -974,6 +1073,40 @@ def _nll_loss_backward(gout, a, target, weight, reduction, ignore_index, tw):
         g = -_mx(gout).reshape(-1)[:n] * m
     onehot = mx.equal(t.reshape(n, 1), mx.arange(a.shape[1]).reshape(1, -1))
     return mx.where(onehot, g.reshape(n, 1), mx.zeros_like(a))
+
+
+def _bn_no_update(x, w, b, rm, rv, momentum, eps):
+    """aten._batch_norm_no_update: eval-mode normalize; aux outs empty."""
+    x = _mx(x)
+    sh = (1, -1) + (1,) * (x.ndim - 2)
+    out = (x - _mx(rm).reshape(sh)) * mx.rsqrt(_mx(rv) + eps).reshape(sh)
+    if w is not None:
+        out = out * _mx(w).reshape(sh)
+    if b is not None:
+        out = out + _mx(b).reshape(sh)
+    e = mx.zeros((0,), dtype=x.dtype)
+    return out, e, e, e
+
+
+def _bn_with_update_functional(x, w, b, rm, rv, momentum, eps):
+    """aten._batch_norm_with_update_functional: train normalize + batch
+    saves + momentum-updated running stats (unbiased var)."""
+    x = _mx(x)
+    sh = (1, -1) + (1,) * (x.ndim - 2)
+    rd = tuple(d for d in range(x.ndim) if d != 1)
+    cnt = x.shape[0] * int(np.prod([x.shape[d] for d in range(2, x.ndim)]))
+    bm = mx.mean(x, axis=rd)
+    bc = mx.mean((x - bm.reshape(sh)) ** 2, axis=rd)
+    iv = mx.rsqrt(bc + eps)
+    out = (x - bm.reshape(sh)) * iv.reshape(sh)
+    if w is not None:
+        out = out * _mx(w).reshape(sh)
+    if b is not None:
+        out = out + _mx(b).reshape(sh)
+    m = float(momentum)
+    rm_out = (1 - m) * _mx(rm) + m * bm
+    rv_out = (1 - m) * _mx(rv) + m * bc * cnt / (cnt - 1)
+    return (out, bm, iv, mx.zeros((0,), dtype=x.dtype), rm_out, rv_out)
 
 
 def _convolution(x, w, b=None, stride=1, padding=0, dilation=1,
@@ -2320,6 +2453,37 @@ _FUNC_SPECS = {
         lambda r: (r[0].astype(_mx(x).dtype), _mx(rm).reshape(-1)[:0], _mx(rv).reshape(-1)[:0]))(_bn3(
             x, w, b, rm, rv, False, momentum, eps)),
     "native_batch_norm_backward": _bn_backward,
+    "batch_norm_backward": lambda go, x, w, rm, rv, sm, sv, update, eps,
+                              mask, reserve=None, **k:
+        _bn_backward(go, x, w, rm, rv, sm, sv, update, eps, mask),
+    "native_group_norm_backward": _gn_backward,
+    "triangular_solve": _triangular_solve,
+    "rrelu_with_noise": lambda a, noise=None, lower=0.125, upper=1/3,
+                               training=False, generator=None, **k:
+        _rrelu_noise(a, noise, lower, upper, training),
+    "rrelu_with_noise_functional": lambda a, noise=None, lower=0.125,
+                                          upper=1/3, training=False,
+                                          generator=None, **k:
+        (_rrelu_noise(a, noise, lower, upper, training), _mx(noise)),
+    "rrelu_with_noise_backward": lambda go, a, noise, lower, upper,
+                                        training, self_is_result=False, **k:
+        _rrelu_noise_bw(go, a, noise, lower, upper, training),
+    "alpha_dropout": lambda a, p=0.5, train=False, **k:
+        _mx(a) if not train else _raise("alpha_dropout train"),
+    "native_dropout": lambda a, p=0.5, train=None, **k:
+        (_mx(a), mx.ones(a.shape, dtype=mx.bool_))
+        if not train or float(p) == 0.0 else _raise("native_dropout train"),
+    "_euclidean_dist": lambda a, b, **k: _cdist(a, b, 2.0),
+    "_cdist_forward": lambda a, b, p=2.0, compute_mode=None, **k:
+        _cdist(a, b, float(p)),
+    "_cdist_backward": lambda go, x1, x2, p, cdist, **k:
+        _cdist_backward(go, x1, x2, float(p), cdist),
+    "_pdist_forward": lambda a, p=2.0, **k:
+        _pdist(a, float(p)) if _mx(a).ndim == 2 else _raise("_pdist_forward batch"),
+    "_pdist_backward": lambda go, x, p, pdist, **k:
+        _pdist_backward(go, x, float(p), pdist),
+    "_batch_norm_no_update": _bn_no_update,
+    "_batch_norm_with_update_functional": _bn_with_update_functional,
     "native_group_norm": _gn_native,
     "conv2d": _conv2d,
     "max_pool2d": lambda a, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False: _max_pool2d(a, kernel_size, stride, padding, dilation, ceil_mode, return_indices),
