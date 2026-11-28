@@ -396,6 +396,31 @@ def _glu(a, dim=-1):
     f = a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a
     lo, hi = mx.split(f, 2, axis=dim % a.ndim)
     return (lo * mx.sigmoid(hi)).astype(a.dtype)
+
+def _scatter(a, dim, index, src, add=False):
+    # aten.scatter(input, dim, index, src) writes src into input at the
+    # indexed positions along dim; scatter_add accumulates instead. The
+    # .value overloads pass a Scalar in place of src — broadcast it to
+    # index's shape. mx.put_along_axis is the exact primitive.
+    a = _mx(a)
+    idx = _mx(index).astype(mx.int32)
+    dim = dim % a.ndim
+    if hasattr(src, "shape"):
+        src = _mx(src)
+        if tuple(src.shape) != tuple(idx.shape):
+            src = mx.broadcast_to(src, tuple(idx.shape))
+    else:
+        src = mx.full(idx.shape, src, dtype=a.dtype)
+    if add:
+        src = (mx.take_along_axis(a, idx, axis=dim).astype(src.dtype)
+               + src).astype(a.dtype)
+    return mx.put_along_axis(a, idx, src, axis=dim).astype(a.dtype)
+
+
+def _take(a, index):
+    # aten.take(input, index): flatten first, then gather.
+    return mx.take(mx.flatten(_mx(a)), _mx(index).astype(mx.int32))
+
 def _frac(a):
     # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
     # NOT x - floor(x) which would give +0.7).
@@ -591,6 +616,12 @@ _FUNC_SPECS = {
     "softshrink": lambda a, lambd=0.5, *k: mx.where(mx.greater(a, lambd), a - lambd, mx.where(mx.less(a, -lambd), a + lambd, mx.zeros_like(a))),
     "tanhshrink": lambda a: a - mx.tanh(a),
     "softsign": lambda a: a / (1.0 + mx.abs(a)),
+    # the scatter family (Q-62).
+    "scatter": lambda a, dim, i, src: _scatter(a, dim, i, src),
+    "scatter_": lambda a, dim, i, src: _scatter(a, dim, i, src),
+    "scatter_add": lambda a, dim, i, src: _scatter(a, dim, i, src, add=True),
+    "scatter_add_": lambda a, dim, i, src: _scatter(a, dim, i, src, add=True),
+    "take": _take,
     "scaled_dot_product_attention": _sdpa,
     "eq": lambda a, b: mx.equal(_mx(a), _mx(b)),
     "ne": lambda a, b: mx.not_equal(_mx(a), _mx(b)),

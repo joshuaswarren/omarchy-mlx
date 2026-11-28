@@ -2048,6 +2048,31 @@ def _glu(a, dim=-1):
         return _raise("glu")
     lo, hi = mx.split(f, 2, axis=dim % a.ndim)
     return (lo * mx.sigmoid(hi)).astype(a.dtype)
+
+def _scatter(a, dim, index, src, add=False):
+    # aten.scatter(input, dim, index, src) writes src into input at the
+    # indexed positions along dim; scatter_add accumulates instead. The
+    # .value overloads pass a Scalar in place of src — broadcast it to
+    # index's shape. mx.put_along_axis is the exact primitive.
+    a = _mx(a)
+    idx = _mx(index).astype(mx.int32)
+    dim = dim % a.ndim
+    if hasattr(src, "shape"):
+        src = _mx(src)
+        if tuple(src.shape) != tuple(idx.shape):
+            src = mx.broadcast_to(src, tuple(idx.shape))
+    else:
+        src = mx.full(idx.shape, src, dtype=a.dtype)
+    if add:
+        src = (mx.take_along_axis(a, idx, axis=dim).astype(src.dtype)
+               + src).astype(a.dtype)
+    return mx.put_along_axis(a, idx, src, axis=dim).astype(a.dtype)
+
+
+def _take(a, index):
+    # aten.take(input, index): flatten first, then gather.
+    return mx.take(mx.flatten(_mx(a)), _mx(index).astype(mx.int32))
+
 def _frac(a):
     # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
     # NOT x - floor(x) which would give +0.7).
@@ -2376,6 +2401,12 @@ _FUNC_SPECS = {
     "elu": lambda a, alpha=1.0, scale=1.0, input_scale=1.0, inplace=False: scale * mx.where(mx.greater(a, 0), a, alpha * mx.expm1(input_scale * a)),
     "selu": lambda a, inplace=False: 1.0507009873554805 * mx.where(mx.greater(a, 0), a, 1.6732632423543772 * mx.expm1(a)),
     "celu": lambda a, alpha=1.0, inplace=False: mx.where(mx.greater(a, 0), a, alpha * mx.expm1(a / alpha)),
+    # the scatter family (Q-62).
+    "scatter": lambda a, dim, i, src: _scatter(a, dim, i, src),
+    "scatter_": lambda a, dim, i, src: _scatter(a, dim, i, src),
+    "scatter_add": lambda a, dim, i, src: _scatter(a, dim, i, src, add=True),
+    "scatter_add_": lambda a, dim, i, src: _scatter(a, dim, i, src, add=True),
+    "take": _take,
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,
