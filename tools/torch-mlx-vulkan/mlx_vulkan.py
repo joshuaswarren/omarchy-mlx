@@ -1050,6 +1050,74 @@ def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     y = y.transpose(0, 2, 1)
     return y[0] if unbatched else y
 
+def _im2col(a, kernel_size, dilation=1, padding=0, stride=1):
+    # aten.im2col (F.unfold): 4-D (B,C,H,W) -> (B, C*kh*kw, Ho*Wo); 3-D
+    # (C,H,W) unbatched -> (C*kh*kw, Ho*Wo). Column-block order is c-major,
+    # then kernel offsets (i*kw + j); each column holds one patch position,
+    # row-major over the output grid. Built from strided slices + reshape:
+    # no gather needed, and the slice bounds (Ho/Wo) come from the torch
+    # formula so off-by-one corners match aten exactly.
+    kh, kw = _tup(kernel_size, 2)
+    dh, dw = _tup(dilation, 2)
+    ph, pw = _tup(padding, 2)
+    sh, sw = _tup(stride, 2)
+    x = _mx(a)
+    batched = x.ndim == 4
+    if not batched:
+        if x.ndim != 3:
+            return _raise("im2col rank != 3/4")
+        x = x[None]
+    ho = (x.shape[2] + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+    wo = (x.shape[3] + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+    if ho <= 0 or wo <= 0:
+        return _raise("im2col kernel larger than padded input")
+    if ph or pw:
+        x = mx.pad(x, [(0, 0), (0, 0), (ph, ph), (pw, pw)])
+    blocks = [
+        x[:, :, i * dh : i * dh + (ho - 1) * sh + 1 : sh,
+          j * dw : j * dw + (wo - 1) * sw + 1 : sw]
+        for i in range(kh) for j in range(kw)
+    ]
+    cols = mx.stack(blocks, axis=2).reshape(x.shape[0], x.shape[1] * kh * kw, ho * wo)
+    return cols if batched else cols[0]
+
+def _col2im(a, output_size, kernel_size, dilation=1, padding=0, stride=1):
+    # aten.col2im (F.fold): (B, C*kh*kw, L) -> (B,C,H,W); (C*kh*kw, L)
+    # unbatched -> (C,H,W). Overlapping patches scatter-add; positions sit
+    # at (i*dh + h*sh, j*dw + w*sw) inside the padded grid, so a per-offset
+    # index array into the flattened spatial axis is enough.
+    oh, ow = _tup(output_size, 2)
+    kh, kw = _tup(kernel_size, 2)
+    dh, dw = _tup(dilation, 2)
+    ph, pw = _tup(padding, 2)
+    sh, sw = _tup(stride, 2)
+    cols = _mx(a)
+    batched = cols.ndim == 3
+    if not batched:
+        if cols.ndim != 2:
+            return _raise("col2im rank != 2/3")
+        cols = cols[None]
+    b = cols.shape[0]
+    hp, wp = oh + 2 * ph, ow + 2 * pw
+    ho = (hp - dh * (kh - 1) - 1) // sh + 1
+    wo = (wp - dw * (kw - 1) - 1) // sw + 1
+    if ho <= 0 or wo <= 0 or cols.shape[1] % (kh * kw) or cols.shape[2] != ho * wo:
+        return _raise("col2im shape")
+    c = cols.shape[1] // (kh * kw)
+    blocks = cols.reshape(b, c, kh * kw, ho * wo)
+    out = mx.zeros((b, c, hp * wp), dtype=cols.dtype)
+    ib = mx.arange(b).reshape(b, 1, 1)
+    ic = mx.arange(c).reshape(1, c, 1)
+    for i in range(kh):
+        for j in range(kw):
+            pos = (mx.arange(ho) * sh + i * dh).reshape(ho, 1) * wp + (
+                mx.arange(wo) * sw + j * dw)
+            out = out.at[ib, ic, pos.reshape(1, 1, ho * wo)].add(
+                blocks[:, :, i * kw + j, :])
+    out = out.reshape(b, c, hp, wp)
+    out = out[:, :, ph : ph + oh, pw : pw + ow]
+    return out if batched else out[0]
+
 def _diff(a, n=1, dim=-1, prepend=None, append=None):
     x = _mx(a)
     d = dim % x.ndim
@@ -2261,6 +2329,8 @@ _FUNC_SPECS = {
     "_adaptive_avg_pool2d_backward": _adaptive_avg_pool2d_backward,
     "conv1d": _conv1d,
     "diff": _diff,
+    "im2col": _im2col,
+    "col2im": _col2im,
     "convolution": _convolution,
     "convolution_backward": _convolution_backward,
     "t": lambda a: a if a.ndim < 2 else mx.transpose(a, axes=(-1, -2)),
