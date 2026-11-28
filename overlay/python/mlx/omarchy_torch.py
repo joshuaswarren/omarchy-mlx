@@ -362,6 +362,45 @@ def _coerce_index(v):
     return v
 
 
+def _has_bool_index(idx):
+    # aten reads a bool index tensor as a mask (masked positions), never as
+    # 0/1 integers - and the backend's gather path treats a bool array as
+    # 0/1 silently, so every index-family site defers on bool rather than
+    # read or write wrong positions.
+    if isinstance(idx, (tuple, list)):
+        return any(_has_bool_index(v) for v in idx)
+    if isinstance(idx, mx.array):
+        return mx.issubdtype(idx.dtype, mx.bool_)
+    if isinstance(idx, torch.Tensor):
+        return idx.dtype == torch.bool
+    return False
+
+
+def _int_index(i, name):
+    # an int-typed index for take/gather/index_select-family ops: defer a
+    # bool tensor instead of casting a mask to 0/1.
+    if _has_bool_index(i):
+        return _raise(f"{name}: a bool index tensor is a mask in aten, not an int index")
+    return _mx(i).astype(mx.int32)
+
+
+def _bool_mask(m, name):
+    # masked_fill's mask is bool by contract; a non-bool arg defers to the
+    # fallback rather than silently astype (aten raises on non-bool masks).
+    mm = _mx(m)
+    if not mx.issubdtype(mm.dtype, mx.bool_):
+        return _raise(f"{name}: mask must be a bool tensor")
+    return mm
+
+
+def _aten_index(a, idx):
+    # aten.index(self, indices): a bool entry is a mask; the backend's tuple
+    # gather would read it as 0/1 positions, so defer.
+    if _has_bool_index(idx):
+        return _raise("aten.index: a bool index tensor is a mask in aten, not an int index")
+    return a[tuple(_mx(i) if isinstance(i, (torch.Tensor, list)) else i
+                   for i in (idx if isinstance(idx, (list, tuple)) else (idx,)))]
+
 def _elu(a, alpha=1.0, scale=1.0, input_scale=1.0):
     # aten.elu(input, alpha=1, scale=1, input_scale=1):
     #   scale*x when x > 0, else alpha*scale*(exp(input_scale*x) - 1);
@@ -556,7 +595,7 @@ _FUNC_SPECS = {
     "full": lambda s, v, **k: mx.full(tuple(s), v, dtype=_MX_DT.get(k.get("dtype"))),
     "full_like": lambda a, v, **k: mx.full(a.shape, v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
-    "getitem": lambda t, i: t[_coerce_index(i)],
+    "getitem": lambda t, i: _raise("aten.getitem: a bool index tensor is a mask in aten, not an int index") if _has_bool_index(i) else t[_coerce_index(i)],
     "detach": lambda a: a, "clone": lambda a: a, "contiguous": lambda a: a,
     "alias": lambda a: a, "lift_fresh": lambda a: a, "lift_fresh_copy": lambda a: a, "to": lambda a, *a_, **k_: a,
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
@@ -602,11 +641,11 @@ _FUNC_SPECS = {
     "outer": mx.outer, "einsum": lambda *a: mx.einsum(*a),
     "argmax": lambda a, dim=None, keepdim=False: mx.argmax(a, axis=dim, keepdims=keepdim),
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),
-    "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
-    "index_select": lambda a, dim, i: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
-    "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
-    "take_along_dim": lambda a, i, dim: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
-    "index": lambda a, idx: a[tuple(_mx(i) if isinstance(i, (torch.Tensor, list)) else i for i in (idx if isinstance(idx, (list, tuple)) else (idx,)))],
+    "take": lambda a, i, dim=None: mx.take(a, _int_index(i, "aten.take"), axis=dim),
+    "index_select": lambda a, dim, i: mx.take(a, _int_index(i, "aten.index_select"), axis=dim),
+    "gather": lambda a, dim, i: mx.take_along_axis(a, _int_index(i, "aten.gather"), axis=dim),
+    "take_along_dim": lambda a, i, dim: mx.take_along_axis(a, _int_index(i, "aten.take_along_dim"), axis=dim),
+    "index": _aten_index,
     "tril": lambda a, k=0: mx.tril(a, k), "triu": lambda a, k=0: mx.triu(a, k),
     "pad": lambda a, p, mode="constant", value=0: mx.pad(a, _pad_width(a, p)),
     "tile": lambda a, d: mx.tile(a, tuple(d)),
@@ -640,8 +679,8 @@ _FUNC_SPECS = {
     "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
     "rsub": lambda a, b: _mx(b) - _mx(a),
-    "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
-    "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
+    "masked_fill": lambda a, m, v: mx.where(_bool_mask(m, "aten.masked_fill"), v, a),
+    "masked_fill_": lambda a, m, v: mx.where(_bool_mask(m, "aten.masked_fill_"), v, a),
     "searchsorted": _searchsorted,
     "bucketize": lambda a, b, out_int32=False, right=False: _searchsorted(
         b, a, out_int32=out_int32, right=right),
@@ -658,7 +697,7 @@ _FUNC_SPECS = {
     "cdist": lambda a, b, p=2.0, compute_mode=None: _cdist(a, b, p, compute_mode),
     "pdist": lambda a, p=2.0: _pdist(a, p),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
-    "embedding": lambda w, idx, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)],
+    "embedding": lambda w, idx, *a_, **k_: _mx(w)[_int_index(idx, "aten.embedding")],
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
@@ -706,9 +745,9 @@ def _build_func_table():
         ("torch.nn.functional.softmax", _FUNC_SPECS["softmax"]),
         ("torch.nn.functional.scaled_dot_product_attention", _sdpa),
         ("torch.nn.functional.dropout", _FUNC_SPECS["dropout"]),
-        ("torch.nn.functional.embedding", lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)]),
-        ("torch.embedding", lambda idx, w, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)]),
-        ("operator.getitem", lambda t, i: t[i]),
+        ("torch.nn.functional.embedding", lambda idx, w, *a_, **k_: _mx(w)[_int_index(idx, "torch.nn.functional.embedding")]),
+        ("torch.embedding", lambda idx, w, *a_, **k_: _mx(w)[_int_index(idx, "torch.embedding")]),
+        ("operator.getitem", lambda t, i: _raise("operator.getitem: a bool index tensor is a mask in aten, not an int index") if _has_bool_index(i) else t[i]),
         ("operator.matmul", mx.matmul),
         ("operator.add", _FUNC_SPECS["add"]),
         ("operator.sub", _FUNC_SPECS["sub"]),
@@ -860,9 +899,14 @@ def make_executor(gm):
                 env[node] = _mx(t)
                 continue
             if node.target is operator.getitem or name == "getitem":
-                env[node] = args[0][_coerce_index(args[1])]
-                stats["glue"].append("getitem")
-                continue
+                if isinstance(args[0], mx.array) and _has_bool_index(args[1]):
+                    # the gather path reads a bool mask as 0/1 positions;
+                    # leave env unset so the torch fallback below handles it
+                    log.info("LOWER-FAIL\tgetitem\tbool mask index defers to torch")
+                else:
+                    env[node] = args[0][_coerce_index(args[1])]
+                    stats["glue"].append("getitem")
+                    continue
 
             val = None
             on_mlx = False
@@ -1187,6 +1231,10 @@ def make_compiled_executor(gm):
                 kwargs = {k: _dqall(v) for k, v in kwargs.items()}
             if name == "index_copy_":
                 t, dim, idx, src = args[0], args[1], args[2], args[3]
+                if _has_bool_index(idx):
+                    raise RuntimeError(
+                        "aten.index_copy_: a bool index tensor is a mask in "
+                        "aten; refused to the per-node path for torch semantics")
                 smax = t.shape[dim]
                 if holder["ar"] is None or holder["ar"].shape[0] != smax:
                     holder["ar"] = mx.arange(smax)
@@ -1247,6 +1295,10 @@ def make_compiled_executor(gm):
                 env[n] = getattr(args[0], name)(*args[1:], **kwargs)
                 continue
             if n.target is operator.getitem:
+                if isinstance(args[0], mx.array) and _has_bool_index(args[1]):
+                    raise RuntimeError(
+                        "getitem with a bool mask index: the gather path reads "
+                        "bool as 0/1; refused to the per-node path")
                 env[n] = args[0][_coerce_index(args[1])]
                 continue
             if n.op == "call_function":

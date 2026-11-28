@@ -526,7 +526,7 @@ def _embedding_dense_backward(go, idx, num_weights, padding_idx,
     # aten: grad_output, indices, num_weights, padding_idx, scale_grad_by_freq
     g = _mx(go)
     g = g.reshape(-1, g.shape[-1])
-    i = _mx(idx).astype(mx.int32).reshape(-1)
+    i = _int_index(idx, "aten.embedding_dense_backward").reshape(-1)
     out = mx.zeros((num_weights, g.shape[-1]), dtype=g.dtype)
     out = out.at[i].add(g)
     if scale_grad_by_freq:
@@ -778,6 +778,8 @@ _INT_DT = (mx.int8, mx.int16, mx.int32, mx.int64,
 def _embedding(a, b, *a_, **k_):
     # F.embedding emits (indices, weight); aten.embedding emits (weight,
     # indices). Indices are integer dtype, weight is float.
+    if _has_bool_index((a, b)):
+        return _raise("aten.embedding: a bool index tensor is a mask in aten, not an int index")
     am, bm = _mx(a), _mx(b)
     idx, w = (am, bm) if am.dtype in _INT_DT else (bm, am)
     return w[idx.astype(mx.int32)]
@@ -1861,6 +1863,8 @@ def _embedding_any(a, b, *a_, **k_):
     indices are the integer tensor - F.embedding and aten.embedding name
     them in opposite orders, so take them by dtype."""
     wa, wb = _mx(a), _mx(b)
+    if _has_bool_index((wa, wb)):
+        return _raise("aten.embedding: a bool index tensor is a mask in aten, not an int index")
     idx_is_a = wa.dtype in (mx.int32, mx.int64, mx.uint32)
     w = wb if idx_is_a else wa
     idx = wa if idx_is_a else wb
@@ -1868,7 +1872,7 @@ def _embedding_any(a, b, *a_, **k_):
 
 def _embedding(weight, idx):
     """aten.embedding(weight, indices) order."""
-    return _mx(weight)[_mx(idx).astype(mx.int32)]
+    return _mx(weight)[_int_index(idx, "aten.embedding")]
 
 def _embedding_f(input, weight, *a_, **k_):
     """F.embedding(input, weight) order."""
@@ -1890,6 +1894,46 @@ def _coerce_index(v):
     if isinstance(v, (tuple, list)):
         return type(v)(_coerce_index(x) for x in v)
     return v
+
+
+def _has_bool_index(idx):
+    # aten reads a bool index tensor as a mask (masked positions), never as
+    # 0/1 integers - and the backend's gather path treats a bool array as
+    # 0/1 silently, so every index-family site defers on bool rather than
+    # read or write wrong positions.
+    if isinstance(idx, (tuple, list)):
+        return any(_has_bool_index(v) for v in idx)
+    if isinstance(idx, mx.array):
+        return mx.issubdtype(idx.dtype, mx.bool_)
+    if isinstance(idx, torch.Tensor):
+        return idx.dtype == torch.bool
+    return False
+
+
+def _int_index(i, name):
+    # an int-typed index for take/gather/index_select-family ops: defer a
+    # bool tensor instead of casting a mask to 0/1.
+    if _has_bool_index(i):
+        return _raise(f"{name}: a bool index tensor is a mask in aten, not an int index")
+    return _mx(i).astype(mx.int32)
+
+
+def _bool_mask(m, name):
+    # masked_fill's mask is bool by contract; a non-bool arg defers to the
+    # fallback rather than silently astype (aten raises on non-bool masks).
+    mm = _mx(m)
+    if not mx.issubdtype(mm.dtype, mx.bool_):
+        return _raise(f"{name}: mask must be a bool tensor")
+    return mm
+
+
+def _aten_index(a, idx):
+    # aten.index(self, indices): a bool entry is a mask; the backend's tuple
+    # gather would read it as 0/1 positions, so defer.
+    if _has_bool_index(idx):
+        return _raise("aten.index: a bool index tensor is a mask in aten, not an int index")
+    return a[tuple(_mx(i) if isinstance(i, (torch.Tensor, list)) else i
+                   for i in (idx if isinstance(idx, (list, tuple)) else (idx,)))]
 
 
 def _local_scalar_dense(a):
@@ -2294,7 +2338,7 @@ _FUNC_SPECS = {
     "full": lambda s, v, **k: mx.full(tuple(s), v, dtype=_MX_DT.get(k.get("dtype"))),
     "full_like": lambda a, v, **k: mx.full(a.shape, v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
-    "getitem": lambda t, i: t[_coerce_index(i)],
+    "getitem": lambda t, i: _raise("aten.getitem: a bool index tensor is a mask in aten, not an int index") if _has_bool_index(i) else t[_coerce_index(i)],
     "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a.clone() if isinstance(a, torch.Tensor) else a, "contiguous": lambda a, *a_, **k_: a,
     "alias": lambda a: a, "lift_fresh": lambda a: a,
     "lift_fresh_copy": lambda a, *a_, **k_: _mx(a),
@@ -2412,11 +2456,11 @@ _FUNC_SPECS = {
     "histogram": _histogram,
     "mode": _mode,
     "kthvalue": _kthvalue,
-    "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
-    "index_select": lambda a, dim, i: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
-    "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
-    "take_along_dim": lambda a, i, dim: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
-    "index": lambda a, idx: a[tuple(_mx(i) if isinstance(i, (torch.Tensor, list)) else i for i in (idx if isinstance(idx, (list, tuple)) else (idx,)))],
+    "take": lambda a, i, dim=None: mx.take(a, _int_index(i, "aten.take"), axis=dim),
+    "index_select": lambda a, dim, i: mx.take(a, _int_index(i, "aten.index_select"), axis=dim),
+    "gather": lambda a, dim, i: mx.take_along_axis(a, _int_index(i, "aten.gather"), axis=dim),
+    "take_along_dim": lambda a, i, dim: mx.take_along_axis(a, _int_index(i, "aten.take_along_dim"), axis=dim),
+    "index": _aten_index,
     # PT-AL-i: membership (aten.isin; in1d is its legacy alias in old graphs)
     "isin": _isin,
     "in1d": _isin,
@@ -2465,8 +2509,8 @@ _FUNC_SPECS = {
     "rsub": _rsub,
     "sub_": _sub_inplace,
     "sub_.Tensor": _sub_inplace,
-    "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
-    "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
+    "masked_fill": lambda a, m, v: mx.where(_bool_mask(m, "aten.masked_fill"), v, a),
+    "masked_fill_": lambda a, m, v: mx.where(_bool_mask(m, "aten.masked_fill_"), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": _roll,
@@ -2765,6 +2809,8 @@ def make_executor(gm):
                 continue
             if (node.target is operator.getitem or name == "getitem") and node not in refused:
                 try:
+                    if isinstance(args[0], mx.array) and _has_bool_index(args[1]):
+                        raise ValueError("a bool index tensor is a mask in aten; the gather path reads it as 0/1")
                     env[node] = args[0][_coerce_index(args[1])]
                     stats["glue"].append("getitem")
                     _tick("getitem")
@@ -2772,7 +2818,7 @@ def make_executor(gm):
                 except Exception as e:
                     # Mixed-domain getitem (torch source, mlx index): coerce the
                     # indexable side to mx when any operand lives there.
-                    if has_mx((args[0], args[1])):
+                    if has_mx((args[0], args[1])) and not _has_bool_index(args[1]):
                         try:
                             env[node] = _mx(args[0])[_deep_mx(_coerce_index(args[1]))]
                             stats["glue"].append("getitem")
@@ -3431,6 +3477,10 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 kwargs = {k: _dqall(v) for k, v in kwargs.items()}
             if name == "index_copy_":
                 t, dim, idx, src = args[0], args[1], args[2], args[3]
+                if _has_bool_index(idx):
+                    raise RuntimeError(
+                        "aten.index_copy_: a bool index tensor is a mask in "
+                        "aten; refused to the per-node path for torch semantics")
                 if dim < 0:
                     dim += src.ndim
                 sh = [1] * src.ndim
@@ -3572,6 +3622,10 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 env[n] = getattr(args[0], name)(*args[1:], **kwargs)
                 continue
             if n.target is operator.getitem:
+                if isinstance(args[0], mx.array) and _has_bool_index(args[1]):
+                    raise RuntimeError(
+                        "getitem with a bool mask index: the gather path reads "
+                        "bool as 0/1; refused to the per-node path")
                 env[n] = args[0][_coerce_index(args[1])]
                 continue
             if n.op == "call_function":

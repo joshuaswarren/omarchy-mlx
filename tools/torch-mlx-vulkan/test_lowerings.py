@@ -3014,6 +3014,50 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_bool_index_defers():
+    # Q-67: a bool index tensor is a mask in aten, never 0/1 ints - every
+    # index-family lowering must defer rather than gather wrong positions.
+    import mlx.core as mx
+
+    x = torch.arange(12, dtype=torch.float32).reshape(3, 4)
+    xm = mx.array(x)
+    mask1 = torch.tensor([True, False, True])
+    mask2 = torch.tensor([True, False, True, False])
+
+    def raises(fn, *args, **kwargs):
+        try:
+            fn(*args, **kwargs)
+        except NotImplementedError:
+            return True
+        return False
+
+    # int-index family: defer on bool (aten itself rejects bool here, so the
+    # deferral also reproduces torch's own error path)
+    assert raises(mlx_vulkan.ATEN_TABLE["index_select"], xm, 0, mask1)
+    assert raises(mlx_vulkan.ATEN_TABLE["take"], xm, mask1.reshape(-1)[:6])
+    assert raises(mlx_vulkan.ATEN_TABLE["gather"], xm, 0, torch.tensor([[True, False]]))
+    assert raises(mlx_vulkan.ATEN_TABLE["take_along_dim"], xm, torch.tensor([[True]]), 0)
+    assert raises(mlx_vulkan.ATEN_TABLE["index"], xm, (mask1,))
+    assert raises(mlx_vulkan.ATEN_TABLE["index"], xm, (mask1, mask2[:3]))
+    assert raises(mlx_vulkan.ATEN_TABLE["getitem"], xm, (mask1,))
+    assert raises(mlx_vulkan.ATEN_TABLE["embedding"], mx.array(torch.randn(8, 4)), mask1[:2])
+    # masked_fill: a bool mask is handled (mask semantics, not an index)
+    got = mlx_vulkan.ATEN_TABLE["masked_fill"](xm, mask2.unsqueeze(0).expand(3, -1), -1.0)
+    ref = torch.ops.aten.masked_fill(x, mask2.unsqueeze(0).expand(3, -1), -1.0)
+    assert np.array_equal(_np(got), ref.numpy()), (_np(got), ref.numpy())
+    # ...but a non-bool mask defers instead of silently astype'ing to bool
+    assert raises(mlx_vulkan.ATEN_TABLE["masked_fill"], xm,
+                  torch.tensor([1, 0, 1, 0], dtype=torch.int64).unsqueeze(0).expand(3, -1), -1.0)
+    # the int paths still lower normally
+    got = mlx_vulkan.ATEN_TABLE["index_select"](xm, 0, torch.tensor([0, 2]))
+    ref = torch.index_select(x, 0, torch.tensor([0, 2]))
+    assert np.array_equal(_np(got), ref.numpy()), (_np(got), ref.numpy())
+    got = mlx_vulkan.ATEN_TABLE["index"](xm, (torch.tensor([0, 2]),))
+    ref = torch.ops.aten.index(x, (torch.tensor([0, 2]),))
+    assert np.array_equal(_np(got), ref.numpy()), (_np(got), ref.numpy())
+    print("test_bool_index_defers PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3118,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_bool_index_defers()
     print("ALL PASS")
 
 
