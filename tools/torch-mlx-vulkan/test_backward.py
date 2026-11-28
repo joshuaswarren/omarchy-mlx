@@ -537,6 +537,8 @@ if __name__ == "__main__":
     test_efficient_attention_forward_schema()
     test_no_duplicate_table_keys()
     test_relu_inplace_and_boolean_dispatch()
+    test_native_layer_norm_backward_bf16_and_fp32()
+    test_native_layer_norm_backward_lowered_in_training_graph()
     print("ALL PASS")
 
 

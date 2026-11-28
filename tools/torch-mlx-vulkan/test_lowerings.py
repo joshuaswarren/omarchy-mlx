@@ -3025,6 +3025,11 @@ if __name__ == "__main__":
     test_cosine_similarity()
     test_pdist_cdist()
     test_flip_rot90()
+    test_mode()
+    test_kthvalue()
+    test_squeeze_inplace()
+    test_clamp_bounds()
+    test_piecewise_activations()
     print("ALL PASS")
 
 
