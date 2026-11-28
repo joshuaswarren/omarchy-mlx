@@ -73,6 +73,75 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     torch.allclose(got, r, atol=1e-5, rtol=1e-5),
                     (ns_shape, tag, float((got - r).abs().max())))
 
+    def test_math_extras(self):
+        """Math-extras family in the wheel backend: ger/inner contract the
+        last dims via reshape+matmul, kron/tensordot/cartesian_prod are pure
+        broadcast products, trapz/cumulative_trapezoid share the take-based
+        segment kernel, nextafter walks one ulp via the ordered-int bit
+        trick on float32."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(0)
+        np = __import__("numpy")
+
+        def to_mx(args):
+            return tuple(
+                mx.array(a.numpy()) if isinstance(a, torch.Tensor) else a
+                for a in args)
+
+        x23 = torch.randn(2, 3)
+        x34 = torch.randn(3, 4)
+        x234 = torch.randn(2, 3, 4)
+        v4 = torch.randn(4)
+        v5 = torch.randn(5)
+        cases = [
+            ("ger", torch.ops.aten.ger.default, (v4, v5), {}),
+            ("inner", torch.ops.aten.inner.default, (x23, x34[:, :3]), {}),
+            ("inner", torch.ops.aten.inner.default,
+             (x234, torch.randn(2, 5, 4)), {}),
+            ("vander", torch.ops.aten.vander.default, (v4,), {}),
+            ("vander", torch.ops.aten.vander.default, (v4,),
+             {"N": 3, "increasing": True}),
+            ("kron", torch.ops.aten.kron.default, (x23, x34[:2, :2]), {}),
+            ("kron", torch.ops.aten.kron.default, (v4, x23), {}),
+            ("deg2rad", torch.ops.aten.deg2rad.default, (x23,), {}),
+            ("rad2deg", torch.ops.aten.rad2deg.default, (x23,), {}),
+            ("ldexp", torch.ops.aten.ldexp.Tensor,
+             (x23, torch.randint(-3, 4, (2, 3))), {}),
+            ("renorm", torch.ops.aten.renorm.default, (x234,),
+             {"p": 1.0, "dim": 1, "maxnorm": 2.0}),
+            ("trapz", torch.ops.aten.trapz.dx, (x23,), {"dx": 0.5, "dim": 1}),
+            ("trapz", torch.ops.aten.trapz.x, (x23, v4[:3]), {"dim": 1}),
+            ("cumulative_trapezoid", torch.ops.aten.cumulative_trapezoid.dx,
+             (x23,), {"dx": 2.0, "dim": 1}),
+            ("tensordot", torch.ops.aten.tensordot.default, (x234, x34),
+             {"dims_self": [1, 2], "dims_other": [0, 1]}),
+            ("tensordot", torch.ops.aten.tensordot.default, (x23, x34),
+             {"dims_self": [1], "dims_other": [0]}),
+        ]
+        for name, aten_fn, args, kwargs in cases:
+            ref = aten_fn(*args, **kwargs).numpy()
+            got = np.array(ATEN_TABLE[name](*to_mx(args), **kwargs))
+            self.assertTrue(np.allclose(got, ref, atol=1e-4),
+                            (name, kwargs, got))
+        # cartesian_prod takes a list of tensors
+        ref = torch.ops.aten.cartesian_prod.default(
+            [v4[:3], v5[:2], v4[:4]]).numpy()
+        got = np.array(ATEN_TABLE["cartesian_prod"](
+            [mx.array(t.numpy()) for t in [v4[:3], v5[:2], v4[:4]]]))
+        self.assertTrue(np.allclose(got, ref, atol=1e-4))
+        # nextafter is ulp-exact — compare the int views
+        tgt = torch.tensor([1.0, -1.0, 0.0, 0.0])
+        src = torch.tensor([0.0, -0.0, 1.0, -1.0])
+        ref = torch.ops.aten.nextafter.default(src, tgt).view(torch.int32)
+        got = torch.as_tensor(np.array(
+            ATEN_TABLE["nextafter"](*to_mx((src, tgt)))))
+        self.assertTrue(torch.equal(got.view(torch.int32), ref))
+        torch.manual_seed(1)
+
     def test_log1p_expm1_logaddexp(self):
         """PT-AL-f: the wheel backend lowers aten.log1p, aten.expm1 and
         aten.logaddexp with fp32/bf16 parity against the aten CPU ops,
