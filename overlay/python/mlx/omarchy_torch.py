@@ -511,6 +511,106 @@ def _rot90(a, k=1, dims=(0, 1)):
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
 
+
+def _tensordot(a, b, dims_self=None, dims_other=None):
+    # aten.tensordot(self, other, dims_self, dims_other): the dims arrive
+    # as int[2] lists from the FX graph, or as bare ints on direct calls.
+    # Contract the listed axes of a with the listed axes of b through one
+    # 2-D matmul; the output order is a's free axes then b's free axes.
+    a, b = _mx(a), _mx(b)
+    if dims_self is None and dims_other is None:
+        raise ValueError("tensordot requires dims")
+    if isinstance(dims_self, int):
+        n = dims_self
+        da, db = list(range(a.ndim - n, a.ndim)), list(range(n))
+    else:
+        da = [int(d) % a.ndim for d in dims_self]
+        db = [int(d) % b.ndim for d in dims_other]
+    ash, bsh = a.shape, b.shape
+    af = [i for i in range(a.ndim) if i not in da]
+    bf = [i for i in range(b.ndim) if i not in db]
+    m = 1
+    for i in af:
+        m *= ash[i]
+    k = 1
+    for i in da:
+        k *= ash[i]
+    n = 1
+    for i in bf:
+        n *= bsh[i]
+    at = mx.transpose(a, af + da)
+    bt = mx.transpose(b, db + bf)
+    out = mx.reshape(at, (m, k)) @ mx.reshape(bt, (k, n))
+    return mx.reshape(out, tuple(ash[i] for i in af) + tuple(bsh[i] for i in bf))
+
+
+def _vander(x, N=None, increasing=False):
+    # aten.vander(x, N, increasing): the Vandermonde matrix; the columns
+    # are x^0..x^(N-1) left to right when increasing, reversed otherwise.
+    # mx has no power scan, so the column ladder is built multiplicatively.
+    x = mx.reshape(_mx(x), (-1,))
+    n = x.shape[0] if N is None or N < 0 else int(N)
+    cols = [mx.ones_like(x)]
+    cur = mx.ones_like(x)
+    for _ in range(1, n):
+        cur = cur * x
+        cols.append(cur)
+    if not increasing:
+        cols = cols[::-1]
+    return mx.stack(cols, -1) if cols else mx.reshape(x, (x.shape[0], 0))
+
+
+def _cov(input, correction=1, fweights=None, aweights=None):
+    # aten.cov(input, correction, fweights, aweights): the row-variables
+    # covariance with the ATen normalization: w = fweights * aweights,
+    # denom = sum(w) - correction, except aweights raise it to
+    # sum(w) - correction * sum(w * aweights) / sum(w) (sum(aweights)
+    # when fweights is absent). 1-D input is one variable with len
+    # observations.
+    m = _mx(input)
+    if m.ndim == 1:
+        m = mx.reshape(m, (1, -1))
+    elif m.ndim > 2:
+        m = mx.reshape(m, (m.shape[0], -1))
+    w = None
+    if fweights is not None:
+        w = mx.reshape(_mx(fweights), (-1,)).astype(m.dtype)
+    if aweights is not None:
+        a = mx.reshape(_mx(aweights), (-1,)).astype(m.dtype)
+        w = a if w is None else w * a
+    if w is None:
+        fact = m.shape[1] - correction
+        avg = mx.sum(m, axis=1) / m.shape[1]
+        m_c = m - mx.reshape(avg, (-1, 1))
+        c = m_c @ mx.transpose(m_c, (1, 0))
+    else:
+        w_sum = mx.sum(w)
+        avg = mx.sum(m * mx.reshape(w, (1, -1)), axis=1) / w_sum
+        m_c = m - mx.reshape(avg, (-1, 1))
+        if correction == 0:
+            fact = w_sum
+        elif aweights is not None:
+            a = mx.reshape(_mx(aweights), (-1,)).astype(m.dtype)
+            ww = w * a if fweights is not None else w * w
+            fact = w_sum - correction * mx.sum(ww) / w_sum
+        else:
+            fact = w_sum - correction
+        c = m_c @ mx.transpose(m_c * mx.reshape(w, (1, -1)), (1, 0))
+    return c / fact
+
+
+def _corrcoef(input):
+    # aten.corrcoef(input): the covariance normalized by the outer product
+    # of the diagonal's sqrt (torch leaves constant rows at nan, so the
+    # division is unclamped).
+    m = _mx(input)
+    if m.ndim == 1:
+        m = mx.reshape(m, (1, -1))
+    c = _cov(m, 1)
+    d = mx.sqrt(mx.abs(mx.diagonal(c)))
+    return c / (mx.reshape(d, (-1, 1)) * mx.reshape(d, (1, -1)))
+
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -657,6 +757,11 @@ _FUNC_SPECS = {
     # pairwise distances used in metric learning (PT-PAIR-a)
     "cdist": lambda a, b, p=2.0, compute_mode=None: _cdist(a, b, p, compute_mode),
     "pdist": lambda a, p=2.0: _pdist(a, p),
+    # Q-62: tensordot / vander / corrcoef / cov (linear algebra + stats).
+    "tensordot": lambda a, b, dims_self=None, dims_other=None: _tensordot(a, b, dims_self, dims_other),
+    "vander": lambda x, N=None, increasing=False: _vander(x, N, increasing),
+    "corrcoef": lambda input: _corrcoef(input),
+    "cov": lambda input, correction=1, fweights=None, aweights=None: _cov(input, correction, fweights, aweights),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
     "embedding": lambda w, idx, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)],
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),

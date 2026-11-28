@@ -1313,7 +1313,7 @@ def test_reductions():
         gm = torch.fx.GraphModule(torch.nn.Module(), g)
         run, stats = mlx_vulkan.make_executor(gm)
         out = run(*ins)
-        assert stats["cpu"] == [], (stats, str(target), kw)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
         # #864: _torch widens bf16 outputs to f32 (numpy has no bf16 buffer)
         assert out.dtype == ref.dtype or (ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
             (str(target), out.dtype, ref.dtype)
@@ -2489,7 +2489,16 @@ def test_mv_addmv():
         ref = target(*ins, **kwargs)
         g = torch.fx.Graph()
         phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
-        n = g.call_function(target, tuple(phs), dict(kwargs))
+        if "dims_self" in kwargs:
+            # aten.tensordot's dims are schema-required int[2]: pass them
+            # positionally (the executor drops list kwargs on fallback).
+            pos = tuple(phs) + (kwargs["dims_self"], kwargs["dims_other"])
+            n = g.call_function(target, pos, {})
+            kw = {}
+        else:
+            pos = tuple(phs)
+            n = g.call_function(target, pos, dict(kwargs))
+            kw = dict(kwargs)
         g.output(n)
         gm = torch.fx.GraphModule(torch.nn.Module(), g)
         run, stats = mlx_vulkan.make_executor(gm)
@@ -2555,7 +2564,7 @@ def test_softplus_mish():
         gm = torch.fx.GraphModule(torch.nn.Module(), g)
         run, stats = mlx_vulkan.make_executor(gm)
         out = run(*ins)
-        assert stats["cpu"] == [], (stats, str(target), kw)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
         assert any(name in s for s in stats["mlx"]), (stats, str(target))
         got = out.float().numpy()
         assert np.allclose(got, ref.float().numpy(), atol=2e-2), \
@@ -2613,7 +2622,7 @@ def test_elu_selu_celu():
             gm = torch.fx.GraphModule(torch.nn.Module(), g)
             run, stats = mlx_vulkan.make_executor(gm)
             out = run(*ins)
-            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert stats["cpu"] == [], (stats, str(target), kwargs)
             assert any(name in s for s in stats["mlx"]), (stats, str(target))
             got = out.float().numpy()
             assert np.allclose(got, ref.float().numpy(), atol=tol), \
@@ -2713,7 +2722,7 @@ def test_glu():
             gm = torch.fx.GraphModule(torch.nn.Module(), g)
             run, stats = mlx_vulkan.make_executor(gm)
             out = run(*ins)
-            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert stats["cpu"] == [], (stats, str(target), kwargs)
             assert any(name in s for s in stats["mlx"]), (stats, str(target))
             got = out.float().numpy()
             assert np.allclose(got, ref.float().numpy(), atol=tol), \
@@ -2750,7 +2759,7 @@ def test_reciprocal_frac():
             gm = torch.fx.GraphModule(torch.nn.Module(), g)
             run, stats = mlx_vulkan.make_executor(gm)
             out = run(*ins)
-            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert stats["cpu"] == [], (stats, str(target), kwargs)
             assert any(name in s for s in stats["mlx"]), (stats, str(target))
             got = out.float().numpy()
             assert np.allclose(got, ref.float().numpy(), atol=tol), \
@@ -2801,7 +2810,7 @@ def test_linalg_norm():
         gm = torch.fx.GraphModule(torch.nn.Module(), g)
         run, stats = mlx_vulkan.make_executor(gm)
         out = run(*ins)
-        assert stats["cpu"] == [], (stats, str(target), kw)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
         assert any(name in s for s in stats["mlx"]), (stats, str(target))
         got = out.float().numpy()
         assert np.allclose(got, ref.float().numpy(), atol=1e-5), \
@@ -2855,6 +2864,51 @@ def test_logsumexp():
         assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
             str(target), kwargs, got, ref)
     print("test_logsumexp PASS")
+
+
+def test_tensordot_vander_corrcoef_cov():
+    # Q-62: aten.tensordot (dims-as-int + dims-as-pairs), aten.vander
+    # (increasing flag), aten.corrcoef + aten.cov (normalization
+    # constants). Zero CPU fallback on the happy path.
+    a = torch.randn(4, 5, 6, 3)
+    b_int = torch.randn(6, 3, 2)
+    b_pair = torch.randn(5, 3, 2, 4)
+    x = torch.randn(6)
+    m = torch.randn(3, 9)
+    f = torch.randint(1, 4, (9,))
+    aw = torch.rand(9) + 0.5
+    one_d = torch.randn(12)
+    cases = [
+        (torch.ops.aten.tensordot.default, (a, b_int, [-2, -1], [0, 1]), {}, "tensordot"),
+        (torch.ops.aten.tensordot.default, (a, b_int, [2, 3], [0, 1]), {}, "tensordot"),
+        (torch.ops.aten.tensordot.default, (a, b_pair, [1, 3], [0, 1]), {}, "tensordot"),
+        (torch.ops.aten.vander.default, (x,), {}, "vander"),
+        (torch.ops.aten.vander.default, (x,), {"N": 4}, "vander"),
+        (torch.ops.aten.vander.default, (x,), {"N": 4, "increasing": True}, "vander"),
+        (torch.ops.aten.corrcoef.default, (m,), {}, "corrcoef"),
+        (torch.ops.aten.corrcoef.default, (one_d,), {}, "corrcoef"),
+        (torch.ops.aten.cov.default, (m,), {}, "cov"),
+        (torch.ops.aten.cov.default, (m,), {"correction": 0}, "cov"),
+        (torch.ops.aten.cov.default, (m,), {"fweights": f}, "cov"),
+        (torch.ops.aten.cov.default, (m,), {"aweights": aw}, "cov"),
+        (torch.ops.aten.cov.default, (m,), {"fweights": f, "aweights": aw}, "cov"),
+        (torch.ops.aten.cov.default, (m,), {"correction": 0, "fweights": f, "aweights": aw}, "cov"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=1e-4), (
+            str(target), kwargs, got, ref)
+    print("test_tensordot_vander_corrcoef_cov PASS")
 
 
 def test_pdist_cdist():
@@ -3024,6 +3078,7 @@ if __name__ == "__main__":
     test_linalg_norm()
     test_cosine_similarity()
     test_pdist_cdist()
+    test_tensordot_vander_corrcoef_cov()
     test_flip_rot90()
     print("ALL PASS")
 

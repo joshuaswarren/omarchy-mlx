@@ -469,6 +469,55 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 (kw, float((got - ref.float()).abs().max())))
 
 
+    def test_tensordot_vander_corrcoef_cov_parity(self):
+        """Q-62: aten.tensordot / vander / corrcoef / cov lower in the
+        wheel backend — parity vs torch across the dims forms, the
+        increasing flag, and the normalization constants."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        a = torch.randn(4, 5, 6, 3)
+        b_int = torch.randn(6, 3, 2)
+        b_pair = torch.randn(5, 3, 2, 4)
+        x = torch.randn(6)
+        m = torch.randn(3, 9)
+        f = torch.randint(1, 4, (9,))
+        aw = torch.rand(9) + 0.5
+        one_d = torch.randn(12)
+        cases = [
+            ("tensordot", (a, b_int), {"dims_self": [2, 3], "dims_other": [0, 1]},
+             torch.tensordot(a, b_int, dims=([2, 3], [0, 1]))),
+            ("tensordot", (a, b_int), {"dims_self": 2, "dims_other": 2},
+             torch.tensordot(a, b_int, dims=2)),
+            ("tensordot", (a, b_pair), {"dims_self": [1, 3], "dims_other": [0, 1]},
+             torch.tensordot(a, b_pair, dims=([1, 3], [0, 1]))),
+            ("vander", (x,), {}, torch.vander(x)),
+            ("vander", (x,), {"N": 4}, torch.vander(x, N=4)),
+            ("vander", (x,), {"N": 4, "increasing": True},
+             torch.vander(x, N=4, increasing=True)),
+            ("corrcoef", (m,), {}, torch.corrcoef(m)),
+            ("corrcoef", (one_d,), {}, torch.corrcoef(one_d)),
+            ("cov", (m,), {}, torch.cov(m)),
+            ("cov", (m,), {"correction": 0}, torch.cov(m, correction=0)),
+            ("cov", (m,), {"fweights": f}, torch.cov(m, fweights=f)),
+            ("cov", (m,), {"aweights": aw}, torch.cov(m, aweights=aw)),
+            ("cov", (m,), {"fweights": f, "aweights": aw},
+             torch.cov(m, fweights=f, aweights=aw)),
+            ("cov", (m,), {"correction": 0, "fweights": f, "aweights": aw},
+             torch.cov(m, correction=0, fweights=f, aweights=aw)),
+        ]
+        for name, ins, kw, ref in cases:
+            mins = tuple(mx.array(t.numpy()) for t in ins)
+            got = torch.from_numpy(
+                np.array(ATEN_TABLE[name](*mins, **kw).astype(mx.float32)))
+            self.assertTrue(
+                torch.allclose(got, ref.float(), atol=1e-4, rtol=1e-4),
+                (name, kw, float((got - ref.float()).abs().max())))
+
+
     def test_pdist_cdist_parity(self):
         """PT-PAIR-a: aten.pdist + aten.cdist lower in the wheel
         backend — parity vs torch across p=0.5/1/2/inf and batched
