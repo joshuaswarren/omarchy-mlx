@@ -1539,11 +1539,10 @@ def _fake_omarchy_dist(root, recorded, version):
     return types.SimpleNamespace(version=version, files=files, locate_file=lambda rel: Path(root) / rel)
 
 
-class QualifyDeviceGuardTests(unittest.TestCase):
-    """qualify refuses a non-GPU default device unless --allow-cpu, and a
-    verified=mismatch provenance even with --allow-cpu, in both direct and
-    --url modes. mlx.core is stubbed so the guards run without mlx;
-    str(mx.default_device()) is "Device(cpu, 0)", never "cpu"."""
+class _QualifyHarness:
+    """Runs qualify.main against stubbed mlx and a local server that answers
+    each fixture case with its expected envelope. mlx.core is stubbed so the
+    runs need no mlx; str(mx.default_device()) is "Device(cpu, 0)", never "cpu"."""
 
     @classmethod
     def setUpClass(cls):
@@ -1580,9 +1579,10 @@ class QualifyDeviceGuardTests(unittest.TestCase):
     def setUp(self):
         del self.posts[:]
 
-    def _qualify(self, default, *argv, dist=None):
+    def _qualify(self, default, *argv, dist=None, model=None):
         """Run qualify.main against stubbed mlx. dist is the installed
         mlx-omarchy distribution; None means no metadata (an editable build).
+        model is the --model directory (default: one that does not exist).
         stdout and stderr stay on self.out and self.err when main exits."""
         import contextlib
         import importlib.metadata
@@ -1618,8 +1618,14 @@ class QualifyDeviceGuardTests(unittest.TestCase):
         self.out, self.err = io.StringIO(), io.StringIO()
         with mock.patch.dict(sys.modules, {"mlx": pkg, "mlx.core": core}), installed, \
                 contextlib.redirect_stdout(self.out), contextlib.redirect_stderr(self.err):
-            rc = qualify.main(["--model", str(REPO / "no-such-checkpoint"), *argv])
+            rc = qualify.main(["--model", str(model or REPO / "no-such-checkpoint"), *argv])
         return rc, self.out.getvalue()
+
+
+class QualifyDeviceGuardTests(_QualifyHarness, unittest.TestCase):
+    """qualify refuses a non-GPU default device unless --allow-cpu, and a
+    verified=mismatch provenance even with --allow-cpu, in both direct and
+    --url modes."""
 
     def test_cpu_default_refuses_url_mode_without_allow_cpu(self):
         with self.assertRaises(SystemExit) as cm:
@@ -1795,6 +1801,456 @@ class QualifyProvenanceTests(unittest.TestCase):
         from mlx_omarchy_laya import qualify
 
         self.assertEqual(qualify._provenance(REPO / "no-such-repo"), "provenance: script not present")
+
+
+def _local_server(test, respond):
+    """Serve respond(handler) for every GET and POST on 127.0.0.1 until the
+    test ends; returns the base URL. POST bodies are read first, so closing
+    the connection cannot reset it before the response."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            respond(self)
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            respond(self)
+
+        def log_message(self, *a):
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    test.addCleanup(httpd.server_close)
+    test.addCleanup(httpd.shutdown)
+    return "http://127.0.0.1:%d" % httpd.server_port
+
+
+def _held_redirect(handler, location, release):
+    """A redirect that promises a 1 GiB body and sends none: reading the
+    body blocks until release is set, closing the response does not."""
+    handler.send_response(302)
+    handler.send_header("Location", location)
+    handler.send_header("Content-Length", str(1 << 30))
+    handler.end_headers()
+    handler.wfile.flush()
+    release.wait(10)
+
+
+class SharedRegularFileReaderTests(unittest.TestCase):
+    """convert's config and manifest reads and its source opens share
+    jsonfile's bounded regular-file reader: one cap, the same FIFO and device
+    refusals and the same blob symlink support, each with convert's own
+    messages; read_json_object still raises plain ValueError."""
+
+    CAP = 1 << 20
+
+    def setUp(self):
+        import tempfile
+
+        from mlx_omarchy_laya import convert, jsonfile
+
+        self.convert, self.jsonfile = convert, jsonfile
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def _readers(self):
+        """(label, call(path), error type, message) for each shared read of a refused file."""
+        c, j = self.convert, self.jsonfile
+        return (
+            ("read_config", lambda p: c._read_config(p, "encoder/config.json"), SystemExit,
+             "convert: encoder/config.json in source snapshot is not a regular file"),
+            ("source_sha256", lambda p: c._sha256(p, "model.safetensors"), SystemExit,
+             "convert: model.safetensors in source snapshot is not a regular file"),
+            ("read_manifest", lambda p: c._read_manifest(p.parent), ValueError,
+             "manifest.json is not a regular file"),
+            ("read_json_object", j.read_json_object, ValueError,
+             "%s is not a regular file"),
+        )
+
+    def _refused(self, build):
+        for label, call, exc_type, message in self._readers():
+            with self.subTest(reader=label):
+                d = self.tmp / ("%s-%d" % (label, len(list(self.tmp.iterdir()))))
+                d.mkdir()
+                path = d / "manifest.json"
+                with build(path):
+                    with _deadline(), self.assertRaises(exc_type) as cm:
+                        call(path)
+                text = str(cm.exception.code if exc_type is SystemExit else cm.exception)
+                self.assertEqual(text, message.replace("%s", str(path)))
+                if exc_type is ValueError:
+                    self.assertIs(type(cm.exception), ValueError)
+
+    def test_fifo_with_an_open_writer_is_refused_without_blocking(self):
+        @contextlib.contextmanager
+        def fifo(path):
+            os.mkfifo(path)
+            fd = os.open(path, os.O_RDWR)  # a writer that never closes
+            try:
+                os.write(fd, b"{}")
+                yield
+            finally:
+                os.close(fd)
+        self._refused(fifo)
+
+    def test_device_is_refused(self):
+        @contextlib.contextmanager
+        def devnull(path):
+            path.symlink_to(os.devnull)
+            yield
+        self._refused(devnull)
+
+    def test_cap_boundary_is_the_same_for_every_reader(self):
+        self.assertEqual(self.convert._MANIFEST_MAX_BYTES, self.CAP)
+        c, j = self.convert, self.jsonfile
+        readers = (
+            ("read_config", lambda p: c._read_config(p, "encoder/config.json")[0], SystemExit,
+             "convert: encoder/config.json exceeds 1048576 bytes"),
+            ("read_manifest", lambda p: c._read_manifest(p.parent), ValueError,
+             "manifest.json exceeds 1048576 bytes"),
+            ("read_json_object", j.read_json_object, ValueError, "%s exceeds 1048576 bytes"),
+        )
+        for size in (self.CAP, self.CAP + 1):
+            for label, call, exc_type, message in readers:
+                with self.subTest(reader=label, size=size):
+                    d = self.tmp / ("%s-%d" % (label, size))
+                    d.mkdir()
+                    path = d / "manifest.json"
+                    path.write_bytes(b"{}" + b" " * (size - 2))
+                    if size == self.CAP:
+                        self.assertEqual(call(path), {})
+                        continue
+                    with self.assertRaises(exc_type) as cm:
+                        call(path)
+                    text = str(cm.exception.code if exc_type is SystemExit else cm.exception)
+                    self.assertEqual(text, message.replace("%s", str(path)))
+
+    def test_read_config_hashes_the_bytes_behind_a_blob_symlink(self):
+        import hashlib
+
+        raw = json.dumps({"model_type": "modernbert"}).encode()
+        (self.tmp / "blobs").mkdir()
+        (self.tmp / "blobs" / "0123abcd").write_bytes(raw)
+        (self.tmp / "config.json").symlink_to("blobs/0123abcd")
+        self.assertEqual(self.convert._read_config(self.tmp / "config.json", "encoder/config.json"),
+                         ({"model_type": "modernbert"}, hashlib.sha256(raw).hexdigest()))
+
+    def test_bounded_bytes_reader_types_and_custom_cap(self):
+        j = self.jsonfile
+        for cls in (j.NotRegularFileError, j.FileTooLargeError):
+            self.assertTrue(issubclass(cls, ValueError))
+        path = self.tmp / "four"
+        path.write_bytes(b"1234")
+        self.assertEqual(j.read_regular_bytes(path, 4), b"1234")
+        with self.assertRaisesRegex(j.FileTooLargeError, "exceeds 3 bytes"):
+            j.read_regular_bytes(path, 3)
+        os.mkfifo(self.tmp / "fifo")
+        with _deadline(), self.assertRaises(j.NotRegularFileError):
+            j.read_regular_bytes(self.tmp / "fifo")
+
+    @unittest.skipUnless(os.path.isdir("/proc/self/fd"), "needs /proc/self/fd")
+    def test_refused_open_closes_its_descriptor(self):
+        os.mkfifo(self.tmp / "fifo")
+        before = len(os.listdir("/proc/self/fd"))
+        kept = []  # held tracebacks keep the opener's frame, and its file, alive
+        for _ in range(20):
+            try:
+                self.jsonfile.open_regular_file(self.tmp / "fifo")
+            except self.jsonfile.NotRegularFileError as exc:
+                kept.append(exc)
+        self.assertEqual(len(kept), 20)
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+
+class ConvertFetchTests(unittest.TestCase):
+    """convert's download stages each file beside its destination and moves
+    it into place only when every promised byte arrived: a short body, an
+    over-limit body, or a redirect whose body never ends leaves the previous
+    destination untouched and no staging file behind."""
+
+    def setUp(self):
+        import tempfile
+        import threading
+        import unittest.mock as mock
+
+        from mlx_omarchy_laya import convert
+
+        self.convert = convert
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.release = threading.Event()
+        self.requests = []
+        base = _local_server(self, self._respond)
+        self.addCleanup(self.release.set)  # runs before the server shuts down
+        self.enterContext(mock.patch.object(convert, "HF_BASE_URL", base))
+        self.enterContext(mock.patch.object(convert, "_FETCH_MAX_BYTES", 1000))
+
+    def _respond(self, h):
+        name = h.path.rsplit("/", 1)[-1]
+        self.requests.append(name)
+        if name == "redirect":
+            return _held_redirect(h, "/r/resolve/rev/body-600", self.release)
+        if name == "short":  # promises 100 bytes, sends 50, then closes
+            h.send_response(200)
+            h.send_header("Content-Length", "100")
+            h.end_headers()
+            h.wfile.write(b"s" * 50)
+            return
+        kind, size = name.rsplit("-", 1)
+        h.send_response(200)
+        if kind == "body":  # Content-Length framing
+            h.send_header("Content-Length", size)
+        h.end_headers()  # "stream" / "held": HTTP/1.0, no Content-Length
+        h.wfile.write(b"b" * int(size))
+        if kind == "held":  # keep the socket open so an oversized read blocks
+            h.wfile.flush()
+            self.release.wait(10)
+
+    def _fetch(self, name, dest):
+        with _deadline():
+            return self.convert._fetch("r", "rev", "", name, dest)
+
+    def _staged(self):
+        return sorted(p.name for p in self.tmp.iterdir() if p.name.endswith(".part"))
+
+    def test_complete_bodies_land_at_the_cap(self):
+        for name in ("body-1000", "stream-1000", "body-0"):
+            with self.subTest(name=name):
+                dest = self.tmp / name
+                self._fetch(name, dest)
+                self.assertEqual(dest.read_bytes(), b"b" * int(name.rsplit("-", 1)[1]))
+        self.assertEqual(self._staged(), [])
+
+    def test_redirect_is_followed_without_reading_its_body(self):
+        dest = self.tmp / "weights"
+        self._fetch("redirect", dest)
+        self.assertEqual(dest.read_bytes(), b"b" * 600)
+        self.assertEqual(self.requests, ["redirect", "body-600"])
+
+    def test_failed_download_keeps_the_previous_destination(self):
+        cases = (
+            ("short", "convert: short download ended after 50 of 100 bytes"),
+            ("held-1001", "convert: held-1001 download exceeds 1000 bytes"),
+            ("body-1001", "convert: body-1001 is 1001 bytes, over the 1000-byte download limit"),
+        )
+        for name, message in cases:
+            with self.subTest(name=name):
+                dest = self.tmp / name
+                dest.write_bytes(b"previous")
+                with self.assertRaises(SystemExit) as cm:
+                    self._fetch(name, dest)
+                self.assertEqual(cm.exception.code, message)
+                self.assertEqual(dest.read_bytes(), b"previous")
+                self.assertEqual(self._staged(), [])
+
+    def test_symlink_at_destination_is_replaced_not_followed(self):
+        outside = self.tmp / "outside"
+        outside.write_bytes(b"keep")
+        dest = self.tmp / "config.json"
+        dest.symlink_to(outside)
+        self._fetch("body-10", dest)
+        self.assertFalse(dest.is_symlink())
+        self.assertEqual(dest.read_bytes(), b"b" * 10)
+        self.assertEqual(outside.read_bytes(), b"keep")
+
+
+class QualifyBoundedReadTests(_QualifyHarness, unittest.TestCase):
+    """qualify reads its fixture and the checkpoint manifest through the
+    bounded regular-file reader before any case runs, refuses redirects
+    without reading their bodies, and caps each server response."""
+
+    CAP = 1 << 20
+    FIXTURE = REPO / "tests/fixtures/laya/laya_reference.json"
+
+    def setUp(self):
+        import tempfile
+
+        super().setUp()
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def _path(self, name):
+        d = self.tmp / ("%d" % len(list(self.tmp.iterdir())))
+        d.mkdir()
+        return d / name
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _fifo_with_writer(path):
+        os.mkfifo(path)
+        fd = os.open(path, os.O_RDWR)
+        try:
+            os.write(fd, b"{}")
+            yield
+        finally:
+            os.close(fd)
+
+    def _bad_files(self):
+        """(label, build(path) context manager, reason) for each refused file."""
+        def devnull(path):
+            path.symlink_to(os.devnull)
+            return contextlib.nullcontext()
+
+        def content(data):
+            def build(path):
+                path.write_bytes(data)
+                return contextlib.nullcontext()
+            return build
+
+        return (
+            ("fifo", self._fifo_with_writer, "is not a regular file"),
+            ("devnull", devnull, "is not a regular file"),
+            ("over-cap", content(b"{}" + b" " * (self.CAP - 1)), "exceeds 1048576 bytes"),
+            ("list", content(b"[1]"), "is not a JSON object"),
+            ("corrupt", content(b"{not json"), "JSONDecodeError"),
+        )
+
+    def test_bad_fixture_is_refused_before_any_case(self):
+        for label, build, reason in self._bad_files():
+            with self.subTest(file=label):
+                fixture = self._path("fixture.json")
+                with build(fixture), _deadline(), self.assertRaises(SystemExit) as cm:
+                    self._qualify("gpu", "--url", self.url, "--fixture", str(fixture))
+                msg = str(cm.exception.code)
+                self.assertTrue(msg.startswith("qualify: cannot read the fixture %s (" % fixture), msg)
+                self.assertIn(reason, msg)
+                self.assertEqual(self.posts, [])
+
+    def test_bad_manifest_is_refused_before_any_case(self):
+        for label, build, reason in self._bad_files():
+            with self.subTest(file=label):
+                manifest = self._path("manifest.json")
+                with build(manifest), _deadline(), self.assertRaises(SystemExit) as cm:
+                    self._qualify("gpu", "--url", self.url, model=manifest.parent)
+                msg = str(cm.exception.code)
+                self.assertTrue(
+                    msg.startswith("qualify: cannot read the checkpoint manifest %s (" % manifest), msg)
+                self.assertIn(reason, msg)
+                self.assertEqual(self.posts, [])
+
+    def test_blob_symlinked_fixture_and_manifest_run(self):
+        model = self._path("blobs").parent
+        (model / "blobs").mkdir()
+        (model / "blobs" / "f1").write_bytes(self.FIXTURE.read_bytes())
+        (model / "blobs" / "m1").write_text(json.dumps({
+            "catalog_id": "laya-test", "source_revision": "abcdef0123456789",
+            "source_files_sha256": {"model.safetensors": "0123456789abcdef0123"}}))
+        (model / "fixture.json").symlink_to("blobs/f1")
+        (model / "manifest.json").symlink_to("blobs/m1")
+        rc, out = self._qualify("gpu", "--url", self.url, "--fixture", str(model / "fixture.json"),
+                                model=model)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.posts), 6)
+        self.assertIn("checkpoint: laya-test @ abcdef012345 (weights sha256 0123456789abcdef)\n", out)
+
+    def test_missing_or_dangling_manifest_omits_the_checkpoint_line(self):
+        for label in ("missing", "dangling", "model-is-a-file"):
+            with self.subTest(manifest=label):
+                del self.posts[:]
+                manifest = self._path("manifest.json")
+                if label == "dangling":
+                    manifest.symlink_to("blobs/missing")
+                model = manifest.parent
+                if label == "model-is-a-file":
+                    model = model / "checkpoint"
+                    model.write_bytes(b"")
+                rc, out = self._qualify("gpu", "--url", self.url, model=model)
+                self.assertEqual(rc, 0)
+                self.assertEqual(len(self.posts), 6)
+                self.assertNotIn("checkpoint:", out)
+
+    def test_read_errors_name_the_file_and_error(self):
+        import unittest.mock as mock
+
+        from mlx_omarchy_laya import qualify
+
+        for exc in (RecursionError("deep fixture"), PermissionError(13, "Permission denied")):
+            with self.subTest(error=type(exc).__name__), \
+                    mock.patch.object(qualify, "read_json_object", side_effect=exc), \
+                    self.assertRaises(SystemExit) as cm:
+                self._qualify("gpu", "--url", self.url)
+            self.assertEqual(cm.exception.code, "qualify: cannot read the fixture %s (%s: %s)"
+                             % (qualify.FIXTURE, type(exc).__name__, exc))
+        self.assertEqual(self.posts, [])
+
+    def test_oversized_response_is_refused(self):
+        import threading
+
+        release = threading.Event()
+
+        def respond(h):  # promises 1 GiB, sends cap + 1 bytes, then holds
+            h.send_response(200)
+            h.send_header("Content-Length", str(1 << 30))
+            h.end_headers()
+            h.wfile.write(b" " * (self.CAP + 1))
+            h.wfile.flush()
+            release.wait(10)
+
+        url = _local_server(self, respond)
+        self.addCleanup(release.set)
+        with _deadline(), self.assertRaises(SystemExit) as cm:
+            self._qualify("gpu", "--url", url)
+        self.assertEqual(cm.exception.code,
+                         "qualify: %s/v1/decisions response exceeds 1048576 bytes" % url)
+
+    def test_response_cap_boundary(self):
+        from mlx_omarchy_laya import qualify
+
+        current = {}
+
+        def respond(h):
+            body = current["body"]
+            h.send_response(200)
+            h.send_header("Content-Length", str(len(body)))
+            h.end_headers()
+            h.wfile.write(body)
+
+        url = _local_server(self, respond)
+        for size in (self.CAP, self.CAP + 1):
+            current["body"] = b"{}" + b" " * (size - 2)
+            with self.subTest(size=size):
+                if size == self.CAP:
+                    with _deadline():
+                        out, wall_ms = qualify._run_case_url(url, {}, [])
+                    self.assertEqual(out, {})
+                    self.assertIsInstance(wall_ms, float)
+                else:
+                    with _deadline(), self.assertRaises(SystemExit) as cm:
+                        qualify._run_case_url(url, {}, [])
+                    self.assertEqual(
+                        cm.exception.code,
+                        "qualify: %s/v1/decisions response exceeds 1048576 bytes" % url,
+                    )
+
+    def test_truncated_response_is_refused(self):
+        from mlx_omarchy_laya import qualify
+
+        def respond(h):
+            body = b"{}"
+            h.send_response(200)
+            h.send_header("Content-Length", str(len(body) + 1))
+            h.end_headers()
+            h.wfile.write(body)
+
+        url = _local_server(self, respond)
+        with _deadline(), self.assertRaises(SystemExit) as cm:
+            qualify._run_case_url(url, {}, [])
+        self.assertEqual(
+            cm.exception.code,
+            "qualify: %s/v1/decisions response ended after 2 of 3 bytes" % url,
+        )
+
+    def test_redirect_is_refused_without_reading_its_body(self):
+        import threading
+
+        release = threading.Event()
+        url = _local_server(self, lambda h: _held_redirect(h, self.url + "/v1/decisions", release))
+        self.addCleanup(release.set)
+        with _deadline(), self.assertRaises(urllib.error.HTTPError) as cm:
+            self._qualify("gpu", "--url", url)
+        cm.exception.close()
+        self.assertEqual(cm.exception.code, 302)
+        self.assertEqual(self.posts, [])
 
 
 # ---------------------------------------------------------------- helpers
