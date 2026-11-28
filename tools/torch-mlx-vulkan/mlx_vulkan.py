@@ -2055,6 +2055,101 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _bcast_axis(v, axis, ndim):
+    sh = [1] * ndim
+    sh[axis] = v.shape[0]
+    return mx.reshape(v, sh)
+
+
+def _area_positions(mscale, out, align, n):
+    # aten area_pixel_compute_source_index: align_corners maps corners,
+    # else half-pixel centers. mscale is the in/out ratio — 1/scale_factor
+    # when the caller supplied scales. Positions are unclamped floats.
+    i = mx.arange(out)
+    if align:
+        return i * ((n - 1) / (out - 1)) if out > 1 else mx.zeros((out,), dtype=mx.float32)
+    return (i + 0.5) * mscale - 0.5
+
+
+def _cubic_w(d):
+    # Keys cubic convolution kernel, a = -0.75 (aten's bicubic).
+    a = -0.75
+    d = mx.abs(d)
+    w1 = (a + 2) * d ** 3 - (a + 3) * d ** 2 + 1
+    w2 = a * d ** 3 - 5 * a * d ** 2 + 8 * a * d - 4 * a
+    return mx.where(d <= 1, w1, w2)
+
+
+def _interp_axis(a, axis, out, mode, align, mscale):
+    n = a.shape[axis]
+    if mode == "nearest":
+        idx = mx.floor(mx.arange(out) * mscale).astype(mx.int32)
+        return mx.take(a, mx.clip(idx, 0, n - 1), axis=axis)
+    raw = _area_positions(mscale, out, align, n)
+    # aten clamps the position for linear modes but not for cubic —
+    # cubic keeps an out-of-range fraction and clamps only its taps.
+    pos = raw if mode == "bicubic" else mx.clip(raw, 0.0, float(n - 1))
+    i0 = mx.floor(pos)
+    t = pos - i0
+    i0i = i0.astype(mx.int32)
+    if mode == "bicubic":
+        ws = [_cubic_w(t + 1), _cubic_w(t), _cubic_w(1 - t), _cubic_w(2 - t)]
+        acc = None
+        for k in range(4):
+            ik = mx.clip(i0i + (k - 1), 0, n - 1)
+            term = mx.take(a, ik, axis=axis) * _bcast_axis(ws[k], axis, a.ndim)
+            acc = term if acc is None else acc + term
+        return acc
+    i1i = mx.clip(i0i + 1, 0, n - 1)
+    i0i = mx.clip(i0i, 0, n - 1)
+    w = _bcast_axis(t, axis, a.ndim)
+    return mx.take(a, i0i, axis=axis) * (1 - w) + mx.take(a, i1i, axis=axis) * w
+
+
+_SCALE_KEYS = {1: ("scales",), 2: ("scales_h", "scales_w"),
+               3: ("scales_d", "scales_h", "scales_w")}
+
+
+def _up(a, k, mode, align, output_size, args, kw):
+    # shared resolver: .default overloads carry per-axis scales_<dhw>
+    # (or `scales` for 1d); .vec carries scale_factors. Positional extras
+    # disambiguate by type: lists are scale_factors, scalars per-axis.
+    a = _mx(a)
+    keys = _SCALE_KEYS[k]
+    named = [kw.get(key) for key in keys]
+    sf = list(kw["scale_factors"]) if kw.get("scale_factors") is not None else None
+    extra = list(args)
+    for v in extra:
+        if isinstance(v, (list, tuple)) or isinstance(v, mx.array) and v.ndim:
+            sf = list(v)
+        else:
+            for j in range(k):
+                if named[j] is None:
+                    named[j] = v
+                    break
+    if sf is None:
+        sf = [s for s in named if s is not None] if any(
+            s is not None for s in named) else None
+        sf = sf if sf is not None and len(sf) == k else None
+    # aten: output_size fixes the shape; a given scale_factor (per axis,
+    # scalar, or list) instead drives the source-index mapping as 1/sf.
+    if output_size is not None:
+        out = [int(s) for s in output_size]
+        if len(out) != k:
+            return _raise("upsample output_size")
+    elif sf is not None:
+        out = [max(int(np.floor(a.shape[a.ndim - k + j] * float(sf[j]))), 1)
+               for j in range(k)]
+    else:
+        return _raise("upsample size/scales")
+    msc = [1.0 / float(sf[j]) if sf is not None else
+           a.shape[a.ndim - k + j] / out[j] for j in range(k)]
+    a, f = _opmath_f32(a)
+    for j in range(k):
+        f = _interp_axis(f, a.ndim - k + j, out[j], mode, align, msc[j])
+    return f.astype(a.dtype)
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2261,6 +2356,14 @@ _FUNC_SPECS = {
     "split_with_sizes": lambda a, ss, dim=0: _split_sizes(a, ss, dim),
     "chunk": _chunk, "unbind": lambda a, dim=0: _unbind(a, dim),
     "meshgrid": _meshgrid,
+    # upsample family: separable index-map composition (no mx.interpolate).
+    "upsample_nearest1d": lambda a, output_size=None, *args, **kw: _up(a, 1, "nearest", False, output_size, args, kw),
+    "upsample_nearest2d": lambda a, output_size=None, *args, **kw: _up(a, 2, "nearest", False, output_size, args, kw),
+    "upsample_nearest3d": lambda a, output_size=None, *args, **kw: _up(a, 3, "nearest", False, output_size, args, kw),
+    "upsample_linear1d": lambda a, output_size=None, align_corners=False, *args, **kw: _up(a, 1, "linear", align_corners, output_size, args, kw),
+    "upsample_bilinear2d": lambda a, output_size=None, align_corners=False, *args, **kw: _up(a, 2, "linear", align_corners, output_size, args, kw),
+    "upsample_trilinear3d": lambda a, output_size=None, align_corners=False, *args, **kw: _up(a, 3, "linear", align_corners, output_size, args, kw),
+    "upsample_bicubic2d": lambda a, output_size=None, align_corners=False, *args, **kw: _up(a, 2, "bicubic", align_corners, output_size, args, kw),
     # torch's norm=None means "backward", same as mx's default
     "fft_fft": lambda a, n=None, dim=-1, norm=None: mx.fft.fft(_mx(a), n, axis=dim, norm=norm or "backward"),
     "fft_ifft": lambda a, n=None, dim=-1, norm=None: mx.fft.ifft(_mx(a), n, axis=dim, norm=norm or "backward"),

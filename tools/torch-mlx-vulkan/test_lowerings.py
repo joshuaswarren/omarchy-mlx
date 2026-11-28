@@ -3014,6 +3014,59 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_upsample():
+    # PT-AL-up: aten upsample family — nearest via floor index maps,
+    # linear/bilinear/trilinear as separable two-tap gathers, bicubic
+    # via the Keys kernel (a = -0.75). Both .default output_size and
+    # .vec scale_factors paths.
+    torch.manual_seed(0)
+    x1 = torch.randn(1, 2, 6)
+    x2 = torch.randn(1, 2, 6, 6)
+    x3 = torch.randn(1, 2, 4, 5, 6)
+    cases = [
+        (torch.ops.aten.upsample_nearest1d.default, (x1,), {"output_size": [12]}, "upsample_nearest"),
+        (torch.ops.aten.upsample_nearest1d.default, (x1,), {"output_size": [4]}, "upsample_nearest"),
+        (torch.ops.aten.upsample_nearest1d.vec, (x1,), {"output_size": None, "scale_factors": [2.5]}, "upsample_nearest"),
+        (torch.ops.aten.upsample_nearest2d.default, (x2,), {"output_size": [12, 9]}, "upsample_nearest"),
+        (torch.ops.aten.upsample_nearest2d.default, (x2,), {"output_size": [3, 3]}, "upsample_nearest"),
+        (torch.ops.aten.upsample_nearest2d.default, (x2,), {"output_size": [12, 9], "scales_h": 2.0, "scales_w": 1.5}, "upsample_nearest"),
+        (torch.ops.aten.upsample_nearest2d.vec, (x2,), {"output_size": None, "scale_factors": [2.0, 0.5]}, "upsample_nearest"),
+        (torch.ops.aten.upsample_nearest3d.default, (x3,), {"output_size": [8, 10, 3]}, "upsample_nearest"),
+        (torch.ops.aten.upsample_linear1d.default, (x1,), {"output_size": [12], "align_corners": False}, "upsample_linear"),
+        (torch.ops.aten.upsample_linear1d.default, (x1,), {"output_size": [12], "align_corners": True}, "upsample_linear"),
+        (torch.ops.aten.upsample_linear1d.default, (x1,), {"output_size": [4], "align_corners": False}, "upsample_linear"),
+        (torch.ops.aten.upsample_linear1d.vec, (x1,), {"output_size": None, "align_corners": False, "scale_factors": [2.0]}, "upsample_linear"),
+        (torch.ops.aten.upsample_bilinear2d.default, (x2,), {"output_size": [12, 12], "align_corners": False}, "upsample_bilinear"),
+        (torch.ops.aten.upsample_bilinear2d.default, (x2,), {"output_size": [12, 12], "align_corners": True}, "upsample_bilinear"),
+        (torch.ops.aten.upsample_bilinear2d.default, (x2,), {"output_size": [4, 4], "align_corners": False}, "upsample_bilinear"),
+        (torch.ops.aten.upsample_bilinear2d.default, (x2,), {"output_size": [7, 5], "align_corners": False, "scales_h": 1.0, "scales_w": 1.0}, "upsample_bilinear"),
+        (torch.ops.aten.upsample_bilinear2d.vec, (x2,), {"output_size": None, "align_corners": False, "scale_factors": [2.0, 2.0]}, "upsample_bilinear"),
+        (torch.ops.aten.upsample_trilinear3d.default, (x3,), {"output_size": [8, 10, 12], "align_corners": False}, "upsample_trilinear"),
+        (torch.ops.aten.upsample_trilinear3d.default, (x3,), {"output_size": [8, 10, 12], "align_corners": True}, "upsample_trilinear"),
+        (torch.ops.aten.upsample_bicubic2d.default, (x2,), {"output_size": [12, 12], "align_corners": False}, "upsample_bicubic"),
+        (torch.ops.aten.upsample_bicubic2d.default, (x2,), {"output_size": [12, 12], "align_corners": True}, "upsample_bicubic"),
+        (torch.ops.aten.upsample_bicubic2d.default, (x2,), {"output_size": [4, 4], "align_corners": False}, "upsample_bicubic"),
+        (torch.ops.aten.upsample_nearest2d.default, (x2.bfloat16(),), {"output_size": [8, 8]}, "upsample_nearest"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 3e-2 if ins[0].dtype == torch.bfloat16 else 1e-4
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs,
+            np.abs(got.float().numpy() - ref.float().numpy()).max())
+    print("test_upsample PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3127,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_upsample()
     print("ALL PASS")
 
 
