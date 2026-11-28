@@ -505,5 +505,60 @@ class TestOmarchyTorchBackend(unittest.TestCase):
 
 
 
+
+    def test_nan_ops_parity(self):
+        """Q-13: the wheel backend lowers aten.nan_to_num, aten.nansum and
+        aten.nanmean — nan/posinf/neginf defaults and custom values,
+        integer input as a no-op, and the dtype output cast — with parity
+        against the aten CPU ops."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x = torch.tensor([[1.0, float("nan"), float("inf")],
+                          [float("-inf"), float("nan"), 4.0]])
+        for kw in ({}, {"nan": -1.0}, {"posinf": 99.0, "neginf": -99.0},
+                   {"nan": 0.0, "posinf": 5.0, "neginf": -5.0}):
+            ref = torch.nan_to_num(x, **kw)
+            got = torch.from_numpy(np.array(
+                ATEN_TABLE["nan_to_num"](mx.array(x.numpy()), **kw)
+                .astype(mx.float32)))
+            self.assertTrue(torch.equal(got, ref), kw)
+        # integer input is a no-op in torch (mx.finfo is float-only, so a
+        # hand-rolled implementation raised here and CPU-fell-back).
+        xi = torch.tensor([[1, 2], [3, -4]])
+        got = torch.from_numpy(np.array(
+            ATEN_TABLE["nan_to_num"](mx.array(xi.numpy())).astype(mx.int64)))
+        self.assertTrue(torch.equal(got, xi))
+        for dim, keep in ((None, False), (0, False), (1, True), (-1, False)):
+            kw = {} if dim is None else {"dim": dim, "keepdim": keep}
+            ref = torch.nansum(x, **kw)
+            got = np.array(ATEN_TABLE["nansum"](mx.array(x.numpy()), **kw)
+                           .astype(mx.float32))
+            self.assertTrue(
+                np.allclose(got, ref.numpy(), atol=1e-5, rtol=1e-5),
+                (dim, keep))
+            ref = torch.nanmean(x, **kw)
+            got = np.array(ATEN_TABLE["nanmean"](mx.array(x.numpy()), **kw)
+                           .astype(mx.float32))
+            self.assertTrue(
+                np.allclose(got, ref.numpy(), atol=1e-5, rtol=1e-5,
+                            equal_nan=True), (dim, keep))
+        # dtype is an output cast, like torch.
+        ref = torch.nansum(x, dtype=torch.float64)
+        got = ATEN_TABLE["nansum"](mx.array(x.numpy()), dtype=torch.float64)
+        self.assertTrue(np.allclose(np.array(got), ref.numpy(), atol=1e-9))
+        # all-NaN slice means NaN in torch.nanmean too.
+        allnan = torch.tensor([[float("nan"), float("nan")], [1.0, 2.0]])
+        ref = torch.nanmean(allnan, dim=1)
+        got = np.array(ATEN_TABLE["nanmean"](mx.array(allnan.numpy()), dim=1)
+                       .astype(mx.float32))
+        self.assertTrue(
+            np.allclose(got, ref.numpy(), atol=1e-5, rtol=1e-5,
+                        equal_nan=True))
+
+
 if __name__ == "__main__":
     unittest.main()

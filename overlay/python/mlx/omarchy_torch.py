@@ -291,38 +291,43 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
     return y.transpose(0, 3, 1, 2)
 
 def _nan_to_num(a, nan=0.0, posinf=None, neginf=None, **k):
-    """aten.nan_to_num: replace NaN (and optionally the infs) element-wise.
-    Deferring NaN-policy mismatches means we reproduce torch's exact
-    defaults: nan=0.0, posinf/neginf left in place unless given."""
-    x = _mx(a)
-    dt = mx.finfo(x.dtype)
-    x = mx.where(mx.isnan(x), mx.array(nan, dtype=x.dtype), x)
-    x = mx.where(mx.isposinf(x), mx.array(dt.max if posinf is None else posinf, dtype=x.dtype), x)
-    x = mx.where(mx.isneginf(x), mx.array(dt.min if neginf is None else neginf, dtype=x.dtype), x)
-    return x
+    """aten.nan_to_num: mx.nan_to_num carries the same nan/posinf/neginf
+    keyword contract (posinf/neginf default to the dtype's finfo bounds on
+    floats) and is a no-op on integer input, like torch; the hand-rolled
+    finfo form used to raise on integer dtypes."""
+    return mx.nan_to_num(_mx(a), nan=nan, posinf=posinf, neginf=neginf)
 
 
 def _nansum(a, dim=None, keepdim=False, dtype=None, **k):
     """aten.nansum: NaN cells count as 0 in the reduction (mx.sum over the
-    nan_to_num result), then optional dim/keepdim like torch."""
-    x = mx.where(mx.isnan(_mx(a)), mx.array(0.0, dtype=_mx(a).dtype), _mx(a))
-    if dim is None:
-        return x.sum()
-    return x.sum(axis=dim, keepdims=bool(keepdim))
+    nan_to_num result), then optional dim/keepdim like torch; dtype is an
+    output cast (unknown torch dtypes raise for the CPU fallback)."""
+    x = _mx(a)
+    x = mx.where(mx.isnan(x), mx.array(0.0, dtype=x.dtype), x)
+    out = x.sum() if dim is None else x.sum(axis=dim, keepdims=bool(keepdim))
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("nansum dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
 
 
 def _nanmean(a, dim=None, keepdim=False, dtype=None, **k):
     """aten.nanmean: mean over the non-NaN cells only - the nansum divided
-    by the per-slice NaN count, so all-NaN slices give NaN like torch."""
+    by the per-slice NaN count, so all-NaN slices give NaN like torch;
+    dtype is an output cast (unknown torch dtypes raise for the CPU
+    fallback)."""
     x = _mx(a)
     mask = mx.isnan(x)
     zeroed = mx.where(mask, mx.array(0.0, dtype=x.dtype), x)
-    if dim is None:
-        good = (~mask).sum()
-        return zeroed.sum() / good if good.item() else zeroed.sum() / good
-    good = (~mask).sum(axis=dim, keepdims=bool(keepdim))
-    total = zeroed.sum(axis=dim, keepdims=bool(keepdim))
-    return total / good
+    good = (~mask).sum() if dim is None else (~mask).sum(axis=dim, keepdims=bool(keepdim))
+    total = zeroed.sum() if dim is None else zeroed.sum(axis=dim, keepdims=bool(keepdim))
+    out = total / good
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("nanmean dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
 
 
 def _group_norm(a, num_groups, w=None, b=None, eps=1e-5):
