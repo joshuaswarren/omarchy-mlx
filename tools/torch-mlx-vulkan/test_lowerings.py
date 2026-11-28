@@ -2971,7 +2971,52 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+
+def test_q71_dtype_guard():
+    # Q-71: every lowering accepting dtype= must map torch dtypes through
+    # _MX_DT and raise by name on an unknown dtype - the sweep found
+    # arange silently defaulting (.get with no raise) and cumsum silently
+    # dropping the kwarg. Producer kwargs (zeros/ones/full/empty and the
+    # _like forms) share the same guard.
+    x = torch.tensor([[1.7, 2.2], [3.9, 4.1]])
+    # cumsum dtype casts the input BEFORE the operation (torch docs): an
+    # int64 kwarg on a float input truncates first, so the result is int64
+    # - distinguishable from silently dropping the kwarg, which would
+    # keep float32. (f64 maps to f32 in _MX_DT on this backend, so int64
+    # is the discriminating probe.)
+    g = torch.fx.Graph()
+    p = g.placeholder("x")
+    g.output(g.call_function(torch.ops.aten.cumsum.default, (p, 1),
+                             {"dtype": torch.int64}))
+    run, stats = mlx_vulkan.make_executor(
+        torch.fx.GraphModule(torch.nn.Module(), g))
+    ref = torch.ops.aten.cumsum.default(x, 1, dtype=torch.int64)
+    out = run(x)
+    assert stats["cpu"] == [], stats
+    assert out.dtype == torch.int64, out.dtype
+    assert np.array_equal(out.numpy(), ref.numpy()), (out, ref)
+    # Unknown dtypes raise by name on every swept site.
+    for name, args in [
+        ("cumsum", (x.numpy(), 1)),
+        ("arange", (4,)),
+    ]:
+        try:
+            mlx_vulkan._FUNC_SPECS[name](*args, dtype=torch.complex128)
+            raise SystemExit(f"{name} accepted an unmapped dtype")
+        except RuntimeError as exc:
+            assert "dtype" in str(exc), (name, exc)
+    # Producers map the known dtypes and refuse the unknown ones.
+    assert mlx_vulkan._FUNC_SPECS["zeros"](2, 2, dtype=torch.float16).dtype == mx.float16
+    try:
+        mlx_vulkan._FUNC_SPECS["zeros"](2, 2, dtype=torch.complex128)
+        raise SystemExit("zeros accepted an unmapped dtype")
+    except RuntimeError as exc:
+        assert "dtype" in str(exc), exc
+    print("test_q71_dtype_guard PASS")
+
 if __name__ == "__main__":
+    test_q71_dtype_guard()
     test_topk()
     test_multinomial()
     test_bincount()
