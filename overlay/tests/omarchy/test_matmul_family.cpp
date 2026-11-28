@@ -9143,3 +9143,107 @@ TEST_CASE("single-row matvec sums 1..32 exactly through the subgroup reduction")
     CHECK_EQ(got[row], 528.0f);
   }
 }
+
+// DEC-20 (5060 Ti): the wider CMAT16 row tiles (64-row 2-subgroup and
+// 128-row SG8) and the wider staged k steps (32/64) reuse the shipped
+// 32-row STEP_K-16 build's per-output ascending-k chain and fp16
+// staging values, so every variant is bit-exact against the default
+// route's output on the same device. The host bound carries the same
+// one-fp16-rounding class the 32-row CMAT16 route already measures.
+TEST_CASE("CMAT16 64/128-row and staged-k tiles match the 32-row route bit for bit") {
+  if (!compute_available() || !float16_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  const bool c16_reachable =
+      caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 64u &&
+      caps.max_compute_work_group_size[0] >= 64u &&
+      !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
+      omarchy::cooperative_matrix_advertises(
+          caps.cooperative_matrix_shapes,
+          omarchy::qmm_prefill_coopmat_shape_f16x16());
+  std::cout << "[provenance] device=" << caps.device_name
+            << " c16_reachable=" << (c16_reachable ? 1 : 0) << "\n";
+  if (!c16_reachable) {
+    skip("no 16x16x16 fp16 subgroup coopmat shape on this device");
+    return;
+  }
+  unsetenv("MLX_OMARCHY_CMAT16_TILES");
+  unsetenv("MLX_OMARCHY_CMAT16_STEP");
+  unsetenv("MLX_OMARCHY_NO_COOPMAT");
+  Stream stream = gpu_stream();
+  const int group_size = 64, bits = 4, k = 2048, n = 896;
+  std::mt19937 gen(20261127);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  std::vector<float> matrix(static_cast<size_t>(n) * k);
+  for (auto& v : matrix) {
+    v = dist(gen);
+  }
+  HostQuantizedWeights host =
+      host_affine_quantize(matrix, n, k, group_size, bits);
+  HostQuantizedWeights rounded = host;
+  rounded.scales = round_trip(stream, host.scales, bfloat16);
+  rounded.biases = round_trip(stream, host.biases, bfloat16);
+  array w_words(host.words.begin(), Shape{n, k * bits / 32}, uint32);
+  array scales(rounded.scales.begin(), Shape{n, k / group_size}, bfloat16);
+  array biases(rounded.biases.begin(), Shape{n, k / group_size}, bfloat16);
+
+  const std::vector<std::pair<const char*, const char*>> variants{
+      {"rows64", "64"},
+      {"rows64-k32", "64|32"},
+      {"rows64-k64", "64|64"},
+      {"rows128-k64", "128|64"},
+  };
+  for (int m : {64, 130, 512, 2048}) {
+    std::vector<float> x_values(static_cast<size_t>(m) * k);
+    for (auto& v : x_values) {
+      v = dist(gen);
+    }
+    std::vector<float> x_rt = round_trip(stream, x_values, bfloat16);
+    std::vector<float> expected =
+        host_quantized_matmul(rounded, x_rt, m, n, k, group_size, bits);
+    array x(x_rt.begin(), Shape{m, k}, bfloat16);
+
+    unsetenv("MLX_OMARCHY_CMAT16_TILES");
+    unsetenv("MLX_OMARCHY_CMAT16_STEP");
+    array baseline = quantized_matmul(
+        x, w_words, scales, biases, true, group_size, bits, "affine",
+        stream);
+    eval(baseline);
+    omarchy::get_command_encoder(stream).synchronize();
+    const std::vector<float> base_values = readback_f32(stream, baseline);
+    REQUIRE_EQ(base_values.size(), expected.size());
+    double host_max = 0.0;
+    for (size_t i = 0; i < base_values.size(); ++i) {
+      host_max = std::max(
+          host_max,
+          static_cast<double>(std::abs(base_values[i] - expected[i])));
+    }
+    // The 32-row CMAT16 route's published value class: one fp16
+    // staging rounding per operand on the fp32 accumulation chain.
+    REQUIRE(host_max < 0.5);
+
+    for (const auto& [name, setting] : variants) {
+      const std::string tiles = setting;
+      const std::size_t bar = tiles.find('|');
+      setenv("MLX_OMARCHY_CMAT16_TILES",
+             tiles.substr(0, bar).c_str(), 1);
+      setenv("MLX_OMARCHY_CMAT16_STEP",
+             tiles.substr(bar + 1).c_str(), 1);
+      array out = quantized_matmul(
+          x, w_words, scales, biases, true, group_size, bits, "affine",
+          stream);
+      eval(out);
+      omarchy::get_command_encoder(stream).synchronize();
+      const std::vector<float> values = readback_f32(stream, out);
+      REQUIRE_EQ(values.size(), base_values.size());
+      INFO("variant " << name << " m=" << m);
+      for (size_t i = 0; i < values.size(); ++i) {
+        REQUIRE_EQ(values[i], base_values[i]);
+      }
+    }
+    unsetenv("MLX_OMARCHY_CMAT16_TILES");
+    unsetenv("MLX_OMARCHY_CMAT16_STEP");
+  }
+}

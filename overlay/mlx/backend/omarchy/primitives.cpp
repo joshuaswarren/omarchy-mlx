@@ -10065,6 +10065,48 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           omarchy::cooperative_matrix_advertises(
               c16_hw.cooperative_matrix_shapes,
               omarchy::qmm_prefill_coopmat_shape_f16x16()));
+      // DEC-20 (5060 Ti): MLX_OMARCHY_CMAT16_TILES=64|128 selects the
+      // wider row tile (64-row: 2 subgroups x 2 blocks; 128-row: SG8
+      // 256-lane workgroup), MLX_OMARCHY_CMAT16_STEP=32|64 widens the
+      // staged k step. The shipped 32-row STEP_K-16 default is
+      // unchanged; mismatched pairs fall back to the default tile. The
+      // one exception: TILES=128 exists only as the K64 build (there is
+      // no 128-row 32-step kernel), so 128 + STEP=32 keeps K64 —
+      // documented forcing, not a silent mismatch.
+      const auto kernel = []() {
+        const auto tiles =
+            omarchy::env_str("MLX_OMARCHY_CMAT16_TILES");
+        const auto step =
+            omarchy::env_str("MLX_OMARCHY_CMAT16_STEP");
+        const std::string t = tiles == nullptr ? std::string()
+                                               : std::string(tiles);
+        const std::string s = step == nullptr ? std::string()
+                                              : std::string(step);
+        if (t == "128") {
+          return omarchy::ComputeKernel::
+              QmmPrefillCoopmat16BF16Rows128K64;
+        }
+        if (t == "64") {
+          if (s == "64") {
+            return omarchy::ComputeKernel::
+                QmmPrefillCoopmat16BF16Rows64K64;
+          }
+          if (s == "32") {
+            return omarchy::ComputeKernel::
+                QmmPrefillCoopmat16BF16Rows64K32;
+          }
+          return omarchy::ComputeKernel::
+              QmmPrefillCoopmat16BF16Rows64;
+        }
+        return omarchy::ComputeKernel::QmmPrefillCoopmat16BF16;
+      }();
+      const uint32_t rows_per_tile =
+          kernel == omarchy::ComputeKernel::QmmPrefillCoopmat16BF16
+          ? 32u
+          : kernel == omarchy::ComputeKernel::
+                    QmmPrefillCoopmat16BF16Rows128K64
+          ? 128u
+          : 64u;
       dispatch_qmm_out_rows(
           encoder,
           out,
@@ -10073,12 +10115,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           [&](std::span<const omarchy::ComputeBinding> cb,
               const omarchy::ComputeParams& cp) {
             encoder.dispatch_compute(
-                omarchy::ComputeKernel::QmmPrefillCoopmat16BF16,
+                kernel,
                 cb,
                 cp,
                 std::min((cp.matrix_n + 31u) / 32u,
                          omarchy::kMaxComputeGroupCountX),
-                std::min((cp.matrix_m + 31u) / 32u,
+                std::min((cp.matrix_m + rows_per_tile - 1u) / rows_per_tile,
                          omarchy::kMaxComputeGroupCountX),
                 1u);
           });

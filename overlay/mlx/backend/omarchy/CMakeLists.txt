@@ -701,6 +701,13 @@ omarchy_shader(qmm_coopmat_m16_bf16 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF
 # staged as fp16 and the dequantized B stores fp16; the accumulator
 # stays fp32. Selected only when the fp32 8x8x8 shape is absent.
 omarchy_shader(qmm_coopmat_c16_bf16 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1 -DCMAT16=1)
+# DEC-20 (5060 Ti): wider CMAT16 row tiles + K staging. Same fp16-operand
+# shape, same per-output ascending-k chain; env-selected, the shipped
+# 32-row target above stays the default.
+omarchy_shader(qmm_coopmat_c16_bf16_rows64 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1 -DCMAT16=1 -DTILE_ROWS=64)
+omarchy_shader(qmm_coopmat_c16_bf16_rows64_k32 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1 -DCMAT16=1 -DTILE_ROWS=64 -DSTEP_K_VAL=32)
+omarchy_shader(qmm_coopmat_c16_bf16_rows64_k64 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1 -DCMAT16=1 -DTILE_ROWS=64 -DSTEP_K_VAL=64)
+omarchy_shader(qmm_coopmat_c16_bf16_rows128_k64 shaders/qmm_coopmat.comp -DX_BF16=1 -DOUT_BF16=1 -DCMAT16=1 -DTILE_ROWS=128 -DSG8 -DSTEP_K_VAL=64)
 # Direct-global-load A twins: the host widens bf16 x to f32 once (exact),
 # so the shader coopMatLoads A tiles straight from the f32 buffer and the
 # x_s staging disappears; same fp32 coopmat k chain, RNE bfloat16 drain.
