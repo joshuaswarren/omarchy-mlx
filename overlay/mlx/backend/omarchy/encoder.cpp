@@ -1988,7 +1988,9 @@ void CommandEncoder::submit(const char* reason) {
     trace::counters().vk_submissions++;
     if (env_set("MLX_OMARCHY_TRACE_DISPATCH")) {
       fprintf(stderr,
-              "[rtmod] SUBMIT tid=%lu cv=%lu waits=%lu sigs=%lu cmds=%u reason=%s\n",
+              "[rtmod] SUBMIT t=%lu tid=%lu cv=%lu waits=%lu sigs=%lu cmds=%u reason=%s\n",
+              (unsigned long)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::steady_clock::now().time_since_epoch()).count(),
               (unsigned long)syscall(SYS_gettid),
               (unsigned long)completion_value,
               (unsigned long)wait_sems.size(),
