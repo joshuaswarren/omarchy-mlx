@@ -27,6 +27,7 @@ import json
 import os
 import struct
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -100,6 +101,93 @@ def _fast_tdt_enabled() -> bool:
     return os.environ.get("MLX_OMARCHY_GPU_STT_FAST_TDT", "").strip().lower() == "on"
 
 
+def _stages_enabled() -> bool:
+    """Opt-in per-stage profiling for the V2 RTFx-gap analysis."""
+    return os.environ.get("MLX_OMARCHY_GPU_STT_STAGES", "").strip().lower() in (
+        "1", "on", "true", "yes")
+
+
+class _StageTimers:
+    """Per-request seam times in ms for the V2 stage profile.
+
+    The model wraps report into this one accumulator (the worker serves one
+    request at a time), and ``_transcribe`` resets it per request. ``load`` is
+    measured once at startup; ``encoder`` is the Conformer; ``decoder`` is the
+    rest of ``model.decode`` (the TDT loop and token assembly); ``post`` is
+    everything ``generate`` does outside mel+decode, including our own result
+    materialisation.
+    """
+
+    def __init__(self) -> None:
+        self.load_ms = 0.0
+        self.reset()
+
+    def reset(self) -> None:
+        self.resample_ms = 0.0
+        self.mel_ms = 0.0
+        self.encoder_ms = 0.0
+        self.decode_ms = 0.0
+        self.generate_ms = 0.0
+        self.generate_calls = 0
+
+    def as_dict(self) -> dict:
+        decoder = max(self.decode_ms - self.encoder_ms, 0.0)
+        post = max(self.generate_ms - self.mel_ms - self.decode_ms, 0.0)
+        return {
+            "load": round(self.load_ms, 2),
+            "resample": round(self.resample_ms, 2),
+            "mel": round(self.mel_ms, 2),
+            "encoder": round(self.encoder_ms, 2),
+            "decoder": round(decoder, 2),
+            "post": round(post, 2),
+            "request_total": round(
+                self.resample_ms + self.mel_ms + self.encoder_ms + decoder + post, 2),
+            "generate_calls": self.generate_calls,
+        }
+
+    def summary(self) -> str:
+        s = self.as_dict()
+        return " ".join(
+            f"{k}={v}ms" for k, v in s.items() if k != "generate_calls") \
+            + f" calls={self.generate_calls}"
+
+
+_TIMERS = _StageTimers()
+
+
+def _sync_eval(out) -> None:
+    """Force lazy mlx work to complete inside the timed window."""
+    try:
+        import mlx.core as mx
+        if isinstance(out, mx.array):
+            mx.eval(out)
+        elif isinstance(out, (tuple, list)):
+            mx.eval(*[x for x in out if isinstance(x, mx.array)])
+    except Exception:
+        pass
+
+
+def _instrument_model(model) -> None:
+    """Wrap the model's stage seams so calls land in ``_TIMERS``."""
+
+    def timed(name, fn):
+        def wrapped(*args, **kwargs):
+            t0 = time.perf_counter()
+            out = fn(*args, **kwargs)
+            _sync_eval(out)
+            setattr(_TIMERS, name, getattr(_TIMERS, name) + (time.perf_counter() - t0) * 1000)
+            return out
+        return wrapped
+
+    mel_fn = getattr(model, "_log_mel_spectrogram", None)
+    if callable(mel_fn):
+        model._log_mel_spectrogram = timed("mel_ms", mel_fn)
+    if callable(getattr(model, "encoder", None)):
+        model.encoder = timed("encoder_ms", model.encoder)
+    if callable(getattr(model, "decode", None)):
+        model.decode = timed("decode_ms", model.decode)
+
+
 def decode_with_retry(generate, xp, audio, noise) -> str:
     """``generate(audio) -> str``, retried once with padded edges when it is
     empty but voiced (see the module docstring)."""
@@ -110,7 +198,7 @@ def decode_with_retry(generate, xp, audio, noise) -> str:
     return generate(xp.concatenate([noise[:n], audio, noise[-n:]]))
 
 
-def generate_with_model(model, audio) -> str:
+def generate_with_model(model, audio, stages: _StageTimers | None = None) -> str:
     """``model.generate`` through the batched TDT decoder when supported.
 
     The fast decoder must produce the same transcript as the reference loop;
@@ -119,21 +207,36 @@ def generate_with_model(model, audio) -> str:
     """
     from mlx_omarchy_assistant import gpu_stt_tdt
 
-    if _fast_tdt_enabled() and gpu_stt_tdt.supports(model):
-        try:
-            from mlx_audio.stt.models.parakeet.audio import log_mel_spectrogram
+    t0 = time.perf_counter()
+    try:
+        if _fast_tdt_enabled() and gpu_stt_tdt.supports(model):
+            try:
+                from mlx_audio.stt.models.parakeet.audio import log_mel_spectrogram
 
-            mel = log_mel_spectrogram(audio, model.preprocessor_config)
-            window = int(os.environ.get(
-                "MLX_OMARCHY_GPU_STT_FAST_TDT_WINDOW", "32") or 32)
-            return str(
-                gpu_stt_tdt.fast_tdt_decode(model, mel, window).text or "")
-        except Exception as exc:  # pragma: no cover - safety fallback
-            print(f"fast tdt decode fell back: {exc}", file=sys.stderr, flush=True)
-    return str(getattr(model.generate(audio, verbose=False), "text", "") or "")
+                t_mel = time.perf_counter()
+                mel = log_mel_spectrogram(audio, model.preprocessor_config)
+                _sync_eval(mel)
+                if stages is not None:
+                    stages.mel_ms += (time.perf_counter() - t_mel) * 1000
+                window = int(os.environ.get(
+                    "MLX_OMARCHY_GPU_STT_FAST_TDT_WINDOW", "32") or 32)
+                t_dec = time.perf_counter()
+                text = str(
+                    gpu_stt_tdt.fast_tdt_decode(model, mel, window).text or "")
+                if stages is not None:
+                    stages.decode_ms += (time.perf_counter() - t_dec) * 1000
+                return text
+            except Exception as exc:  # pragma: no cover - safety fallback
+                print(f"fast tdt decode fell back: {exc}", file=sys.stderr, flush=True)
+        return str(getattr(model.generate(audio, verbose=False), "text", "") or "")
+    finally:
+        if stages is not None:
+            stages.generate_ms += (time.perf_counter() - t0) * 1000
+            stages.generate_calls += 1
 
 
-def _transcribe(model, payload: bytes, rate: int, noise) -> dict:
+def _transcribe(model, payload: bytes, rate: int, noise,
+                stages: _StageTimers | None = None) -> dict:
     import mlx.core as mx
 
     from .gpu_stt import resample_to_16k
@@ -143,17 +246,28 @@ def _transcribe(model, payload: bytes, rate: int, noise) -> dict:
     except ValueError as exc:
         return {"ok": False, "kind": "input", "error": f"payload parse failed: {exc}"}
 
+    if stages is not None:
+        stages.reset()
+
     # 1-D only: a (1, N) input makes Parakeet-TDT on mlx-audio 0.5.6
     # silently return "".
     def generate(audio) -> str:
-        return generate_with_model(model, audio)
+        return generate_with_model(model, audio, stages)
 
     try:
+        t0 = time.perf_counter()
         audio = resample_to_16k(mx.array(samples), rate)
+        if stages is not None:
+            _sync_eval(audio)
+            stages.resample_ms = (time.perf_counter() - t0) * 1000
         text = decode_with_retry(generate, mx, audio, noise)
     except Exception as exc:
         return {"ok": False, "kind": "unavailable", "error": f"gpu-stt generate failed: {exc}"}
-    return {"ok": True, "transcript": text, "peak_memory_bytes": int(mx.get_peak_memory())}
+    response = {"ok": True, "transcript": text, "peak_memory_bytes": int(mx.get_peak_memory())}
+    if stages is not None:
+        response["stage_ms"] = stages.as_dict()
+        print(f"[gpu-stt-stages] {stages.summary()}", file=sys.stderr, flush=True)
+    return response
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -168,11 +282,17 @@ def main(argv: list[str] | None = None) -> int:
 
         # A Path (not str) skips mlx-audio's hub resolution: the snapshot
         # directory is loaded as-is, with no network lookup.
+        t0 = time.perf_counter()
         model = load_model(args.model_dir)
         # The first generate() after load returns "" on this stack; spend
         # it on one second of silence before declaring readiness.
         model.generate(mx.zeros((16_000,), dtype=mx.float32), verbose=False)
+        _TIMERS.load_ms = (time.perf_counter() - t0) * 1000
         noise = mx.array(_PAD_NOISE)
+        if _stages_enabled():
+            _instrument_model(model)
+        else:
+            _TIMERS.load_ms = 0.0
     except Exception as exc:
         _send(stdout, {"ok": False, "kind": "unavailable", "error": f"failed to load model: {exc}"})
         return 2
@@ -195,7 +315,8 @@ def main(argv: list[str] | None = None) -> int:
             _send(stdout, {"ok": True, "event": "closed", "id": request_id})
             return 0
         if op == "transcribe":
-            response = _transcribe(model, payload, int(header.get("sample_rate", 16_000)), noise)
+            response = _transcribe(model, payload, int(header.get("sample_rate", 16_000)),
+                                   noise, _TIMERS if _stages_enabled() else None)
         else:
             response = {"ok": False, "kind": "input", "error": f"unknown op {op!r}"}
         _send(stdout, dict(response, id=request_id))
