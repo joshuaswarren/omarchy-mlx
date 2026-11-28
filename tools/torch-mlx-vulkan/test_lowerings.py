@@ -3014,6 +3014,74 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_view_misc_family():
+    # PT-AL-tf: misc forwards - trace, tri-index grids, unfold, unsafe
+    # splits, *_copy view aliases, copy, to_dense, zero, trunc,
+    # masked_select, nonzero, view_as_real/complex.
+    torch.manual_seed(0)
+    a = torch.ops.aten
+    sq = torch.randn(3, 3)
+    rect = torch.randn(3, 4)
+    y = torch.randn(2, 5)
+    m3 = torch.tensor([[True, False], [False, True]])
+    cmp2 = torch.complex(torch.ones(2, 3), torch.zeros(2, 3))
+    cases = [
+        (a.trace.default, (sq,), {}, "trace"),
+        (a.tril_indices.default, (3, 4), {}, "tril_indices"),
+        (a.tril_indices.default, (3, 4), {"offset": 1}, "tril_indices"),
+        (a.triu_indices.default, (3, 4), {}, "triu_indices"),
+        (a.triu_indices.default, (3, 4), {"offset": -1}, "triu_indices"),
+        (a.unfold.default, (y, 1, 2, 1), {}, "unfold"),
+        (a.unfold_copy.default, (y, 1, 2, 1), {}, "unfold_copy"),
+        (a.unsafe_chunk.default, (torch.randn(7, 3), 3, 0), {}, "unsafe_chunk"),
+        (a.unsafe_split_with_sizes.default,
+         (torch.randn(7, 3), [2, 4, 1], 0), {}, "unsafe_split_with_sizes"),
+        (a.unsqueeze_copy.default, (y, 1), {}, "unsqueeze_copy"),
+        (a.view_copy.default, (y, (5, 2)), {}, "view_copy"),
+        (a.copy.default, (rect, torch.ones(3, 4)), {}, "copy"),
+        (a.to_dense.default, (rect,), {}, "to_dense"),
+        (a.zero.default, (rect,), {}, "zero"),
+        (a.trunc.default, (torch.tensor([-1.7, 1.7, -0.3, 0.9]),), {}, "trunc"),
+        (a.masked_select.default, (torch.tensor([[1., 2.], [3., 4.]]), m3),
+         {}, "masked_select"),
+        (a.masked_select.default,
+         (torch.tensor([[1., 2.], [3., 4.]]), torch.tensor([True, False])),
+         {}, "masked_select"),
+        (a.nonzero.default, (torch.tensor([[0., 5.], [7., 0.]]),), {}, "nonzero"),
+        (a.nonzero_numpy.default, (torch.tensor([[0., 5.], [7., 0.]]),),
+         {}, "nonzero_numpy"),
+        (a.view_as_real.default, (cmp2,), {}, "view_as_real"),
+        (a.view_as_complex.default, (torch.randn(2, 3, 2),), {},
+         "view_as_complex"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        t_ins = tuple(t for t in ins if isinstance(t, torch.Tensor))
+        g = torch.fx.Graph()
+        phs, j = [], 0
+        args = []
+        for v in ins:
+            if isinstance(v, torch.Tensor):
+                args.append(g.placeholder(f"p{j}")); j += 1
+            else:
+                args.append(v)
+        n = g.call_function(target, tuple(args), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*t_ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        refs = list(ref) if isinstance(ref, (tuple, list)) else [ref]
+        outs = list(out) if isinstance(out, (tuple, list)) else [out]
+        assert len(outs) == len(refs), (str(target), kwargs, len(outs), len(refs))
+        for i, (o, r) in enumerate(zip(outs, refs)):
+            got = torch.as_tensor(np.array(o))
+            assert np.allclose(got.float().numpy(), r.float().numpy(),
+                               atol=1e-5), (str(target), kwargs, i, got, r)
+    print("test_view_misc_family PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3142,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_view_misc_family()
     print("ALL PASS")
 
 
