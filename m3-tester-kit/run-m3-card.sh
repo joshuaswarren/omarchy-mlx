@@ -89,7 +89,7 @@ echo "[3/4] deferral check (MLX_OMARCHY_DEFER_TOKENS=$MLX_OMARCHY_DEFER_TOKENS)"
 import sys
 sys.path.insert(0, sys.argv[1] + "/scripts")
 import defer_tokens_guard  # noqa: E402
-defer_tokens_guard.effective_defer_tokens(tool="m3-tester-kit")
+defer_tokens_guard.require_defer_tokens("m3-tester-kit")
 PYEOF
 
 # [4/4] PAR-45 cells.

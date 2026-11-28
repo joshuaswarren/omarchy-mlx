@@ -7,6 +7,7 @@ audit, DEFER_TOKENS pin, tamper check) and must stay green offline.
 """
 
 import os
+import re
 import pathlib
 import subprocess
 import tempfile
@@ -164,6 +165,40 @@ class AnePreflightTests(unittest.TestCase):
         self.assertIn("no opt-in key applies", r.stdout)
         self.assertNotIn("line ''", r.stdout)
         self.assertNotIn("unbound variable", r.stderr)
+
+
+RUN_CARD = ROOT / "m3-tester-kit" / "run-m3-card.sh"
+GUARD = ROOT / "scripts" / "defer_tokens_guard.py"
+
+
+class RunM3CardTests(unittest.TestCase):
+    """run-m3-card.sh calls into scripts/defer_tokens_guard.py by name; a
+    typo'd entry point kills the runner under set -e before any card cell
+    executes."""
+
+    def test_guard_calls_resolve_to_module_attributes(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("defer_tokens_guard",
+                                                      GUARD)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        calls = set(re.findall(r"defer_tokens_guard\.([a-z_]+)\(",
+                               RUN_CARD.read_text()))
+        self.assertTrue(calls, "no defer_tokens_guard calls found")
+        for name in calls:
+            self.assertTrue(callable(getattr(mod, name, None)),
+                            f"defer_tokens_guard.{name} is not callable")
+
+    def test_guard_step_runs_the_real_call(self):
+        # The [3/4] step calls the guard inside a venv python against the
+        # staged scripts/; replay the same import + call with the defer pin.
+        code = ("import sys; sys.path.insert(0, sys.argv[1] + '/scripts'); "
+                "import defer_tokens_guard; "
+                "defer_tokens_guard.require_defer_tokens('m3-tester-kit')")
+        r = subprocess.run([os.sys.executable, "-c", code, str(ROOT)],
+                           capture_output=True, text=True,
+                           env={**os.environ, "MLX_OMARCHY_DEFER_TOKENS": "0"})
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
 
 if __name__ == "__main__":
