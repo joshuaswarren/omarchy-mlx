@@ -3014,6 +3014,59 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+
+def test_linalg_residue():
+    # linalg_lu_solve (all left/adjoint combos, batched), linalg_polar,
+    # linalg_matrix_sqrth parity vs torch CPU.
+    def run_fx(target, argmask, kwargs, *ins):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        cargs = tuple(next(it) if m is None else m for m in argmask)
+        n = g.call_function(target, cargs, dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*[a.clone() for a in ins])
+        assert stats["cpu"] == [], (stats, str(target))
+        it2 = iter([a.clone() for a in ins])
+        rargs = tuple(next(it2) if m is None else m for m in argmask)
+        ref = target(*rargs, **kwargs)
+        outs = out if isinstance(out, (tuple, list)) else (out,)
+        refs = ref if isinstance(ref, (tuple, list)) else (ref,)
+        for g_, r_ in zip(outs, refs):
+            got = torch.as_tensor(g_)
+            assert got.shape == r_.shape, (str(target), got.shape, r_.shape)
+            assert np.allclose(got.float().numpy(), r_.float().numpy(),
+                               atol=2e-4), (str(target), got, r_)
+
+    A = torch.ops.aten
+    mat = torch.tensor([[2., 1., 1.], [4., 3., 3.], [8., 7., 9.]])
+    LU, piv = torch.linalg.lu_factor(mat)
+    LU, piv = LU.float(), piv.int()
+    B = torch.randn(3, 2)
+    run_fx(A.linalg_lu_solve.default, (None, None, None), {}, LU, piv, B)
+    run_fx(A.linalg_lu_solve.default, (None, None, None), {"adjoint": True},
+           LU, piv, B)
+    run_fx(A.linalg_lu_solve.default, (None, None, None), {"left": False},
+           LU, piv, torch.randn(2, 3))
+    run_fx(A.linalg_lu_solve.default, (None, None, None),
+           {"left": False, "adjoint": True}, LU, piv, torch.randn(2, 3))
+    LU2, piv2 = torch.linalg.lu_factor(torch.stack([mat, mat * 2]))
+    run_fx(A.linalg_lu_solve.default, (None, None, None), {},
+           LU2.float(), piv2.int(), torch.randn(2, 3, 2))
+
+    run_fx(A.linalg_polar.default, (None,), {}, torch.randn(5, 3))
+    run_fx(A.linalg_polar.default, (None,), {},
+           torch.randn(2, 4, 4) @ torch.randn(4, 4))
+    S = torch.tensor([[4., 1.], [1., 3.]])
+    run_fx(A.linalg_matrix_sqrth.default, (None,), {}, S)
+    run_fx(A.linalg_matrix_sqrth.default, (None,), {},
+           torch.stack([S, S * 2]))
+    print("test_linalg_residue PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3127,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_linalg_residue()
     print("ALL PASS")
 
 
