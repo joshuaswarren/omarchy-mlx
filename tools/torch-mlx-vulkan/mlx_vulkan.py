@@ -2059,6 +2059,94 @@ def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
 
+# sign-magnitude int views for the IEEE families: (int view dtype,
+# magnitude mask, sign mask)
+_SIGNED = {mx.float32: (mx.int32, 0x7fffffff, -0x80000000),
+           mx.float64: (mx.int64, 0x7fffffffffffffff, -0x8000000000000000),
+           mx.float16: (mx.int16, 0x7fff, -0x8000),
+           mx.bfloat16: (mx.int16, 0x7fff, -0x8000)}
+
+
+def _signbit(a):
+    # aten.signbit: the literal sign bit — -0.0 and negative NaN are True.
+    a = _mx(a)
+    if a.dtype in _SIGNED:
+        return mx.less(a.view(_SIGNED[a.dtype][0]), 0)
+    return mx.less(a, 0)
+
+
+def _copysign(a, b):
+    # aten.copysign: |a| with b's sign bit — b=-0.0 and -NaN flip it.
+    a, b = _mx(a), _mx(b)
+    dt = a.dtype if a.dtype in _SIGNED else mx.float32
+    idt, mag, sgn = _SIGNED[dt]
+    a = a.astype(dt)
+    bs = b.astype(dt) if b.dtype in _SIGNED else b.astype(mx.float32).astype(dt)
+    ai, bi = a.view(idt), bs.view(idt)
+    out = mx.bitwise_or(mx.bitwise_and(ai, mx.array(mag, idt)),
+                        mx.bitwise_and(bi, mx.array(sgn, idt)))
+    return out.view(dt)
+
+
+def _heaviside(a, values):
+    # aten.heaviside(input, values): 0 for x<0, values for x==0, 1 for x>0.
+    a, f = _opmath_f32(a)
+    v = _opmath_f32(_mx(values))[1]
+    out = mx.where(mx.greater(f, 0), mx.ones_like(f),
+                   mx.where(f == 0, v, mx.zeros_like(f)))
+    return out.astype(a.dtype)
+
+
+def _frexp(a):
+    # aten.frexp: (mantissa m in (-1,-0.5] U {0} U [0.5,1), int32 exponent e)
+    # with x = m * 2^e. Subnormals are scaled up by 2^25 first so log2 and
+    # the division stay in the normal range.
+    a, f = _opmath_f32(a)
+    ax = mx.abs(f)
+    tiny = mx.logical_and(mx.less(ax, 1.1754943508222875e-38),
+                          mx.greater(ax, 0))
+    fs = mx.where(tiny, f * 33554432.0, f)          # 2^25
+    e2 = mx.floor(mx.log2(mx.abs(fs))) + 1
+    m = fs / mx.power(2.0, e2)
+    e = e2 - mx.where(tiny, 25.0, 0.0)
+    zero = f == 0
+    return (mx.where(zero, f, m).astype(a.dtype),
+            mx.where(zero, mx.zeros_like(e), e).astype(mx.int32))
+
+
+def _ldexp(a, i):
+    # aten.ldexp(x, exp): x * 2^exp.
+    a, f = _opmath_f32(a)
+    return (f * mx.power(2.0, _mx(i).astype(mx.float32))).astype(a.dtype)
+
+
+def _nextafter(a, b):
+    # aten.nextafter: the next representable value toward b, via the
+    # sign-magnitude int view. Moving toward +inf increments the magnitude
+    # of a nonnegative value and decrements a negative one (and mirror);
+    # a zero seeds the smallest subnormal of b's sign; a==b keeps a.
+    a, b = _mx(a), _mx(b)
+    dt = a.dtype if a.dtype in _SIGNED else mx.float32
+    a = a.astype(dt)
+    bs = b.astype(dt)
+    idt, mag, sgn = _SIGNED[dt]
+    ai, bi = a.view(idt), bs.view(idt)
+    magn = mx.bitwise_and(ai, mx.array(mag, idt))
+    neg = mx.less(ai, 0)
+    toward_up = mx.greater(bs, a)
+    step = mx.where(toward_up,
+                    mx.where(neg, -1, 1),
+                    mx.where(neg, 1, -1))
+    walked = mx.bitwise_or(mx.bitwise_and(ai, mx.array(sgn, idt)),
+                           magn + step)
+    seed = mx.where(mx.less(bi, 0), mx.array(sgn + 1, idt),
+                    mx.array(1, idt))
+    out = mx.where(magn == 0, seed, walked)
+    nan = mx.logical_or(mx.isnan(a), mx.isnan(bs))
+    out = mx.where(mx.logical_or(a == bs, nan), ai, out)
+    return out.view(dt)
+
+
 def _linalg_norm(a, ord=None, dim=None, keepdim=False, dtype=None):
     # aten.linalg_norm: mx.linalg.norm shares the vector/matrix
     # ord/axis/keepdims contract (ord=None + axis=None flattens, a
@@ -2441,6 +2529,20 @@ _FUNC_SPECS = {
     "logical_or": lambda a, b: mx.logical_or(_mx(a), _mx(b)),
     "logical_not": lambda a: mx.logical_not(a),
     "invert": lambda a: mx.logical_not(a),
+    # PT-AL-j: sign/copysign family — signbit/copysign/nextafter read the
+    # IEEE sign-magnitude int view so -0.0 and -NaN keep aten semantics;
+    # frexp normalizes subnormals through a 2^25 scale; heaviside takes
+    # the values arg at x==0.
+    "sgn": mx.sign, "sgn_": mx.sign,
+    "signbit": _signbit,
+    "heaviside": _heaviside, "heaviside_": _heaviside,
+    "copysign": _copysign, "copysign_": _copysign,
+    "frexp": _frexp,
+    "ldexp": _ldexp,
+    "nextafter": _nextafter, "nextafter_": _nextafter,
+    "positive": lambda a: _mx(a),
+    "fix": lambda a: mx.trunc(_mx(a)),
+    "absolute": mx.abs, "absolute_": mx.abs,
     "clamp": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
     "clamp_": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
     "clip": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
