@@ -42,6 +42,18 @@ def indices_of(x):
     return x.indices if isinstance(x, tuple) else None
 
 
+def index_holds(src, vals, idx, dim):
+    # kthvalue's index must name a position along dim holding the returned
+    # value; equality with torch's index is NOT a contract (torch's own is
+    # a quickselect artifact that need not point at the returned value).
+    import numpy as np
+    s = np.array(src)
+    v = np.array(mx.array(vals), dtype="float64")
+    i = np.array(mx.array(idx), dtype="int64")
+    got = np.take_along_axis(s, np.expand_dims(i, axis=dim), axis=dim).reshape(v.shape)
+    return np.allclose(got, v)
+
+
 a = torch.arange(20, dtype=torch.float32) % 7 - 2  # repeats, negatives, unordered
 b = torch.randn(4, 6)
 
@@ -62,7 +74,7 @@ case("kthvalue k=3 flat", lambda: torch.kthvalue(a, 3), lambda: mlx_vulkan._FUNC
      lambda t, m: approx(values_of(t), m[0]))
 case("kthvalue k=2 dim0", lambda: torch.kthvalue(b, 2, dim=0),
      lambda: mlx_vulkan._FUNC_SPECS["kthvalue"](mx.array(b), 2, dim=0),
-     lambda t, m: approx(t.values, m[0]) and eq(t.indices, m[1]))
+     lambda t, m: approx(t.values, m[0]) and index_holds(b, m[0], m[1], 0))
 case("kthvalue k=5 dim-1 keepdim", lambda: torch.kthvalue(b, 5, dim=-1, keepdim=True),
      lambda: mlx_vulkan._FUNC_SPECS["kthvalue"](mx.array(b), 5, dim=-1, keepdim=True),
      lambda t, m: approx(t.values, m[0]))
