@@ -2928,6 +2928,59 @@ def test_log1p_expm1_logaddexp():
     print("test_log1p_expm1_logaddexp PASS")
 
 
+def test_log_exp_extras():
+    # PT-AL-g: log/exp extras — log2/log10/logit/logaddexp2/logspace/
+    # exp2/square lower with fp32 parity vs torch CPU and zero CPU
+    # fallback. logit's eps clamps endpoints; logaddexp2 covers the
+    # +-80 magnitudes where the naive log2(2^a+2^b) overflows fp32.
+    torch.manual_seed(0)
+    xp = torch.tensor([1e-8, 1e-4, 0.5, 1.0, 2.0, 10.0, 1e6])
+    xg = torch.tensor([-2.0, -0.5, 0.0, 0.5, 1.0, 3.0])
+    xi = torch.tensor([1e-6, 0.01, 0.5, 0.99, 0.999999])
+    xc = torch.tensor([0.0, 1e-4, 0.5, 0.9999, 1.0])
+    a2 = torch.tensor([-80.0, -10.0, 0.0, 1.0, 10.0, 80.0])
+    b2 = torch.tensor([-80.0, -5.0, 0.5, 2.0, -10.0, 80.0])
+    xe = torch.tensor([-20.0, -2.0, -0.5, 0.0, 0.5, 1.0, 10.0, 20.0])
+    cases = [
+        (torch.ops.aten.log2.default, (xp,), {}, "log2"),
+        (torch.ops.aten.log2_.default, (xp,), {}, "log2"),
+        (torch.ops.aten.log10.default, (xp,), {}, "log10"),
+        (torch.ops.aten.log10_.default, (xp,), {}, "log10"),
+        (torch.ops.aten.square.default, (xg,), {}, "square"),
+        (torch.ops.aten.square_.default, (xg,), {}, "square"),
+        (torch.ops.aten.logit.default, (xi,), {}, "logit"),
+        (torch.ops.aten.logit.default, (xc,), {"eps": 1e-3}, "logit"),
+        (torch.ops.aten.logit_.default, (xc,), {"eps": 1e-3}, "logit"),
+        (torch.ops.aten.logaddexp2.default, (a2, b2), {}, "logaddexp2"),
+        (torch.ops.aten.exp2.default, (xe,), {}, "exp2"),
+        (torch.ops.aten.exp2_.default, (xe,), {}, "exp2"),
+        (torch.ops.aten.logspace.default, (0.0, 2.0, 5), {}, "logspace"),
+        (torch.ops.aten.logspace.default, (0.0, 4.0, 5),
+         {"base": 2.0}, "logspace"),
+        (torch.ops.aten.log2.default, (xp.bfloat16(),), {}, "log2"),
+        (torch.ops.aten.exp2.default, (xe.bfloat16(),), {}, "exp2"),
+        (torch.ops.aten.logit.default, (xi.bfloat16(),),
+         {"eps": 1e-3}, "logit"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() if isinstance(a, torch.Tensor) else a
+                       for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if getattr(ins[0], "dtype", None) == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), got, ref)
+    print("test_log_exp_extras PASS")
+
+
 def test_flip_rot90():
     # PT-Q11: aten.flip(self, int[] dims) reverses along each listed dim;
     # aten.rot90(self, int k=1, int[] dims=[0,1]) is the ATen
@@ -3018,6 +3071,7 @@ if __name__ == "__main__":
     test_softplus_mish()
     test_elu_selu_celu()
     test_log1p_expm1_logaddexp()
+    test_log_exp_extras()
     test_logsumexp()
     test_glu()
     test_reciprocal_frac()

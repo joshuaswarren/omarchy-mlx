@@ -2055,6 +2055,37 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _logit(a, eps=None):
+    # aten.logit(input, eps=None): log(x/(1-x)); an eps argument clamps
+    # into [eps, 1-eps] first, with the bounds quantized into the input
+    # dtype (bf16 1-eps rounds back to 1.0, so x==1 stays NaN/inf like
+    # aten). Outside [0,1] unclamped aten gives NaN; log of a
+    # nonpositive ratio does the same here.
+    a, f = _opmath_f32(a)
+    if eps is not None:
+        lo = float(mx.array(float(eps)).astype(a.dtype).astype(mx.float32))
+        hi = float(mx.array(1.0 - float(eps)).astype(a.dtype)
+                   .astype(mx.float32))
+        f = mx.clip(f, lo, hi)
+    return mx.log(f / (1.0 - f)).astype(a.dtype)
+
+
+_LN2 = 0.6931471805599453
+
+
+def _logaddexp2(a, b):
+    # aten.logaddexp2(a,b) = log2(2^a + 2^b). Fold the base change into
+    # the stable natural-log form: log(e^{a·ln2} + e^{b·ln2}) / ln2.
+    a, b = _mx(a), _mx(b)
+    return mx.logaddexp(a * _LN2, b * _LN2) / _LN2
+
+
+def _exp2(a):
+    # aten.exp2(input): 2^x elementwise.
+    a, f = _opmath_f32(a)
+    return mx.power(2.0, f).astype(a.dtype)
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2386,6 +2417,17 @@ _FUNC_SPECS = {
     # must match so traced graphs lower them too.
     "expm1": mx.expm1, "expm1_": mx.expm1,
     "logaddexp": lambda a, b: mx.logaddexp(_mx(a), _mx(b)),
+    # PT-AL-g: log/exp extras. logit clamps into [eps, 1-eps] when eps
+    # is given; logaddexp2 folds the base-2 change into the stable
+    # natural-log form; logspace is base**linspace.
+    "log2": mx.log2, "log2_": mx.log2,
+    "log10": mx.log10, "log10_": mx.log10,
+    "logit": _logit, "logit_": _logit,
+    "logaddexp2": _logaddexp2,
+    "logspace": lambda s, e, n=100, base=10.0, **k: mx.power(
+        base, mx.linspace(float(s), float(e), int(n))),
+    "exp2": _exp2, "exp2_": _exp2,
+    "square": mx.square, "square_": mx.square,
     "xlogy": _xlogy, "xlog1py": _xlog1py,
     # aten registers torch.special.xlog1py as special_xlog1py
     "special_xlog1py": _xlog1py,
@@ -2582,6 +2624,7 @@ for _fn, _low in FUNC_TABLE.items():
 
 # ops that produce arrays from scalars/shapes — lower even with no mx inputs
 _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
+              "logspace",
               "tensor", "zeros_like", "ones_like", "full_like", "empty_like",
               "rand", "randn", "randint", "randperm", "new_zeros", "new_ones",
               "new_empty", "new_full", "scalar_tensor"}
