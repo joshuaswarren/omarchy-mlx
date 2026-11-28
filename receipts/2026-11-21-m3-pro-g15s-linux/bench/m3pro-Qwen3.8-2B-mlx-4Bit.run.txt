@@ -1,3 +1,0 @@
-  "verified": "match",
-  "dist_version": "0.32.4.dev202611210550+bf5631d",
-DECODE 76.14 tok/s  PREFILL 370.49 tok/s  digest 912ebb461fda3c39

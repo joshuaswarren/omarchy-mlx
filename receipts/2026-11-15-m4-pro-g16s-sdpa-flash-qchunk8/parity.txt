@@ -1,8 +1,0 @@
-# omarchy_sdpa_prefill_flash_tests -tc='causal flash Q_CHUNK=8 twin*' -s, Apple M4 Pro (G16S B1), 2026-11-16, kernel ids 677 = SdpaCausalFlashCoopmatBF16Qchunk8, 572 = SdpaCausalFlashCoopmatBF16
-MESSAGE: [qchunk8 parity] q_len 2065 k_len 2072 kernels 677/572 mismatches 0 of 8458240 max_abs 0
-MESSAGE: [qchunk8 parity] q_len 8192 k_len 8192 kernels 677/572 mismatches 0 of 33554432 max_abs 0
-MESSAGE: [qchunk8 parity] q_len 1024 k_len 3072 kernels 677/572 mismatches 0 of 4194304 max_abs 0
-MESSAGE: [qchunk8 parity] q_len 2056 k_len 2056 kernels 677/572 mismatches 0 of 8421376 max_abs 0
-[doctest] test cases:  1 |  1 passed | 0 failed | 16 skipped
-[doctest] assertions: 20 | 20 passed | 0 failed |
-[doctest] Status: SUCCESS!

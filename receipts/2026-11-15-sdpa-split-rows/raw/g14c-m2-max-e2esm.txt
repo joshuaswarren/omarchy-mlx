@@ -1,4 +1,0 @@
-E2E {"model": "models--mlx-community--Qwen3-4B-Instruct", "prompt": "code", "base_tps": 71.5, "spec_tps": 57.4, "split_tps": 72.3, "spec_speedup": 0.803, "split_speedup": 1.011, "base_pair_spread_pct": 0.24, "spec_pair_spread_pct": 0.08, "base_deterministic": true, "spec_identical": false, "split_identical": true, "gen": 256, "sha": "a564d0541708"}
-E2E {"model": "models--mlx-community--Qwen3-4B-Instruct", "prompt": "quote", "base_tps": 71.5, "spec_tps": 63.3, "split_tps": 91.3, "spec_speedup": 0.885, "split_speedup": 1.277, "base_pair_spread_pct": 0.07, "spec_pair_spread_pct": 2.14, "base_deterministic": true, "spec_identical": true, "split_identical": true, "gen": 256, "sha": "78712f34f17b"}
-RC 0 models--mlx-community--Qwen3-4B-Instruct-2507-4bit
-GPU-TIMEOUTS after=0 delta=0

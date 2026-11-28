@@ -1,4 +1,0 @@
-# filtered from the build log: commit line, link count, result
-commit d6a7d7e11aca4e5d94d3dc6e1fcd8f2c0a083d3d loadavg 0.28 0.94 1.09 1/1256 3086518
-TESTS_BUILT 2026-11-23T19:46:22Z
-links: 28

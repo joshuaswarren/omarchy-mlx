@@ -1,2 +1,0 @@
-{"model": "qwen3-4b-2507-4bit", "captures": 5, "bit_identical_to_NG_main": [true, true, true, true, true], "deviation_spread": {"fp32-qwen3-4b-2507-4bit": 0.0}}
-{"model": "qwen3.8-2b-4bit", "captures": 5, "bit_identical_to_NG_main": [true, true, true, true, true], "deviation_spread": {"cpuref-qwen3.8-2b-4bit": 0.0, "fp32-qwen3.8-2b-4bit": 0.0}}

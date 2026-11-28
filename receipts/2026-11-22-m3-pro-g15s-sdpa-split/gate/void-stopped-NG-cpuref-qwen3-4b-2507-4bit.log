@@ -1,4 +1,0 @@
-reference: stock mlx 0.32.3 mlx-cpu 0.32.3 mlx-lm 0.31.3 (CPU stream, float32)
-step 512/5120
-step 1024/5120
-step 1536/5120

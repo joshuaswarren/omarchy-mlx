@@ -1,5 +1,0 @@
-E2E {"model": "models--mlx-community--Qwen3-4B-Instruct", "prompt": "code", "base_tps": 76.5, "spec_tps": 47.6, "split_tps": 48.9, "spec_speedup": 0.622, "split_speedup": 0.639, "base_pair_spread_pct": 0.49, "spec_pair_spread_pct": 0.52, "base_deterministic": true, "spec_identical": true, "split_identical": true, "gen": 256, "sha": "5553f0812b09"}
-E2E {"model": "models--mlx-community--Qwen3-4B-Instruct", "prompt": "quote", "base_tps": 75.6, "spec_tps": 43.9, "split_tps": 46.3, "spec_speedup": 0.581, "split_speedup": 0.613, "base_pair_spread_pct": 2.85, "spec_pair_spread_pct": 3.36, "base_deterministic": true, "spec_identical": true, "split_identical": true, "gen": 256, "sha": "78712f34f17b"}
-E2E {"model": "models--mlx-community--Qwen3-4B-Instruct", "prompt": "chat", "base_tps": 81.7, "spec_tps": 69.3, "split_tps": 68.8, "spec_speedup": 0.849, "split_speedup": 0.842, "base_pair_spread_pct": 0.02, "spec_pair_spread_pct": 1.03, "base_deterministic": true, "spec_identical": true, "split_identical": true, "gen": 91, "sha": "8b2556f35c79"}
-RC 0 models--mlx-community--Qwen3-4B-Instruct-2507-4bit
-GPU-TIMEOUTS after=0 delta=0

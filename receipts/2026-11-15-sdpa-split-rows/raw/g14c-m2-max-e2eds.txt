@@ -1,5 +1,0 @@
-E2E {"model": "models--nvythong--Qwen3.8-9B-Distill-mlx", "prompt": "code", "base_tps": 42.3, "spec_tps": 25.3, "spec0_tps": 25.6, "spec_speedup": 0.598, "spec0_speedup": 0.605, "base_pair_spread_pct": 0.35, "spec_pair_spread_pct": 1.61, "base_deterministic": true, "spec_identical": true, "spec0_identical": true, "gen": 256, "sha": "46b2fe0e0e11"}
-E2E {"model": "models--nvythong--Qwen3.8-9B-Distill-mlx", "prompt": "quote", "base_tps": 42.3, "spec_tps": 30.3, "spec0_tps": 30.7, "spec_speedup": 0.718, "spec0_speedup": 0.726, "base_pair_spread_pct": 0.21, "spec_pair_spread_pct": 0.66, "base_deterministic": true, "spec_identical": true, "spec0_identical": true, "gen": 256, "sha": "01706f00e98d"}
-E2E {"model": "models--nvythong--Qwen3.8-9B-Distill-mlx", "prompt": "chat", "base_tps": 43.2, "spec_tps": 23.4, "spec0_tps": 23.0, "spec_speedup": 0.54, "spec0_speedup": 0.533, "base_pair_spread_pct": 3.48, "spec_pair_spread_pct": 3.94, "base_deterministic": true, "spec_identical": true, "spec0_identical": true, "gen": 96, "sha": "e3620bff549c"}
-RC 0 models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit
-GPU-TIMEOUTS after=0 delta=0

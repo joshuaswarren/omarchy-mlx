@@ -290,6 +290,50 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
         y = y + _mx(b).reshape(1, 1, 1, -1)
     return y.transpose(0, 3, 1, 2)
 
+def _roll(a, shifts, dims=None, **k):
+    """aten.roll: wrap-around shift, no wrap in the flat view - per-dim
+    numpy-style slicing on a doubled axis pair."""
+    x = _mx(a)
+    n = x.ndim
+    if dims is None:
+        # torch flattens, rolls once, reshapes back
+        shape = x.shape
+        x = _roll(x.reshape(1, -1), shifts, 1).reshape(shape)
+        return x
+    dims = [dims] if isinstance(dims, int) else list(dims)
+    if not isinstance(shifts, (list, tuple)):
+        shifts = [shifts] * len(dims)
+    for d, sh in zip(dims, shifts):
+        size = x.shape[d]
+        if size == 0:
+            continue
+        sh = sh % size
+        if sh == 0:
+            continue
+        # explicit per-axis slices: ... would hit the trailing axes instead
+        head_sl = [slice(None)] * n
+        tail_sl = [slice(None)] * n
+        head_sl[d] = slice(0, size - sh)
+        tail_sl[d] = slice(size - sh, size)
+        x = mx.concatenate([x[tuple(tail_sl)], x[tuple(head_sl)]], axis=d)
+    return x
+
+
+def _flip(a, dims=None, **k):
+    """aten.flip: reverse along the named dims."""
+    x = _mx(a)
+    if dims is None:
+        dims = list(range(x.ndim))
+    elif isinstance(dims, int):
+        dims = [dims]
+    for d in dims:
+        size = x.shape[d]
+        sl = [slice(None)] * x.ndim
+        sl[d] = slice(size - 1, None, -1)
+        x = x[tuple(sl)]
+    return x
+
+
 def _group_norm(a, num_groups, w=None, b=None, eps=1e-5):
     # torch NCHW; mlx 0.32 has no fast.group_norm - normalize per group.
     x = _mx(a)
@@ -566,6 +610,8 @@ _FUNC_SPECS = {
     "fold": _fold,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     "conv2d": _conv2d,
+    "roll": _roll,
+    "flip": _flip,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),

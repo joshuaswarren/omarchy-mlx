@@ -1,7 +1,0 @@
-/tmp/broken.comp
-WARNING: /tmp/broken.comp:9: '#define' : names containing consecutive underscores are reserved: __FAST_MATH__
-ERROR: /tmp/broken.comp:71: '' :  syntax error, unexpected SEMICOLON, expecting RIGHT_PAREN or COMMA
-ERROR: 1 compilation errors.  No code generated.
-
-
-SPIR-V is not generated for failed compile or link

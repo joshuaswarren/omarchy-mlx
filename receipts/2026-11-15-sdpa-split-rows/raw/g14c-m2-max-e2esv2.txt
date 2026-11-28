@@ -1,4 +1,0 @@
-E2E {"model": "models--SiddhJagani--Qwen3.8-2B-mlx-4Bit", "prompt": "code", "base_tps": 109.7, "spec_tps": 77.6, "split_tps": 97.1, "spec_speedup": 0.707, "split_speedup": 0.885, "base_pair_spread_pct": 5.03, "spec_pair_spread_pct": 1.13, "base_deterministic": true, "spec_identical": true, "split_identical": true, "gen": 256, "sha": "ce630247b0b0"}
-E2E {"model": "models--SiddhJagani--Qwen3.8-2B-mlx-4Bit", "prompt": "quote", "base_tps": 111.0, "spec_tps": 90.6, "split_tps": 124.8, "spec_speedup": 0.817, "split_speedup": 1.125, "base_pair_spread_pct": 4.21, "spec_pair_spread_pct": 4.16, "base_deterministic": true, "spec_identical": true, "split_identical": true, "gen": 101, "sha": "8d1a1506c334"}
-RC 0 models--SiddhJagani--Qwen3.8-2B-mlx-4Bit
-GPU-TIMEOUTS after=0 delta=0

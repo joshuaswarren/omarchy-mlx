@@ -1,9 +1,0 @@
-# Packages with no published wheel for the target interpreter. Upstream ships
-# an sdist only, so vendor-wheels.sh builds the wheel with pip wheel --no-deps
-# at release time; the built wheel enters the vendored set and the generated
-# requirements-lock.txt like any download. A runtime dependency, when one
-# exists, lives in requirements-lock.in.
-# docopt: num2words' only dependency; its command line needs it, the library
-# import does not, but pip resolves num2words' Requires-Dist anyway, so the
-# wheel must be present for an offline --require-hashes install to close.
-docopt==0.6.2

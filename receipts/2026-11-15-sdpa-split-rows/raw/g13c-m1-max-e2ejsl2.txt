@@ -1,4 +1,0 @@
-E2E {"model": "local-model-dir", "prompt": "code", "base_tps": 100.4, "spec_tps": 85.3, "split_tps": 94.0, "spec_speedup": 0.849, "split_speedup": 0.936, "base_pair_spread_pct": 0.86, "spec_pair_spread_pct": 0.08, "base_deterministic": true, "spec_identical": true, "split_identical": true, "gen": 256, "sha": "ce630247b0b0"}
-E2E {"model": "local-model-dir", "prompt": "quote", "base_tps": 102.9, "spec_tps": 114.7, "split_tps": 141.4, "spec_speedup": 1.115, "split_speedup": 1.374, "base_pair_spread_pct": 0.11, "spec_pair_spread_pct": 0.41, "base_deterministic": true, "spec_identical": true, "split_identical": true, "gen": 101, "sha": "8d1a1506c334"}
-RC 0 local-model-dir
-GPU-TIMEOUTS after=2 delta=0

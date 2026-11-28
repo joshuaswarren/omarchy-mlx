@@ -1,3 +1,0 @@
-3186735 g412: flip the G16S small-M selector pin to the occupancy-floor pick (red)
-5366358 packaging: vendor docopt so the vendored set resolves offline (#709)
-cd10a5c docs: update the M4 support matrix with the #537 qualification rows (#672)

@@ -1,9 +1,0 @@
-omarchy_matmul_family_tests [doctest] test cases:       46 |       46 passed | 0 failed | 0 skipped
-omarchy_matmul_family_tests [doctest] assertions: 21890061 | 21890061 passed | 0 failed |
-omarchy_matmul_family_tests [doctest] Status: SUCCESS!
-omarchy_primitive_tests [doctest] test cases:     107 |     107 passed | 0 failed | 0 skipped
-omarchy_primitive_tests [doctest] assertions: 2768377 | 2768377 passed | 0 failed |
-omarchy_primitive_tests [doctest] Status: SUCCESS!
-omarchy_runtime_tests [doctest] test cases:    60 |    60 passed | 0 failed | 0 skipped
-omarchy_runtime_tests [doctest] assertions: 27082 | 27082 passed | 0 failed |
-omarchy_runtime_tests [doctest] Status: SUCCESS!

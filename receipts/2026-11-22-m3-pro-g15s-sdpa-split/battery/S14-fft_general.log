@@ -1,7 +1,0 @@
-[doctest] doctest version is "2.4.12"
-[doctest] run with "--help" for options
-[fft accuracy] worst relative error 4.43243e-07 at n=4095
-===============================================================================
-[doctest] test cases:   14 |   14 passed | 0 failed | 0 skipped
-[doctest] assertions: 4245 | 4245 passed | 0 failed |
-[doctest] Status: SUCCESS!

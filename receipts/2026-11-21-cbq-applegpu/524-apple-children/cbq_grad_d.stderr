@@ -1,5 +1,0 @@
-# rc=1
---- stdout ---
-CHILDERR: [RuntimeError] [omarchy] fast::CustomKernel MSL subset: unsupported CBQ kernel ABI or launch: grad_d is not implemented for the Omarchy Vulkan backend (dtype=float32, shape=[8,512,16]). No GPU kernel exists for it; no silent CPU fallback occurs. Run it on an explicit CPU stream to use the CPU implementation.
-
---- stderr ---

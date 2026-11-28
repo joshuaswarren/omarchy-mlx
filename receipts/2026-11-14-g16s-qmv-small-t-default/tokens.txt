@@ -1,8 +1,0 @@
-### tokens-identical (greedy 64 tok)  2026-11-14T21:12:15+01:00
--- defON cpu=65 gpu=64 pmax=4512000 --
-SHA 2e31ec840ffe9443 LEN 378
-Also, explain the difference between the transformer attention layer and the self-attention layer. Also, explain the difference between the 
--- off(SMALL_T=0) cpu=76 gpu=74 pmax=4512000 --
-SHA 2e31ec840ffe9443 LEN 378
-Also, explain the difference between the transformer attention layer and the self-attention layer. Also, explain the difference between the 
-TOK_DONE 2026-11-14T21:12:21+01:00

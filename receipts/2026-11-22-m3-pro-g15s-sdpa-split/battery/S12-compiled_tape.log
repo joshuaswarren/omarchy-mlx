@@ -1,7 +1,0 @@
-[omarchy] compiled-tape debug switches active (diagnostics only, not product configuration; docs/install-omarchy.md): MLX_OMARCHY_TAPE_PER_NODE_SUBMIT
-[doctest] doctest version is "2.4.12"
-[doctest] run with "--help" for options
-===============================================================================
-[doctest] test cases:    14 |    14 passed | 0 failed | 0 skipped
-[doctest] assertions: 46224 | 46224 passed | 0 failed |
-[doctest] Status: SUCCESS!

@@ -1,5 +1,0 @@
-# filtered from the build log: commit line, last link step, result
-commit e86d9d0abec0216cf876d56f99a2bdbf0e914352 loadavg 0.30 0.30 0.33 4/1261 2546373
-[1498/1498] Linking CXX executable tests/omarchy/omarchy_sdpa_split_tests
-SPLIT_TEST_BUILT 2026-11-22T17:49:22Z
-rc=0

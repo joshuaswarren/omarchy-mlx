@@ -1,7 +1,0 @@
-== S13-fft_ops source a893cae5c build [build] start 2026-11-21T22:56:55Z load 1.57 3.01 1.73 exit 0 new GPU kernel lines: (none)
-[doctest] doctest version is "2.4.12"
-[doctest] run with "--help" for options
-===============================================================================
-[doctest] test cases:   19 |   19 passed | 0 failed | 0 skipped
-[doctest] assertions: 1379 | 1379 passed | 0 failed |
-[doctest] Status: SUCCESS!

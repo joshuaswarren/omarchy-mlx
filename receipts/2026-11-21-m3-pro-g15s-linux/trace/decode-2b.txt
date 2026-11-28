@@ -1,5 +1,0 @@
-  "verified": "match",
-  "dist_version": "0.32.4.dev202611210550+bf5631d",
-Breakpoint 1 (_ZN3mlx4core3cpu19get_command_encoderENS0_6StreamE) pending.
-TRACE {"arm": "decode", "model": "qwen3.8-2b-4bit", "device": "Device(gpu, 0)", "tokens": 32, "token_sha256": "7f36894a43e42bba7e154953ec0887668881a9bc02426c030c074bd4822c6bec", "delta": {"gpu_primitive_dispatches": 25383, "vk_submissions": 1027, "vk_buffer_copies": 73, "vk_buffer_fills": 1, "vk_compute_dispatches": 10373, "omarchy_finalize_calls": 98, "commit_calls_with_work": 1027, "commit_calls_noop": 98, "barriers_emitted": 10126, "barriers_skipped": 1315}}
-CPU_COUNT {"symbol": "_ZN3mlx4core3cpu19get_command_encoderENS0_6StreamE", "cpu_command_encoder_calls": 0, "resolved_while_running": true, "libmlx_loaded": true}

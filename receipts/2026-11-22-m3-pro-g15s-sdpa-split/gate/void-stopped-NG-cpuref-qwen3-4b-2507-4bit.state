@@ -1,4 +1,0 @@
-== before 2026-11-22T20:07:02Z loadavg 0.61 0.94 0.98 2/1221 2602282
-Mem:           17612        6425        4369        1491        9317       11187
-== after 2026-11-22T22:08:31Z exit 0 loadavg 3.68 2.39 2.20 10/1288 2634115
-stopped at step 1536+ of 5120 by kill (contiguous run would pass its 6 h timeout); recorded 'exit 0' above is the subshell's, not the python's

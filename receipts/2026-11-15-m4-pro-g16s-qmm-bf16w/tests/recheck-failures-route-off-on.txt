@@ -1,8 +1,0 @@
-fused_chain off rc=0
-runtime-streams off rc=1
-flash2 off rc=1
-flash14 off rc=1
-fused_chain on rc=0
-runtime-streams on rc=1
-flash2 on rc=1
-flash14 on rc=1

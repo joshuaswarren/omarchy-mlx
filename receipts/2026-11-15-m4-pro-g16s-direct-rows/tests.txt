@@ -1,6 +1,0 @@
-stock omarchy_matmul_family_tests rc=0 secs=35 [doctest] test cases: 46 | 46 passed | 0 failed | 0 skipped
-stock omarchy_primitive_tests rc=0 secs=8 [doctest] test cases: 107 | 107 passed | 0 failed | 0 skipped
-stock omarchy_runtime_tests rc=0 secs=64 [doctest] test cases: 60 | 60 passed | 0 failed | 0 skipped
-bf16 omarchy_matmul_family_tests rc=1 secs=45 [doctest] test cases: 46 | 40 passed | 6 failed | 0 skipped
-bf16 omarchy_primitive_tests rc=1 secs=22 [doctest] test cases: 107 | 105 passed | 2 failed | 0 skipped
-bf16 omarchy_runtime_tests rc=0 secs=63 [doctest] test cases: 60 | 60 passed | 0 failed | 0 skipped

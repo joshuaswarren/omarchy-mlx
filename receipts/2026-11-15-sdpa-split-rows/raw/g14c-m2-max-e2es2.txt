@@ -1,5 +1,0 @@
-E2E {"model": "models--SiddhJagani--Qwen3.8-2B-mlx-4Bit", "prompt": "code", "base_tps": 122.3, "spec_tps": 106.2, "split_tps": 106.8, "spec_speedup": 0.868, "split_speedup": 0.873, "base_pair_spread_pct": 0.29, "spec_pair_spread_pct": 0.32, "base_deterministic": true, "spec_identical": false, "split_identical": true, "gen": 256, "sha": "adb289b9d65a"}
-E2E {"model": "models--SiddhJagani--Qwen3.8-2B-mlx-4Bit", "prompt": "quote", "base_tps": 123.0, "spec_tps": 132.3, "split_tps": 135.6, "spec_speedup": 1.075, "split_speedup": 1.103, "base_pair_spread_pct": 0.1, "spec_pair_spread_pct": 0.59, "base_deterministic": true, "spec_identical": true, "split_identical": true, "gen": 101, "sha": "8d1a1506c334"}
-E2E {"model": "models--SiddhJagani--Qwen3.8-2B-mlx-4Bit", "prompt": "chat", "base_tps": 124.0, "spec_tps": 115.8, "split_tps": 116.3, "spec_speedup": 0.934, "split_speedup": 0.938, "base_pair_spread_pct": 5.17, "spec_pair_spread_pct": 1.09, "base_deterministic": true, "spec_identical": true, "split_identical": true, "gen": 74, "sha": "424deb575af1"}
-RC 0 models--SiddhJagani--Qwen3.8-2B-mlx-4Bit
-GPU-TIMEOUTS after=0 delta=0

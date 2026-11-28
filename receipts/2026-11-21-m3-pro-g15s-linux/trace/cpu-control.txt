@@ -1,5 +1,0 @@
-  "verified": "match",
-  "dist_version": "0.32.4.dev202611210550+bf5631d",
-Breakpoint 1 (_ZN3mlx4core3cpu19get_command_encoderENS0_6StreamE) pending.
-TRACE {"arm": "cpu-control", "device": "Device(gpu, 0)"}
-CPU_COUNT {"symbol": "_ZN3mlx4core3cpu19get_command_encoderENS0_6StreamE", "cpu_command_encoder_calls": 3, "resolved_while_running": true, "libmlx_loaded": true}

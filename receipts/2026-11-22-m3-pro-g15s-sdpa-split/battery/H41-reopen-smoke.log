@@ -1,2 +1,0 @@
-buffer round trip: OK (65536 bytes, device Apple M3 Pro (G15S B1))
-trace: vk_submissions=2 vk_buffer_copies=1 vk_buffer_fills=0 vk_compute_dispatches=1 gpu_primitive_dispatches=0

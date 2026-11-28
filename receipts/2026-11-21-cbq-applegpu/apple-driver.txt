@@ -1,4 +1,0 @@
-GPU0:
-	deviceName         = Apple M1 Max (G13C C0)
-	driverName         = Honeykrisp
-	driverInfo         = Mesa 26.3.0-devel (git-69bde15340)

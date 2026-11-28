@@ -1,4 +1,0 @@
-E2E {"model": "models--nvythong--Qwen3.8-9B-Distill-mlx", "prompt": "code", "base_tps": 40.3, "spec_tps": 34.0, "split_tps": 36.8, "spec_speedup": 0.843, "split_speedup": 0.913, "base_pair_spread_pct": 0.4, "spec_pair_spread_pct": 0.68, "base_deterministic": true, "spec_identical": false, "split_identical": false, "gen": 256, "sha": "70ad202e0149"}
-E2E {"model": "models--nvythong--Qwen3.8-9B-Distill-mlx", "prompt": "quote", "base_tps": 41.2, "spec_tps": 41.9, "split_tps": 49.1, "spec_speedup": 1.017, "split_speedup": 1.191, "base_pair_spread_pct": 3.29, "spec_pair_spread_pct": 2.27, "base_deterministic": true, "spec_identical": false, "split_identical": false, "gen": 136, "sha": "72f143b8025b"}
-RC 0 models--nvythong--Qwen3.8-9B-Distill-mlx-4Bit
-GPU-TIMEOUTS after=0 delta=0

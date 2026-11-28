@@ -1,6 +1,0 @@
-b0d5de688567bf4acd5e421027acd410dabcdc255a5bd46fdbf06c75dc2e6863  [models]/qwen3.8-2b-4bit/model.safetensors
-6834d47a6e13a1ac135f27be825abfa0fa54b9e33980599a5575e2f298503a34  [models]/qwen3.8-2b-4bit/config.json
-87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4  [models]/qwen3.8-2b-4bit/tokenizer.json
-2a73c6c248601ab904e035548abd8e6abb65ea27dcb5f342fb0a8910eb44173f  [models]/qwen3-4b-2507-4bit/model.safetensors
-574349e5a343236546fda55e4744a76e181f534182d7dc60ff1bad7e7a502849  [models]/qwen3-4b-2507-4bit/config.json
-aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4  [models]/qwen3-4b-2507-4bit/tokenizer.json

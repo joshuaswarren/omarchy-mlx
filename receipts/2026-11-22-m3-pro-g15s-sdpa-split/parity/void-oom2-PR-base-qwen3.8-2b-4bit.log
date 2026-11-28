@@ -1,9 +1,0 @@
-provenance: mlx-omarchy 0.32.4.dev202611221441+85e0f4480 mx=0.32.4.dev202611221441+85e0f4480 verified=match harness=85e0f4480 core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:8bd56a11df3fa5c0
-Traceback (most recent call last):
-  File "<lane>/scripts/parity_ref.py", line 92, in <module>
-    ref = {ctx: forced(ctx) for ctx in CTX}
-                ~~~~~~^^^^^
-  File "<lane>/scripts/parity_ref.py", line 67, in forced
-    mx.eval(lp)
-    ~~~~~~~^^^^
-RuntimeError: [omarchy] vkAllocateMemory failed: VK_ERROR_OUT_OF_DEVICE_MEMORY (request=1048576 bytes; active=9151959040 quarantined=163840 bytes; cache released)

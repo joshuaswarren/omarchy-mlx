@@ -1,7 +1,0 @@
-== S20-fast_regression source a893cae5c build [build] start 2026-11-21T22:57:01Z load 1.69 3.01 1.73 exit 0 new GPU kernel lines: (none)
-[doctest] doctest version is "2.4.12"
-[doctest] run with "--help" for options
-===============================================================================
-[doctest] test cases:  2 |  2 passed | 0 failed | 0 skipped
-[doctest] assertions: 16 | 16 passed | 0 failed |
-[doctest] Status: SUCCESS!

@@ -1,6 +1,0 @@
-== before 2026-11-22T22:08:34Z loadavg 3.68 2.39 2.20 3/1256 2634167
-Mem:           17612        7994        3913        1482        8197        9618
-GATE_PREFIX=2688 GATE_STEPS=2560
-== after 2026-11-23T02:09:40Z exit 0 loadavg 1.14 1.12 1.14 3/1254 2713730
-== after 2026-11-23T02:09:55Z python 2634174 exited (detached from its timeout at 02:1xZ) loadavg 0.89 1.06 1.12 1/1251 2713764
-killed with its timeout wrapper at 02:09:40Z (coreutils timeout sets a parent-death signal on its child); reached step 512/2560 after a 2688-token CPU prefill

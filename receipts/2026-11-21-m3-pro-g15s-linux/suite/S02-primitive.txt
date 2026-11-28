@@ -1,7 +1,0 @@
-== S02-primitive source a893cae5c build [build] start 2026-11-21T22:56:22Z load 1.46 3.16 1.72 exit 0 new GPU kernel lines: (none)
-[doctest] doctest version is "2.4.12"
-[doctest] run with "--help" for options
-===============================================================================
-[doctest] test cases:     107 |     107 passed | 0 failed | 0 skipped
-[doctest] assertions: 2768377 | 2768377 passed | 0 failed |
-[doctest] Status: SUCCESS!

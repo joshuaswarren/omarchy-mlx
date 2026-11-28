@@ -1,9 +1,0 @@
-provenance: mlx-omarchy 0.32.4.dev202611221441+85e0f4480 mx=0.32.4.dev202611221441+85e0f4480 verified=match harness=85e0f4480 core.cpython-314-aarch64-linux-gnu.so=sha256:615f0eb19f8f7d17 libmlx.so=sha256:8bd56a11df3fa5c0
-SDPA mlx 0.32.4.dev202611221441+85e0f4480 device Device(gpu, 0) D 128 HQ 32 HKV 8 env {}
-SDPA kv 176: independent 38.28 us (best 37.89); chain 66.0 us (best 65.78); 1 dispatches per call; max |err| vs f64 0.0015
-SDPA kv 192: independent 40.17 us (best 39.89); chain 69.99 us (best 69.59); 1 dispatches per call; max |err| vs f64 0.00167
-SDPA kv 640: independent 107.17 us (best 105.49); chain 188.01 us (best 187.35); 1 dispatches per call; max |err| vs f64 0.000488
-SDPA kv 641: independent 106.72 us (best 106.14); chain 188.0 us (best 187.37); 1 dispatches per call; max |err| vs f64 0.000485
-SDPA kv 1280: independent 204.74 us (best 203.18); chain 344.25 us (best 343.64); 1 dispatches per call; max |err| vs f64 0.000484
-SDPA kv 1281: independent 213.21 us (best 212.52); chain 358.06 us (best 357.47); 1 dispatches per call; max |err| vs f64 0.000465
-SDPA done

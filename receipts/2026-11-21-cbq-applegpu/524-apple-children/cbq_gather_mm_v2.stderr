@@ -1,5 +1,0 @@
-# rc=1
---- stdout ---
-CHILDERR: [RuntimeError] [omarchy] fast::CustomKernel MSL subset: unsupported CBQ kernel ABI or launch: gather_mm_v2 is not implemented for the Omarchy Vulkan backend (dtype=bfloat16, shape=[8,512]). No GPU kernel exists for it; no silent CPU fallback occurs. Run it on an explicit CPU stream to use the CPU implementation.
-
---- stderr ---

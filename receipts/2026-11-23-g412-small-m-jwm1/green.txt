@@ -1,7 +1,0 @@
-gpu-turn: RULE no single GPU submit may run longer than 20 s (a ~300 s submit hangs the GPU/machine; jw16 hang 2026-10-08 11:39 CDT). Split large shapes; pilot small first.
-[doctest] doctest version is "2.4.12"
-[doctest] run with "--help" for options
-===============================================================================
-[doctest] test cases:  1 |  1 passed | 0 failed | 61 skipped
-[doctest] assertions: 13 | 13 passed | 0 failed |
-[doctest] Status: SUCCESS!

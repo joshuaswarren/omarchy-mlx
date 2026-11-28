@@ -1,8 +1,0 @@
-{
- "arm": "cpuref",
- "model": "qwen3-4b-2507-4bit",
- "prefix": 128,
- "steps": 2560,
- "ppl_teacher_forced": 38.867132934366076,
- "provenance": "reference: stock mlx 0.32.3 mlx-cpu 0.32.3 mlx-lm 0.31.3 (CPU stream, float32)"
-}

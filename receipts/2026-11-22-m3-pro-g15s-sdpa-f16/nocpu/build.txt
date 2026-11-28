@@ -1,9 +1,0 @@
-CMAKE_ARGS=-DCMAKE_BUILD_TYPE=Release -DMLX_BUILD_OMARCHY=ON -DMLX_BUILD_CPU=OFF -DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DMLX_BUILD_BENCHMARKS=OFF -DMLX_OMARCHY_GPU_PROFILING=OFF -DCMAKE_INSTALL_LIBDIR=lib -DBLAS_INCLUDE_DIRS=/usr/include/openblas -DLAPACK_INCLUDE_DIRS=/usr/include/openblas
-no_cpu objects:
-backend/no_cpu/compiled.cpp.o
-backend/no_cpu/device_info.cpp.o
-backend/no_cpu/primitives.cpp.o
-cpu objects:
-backend/cpu/encoder.cpp.o
-backend/cpu/eval.cpp.o
-mlx_omarchy-0.32.4.dev202611220614+nocpu.95126c59f-cp314-cp314-linux_aarch64.whl

@@ -1,9 +1,0 @@
-== against the float32 model (KL(float32 || arm) mean/max, argmax agreement of 32 steps)
-qwen3-4b-2507-4bit ctx 443: default 3.44e-04/8.61e-04 31/32; composition 3.44e-04/8.61e-04 31/32; split 3.63e-04/6.35e-04 31/32; pv 3.21e-04/5.44e-04 32/32; bk64 3.27e-04/8.63e-04 31/32
-qwen3-4b-2507-4bit ctx 1024: default 3.17e-04/8.28e-04 31/32; composition 3.17e-04/8.28e-04 31/32; split 3.67e-04/1.02e-03 31/32; pv 4.27e-04/1.88e-03 32/32; bk64 4.12e-04/1.31e-03 30/32
-qwen3-4b-2507-4bit ctx 2048: default 2.98e-04/9.07e-04 32/32; composition 2.98e-04/9.07e-04 32/32; split 3.93e-04/1.22e-03 32/32; pv 2.64e-04/9.18e-04 32/32; bk64 3.06e-04/9.69e-04 32/32
-qwen3-4b-2507-4bit ctx 4000: default 3.18e-04/1.41e-03 31/32; composition 3.18e-04/1.41e-03 31/32; split 3.22e-04/9.15e-04 32/32; pv 3.15e-04/9.49e-04 32/32; bk64 2.94e-04/1.18e-03 31/32
-qwen3.8-2b-4bit ctx 443: default 4.49e-04/1.09e-03 31/32; split 4.86e-04/1.46e-03 31/32; pv 4.63e-04/1.09e-03 31/32
-qwen3.8-2b-4bit ctx 1024: default 3.91e-04/9.44e-04 31/32; split 3.98e-04/1.69e-03 30/32; pv 3.97e-04/1.00e-03 30/32
-qwen3.8-2b-4bit ctx 2048: default 4.68e-04/1.13e-03 31/32; split 5.19e-04/1.14e-03 31/32; pv 4.44e-04/1.05e-03 31/32
-qwen3.8-2b-4bit ctx 4000: default 4.65e-04/1.55e-03 32/32; split 4.89e-04/1.62e-03 32/32; pv 4.47e-04/1.38e-03 32/32
