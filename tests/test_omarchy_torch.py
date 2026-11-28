@@ -115,6 +115,46 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     (name, dtype, float((got - ref.float()).abs().max())))
         torch.manual_seed(1)
 
+    def test_pixel_onehot(self):
+        """Q-64: the wheel backend lowers aten.pixel_shuffle,
+        aten.pixel_unshuffle and aten.one_hot — fp32 parity against the
+        torch ops, including r=1 shuffle identity, inferred class count
+        and out-of-range all-zero rows."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(13)
+        np = __import__("numpy")
+        x = torch.randn(2, 12, 3, 5)
+        y = torch.randn(2, 3, 8, 8)
+        cases = [
+            ("pixel_shuffle", ATEN_TABLE["pixel_shuffle"](
+                mx.array(x.numpy()), 2), torch.pixel_shuffle(x, 2)),
+            ("pixel_shuffle", ATEN_TABLE["pixel_shuffle"](
+                mx.array(x[:, :3].numpy()), 1), torch.pixel_shuffle(x[:, :3], 1)),
+            ("pixel_unshuffle", ATEN_TABLE["pixel_unshuffle"](
+                mx.array(y.numpy()), 2), torch.pixel_unshuffle(y, 2)),
+            ("pixel_unshuffle", ATEN_TABLE["pixel_unshuffle"](
+                mx.array(y.numpy()), 4), torch.pixel_unshuffle(y, 4)),
+        ]
+        for name, got, ref in cases:
+            got = torch.from_numpy(np.array(got))
+            self.assertEqual(tuple(got.shape), tuple(ref.shape), name)
+            self.assertTrue(torch.allclose(got.float(), ref.float(),
+                                           atol=1e-5), name)
+        c = torch.tensor([0, 1, 3, 2])
+        got = torch.from_numpy(np.array(
+            ATEN_TABLE["one_hot"](mx.array(c.numpy()), 5)))
+        self.assertTrue(torch.equal(got,
+                                    torch.nn.functional.one_hot(c, 5)))
+        got = torch.from_numpy(np.array(
+            ATEN_TABLE["one_hot"](mx.array(c.numpy()))))
+        self.assertTrue(torch.equal(got, torch.nn.functional.one_hot(c)))
+        got = np.array(ATEN_TABLE["one_hot"](mx.array([4]), 3))
+        self.assertTrue((got == 0).all(), got)
+
     def test_unfold_last_dim(self):
         """PT-IM-b: aten.unfold lowers via gather + transpose — fp32 parity
         against the aten CPU op on the last dimension."""

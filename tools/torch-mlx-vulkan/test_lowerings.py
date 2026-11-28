@@ -2680,6 +2680,51 @@ def test_elu_selu_celu():
     print("test_elu_selu_celu PASS")
 
 
+def test_pixel_onehot():
+    # Q-64: shape/index extras.
+    # aten.pixel_shuffle moves r*r channel blocks into the spatial dims;
+    # pixel_unshuffle is the inverse. one_hot emits int64 class rows with
+    # num_classes defaulting to max+1.
+    rng = np.random.RandomState(13)
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        x = torch.tensor(rng.randn(2, 12, 3, 5).astype(np.float32)).to(dtype)
+        y = torch.tensor(rng.randn(2, 3, 8, 8).astype(np.float32)).to(dtype)
+        cases = [
+            (torch.ops.aten.pixel_shuffle.default, (x, 2), {},
+             torch.pixel_shuffle(x, 2), "pixel_shuffle"),
+            (torch.ops.aten.pixel_shuffle.default, (x[:, :3], 1), {},
+             torch.pixel_shuffle(x[:, :3], 1), "pixel_shuffle"),
+            (torch.ops.aten.pixel_unshuffle.default, (y, 2), {},
+             torch.pixel_unshuffle(y, 2), "pixel_unshuffle"),
+            (torch.ops.aten.pixel_unshuffle.default, (y, 4), {},
+             torch.pixel_unshuffle(y, 4), "pixel_unshuffle"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target))
+            assert np.allclose(out.float().numpy(), ref.float().numpy(),
+                               atol=tol), (str(target), dtype)
+    # one_hot at the table: explicit classes, inferred classes, and the
+    # out-of-range all-zero row.
+    c = torch.tensor([0, 1, 3, 2])
+    T = mlx_vulkan.ATEN_TABLE
+    got = np.array(T["one_hot"](mx.array(c.numpy()), 5))
+    ref = torch.nn.functional.one_hot(c, 5)
+    assert np.array_equal(got, ref.numpy()), got
+    got = np.array(T["one_hot"](mx.array(c.numpy())))
+    ref = torch.nn.functional.one_hot(c)
+    assert np.array_equal(got, ref.numpy()), got
+    got = np.array(T["one_hot"](mx.array([4]), 3))
+    assert (got == 0).all(), got
+    print("test_pixel_onehot PASS")
+
+
 def test_cosine_similarity():
     # PT-NORM-a: aten.cosine_similarity.default (embedding-eval family).
     # sum(x1*x2, dim) / (clamp(norm1,eps) * clamp(norm2,eps)) - eps clamps
@@ -3074,6 +3119,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_pixel_onehot()
     print("ALL PASS")
 
 

@@ -2048,6 +2048,57 @@ def _glu(a, dim=-1):
         return _raise("glu")
     lo, hi = mx.split(f, 2, axis=dim % a.ndim)
     return (lo * mx.sigmoid(hi)).astype(a.dtype)
+
+def _pixel_shuffle(a, upscale_factor):
+    # aten.pixel_shuffle(input, r): (N, C*r*r, H, W) -> (N, C, H*r, W*r)
+    # by moving the r*r channel blocks into the spatial dims.
+    a = _mx(a)
+    if a.ndim < 3 or upscale_factor <= 0:
+        return _raise("pixel_shuffle")
+    r = upscale_factor
+    n = a.shape[-3] // (r * r)
+    if a.shape[-3] != n * r * r:
+        return _raise("pixel_shuffle channels")
+    lead = a.shape[:-3]
+    h, w = a.shape[-2:]
+    x = mx.reshape(a, lead + (n, r, r, h, w))
+    # permute to (..., n, h, r, w, r) — move the two r dims out in order.
+    d = x.ndim
+    order = list(range(d - 5)) + [d - 5, d - 2, d - 4, d - 1, d - 3]
+    x = mx.transpose(x, axes=order)
+    return mx.reshape(x, lead + (n, h * r, w * r))
+
+
+def _pixel_unshuffle(a, downscale_factor):
+    # aten.pixel_unshuffle(input, r): (N, C, H, W) -> (N, C*r*r, H/r, W/r)
+    if a.ndim < 3 or downscale_factor <= 0:
+        return _raise("pixel_unshuffle")
+    r = downscale_factor
+    h, w = a.shape[-2:]
+    if h % r or w % r:
+        return _raise("pixel_unshuffle size")
+    lead = a.shape[:-3]
+    c = a.shape[-3]
+    x = mx.reshape(a, lead + (c, h // r, r, w // r, r))
+    d = x.ndim
+    order = list(range(d - 5)) + [d - 5, d - 3, d - 1, d - 4, d - 2]
+    x = mx.transpose(x, axes=order)
+    return mx.reshape(x, lead + (c * r * r, h // r, w // r))
+
+
+def _one_hot(a, num_classes=-1):
+    # aten.one_hot(self, num_classes=-1): int64 input -> one-hot rows of
+    # num_classes (or max+1 when -1); out-of-range classes stay all-zero.
+    a = _mx(a)
+    if num_classes == -1:
+        if a.size == 0:
+            return _raise("one_hot empty")
+        num_classes = int(np.array(mx.max(a)).item()) + 1
+    if num_classes <= 0:
+        return _raise("one_hot num_classes")
+    return (mx.equal(a[..., None],
+                     mx.arange(num_classes))).astype(mx.int64)
+
 def _frac(a):
     # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
     # NOT x - floor(x) which would give +0.7).
@@ -2376,6 +2427,10 @@ _FUNC_SPECS = {
     "elu": lambda a, alpha=1.0, scale=1.0, input_scale=1.0, inplace=False: scale * mx.where(mx.greater(a, 0), a, alpha * mx.expm1(input_scale * a)),
     "selu": lambda a, inplace=False: 1.0507009873554805 * mx.where(mx.greater(a, 0), a, 1.6732632423543772 * mx.expm1(a)),
     "celu": lambda a, alpha=1.0, inplace=False: mx.where(mx.greater(a, 0), a, alpha * mx.expm1(a / alpha)),
+    # the shape/index extras (Q-64).
+    "pixel_shuffle": _pixel_shuffle,
+    "pixel_unshuffle": _pixel_unshuffle,
+    "one_hot": _one_hot,
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,
