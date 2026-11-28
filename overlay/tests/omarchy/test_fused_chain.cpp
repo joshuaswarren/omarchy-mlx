@@ -2327,7 +2327,7 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   array xv =
       astype(array(xv_float.data(), {1, 64}, float32), bfloat16, stream);
   array vadd =
-      astype(array(vadd_float.data(), {128}, float32)), bfloat16, stream);
+      astype(array(vadd_float.data(), {128}, float32), bfloat16, stream);
   const int64_t norm_pair_a = static_cast<int64_t>(
       omarchy::ComputeKernel::FastRopeNormPairBF16);
   const int64_t norm_pair_b = static_cast<int64_t>(
@@ -2358,6 +2358,17 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   eval({xq, xk, wq, wk, offset, keys_init, values_init, vw, vscales,
         vbiases, xv, vadd});
   sync_stream(stream);
+  // Host copies of the init caches: copy() aliases its input buffer on
+  // this backend (Copy::eval is copy_shared_buffer), so a cache made
+  // from it can never be donatable. Materializing from host data each
+  // arm gives the SliceUpdate edge a sole-held buffer — the kv_ops
+  // window idiom.
+  std::vector<float> keys_host(keys_init.size());
+  std::vector<float> values_host(values_init.size());
+  for (int64_t i = 0; i < keys_init.size(); ++i) {
+    keys_host[i] = static_cast<float>(keys_init.data<bfloat16_t>()[i]);
+    values_host[i] = static_cast<float>(values_init.data<bfloat16_t>()[i]);
+  }
   auto [q_pair, k_pair, n_pair, last_pair] = run_pair("1");
   auto [q_solo, k_solo, n_solo, last_solo] = run_pair("0");
   CHECK_EQ(n_pair, 1);
@@ -2373,8 +2384,10 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
   auto run_window = [&](const char* trio) {
     setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
     setenv("MLX_OMARCHY_FUSED_TRIO", trio, 1);
-    array keys_cache = copy(keys_init, stream);
-    array values_cache = copy(values_init, stream);
+    array keys_cache = astype(
+        array(keys_host.data(), {1, 2, 8, D}, float32), bfloat16, stream);
+    array values_cache = astype(
+        array(values_host.data(), {1, 2, 8, D}, float32), bfloat16, stream);
     eval({keys_cache, values_cache});
     sync_stream(stream);
     const void* keys_before = keys_cache.data<void>();
@@ -2390,6 +2403,12 @@ TEST_CASE("rope norm pair covers unequal heads and the kv window") {
         keys_cache, kr, Shape{0, 0, 3, 0}, Shape{1, 2, 4, D}, stream);
     array values_out = slice_update(
         values_cache, vrow, Shape{0, 0, 3, 0}, Shape{1, 2, 4, D}, stream);
+    // Donation needs the SliceUpdate edge as the cache's last holder
+    // (kv_window_in_place asks is_donatable, which wants the array desc
+    // use count at 1): drop the lambda's own handles the way the kv_ops
+    // window cases do before eval plans the direct write.
+    keys_cache = array(0.0f);
+    values_cache = array(0.0f);
     eval({values_out, keys_out, qr});
     sync_stream(stream);
     return std::make_tuple(
@@ -2435,6 +2454,8 @@ TEST_CASE("rope norm pair picks the narrow build on 128-wide rows") {
   array offset = array(17, int32);
   setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
   setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+  eval({xq, xk, wq, wk, offset});
+  sync_stream(stream);
   array qr = fast::rope_rms_norm(
       xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
   array kr = fast::rope_rms_norm(
