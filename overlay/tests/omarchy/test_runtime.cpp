@@ -859,12 +859,21 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // 80000 keeps one decode step in one submit (decode p50 10.61 ms) while
   // holding all-submissions (incl. ctx=2048 prefill) at p99 32.05 ms / max
   // 32.09 ms (under 33.3 ms; 200000 reached 63.72 ms).
-  // The 13-inch M1 takes 20000 under the tail rule of the G13S/G14G/G17P
-  // rows (receipts/2026-11-21-g13g-batch-work-20000): Qwen3-4B submission
-  // p99 24.1 ms (40000 reached 45.5 ms), decode +4.0% (2B) and +1.3% (4B)
-  // against 8000, tokens identical.
+  // The 13-inch M1 (G13G) takes 35000
+  // (receipts/2026-11-27-g13g-batch-work-35000.md): 20000 split every
+  // Qwen3.8-2B decode token across 2 submits; 35000 keeps 2B@512 and
+  // 2B@2048 decode in 1 submit/tok while holding Qwen3-4B decode p99
+  // at 20.58 ms (ctx=512) and 23.05 ms (ctx=2048), well under 33 ms,
+  // with bit-identical greedy ids.
   CHECK(omarchy::calibrated_batch_work("Apple M1 Max (G13C)") == 80000);
-  CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 20000);
+  CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G B1)") == 35000);
+  CHECK(omarchy::calibrated_batch_work("Apple M1 (G13G)") == 35000);
+  CHECK(omarchy::calibrated_prefill_batch_work("Apple M1 (G13G B1)") == 20000);
+  CHECK(omarchy::calibrated_prefill_batch_work("Apple M1 (G13G)") == 20000);
+  // Boards without a separate prefill cap reuse their decode budget.
+  CHECK(omarchy::calibrated_prefill_batch_work("Apple M1 Max (G13C)") == 80000);
+  CHECK(omarchy::calibrated_prefill_batch_work("Apple M2 Max (G14C)") == 200000);
+  CHECK(omarchy::calibrated_prefill_batch_work("llvmpipe (LLVM 19.1.0, 256 bits)") == 0);
 
   // receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p (tail/ rework): the
   // largest swept budget that keeps the Qwen3-4B submission p50 at or under
@@ -948,6 +957,9 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
                            : row.board == "G18G" ? UINT64_MAX
                                                  : 40000));
     }
+    if (row.prefill_budget > 0) {
+      CHECK(row.prefill_budget <= row.budget);
+    }
   }
 }
 
@@ -982,19 +994,43 @@ TEST_CASE("work budget resolves per device name, not per process") {
   // budgets however many devices ran before them: the first caller must
   // not pin the value for the process (issue 207).
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 80000);
-  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 20000);
+  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 35000);
   CHECK(omarchy::batch_work_budget("Apple M6 (G18G B1)") == UINT64_MAX);
   CHECK(omarchy::batch_work_budget("Apple M3 Pro (G15S B1)") == 15000);
   CHECK(omarchy::batch_work_budget("Apple M4 Pro (G16S B1)") == 15000);
 
   // A third name between repeats: a one-entry cache that returns its
   // stored value without re-keying on the name would surface a stale
-  // 80000 or 20000 here.
+  // 80000 or 35000 here.
   CHECK(omarchy::batch_work_budget("Apple M2 Max (G14C)") == 200000);
 
   // A repeat call for the same name resolves to the same value.
   CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)") == 80000);
-  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 20000);
+  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)") == 35000);
+
+  // G13G applies its tighter 20000 prefill cap once a batch records a prefill
+  // kernel, while keeping 35000 for single-submit decode and leaving sibling
+  // boards unchanged.
+  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)", false) == 35000);
+  CHECK(omarchy::batch_work_budget("Apple M1 (G13G B1)", true) == 20000);
+  CHECK(omarchy::batch_work_budget("Apple M1 Max (G13C)", true) == 80000);
+  CHECK(omarchy::batch_work_budget("llvmpipe (LLVM 19.1.0, 256 bits)", true) == 5000);
+
+  // Prefill kernel classifier separates multi-token prefill/tiled-matrix
+  // kernels from 1-token decode kernels.
+  CHECK(omarchy::is_prefill_work_kernel_name("QmmPrefillCoopmatBF16X32FullN"));
+  CHECK(omarchy::is_prefill_work_kernel_name("QmmPrefillFmaF16"));
+  CHECK(omarchy::is_prefill_work_kernel_name("SdpaCausalFlashCoopmatBF16"));
+  CHECK(omarchy::is_prefill_work_kernel_name("GatedDeltaPrefillCoopmatBF16"));
+  CHECK(omarchy::is_prefill_work_kernel_name("QmmBF16"));
+  CHECK(omarchy::is_prefill_work_kernel_name("MatmulBF16Coopmat"));
+  CHECK(omarchy::is_prefill_work_kernel_name("MatmulDirectF16Nn"));
+  CHECK_FALSE(omarchy::is_prefill_work_kernel_name("QmmVecQ4WordSubgroupBF16"));
+  CHECK_FALSE(omarchy::is_prefill_work_kernel_name("QmmVecGreedyWordBF16"));
+  CHECK_FALSE(omarchy::is_prefill_work_kernel_name("SdpaDecodeOnlineRopeSg32BF16Hd128G13C"));
+  CHECK_FALSE(omarchy::is_prefill_work_kernel_name("GatedDeltaDecodeConvNormBF16Sg32"));
+  CHECK_FALSE(omarchy::is_prefill_work_kernel_name("MatmulVecBF16"));
+  CHECK_FALSE(omarchy::is_prefill_work_kernel_name("FastRmsNormBF16"));
 
   // An unknown board keeps the conservative fallback, again per call.
   CHECK(omarchy::batch_work_budget("llvmpipe (LLVM 19.1.0, 256 bits)") == 5000);

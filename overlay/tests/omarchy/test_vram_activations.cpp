@@ -127,6 +127,7 @@ int main() {
       "G13G Apple default moves from 2x16 to 2x8w2");
   QmmWideCaps wg256{32u, VK_SUBGROUP_FEATURE_ARITHMETIC_BIT, 256u, 256u};
   QmmWideCaps sg64{64u, VK_SUBGROUP_FEATURE_ARITHMETIC_BIT, 1024u, 1024u};
+  QmmWideCaps sg64p{64u, VK_SUBGROUP_FEATURE_ARITHMETIC_BIT, 1024u, 1024u, true};
 
   fails += check(
       select_qmm_2x8w2("Apple M1 Max (G13C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false),
@@ -160,7 +161,13 @@ int main() {
       "discrete GPU without VRAM activations does not select 2x8w2");
   fails += check(
       !select_qmm_2x8w2("AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, sg64, true),
-      "subgroup-64 device does not select the 32-lane 2x8w2 kernels");
+      "subgroup-64 device without the 32-pin does not select 2x8w2");
+  fails += check(
+      select_qmm_2x8w2("AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, sg64p, true),
+      "subgroup-64 device with the 32-pin admitted selects 2x8w2");
+  fails += check(
+      select_qmm_wide_2x16("AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, sg64p, true),
+      "subgroup-64 device with the 32-pin admitted selects 2x16");
   fails += check(
       !select_qmm_2x8w2("NVIDIA GeForce RTX 5060 Ti", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, no_arith, true),
       "refuses 2x8w2 without subgroup arithmetic");
@@ -188,6 +195,7 @@ int main() {
         {"RTX 5060 Ti", "NVIDIA GeForce RTX 5060 Ti", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, rtx_caps, true, "2x8w2"},
         {"RX 9070 wg256", "AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, wg256, true, "2x8w2"},
         {"RX 9070 sg64", "AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, sg64, true, "2x4"},
+        {"RX 9070 sg64 pinned", "AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, sg64p, true, "2x8w2"},
         {"Apple G13G", "Apple M1 (G13G B1)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x8w2"},
         {"Apple G13C", "Apple M1 Max (G13C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x8w2"},
         {"Apple G14C", "Apple M2 Max (G14C C0)", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, rtx_caps, false, "2x8w2"},

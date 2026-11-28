@@ -1095,6 +1095,37 @@ bool Runtime::init_impl() {
             p13.maxComputeWorkgroupSubgroups,
             32u,
             128u);
+    // Wide 32-lane admission (DEC-18): the QMV decode and Apple-norm
+    // kernels run up to 512-lane workgroups, so the pin check uses the
+    // family's largest bound (VUID-02757).
+    info.caps.subgroup_size_32_wide_admitted =
+        info.caps.required_subgroup_size != 0 &&
+        subgroup_size_admitted(
+            f13.subgroupSizeControl == VK_TRUE,
+            p13.requiredSubgroupSizeStages,
+            p13.minSubgroupSize,
+            p13.maxSubgroupSize,
+            p13.maxComputeWorkgroupSubgroups,
+            32u,
+            512u);
+    // Workgroup-size-general 32-pin admission (DEC-45): the largest
+    // workgroup a requiredSubgroupSize = 32 pipeline may launch, so
+    // gates can admit the pin for the exact lane count each 32-lane
+    // kernel was built for instead of hardcoding one size.
+    info.caps.subgroup_size_32_admitted_max_wg =
+        info.caps.required_subgroup_size != 0 &&
+                subgroup_size_admitted(
+                    f13.subgroupSizeControl == VK_TRUE,
+                    p13.requiredSubgroupSizeStages,
+                    p13.minSubgroupSize,
+                    p13.maxSubgroupSize,
+                    p13.maxComputeWorkgroupSubgroups,
+                    32u,
+                    32u)
+            ? static_cast<uint32_t>(std::min<uint64_t>(
+                  32ull * p13.maxComputeWorkgroupSubgroups,
+                  info.caps.max_compute_work_group_invocations))
+            : 0u;
     // 64-lane admission: the one-subgroup 16x16x16 coopmat builds run a
     // 64-wide wave, so a device whose native subgroup is narrower needs a
     // legal requiredSubgroupSize = 64 pin for the whole workgroup.
@@ -1925,7 +1956,9 @@ Device::Device(uint32_t physical_device_index) {
       hardware_caps_.required_subgroup_size,
       hardware_caps_.subgroup_size_16_admitted,
       hardware_caps_.subgroup_size_32_admitted,
-      hardware_caps_.subgroup_size_64_admitted);
+      hardware_caps_.subgroup_size_64_admitted,
+      hardware_caps_.subgroup_size_32_wide_admitted,
+      hardware_caps_.subgroup_size_32_admitted_max_wg);
   completions_ = std::make_unique<CompletionDispatcher>(device_, this);
 }
 

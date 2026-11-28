@@ -17,40 +17,456 @@ unit tests inject a scripted session instead.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import math
+import os
+import secrets
+import stat
+import sys
 from pathlib import Path
 
 SAMPLE_RATE = 16000
 MIN_SECONDS = 2.0  # pad short clips so the detector sees streaming context
+MAX_CORPUS_LIST_BYTES = 16 << 20  # 16 MiB: >100k clip paths
+MAX_MANIFEST_BYTES = 16 << 20  # 16 MiB: >100k manifest entries
+MAX_CLIP_BYTES = 256 << 20  # 256 MiB: >2.3 h of 16 kHz mono int16 PCM
+MAX_PCM_BYTES = MAX_CLIP_BYTES
+# 512 MiB float64 cap per resampling array (~23 min at 48 kHz, ~50 min at 22.05 kHz).
+MAX_RESAMPLE_WORK_BYTES = 512 << 20
+MAX_CHANNELS = 64
+MAX_RESAMPLE_FACTOR = 4096  # caps scipy resample_poly FIR filter length (<1 MiB)
+MAX_JSON_DEPTH = 32
+_READ_CHUNK = 1 << 20
+_WAV_CHUNK_FRAMES = 65536
+_MAX_WAV_CHUNKS = 1024
+_VALID_LABELS = frozenset({"positive", "negative"})
+_DONE = object()
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+
+
+class WakeEvalError(ValueError):
+    """Refused input or output path in wake-word evaluation."""
+
+
+@contextlib.contextmanager
+def _open_regular(path: Path | str, *, max_bytes: int, buffering: int = -1):
+    """Open a regular file non-blockingly and verify S_ISREG and st_size <= max_bytes.
+
+    Follows symlinks on readable CLI inputs (consistent with sibling loaders
+    such as mlx_omarchy_laya.jsonfile) so symlinked dataset manifests and clips
+    load; a symlink to a FIFO, device, or directory is still refused after fstat.
+    """
+    path = Path(path)
+    try:
+        fd = os.open(path, os.O_RDONLY | _O_NONBLOCK | _O_CLOEXEC)
+    except (OSError, ValueError) as exc:
+        detail = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+        raise WakeEvalError(f"cannot read {path}: {detail}") from exc
+    try:
+        try:
+            st = os.fstat(fd)
+        except OSError as exc:
+            raise WakeEvalError(f"cannot read {path}: {exc.strerror or exc}") from exc
+        if not stat.S_ISREG(st.st_mode):
+            raise WakeEvalError(f"refusing non-regular file: {path}")
+        if st.st_size > max_bytes:
+            raise WakeEvalError(f"file exceeds {max_bytes} bytes: {path}")
+        fh = os.fdopen(fd, "rb", buffering=buffering)
+    except BaseException:
+        os.close(fd)
+        raise
+    with fh:
+        yield fh, st
+
+
+def _read_bounded_chunks(stream, path: Path, max_bytes: int) -> bytes:
+    """Read at most max_bytes + 1 bytes from stream in chunks."""
+    parts: list[bytes] = []
+    total = 0
+    limit = max_bytes + 1
+    while total < limit:
+        want = min(_READ_CHUNK, limit - total)
+        try:
+            chunk = stream.read(want)
+        except OSError as exc:
+            raise WakeEvalError(f"cannot read {path}: {exc.strerror or exc}") from exc
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise WakeEvalError(f"file exceeds {max_bytes} bytes: {path}")
+        parts.append(chunk)
+    return b"".join(parts)
+
+
+def _read_regular_bytes(path: Path, max_bytes: int) -> bytes:
+    """Read a regular file up to max_bytes without blocking on FIFOs."""
+    path = Path(path)
+    with _open_regular(path, max_bytes=max_bytes, buffering=0) as (stream, _st):
+        return _read_bounded_chunks(stream, path, max_bytes)
+
+
+def _read_regular_text(path: Path, max_bytes: int) -> str:
+    """Read a UTF-8 regular file up to max_bytes."""
+    raw = _read_regular_bytes(path, max_bytes)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise WakeEvalError(f"{path} is not valid UTF-8: {exc}") from exc
+
+
+def _check_json_depth(value: object, what: str,
+                      max_depth: int = MAX_JSON_DEPTH) -> None:
+    """Reject JSON containers nested deeper than max_depth in O(max_depth) space."""
+    if not isinstance(value, (dict, list)):
+        return
+    if max_depth < 1:
+        raise WakeEvalError(f"{what} nests deeper than {max_depth} levels")
+    stack = [iter(value.values() if isinstance(value, dict) else value)]
+    while stack:
+        child = next(stack[-1], _DONE)
+        if child is _DONE:
+            stack.pop()
+            continue
+        if isinstance(child, (dict, list)):
+            if len(stack) + 1 > max_depth:
+                raise WakeEvalError(f"{what} nests deeper than {max_depth} levels")
+            stack.append(iter(child.values() if isinstance(child, dict) else child))
+
+
+def _validate_manifest(data: object, what: str) -> list[dict]:
+    """Verify manifest top-level list and per-entry file/label structure."""
+    if not isinstance(data, list):
+        raise WakeEvalError(f"{what} must be a JSON list")
+    for index, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise WakeEvalError(f"{what} entry {index} must be a JSON object")
+        clip_file = entry.get("file")
+        if (not isinstance(clip_file, str) or not clip_file.strip()
+                or "\x00" in clip_file):
+            raise WakeEvalError(
+                f"{what} entry {index} must have a non-empty string 'file'"
+            )
+        try:
+            os.fsencode(clip_file)
+        except UnicodeEncodeError as exc:
+            raise WakeEvalError(
+                f"{what} entry {index} has unencodable 'file': {exc}"
+            ) from exc
+        label = entry.get("label")
+        if not isinstance(label, str) or label not in _VALID_LABELS:
+            raise WakeEvalError(
+                f"{what} entry {index} must have 'label' in ('positive', 'negative')"
+            )
+    return data
+
+
+def load_manifest(path: Path) -> list[dict]:
+    """Read, depth-check, and validate a wake-eval JSON clip manifest."""
+    path = Path(path)
+    what = f"manifest {path}"
+    text = _read_regular_text(path, MAX_MANIFEST_BYTES)
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError) as exc:
+        raise WakeEvalError(f"{what} unreadable: {exc}") from exc
+    _check_json_depth(data, what)
+    return _validate_manifest(data, what)
+
+
+def load_corpus_list(path: Path) -> list[Path]:
+    """Read a newline-delimited audio path list from a bounded regular file."""
+    path = Path(path)
+    text = _read_regular_text(path, MAX_CORPUS_LIST_BYTES)
+    if "\x00" in text:
+        raise WakeEvalError(f"corpus list contains NUL byte: {path}")
+    paths: list[Path] = []
+    for line in text.splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        try:
+            os.fsencode(item)
+        except UnicodeEncodeError as exc:
+            raise WakeEvalError(
+                f"corpus list contains unencodable path: {exc}"
+            ) from exc
+        paths.append(Path(item))
+    return paths
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    """Write text to path via a unique sibling temp file inside dir_fd.
+
+    Threat model:
+    - Closed: a planted symlink at path is replaced rather than followed; a
+      pre-existing file or symlink at the temp name is refused (O_EXCL |
+      O_NOFOLLOW); failed or interrupted writes (including close errors)
+      never leave a partial output and remove only the temp file this call
+      created; the parent directory is pinned with dir_fd across open,
+      replace, and error cleanup; the created file is verified via fstat to
+      be owned by the current user and not writable by group/other (allowing
+      vfat-style fmask=0022 mounts).
+    - Non-goal: defending against a hostile co-writer who already has write
+      permission on path's parent directory (who can replace or unlink path
+      directly after os.replace regardless of staging).
+    """
+    path = Path(path)
+    name = path.name
+    if not name or name in (".", "..") or "\x00" in name:
+        raise WakeEvalError(f"invalid output path: {path}")
+    parent = path.parent
+    try:
+        dir_fd = os.open(parent, os.O_RDONLY | _O_DIRECTORY | _O_CLOEXEC)
+    except (OSError, ValueError) as exc:
+        detail = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+        raise WakeEvalError(
+            f"cannot open output directory {parent}: {detail}"
+        ) from exc
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC
+    euid = os.geteuid()
+    fd: int | None = None
+    tmp_name: str | None = None
+    try:
+        for _ in range(16):
+            candidate = f".wake_eval.{secrets.token_hex(8)}.tmp"
+            try:
+                fd = os.open(candidate, flags, 0o600, dir_fd=dir_fd)
+            except FileExistsError:
+                continue
+            except (OSError, ValueError) as exc:
+                detail = (
+                    exc.strerror
+                    if isinstance(exc, OSError) and exc.strerror
+                    else exc
+                )
+                raise WakeEvalError(
+                    f"cannot create temp output for {path}: {detail}"
+                ) from exc
+            tmp_name = candidate
+            break
+        if fd is None or tmp_name is None:
+            raise WakeEvalError(f"cannot create unique temp output for {path}")
+        try:
+            try:
+                file_st = os.fstat(fd)
+                if file_st.st_uid != euid or (file_st.st_mode & 0o022) != 0:
+                    raise WakeEvalError(
+                        f"staged output file for {path} is writable by others "
+                        f"or not owned by current user"
+                    )
+                fh = os.fdopen(fd, "w", encoding="utf-8")
+            except BaseException:
+                os.close(fd)
+                raise
+            with fh:
+                fh.write(text)
+                fh.flush()
+            # fh is closed cleanly before publication so delayed close errors
+            # abort without replacing an existing output file.
+            os.replace(tmp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException as exc:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name, dir_fd=dir_fd)
+            if isinstance(exc, OSError):
+                raise WakeEvalError(
+                    f"cannot write {path}: {exc.strerror or exc}"
+                ) from exc
+            raise
+    finally:
+        os.close(dir_fd)
+
+
+def _check_resample_rate(sr: object, path: Path) -> int:
+    if isinstance(sr, bool) or not isinstance(sr, int) or sr <= 0:
+        raise WakeEvalError(f"invalid sample rate {sr!r} in {path}")
+    if sr != SAMPLE_RATE:
+        g = math.gcd(SAMPLE_RATE, sr)
+        if max(SAMPLE_RATE // g, sr // g) > MAX_RESAMPLE_FACTOR:
+            raise WakeEvalError(
+                f"unsupported resample ratio for sample rate {sr} in {path}"
+            )
+    return sr
+
+
+def _check_resample_budget(frames: int, channels: int, sr: int, path: Path) -> None:
+    """Validate decoded int16 PCM and float64 resampling working-memory budgets."""
+    if frames * channels * 2 > MAX_PCM_BYTES:
+        raise WakeEvalError(
+            f"audio clip decoded PCM exceeds {MAX_PCM_BYTES} bytes: {path}"
+        )
+    est_out_frames = (frames * SAMPLE_RATE + sr - 1) // sr
+    if est_out_frames * 2 > MAX_PCM_BYTES:
+        raise WakeEvalError(
+            f"resampled audio exceeds {MAX_PCM_BYTES} bytes: {path}"
+        )
+    if sr != SAMPLE_RATE:
+        if (frames * 8 > MAX_RESAMPLE_WORK_BYTES
+                or est_out_frames * 8 > MAX_RESAMPLE_WORK_BYTES):
+            raise WakeEvalError(
+                f"audio clip resampling workspace exceeds "
+                f"{MAX_RESAMPLE_WORK_BYTES} bytes: {path}"
+            )
+
+
+def _float_to_int16_pcm(mono) -> bytes:
+    """Convert scaled float64 mono samples to little-endian int16 PCM in chunks."""
+    import numpy as np
+    if len(mono) == 0:
+        return b""
+    out = bytearray(len(mono) * 2)
+    for off in range(0, len(mono), _WAV_CHUNK_FRAMES):
+        chunk = mono[off:off + _WAV_CHUNK_FRAMES]
+        end = off + len(chunk)
+        out[off * 2:end * 2] = np.clip(np.rint(chunk), -32768, 32767).astype("<i2").tobytes()
+    return bytes(out)
+
+
+def _wav_data_chunk_size(fh, path: Path) -> int | None:
+    """Return the declared byte length of a RIFF/WAVE 'data' chunk, or None."""
+    fh.seek(0)
+    head = fh.read(12)
+    if len(head) < 12 or head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+        return None
+    for _ in range(_MAX_WAV_CHUNKS):
+        chunk_hdr = fh.read(8)
+        if len(chunk_hdr) < 8:
+            return None
+        chunk_id = chunk_hdr[:4]
+        chunk_size = int.from_bytes(chunk_hdr[4:8], "little")
+        if chunk_id == b"data":
+            return chunk_size
+        fh.seek(chunk_size + (chunk_size & 1), os.SEEK_CUR)
+    raise WakeEvalError(
+        f"WAV header exceeds {_MAX_WAV_CHUNKS} chunks before data in {path}"
+    )
+
+
+def _read_wav_pcm(handle, path: Path, *, frame_size: int,
+                  expected_frames: int) -> bytes:
+    """Read native PCM frames from an open wave handle under MAX_PCM_BYTES."""
+    import wave
+    expected_bytes = expected_frames * frame_size
+    if expected_bytes > MAX_PCM_BYTES:
+        raise WakeEvalError(
+            f"audio clip decoded PCM exceeds {MAX_PCM_BYTES} bytes: {path}"
+        )
+    buf = bytearray()
+    total = 0
+    remaining_frames = expected_frames
+    while remaining_frames > 0:
+        want = min(_WAV_CHUNK_FRAMES, remaining_frames)
+        try:
+            chunk = handle.readframes(want)
+        except (OSError, wave.Error, EOFError, RuntimeError) as exc:
+            raise WakeEvalError(f"cannot read WAV frames from {path}: {exc}") from exc
+        if not chunk:
+            break
+        next_total = total + len(chunk)
+        if next_total > MAX_PCM_BYTES:
+            raise WakeEvalError(
+                f"audio clip decoded PCM exceeds {MAX_PCM_BYTES} bytes: {path}"
+            )
+        if next_total > expected_bytes:
+            raise WakeEvalError(
+                f"WAV data exceeds declared frame count in {path}: "
+                f"expected {expected_bytes} bytes, got {next_total}"
+            )
+        if len(chunk) % frame_size != 0:
+            raise WakeEvalError(
+                f"truncated WAV data in {path}: unaligned frame chunk"
+            )
+        buf.extend(chunk)
+        total = next_total
+        remaining_frames -= len(chunk) // frame_size
+    if total != expected_bytes:
+        raise WakeEvalError(
+            f"truncated WAV data in {path}: expected {expected_bytes} bytes, got {total}"
+        )
+    return bytes(buf)
 
 
 def load_pcm(path: Path) -> bytes:
     """Read a clip as 16 kHz mono int16 PCM, padded to MIN_SECONDS.
 
-    16 kHz mono WAV comes through the stdlib wave module, so the tests
-    need nothing beyond numpy. Anything else (other rates, FLAC) goes
-    through soundfile, and the generator's espeak output is 22.05 kHz.
+    16 kHz mono WAV comes through the stdlib wave module on the already-open
+    regular-file descriptor (no path-swap TOCTOU), so the tests need nothing
+    beyond numpy. Anything else (other rates, FLAC) rewinds the same descriptor
+    and decodes through soundfile (when SoundFile is available, keeping the
+    single descriptor with no path reopen), and the generator's espeak output
+    is 22.05 kHz.
     """
     import wave
-    try:
-        with wave.open(str(path), "rb") as handle:
-            native = (handle.getnchannels() == 1
-                      and handle.getsampwidth() == 2
-                      and handle.getframerate() == SAMPLE_RATE)
-            if native:
-                pcm = handle.readframes(handle.getnframes())
-            else:
-                pcm = _resample_to_16k(path)
-    except wave.Error:
-        pcm = _resample_to_16k(path)
+    path = Path(path)
+    with _open_regular(path, max_bytes=MAX_CLIP_BYTES) as (fh, st):
+        resample = False
+        try:
+            data_chunk_size = _wav_data_chunk_size(fh, path)
+            fh.seek(0)
+            with wave.open(fh, "rb") as handle:
+                nchannels = handle.getnchannels()
+                sampwidth = handle.getsampwidth()
+                framerate = handle.getframerate()
+                nframes = handle.getnframes()
+                if (nchannels <= 0 or nchannels > MAX_CHANNELS or sampwidth <= 0
+                        or framerate <= 0 or nframes < 0):
+                    raise WakeEvalError(f"invalid WAV header in {path}")
+                frame_size = nchannels * sampwidth
+                expected_bytes = nframes * frame_size
+                if expected_bytes > MAX_PCM_BYTES:
+                    raise WakeEvalError(
+                        f"audio clip decoded PCM exceeds {MAX_PCM_BYTES} bytes: {path}"
+                    )
+                native = (
+                    nchannels == 1
+                    and sampwidth == 2
+                    and framerate == SAMPLE_RATE
+                )
+                if native:
+                    if (data_chunk_size is not None
+                            and data_chunk_size % frame_size != 0):
+                        raise WakeEvalError(
+                            f"misaligned WAV data chunk in {path}: "
+                            f"{data_chunk_size} bytes is not a multiple of {frame_size}"
+                        )
+                    if st.st_size > 0 and expected_bytes > st.st_size:
+                        raise WakeEvalError(
+                            f"truncated WAV data in {path}: declared {expected_bytes} "
+                            f"bytes exceeds file size {st.st_size}"
+                        )
+                    pcm = _read_wav_pcm(
+                        handle, path, frame_size=2, expected_frames=nframes
+                    )
+                else:
+                    sr = _check_resample_rate(framerate, path)
+                    _check_resample_budget(nframes, nchannels, sr, path)
+                    resample = True
+        except wave.Error:
+            resample = True
+        except (EOFError, OSError, RuntimeError) as exc:
+            raise WakeEvalError(
+                f"truncated or unreadable audio file: {path}"
+            ) from exc
+        if resample:
+            try:
+                fh.seek(0)
+            except OSError as exc:
+                raise WakeEvalError(
+                    f"cannot rewind audio file {path}: {exc.strerror or exc}"
+                ) from exc
+            pcm = _resample_stream(fh, path)
     need = int(MIN_SECONDS * SAMPLE_RATE) * 2  # bytes
     if len(pcm) < need:
         pcm = pcm + bytes(need - len(pcm))
     return pcm
 
 
-def _resample_to_16k(path: Path) -> bytes:
-    """Return 16 kHz mono little-endian int16 PCM, channels averaged.
+def _resample_stream(fh, path: Path) -> bytes:
+    """Decode and resample an already-opened audio stream to 16 kHz mono int16.
 
     Read as float: soundfile returns float sources unscaled when asked
     for int16, so 0.5 would read as 0. The clip catches resampler
@@ -58,12 +474,122 @@ def _resample_to_16k(path: Path) -> bytes:
     """
     import numpy as np
     import soundfile as sf
-    data, sr = sf.read(path, dtype="float64", always_2d=True)
-    data = data.mean(axis=1) * 32768.0
-    if sr != SAMPLE_RATE:
-        import scipy.signal as sig
-        data = sig.resample_poly(data, SAMPLE_RATE, sr)
-    return np.clip(np.rint(data), -32768, 32767).astype("<i2").tobytes()
+    if hasattr(sf, "SoundFile"):
+        try:
+            with sf.SoundFile(fh) as audio:
+                channels = audio.channels
+                sr = _check_resample_rate(audio.samplerate, path)
+                frames = audio.frames
+                if (isinstance(channels, bool) or not isinstance(channels, int)
+                        or channels <= 0 or channels > MAX_CHANNELS):
+                    raise WakeEvalError(f"invalid channel count {channels!r} in {path}")
+                if isinstance(frames, bool) or not isinstance(frames, int) or frames < 0:
+                    raise WakeEvalError(f"invalid frame count {frames!r} in {path}")
+                _check_resample_budget(frames, channels, sr, path)
+                block_frames = max(
+                    1, min(_WAV_CHUNK_FRAMES, _READ_CHUNK // (channels * 8))
+                )
+                if sr == SAMPLE_RATE:
+                    pcm_buf = bytearray()
+                    total_frames = 0
+                    while True:
+                        block = audio.read(
+                            frames=block_frames, dtype="float64", always_2d=True
+                        )
+                        if len(block) == 0:
+                            break
+                        total_frames += len(block)
+                        _check_resample_budget(total_frames, channels, sr, path)
+                        pcm_buf.extend(
+                            np.clip(
+                                np.rint(block.mean(axis=1) * 32768.0),
+                                -32768,
+                                32767,
+                            ).astype("<i2").tobytes()
+                        )
+                    pcm = bytes(pcm_buf)
+                else:
+                    # Single contiguous float64 buffer avoids holding both a chunk
+                    # list and a concatenated copy across resample_poly.
+                    max_in_frames = min(
+                        MAX_PCM_BYTES // (channels * 2),
+                        MAX_RESAMPLE_WORK_BYTES // 8,
+                    )
+                    init_frames = min(frames, block_frames * 16)
+                    mono = np.empty(init_frames, dtype=np.float64)
+                    total_frames = 0
+                    while True:
+                        block = audio.read(
+                            frames=block_frames, dtype="float64", always_2d=True
+                        )
+                        n = len(block)
+                        if n == 0:
+                            break
+                        next_total = total_frames + n
+                        _check_resample_budget(next_total, channels, sr, path)
+                        if next_total > len(mono):
+                            new_cap = min(
+                                max_in_frames,
+                                max(next_total, len(mono) * 2, block_frames),
+                            )
+                            mono.resize(new_cap, refcheck=False)
+                        mono[total_frames:next_total] = block.mean(axis=1) * 32768.0
+                        total_frames = next_total
+                    mono = mono[:total_frames]
+        except WakeEvalError:
+            raise
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise WakeEvalError(f"cannot decode audio file {path}: {exc}") from exc
+        if sr != SAMPLE_RATE:
+            if len(mono) > 0:
+                import scipy.signal as sig
+                mono = sig.resample_poly(mono, SAMPLE_RATE, sr)
+            pcm = _float_to_int16_pcm(mono)
+    else:
+        # Compatibility path only for minimal test doubles that expose sf.read(path)
+        # without sf.SoundFile(fh); production soundfile always uses the SoundFile(fh)
+        # branch above and never reopens by path.
+        if hasattr(sf, "info"):
+            try:
+                info = sf.info(path)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise WakeEvalError(
+                    f"cannot inspect audio file {path}: {exc}"
+                ) from exc
+            frames = getattr(info, "frames", 0)
+            channels = getattr(info, "channels", 1)
+            sr = _check_resample_rate(getattr(info, "samplerate", 0), path)
+            if (isinstance(channels, bool) or not isinstance(channels, int)
+                    or channels <= 0 or channels > MAX_CHANNELS):
+                raise WakeEvalError(f"invalid channel count {channels!r} in {path}")
+            if isinstance(frames, bool) or not isinstance(frames, int) or frames < 0:
+                raise WakeEvalError(f"invalid frame count {frames!r} in {path}")
+            _check_resample_budget(frames, channels, sr, path)
+        try:
+            data, sr_raw = sf.read(path, dtype="float64", always_2d=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise WakeEvalError(f"cannot decode audio file {path}: {exc}") from exc
+        sr = _check_resample_rate(sr_raw, path)
+        if data.ndim != 2 or data.shape[1] <= 0 or data.shape[1] > MAX_CHANNELS:
+            raise WakeEvalError(f"invalid audio shape {data.shape!r} in {path}")
+        _check_resample_budget(len(data), data.shape[1], sr, path)
+        mono = data.mean(axis=1) * 32768.0
+        if sr != SAMPLE_RATE and len(mono) > 0:
+            import scipy.signal as sig
+            mono = sig.resample_poly(mono, SAMPLE_RATE, sr)
+        pcm = _float_to_int16_pcm(mono)
+    if len(pcm) > MAX_PCM_BYTES:
+        raise WakeEvalError(
+            f"resampled audio exceeds {MAX_PCM_BYTES} bytes: {path}"
+        )
+    return pcm
+
+
+def _resample_to_16k(path: Path) -> bytes:
+    """Return 16 kHz mono little-endian int16 PCM, channels averaged."""
+    path = Path(path)
+    with _open_regular(path, max_bytes=MAX_CLIP_BYTES) as (fh, _st):
+        return _resample_stream(fh, path)
 
 
 def make_detector(model_path: str, threshold: float, vad_rms_floor: float):
@@ -297,6 +823,10 @@ def corpus_sweep(files: list[Path], model_path: str, thresholds: list[float],
             for t in thresholds for f in floors]
 
 
+def _fmt_metric(value: float | None, width: int) -> str:
+    return f"{'n/a' if value is None else value:>{width}}"
+
+
 def main(argv: list[str] | None = None, session=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path,
@@ -319,33 +849,49 @@ def main(argv: list[str] | None = None, session=None) -> int:
                              "non-wake audio, counting wakes per hour")
     args = parser.parse_args(argv)
 
-    thresholds = [float(t) for t in args.thresholds.split(",")]
-    floors = [float(f) for f in args.floors.split(",")]
+    try:
+        thresholds = [float(t) for t in args.thresholds.split(",")]
+        floors = [float(f) for f in args.floors.split(",")]
+    except ValueError as exc:
+        print(f"wake_eval: invalid numeric argument: {exc}", file=sys.stderr)
+        return 1
     curves = []
-    if args.mode == "corpus":
-        if args.corpus_list:
-            files = [Path(line.strip()) for line in
-                     args.corpus_list.read_text().splitlines() if line.strip()]
-        elif args.corpus_dir:
-            files = sorted(p for p in args.corpus_dir.iterdir()
-                           if p.suffix.lower() in (".wav", ".flac"))
+    try:
+        if args.mode == "corpus":
+            if args.corpus_list:
+                files = load_corpus_list(args.corpus_list)
+            elif args.corpus_dir:
+                try:
+                    files = sorted(
+                        p for p in args.corpus_dir.iterdir()
+                        if p.suffix.lower() in (".wav", ".flac")
+                    )
+                except OSError as exc:
+                    raise WakeEvalError(
+                        f"cannot read corpus directory {args.corpus_dir}: "
+                        f"{exc.strerror or exc}"
+                    ) from exc
+            else:
+                parser.error("--mode corpus needs --corpus-dir or --corpus-list")
+            rows = corpus_sweep(files, args.model, thresholds, floors,
+                                session=session)
         else:
-            parser.error("--mode corpus needs --corpus-dir or --corpus-list")
-        rows = corpus_sweep(files, args.model, thresholds, floors,
-                            session=session)
-    else:
-        if not args.manifest or not args.clips_dir:
-            parser.error(f"--mode {args.mode} needs --manifest and --clips-dir")
-        manifest = json.loads(args.manifest.read_text())
-        if args.mode == "direct":
-            rows = direct_sweep(manifest, args.clips_dir, args.model,
-                                thresholds, floors, session=session)
-        else:
-            curves = build_curves(manifest, args.clips_dir, args.model,
-                                  session=session)
-            rows = sweep(curves, thresholds, floors)
-    args.out.write_text(json.dumps(
-        {"rows": rows, "curves": curves}, indent=1) + "\n")
+            if not args.manifest or not args.clips_dir:
+                parser.error(f"--mode {args.mode} needs --manifest and --clips-dir")
+            manifest = load_manifest(args.manifest)
+            if args.mode == "direct":
+                rows = direct_sweep(manifest, args.clips_dir, args.model,
+                                    thresholds, floors, session=session)
+            else:
+                curves = build_curves(manifest, args.clips_dir, args.model,
+                                      session=session)
+                rows = sweep(curves, thresholds, floors)
+        _write_text_atomic(
+            args.out, json.dumps({"rows": rows, "curves": curves}, indent=1) + "\n"
+        )
+    except WakeEvalError as exc:
+        print(f"wake_eval: {exc}", file=sys.stderr)
+        return 1
     print(f"mode={args.mode}")
     if args.mode == "corpus":
         print(f"{'threshold':>9} {'vad_floor':>9} {'files':>6} {'hours':>8} "
@@ -353,12 +899,12 @@ def main(argv: list[str] | None = None, session=None) -> int:
         for row in rows:
             print(f"{row['threshold']:>9} {row['vad_rms_floor']:>9} "
                   f"{row['files']:>6} {row['hours']:>8} {row['wakes']:>6} "
-                  f"{row['wakes_per_hour']:>9}")
+                  f"{_fmt_metric(row['wakes_per_hour'], 9)}")
         return 0
     print(f"{'threshold':>9} {'vad_floor':>9} {'TPR':>7} {'FPR':>7}  (tp fn fp tn)")
     for row in rows:
         print(f"{row['threshold']:>9} {row['vad_rms_floor']:>9} "
-              f"{row['tpr']:>7} {row['fpr']:>7}  "
+              f"{_fmt_metric(row['tpr'], 7)} {_fmt_metric(row['fpr'], 7)}  "
               f"({row['tp']} {row['fn']} {row['fp']} {row['tn']})")
     return 0
 

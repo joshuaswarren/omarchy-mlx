@@ -93,7 +93,7 @@ plus Laya, and it needs a 96 GB machine.
 | Chip | GPU | ANE |
 |---|---|---|
 | M1 | Tested on Linux: MacBook Pro 13-inch, 8-core GPU, Mesa Honeykrisp `53ad9af196f5`; Qwen3-4B 4-bit decode 24.37 tok/s ([matched table](#how-close-to-macos)) | Parakeet islands |
-| M1 Max | Tested on Linux: MacBook Pro 16-inch, 32-core GPU, Mesa Honeykrisp `53ad9af196f5`; Qwen3-4B 4-bit decode 107.16 tok/s ([matched table](#how-close-to-macos)) | Whole encoder |
+| M1 Max | Tested on Linux: MacBook Pro 16-inch, 32-core GPU, Mesa Honeykrisp `53ad9af196f5`; Qwen3-4B 4-bit decode 107.16 tok/s with the PMP driver on, 98.48 tok/s without it on the shipped kernel pending [`aurora-silicon/linux#3401`](https://github.com/aurora-silicon/linux/pull/3401) ([matched table](#how-close-to-macos)) | Whole encoder |
 | M2 Max | [Tested on Linux](receipts/2026-11-21-m2-mesa-1650fc1-qualification/README.md): MacBook Pro 14-inch, 38-core GPU, Mesa Honeykrisp `1650fc1a33` — suite clean against the M1 Max reference, kit decode 80.75 tok/s; Qwen3.8-2B 4-bit decode 215.41 tok/s on Mesa `53ad9af196f5` ([matched table](#how-close-to-macos)) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](docs/ANE-LINUX.md#m2-max-ane-measured)) ([results](receipts/2026-10-10-m2-max-ane.md)) |
 | M1 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 16-core GPU, release wheel on Mesa Borealis `be147e3625`, Qwen3-4B 4-bit decode 31.5 tok/s | Untested |
 | M2 | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Air 13-inch, 8-core GPU, release wheel on Mesa Borealis `be147e3625`, Qwen3-4B 4-bit decode 19.4 tok/s | Untested |
@@ -207,12 +207,30 @@ macOS decode: 100% means parity, higher is faster on Linux.
 | 13-inch M1 MacBook Pro (8-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 | **51.54 tok/s** | 498.75 tok/s | 48.02 tok/s | 341.46 tok/s | **107.3% (+7.3%)** | 5 pairs / 25 runs | `c5fb4074d0b5` | `#1138` | `53ad9af196f5` |
 | 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | **24.37 tok/s** | 231.65 tok/s | 23.17 tok/s | 170.02 tok/s | **105.2% (+5.2%)** | 5 pairs / 25 runs | `a6fad159dfa9` | `#1138` | `53ad9af196f5` |
 | 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | **22.21 tok/s** | 194.39 tok/s | 20.18 tok/s | 161.87 tok/s | **110.0% (+10.0%)** | 5 pairs / 25 runs | `9115b5280c1d` | `#1138` | `53ad9af196f5` |
-| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | **107.16 tok/s** | 894.77 tok/s | 104.53 tok/s | 660.26 tok/s | **102.5% (+2.5%)** | 5 pairs / 25 runs | `efb521ae04af` | `#1117` | `53ad9af196f5` |
-| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | **96.69 tok/s** | 786.10 tok/s | 87.20 tok/s | 638.54 tok/s | **110.9% (+10.9%)** | 5 pairs / 25 runs | `542524d1f692` | `#1117` | `53ad9af196f5` |
-| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | **63.47 tok/s** | 470.32 tok/s | 57.77 tok/s | 388.31 tok/s | **109.9% (+9.9%)** | 5 pairs / 25 runs | `697272134f42` | `#1117` | `53ad9af196f5` |
-| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | **62.96 tok/s** | 449.39 tok/s | 57.05 tok/s | 388.44 tok/s | **110.4% (+10.4%)** | 5 pairs / 25 runs | `7dd7261b2fb8` | `#1117` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU)† | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | **107.16 tok/s** | 894.77 tok/s | 104.53 tok/s | 660.26 tok/s | **102.5% (+2.5%)** | 5 pairs / 25 runs | `efb521ae04af` | `#1117` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU)† | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | **96.69 tok/s** | 786.10 tok/s | 87.20 tok/s | 638.54 tok/s | **110.9% (+10.9%)** | 5 pairs / 25 runs | `542524d1f692` | `#1117` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU)† | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | **63.47 tok/s** | 470.32 tok/s | 57.77 tok/s | 388.31 tok/s | **109.9% (+9.9%)** | 5 pairs / 25 runs | `697272134f42` | `#1117` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU)† | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | **62.96 tok/s** | 449.39 tok/s | 57.05 tok/s | 388.44 tok/s | **110.4% (+10.4%)** | 5 pairs / 25 runs | `7dd7261b2fb8` | `#1117` | `53ad9af196f5` |
 | 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 | **215.41 tok/s** | 2282.75 tok/s | 212.82 tok/s | 1766.07 tok/s | **101.2% (+1.2%)** | 5 pairs / 25 runs | `4784df039da0` | `#1101` | `53ad9af196f5` |
 | 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 | **211.38 tok/s** | 2347.61 tok/s | 209.28 tok/s | 1786.03 tok/s | **101.0% (+1.0%)** | 5 pairs / 25 runs | `c5fb4074d0b5` | `#1101` | `53ad9af196f5` |
+
+† **16-inch M1 Max PMP driver note:** The four M1 Max rows above were
+measured with the Apple PMP (`apple_pmp`) memory DVFS driver enabled,
+which the shipped Linux kernel does not yet turn on for M1 Max (`t6001`).
+[`aurora-silicon/linux#3401`](https://github.com/aurora-silicon/linux/pull/3401)
+is the kernel change that turns it on. Matched decode measurements on
+the same 16-inch M1 Max, same package build (`cccad65` + `#1203`), and
+Mesa `53ad9af196f5` (`MLX_OMARCHY_DEFER_TOKENS=0`, identical greedy
+SHA-256) without PMP vs with PMP:
+
+| Model (snapshot) | Context | Linux decode (no PMP) | Linux decode (with PMP) | Delta (with vs no PMP) | No PMP vs macOS | Greedy SHA-256 (12 hex) |
+|---|---:|---:|---:|---:|---:|---|
+| `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | **98.48 tok/s** (`98.39`, `98.57`) | **107.87 tok/s** (`107.90`, `107.84`) | +9.5% (−8.7% without) | 94.2% | `efb521ae04af` |
+| `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | **58.56 tok/s** (`58.53`, `58.59`) | **64.09 tok/s** (`64.11`, `64.07`) | +9.4% (−8.6% without) | 101.4% | `697272134f42` |
+| `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | **57.74 tok/s** (1 leg × 3) | **63.49 tok/s** steady (leg 2: `60.44` under fan ramp) | +10.0% steady (−9.1% without) | 101.2% | `7dd7261b2fb8` |
+
+`Qwen3-4B-Instruct-2507-4bit` at `ctx=2048` was not separately
+re-measured without PMP in this pair.
 
 ### Earlier M1 Max model sweep (October 2026)
 

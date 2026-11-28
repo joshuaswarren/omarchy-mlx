@@ -910,7 +910,8 @@ foreach(_capsim_profile IN ITEMS
             m3-g15g
             m3-pro-g15s
             m3-max-g15c
-            nvidia-c16-coopmat)
+            nvidia-c16-coopmat
+            radv-rdna-subgroup64-pin32)
   add_test(NAME omarchy_capability_sim_tests/${_capsim_profile}
            COMMAND omarchy_capability_sim_tests ${_capsim_profile})
   set_tests_properties(omarchy_capability_sim_tests/${_capsim_profile}

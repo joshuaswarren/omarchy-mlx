@@ -259,6 +259,22 @@ struct CapabilityReport {
   // 64-lane subgroup (ANV, RADV) run the same route NVIDIA runs
   // natively. Derived from the hardware report only.
   bool subgroup_size_32_admitted{false};
+  // True: this hardware can pin requiredSubgroupSize = 32 for a 512-lane
+  // compute workgroup — the largest workgroup in the QMV decode and
+  // Apple-norm kernel family (DEC-18). Same derivation rule as
+  // subgroup_size_32_admitted, at the wider VUID-02757 bound.
+  bool subgroup_size_32_wide_admitted{false};
+  // Largest compute workgroup lane-count this hardware can run pinned
+  // at requiredSubgroupSize = 32: 32 * maxComputeWorkgroupSubgroups
+  // capped by maxComputeWorkGroupInvocations when size control is on,
+  // the compute stage is covered and 32 sits in [min, max]; 0
+  // otherwise. Same enable rule as the per-size admitted bits; a value
+  // >= 128 implies subgroup_size_32_admitted (probed at a 128-lane
+  // workgroup), >= 512 implies subgroup_size_32_wide_admitted. The
+  // 32-lane kernels whose workgroup is not the DEC-18 512 bound gate
+  // on it so RADV (native 64) and ANV-class parts run the NVIDIA
+  // 32-lane routes under a requiredSubgroupSize = 32 pipeline pin.
+  uint32_t subgroup_size_32_admitted_max_wg{0};
   // True: this hardware can pin requiredSubgroupSize = 64 for a 64-lane
   // compute workgroup (the one-subgroup 16x16x16 coopmat builds). Same
   // derivation rule as subgroup_size_16_admitted.
@@ -941,6 +957,16 @@ inline bool qmm_resnorm_vec4_default(const std::string& device_name) {
       device_name.find("G13G") != std::string::npos;
 }
 
+// Width-aware overload: G13C enables ResNormVec4 R2S32W2 strictly at
+// row_length == 4096 (64 WGs = 2.00 full waves on 32 cores), keeping
+// D=2560 (Qwen3-4B) and D=2048 on R2S8W2VecFast. Pure.
+inline bool qmm_resnorm_vec4_default(
+    const std::string& device_name,
+    uint32_t row_length) {
+  return qmm_resnorm_vec4_default(device_name) ||
+      (device_name.find("G13C") != std::string::npos && row_length == 4096u);
+}
+
 // 1024-thread (32 subgroups, 64 cols/WG) coalesced uvec4 ResNormVec4
 // (QmmVecQ4ResNormVec4BF16R2S32W2). Cuts N=2048 from 64 WGs (2 waves on 38
 // cores) to 32 WGs (1 wave) and halves ticket.done atomic contention again.
@@ -948,6 +974,28 @@ inline bool qmm_resnorm_vec4_default(const std::string& device_name) {
 // MLX_OMARCHY_RESNORM_VEC4=0 disables Vec4. Pure.
 inline bool qmm_resnorm_r2s32_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
+}
+
+// Width-aware overload: G13C pairs R2S32W2 strictly with row_length == 4096
+// (64 WGs = 2.00 full waves on 32 cores). Pure.
+inline bool qmm_resnorm_r2s32_default(
+    const std::string& device_name,
+    uint32_t row_length) {
+  return qmm_resnorm_r2s32_default(device_name) ||
+      (device_name.find("G13C") != std::string::npos && row_length == 4096u);
+}
+
+// G13C-gated D=4096 ResNormVec4 R2S32W2 fast-only mid-loop scale/bias variant
+// (QmmVecQ4ResNormVec4BF16R2S32W2FastD4096Midsb): uses QMM_Q4_MIDSB instead of
+// QMM_W2_UPFRONT so 64-WG D=4096 wins on both qualified Mesa (53ad9af1) and
+// stock shipped Mesa (1650fc1a33) without FIFO stalls. 0-ULP bit-identical.
+// Default on G13C; MLX_OMARCHY_RESNORM_D4096_MIDSB=0/1 overrides. Pure.
+inline bool qmm_resnorm_d4096_midsb_default_part(
+    const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_RESNORM_D4096_MIDSB")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G13C") != std::string::npos;
 }
 
 // 1024-thread (32 subgroups, 64 cols/WG) Q4 word decode GEMV for large
@@ -1040,13 +1088,17 @@ inline bool qmm_g14c_fast_only_default_part(const std::string& device_name) {
 // M2 Max (G14C): halves QKV preamble launches while keeping 64 half-regs and
 // 1024-thread occupancy (0-ULP bit-identical). Measured on Apple M2 Max
 // (G14C B1, DEFER_TOKENS=0): Qwen3.8-2B ctx=512 +0.22% (210.14 -> 210.43 tok/s,
-// 4/5, identical greedy digest). Default on G14C only;
-// MLX_OMARCHY_MULTI_R2S16=0/1 overrides. Pure.
+// 4/5, identical greedy digest). Measured on Apple M1 Max (G13C C0,
+// DEFER_TOKENS=0) vs the R2S8W2Fast3w default: Qwen3-4B ctx=512 +0.80%
+// (105.78 -> 106.63 tok/s, 5-pair ABBA, 10/10 leg separation) and ctx=2048
+// +0.60% (93.60 -> 94.16 tok/s), all legs greedy-identical. Default on
+// G14C and G13C; MLX_OMARCHY_MULTI_R2S16=0/1 overrides. Pure.
 inline bool qmm_g14c_multi_r2s16_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_MULTI_R2S16")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+         device_name.find("G13C") != std::string::npos;
 }
 
 // G13C-gated HD=128 SdpaOnlineRope fast path (parallel Phase-A sg 2..3 RoPE
@@ -1084,7 +1136,12 @@ inline bool prologue_norm_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_PROLOGUE_NORM")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("G14C") != std::string::npos;
+  // G13G added per M1D-2/BEY-03: the 13-inch 5-pair ABBA (Qwen3.8-2B 4-bit
+  // decode) measured the fused prologue at +2.66 percent median (5/5 legs
+  // above the default arm's median), 4-bit neutral (-0.38 percent), greedy
+  // ids bit-identical across all arms.
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 inline bool vocab_tail_chunked_default(const std::string& device_name) {
@@ -1686,11 +1743,17 @@ inline bool gemv_balanced_qkv_part(const std::string& device_name) {
 // apple_norm_shape_selected), so this predicate is consulted only where
 // RoPE::eval_gpu fuses the norm. G13C (16-inch M1 Max): measured for
 // receipts/20261125T-w7T-m1md5. G13G (13-inch M1): +0.30% on 4B ctx512 and
-// stacks in +8.19%/+8.23% 5/5 ABBA on 2B. MLX_OMARCHY_NORM_APPLE_128=1/0
-// overrides on any part. Pure.
-inline bool norm_apple_128_default_part(const std::string& device_name) {
+// stacks in +8.19%/+8.23% 5/5 ABBA on 2B. Discrete GPUs admit it by
+// capability (DEC-18): the subgroup probe at the call site still gates,
+// and on a subgroup-64 part the pipeline pins requiredSubgroupSize = 32.
+// MLX_OMARCHY_NORM_APPLE_128=1/0 overrides on any part. Pure.
+inline bool norm_apple_128_default_part(
+    const std::string& device_name,
+    VkPhysicalDeviceType physical_type =
+        VK_PHYSICAL_DEVICE_TYPE_OTHER) {
   return device_name.find("G13C") != std::string::npos ||
-      device_name.find("G13G") != std::string::npos;
+      device_name.find("G13G") != std::string::npos ||
+      physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
 }
 
 inline bool gemv_balanced_qkv_widths_ok(const std::vector<int64_t>& widths) {
@@ -1757,10 +1820,16 @@ inline bool greedy_prune_enabled(const std::string& device_name) {
 // and matching/edging the 5-dispatch composed tail with bit-identical token IDs.
 // On G13G (Apple M1) Qwen3.8-2B ctx 512 it wins +1.69% solo (42.13 -> 42.84
 // tok/s, bit-exact 4784df039da0).
+// On G13C (Apple M1 Max, 16-inch) Qwen3.8-2B (5-pair ABBA, DT=0, Mesa
+// 53ad9af1, receipts/2026-11-27-g13c-greedy-word-2b-abba.md) it wins +44.38%
+// at ctx 512 (116.595 -> 168.342 tok/s, 5/5, power_off 38 -> 0, bit-exact
+// 2f4697d06db73dba) and +44.42% at ctx 2048 (111.240 -> 160.651 tok/s, 5/5,
+// power_off 55 -> 0, bit-exact 93a61074d50a2788).
 // MLX_OMARCHY_GREEDY_WORD=1/0 overrides on any part. Pure.
 inline bool greedy_word_over_staged_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos ||
-      device_name.find("G13G") != std::string::npos;
+      device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos;
 }
 
 inline bool greedy_word_preferred(const std::string& device_name) {

@@ -3318,7 +3318,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           : (a_log_f32 ? omarchy::gdn_conv_coalesced_f32a_default(caps.device_name)
                        : omarchy::gdn_conv_coalesced_default(
                              caps.device_name, gdn_hk, gdn_hv));
-      if (!gdn_coal_want || caps.subgroup_size != 32u ||
+      if (!gdn_coal_want ||
+          (caps.subgroup_size != 32u &&
+           caps.subgroup_size_32_admitted_max_wg < 1024u) ||
           (caps.subgroup_operations & kGdnSgFeatures) != kGdnSgFeatures ||
           caps.max_compute_work_group_invocations < 1024u ||
           caps.max_compute_work_group_size[0] < 1024u ||
@@ -3636,7 +3638,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     // same-stream tape ordering.
     auto& encoder = get_command_encoder(member_stream);
     const auto& caps = encoder.device().capabilities();
-    bool subgroup_ready = caps.subgroup_size == 32u &&
+    bool subgroup_ready =
+        (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted ||
+         caps.subgroup_size_32_admitted_max_wg >= 256u) &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     // The group dispatch refuses every group while the Q4 word path is off
     // (MLX_OMARCHY_QMM_VEC_Q4_WORD=0); adopting the fold then would leave the
@@ -5418,7 +5422,9 @@ bool qmm_residual_norm_enabled(
     const CapabilityReport& caps, int norm_cols, bool outgate) {
   // The plain and out-gate kernels use 16 and 8 32-lane slots respectively.
   const uint32_t threads = outgate ? 256u : 512u;
-  if (!fused_chain_enabled() || caps.subgroup_size != 32 ||
+  if (!fused_chain_enabled() ||
+      (caps.subgroup_size != 32u && !caps.subgroup_size_32_wide_admitted &&
+       caps.subgroup_size_32_admitted_max_wg < threads) ||
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0 ||
       caps.max_compute_work_group_invocations < threads ||
       caps.max_compute_work_group_size[0] < threads) {
@@ -5430,10 +5436,13 @@ bool qmm_residual_norm_enabled(
   }
   // Width allowlist: {256, 2048, 4096} on every part that passed the
   // subgroup-32 probe above. 2560 stays a measured exception: G13C,
-  // G14C, plus non-unified-memory devices. G13G measured
-  // ResNorm(2560)+2x8w2 at -2.2% (M1D-1c #947, 2x2 factorial: geom-only
-  // +0.5%, fold-only +0.4%, both -2.2%), so G13G keeps the exclusion
-  // while G13C opts in with measured zero-env decode gains.
+  // G14C, plus non-unified-memory devices. G13G keeps the exclusion:
+  // the isolated 5-pair jwm1 ABBA the #947 review asked for
+  // (MLX_OMARCHY_QMM_RESIDUAL_NORM =0 vs =1 on one wheel, default
+  // 2x8w2 geometry, identical greedy IDs, DEC-31 receipt
+  // 2026-11-28-g13g-resnorm2560-isolated) measures the fold at
+  // -1.3% ctx512 (0/5 pairs) and -1.2% ctx2048 (1/5) on current
+  // defaults, while the excluded arm decodes 4B at 24.23 tok/s.
   if (norm_cols == 2560) {
     return caps.device_name.find("G13C") != std::string::npos ||
         caps.device_name.find("G14C") != std::string::npos ||
@@ -5623,7 +5632,9 @@ bool sdpa_online_rope_enabled(
       VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
-  const bool device_ok = caps.subgroup_size == 32u &&
+  const bool device_ok =
+      (caps.subgroup_size == 32u ||
+       caps.subgroup_size_32_admitted_max_wg >= 1024u) &&
       caps.max_compute_work_group_invocations >= 1024u &&
       caps.max_compute_work_group_size[0] >= 1024u &&
       caps.max_compute_shared_memory_size >= min_shared &&
@@ -6188,7 +6199,8 @@ bool dispatch_prologue_fold(
     const auto& caps = encoder.device().capabilities();
     constexpr VkSubgroupFeatureFlags kPnSgOps =
         VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
-    if (caps.subgroup_size == 32u &&
+    if ((caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted ||
+         caps.subgroup_size_32_admitted_max_wg >= 256u) &&
         (caps.subgroup_operations & kPnSgOps) == kPnSgOps &&
         caps.max_compute_work_group_invocations >= 256u &&
         caps.max_compute_work_group_size[0] >= 256u) {
