@@ -2976,18 +2976,59 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
   // wave64) reaches them only through a requiredSubgroupSize = 32 pin,
   // and only when the hardware report admitted the pin. Same fail-closed
   // rule as the CMAT16 arm; a native-32 device takes the default.
-  if (kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16 ||
+  if (kernel == ComputeKernel::QmmVecQ4WordSubgroupF32 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupF16 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16 ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupF32 ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupF16 ||
       kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16 ||
+      kernel == ComputeKernel::QmmVecQ4MultiOutgateBF16 ||
+      kernel == ComputeKernel::QmmVecQ4MultiToken4SubgroupBF16 ||
+      kernel == ComputeKernel::QmmVecQ4MultiToken8SubgroupBF16 ||
+      kernel == ComputeKernel::QmmVecQ4MultiToken16SubgroupBF16 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupRows8BF16 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16G128 ||
+      kernel == ComputeKernel::QmmVecQ4MultiToken4ResNormSubgroupBF16 ||
+      kernel == ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16 ||
       kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2 ||
       kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 ||
       kernel == ComputeKernel::QmmVecQ4SwigluBF16R2S8W2 ||
       kernel == ComputeKernel::QmmVecQ4ResNormBF16R2S8W2 ||
       kernel == ComputeKernel::QmmVecQ4OutgateResNormBF16R2S8W2 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2Fast ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast ||
+      kernel == ComputeKernel::QmmVecQ4SwigluBF16R2S8W2Fast ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Upfront ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast3w ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast3M ||
+      kernel == ComputeKernel::QmmVecQ4ResNormBF16R2S8W2Vec ||
+      kernel == ComputeKernel::QmmVecQ4ResNormBF16R2S8W2VecFast ||
       kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16 ||
       kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16 ||
       kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2 ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16KCONT ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast3M ||
+      kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2 ||
+      kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2Fast ||
+      kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2FastD2048 ||
+      kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2FastD4096 ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4W2 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2Fast ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2FastB1 ||
+      kernel == ComputeKernel::QmmVecQ4SwigluBF16R1S4W2 ||
+      kernel == ComputeKernel::QmmVecQ4SwigluBF16R1S4W2Fast ||
+      kernel == ComputeKernel::QmmVecQ4SwigluBF16R1S8W2 ||
+      kernel == ComputeKernel::QmmVecQ4SwigluBF16R1S8W2Fast ||
       kernel == ComputeKernel::QmmVecQ4ResNormBF16 ||
       kernel == ComputeKernel::QmmVecQ4OutgateResNormBF16 ||
+      kernel == ComputeKernel::GatedDeltaPrefillRecur32BF16 ||
+      kernel == ComputeKernel::GatedDeltaPrefillRecur32MaskedBF16 ||
       kernel == ComputeKernel::FastRmsNormAppleBF16 ||
       kernel == ComputeKernel::FastNormGatedAppleBF16 ||
       kernel == ComputeKernel::FastNormGatedOnlyAppleBF16 ||
@@ -2997,17 +3038,18 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
       kernel == ComputeKernel::FastAddRmsNormAppleBF16 ||
       kernel == ComputeKernel::GdnConvDecodeAppleBF16 ||
       kernel == ComputeKernel::GatherDequantNormBF16) {
-    if (required_subgroup_size_ != 0u &&
-        required_subgroup_size_ != 32u &&
-        !subgroup_size_32_wide_admitted_) {
+    // Fail closed on the native size too: required_subgroup_size_ is 0 on
+    // a device without subgroupSizeControl, so checking it alone would
+    // compile a 32-lane kernel unpinned on native-64 hardware. The
+    // R2S32W2 family (1024-lane workgroups, over the 512-lane admission
+    // bound) is deliberately absent: primitives.cpp keeps those variants
+    // native-32-only at selection time.
+    if (subgroup_size_ != 32u && !subgroup_size_32_wide_admitted_) {
       throw std::runtime_error(
           "[omarchy] this QMV/norm kernel requires 32-lane subgroups, "
           "which this device cannot legally pin.");
     }
-    const uint32_t pin =
-        required_subgroup_size_ != 0u && required_subgroup_size_ != 32u
-        ? 32u
-        : required_subgroup_size_;
+    const uint32_t pin = subgroup_size_ != 32u ? 32u : required_subgroup_size_;
     return create_pipeline(
         std::span<const uint32_t>{
             reinterpret_cast<const uint32_t*>(bytes),

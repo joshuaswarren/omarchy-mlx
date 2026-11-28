@@ -1549,6 +1549,33 @@ int main(int argc, char** argv) {
       std::cerr << "unit: m1-fork delta wrong\n";
       return 1;
     }
+    // DEC-18: a profile that sets the reported subgroup size clears the
+    // 32-lane pin admission (the simulated device makes no
+    // requiredSubgroupSize claim); a profile that inherits the axis keeps
+    // hardware truth.
+    hw_report.subgroup_size_32_wide_admitted = true;
+    for (const char* name :
+         {kM1Fork, kSubgroup64, kSmallSmem, kNoCoopmat}) {
+      auto out = omarchy::capsim::apply(
+          hw_report, *omarchy::capsim::find(name));
+      if (out.subgroup_size_32_wide_admitted) {
+        std::cerr << "unit: " << name
+                  << " kept the wide-32 pin bit under a simulated "
+                     "subgroup size\n";
+        return 1;
+      }
+    }
+    for (const char* name : {kG13Legacy, kWorkgroup256, kWorkgroup128}) {
+      auto out = omarchy::capsim::apply(
+          hw_report, *omarchy::capsim::find(name));
+      if (!out.subgroup_size_32_wide_admitted) {
+        std::cerr << "unit: " << name
+                  << " dropped the wide-32 pin bit on an inherited "
+                     "subgroup size\n";
+        return 1;
+      }
+    }
+    hw_report.subgroup_size_32_wide_admitted = false;
     auto small = omarchy::capsim::apply(
         hw_report, *omarchy::capsim::find(kSmallSmem));
     if (small.max_compute_shared_memory_size != 16384 ||
