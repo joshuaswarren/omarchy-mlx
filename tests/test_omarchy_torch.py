@@ -183,6 +183,26 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         self.assertTrue(torch.allclose(got.float(), ref.float(), atol=1e-5, rtol=1e-5),
                         float((got - ref).abs().max()))
 
+    def test_fold_strided_multi_block(self):
+        """PT-IM-b re-review: the strided-placement path with multiple
+        blocks per axis (stride < output span, L > 1) — fp32 parity vs the
+        aten CPU op. Pins the bug where blocks stacked at stride 1."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(9)
+        fold = ATEN_TABLE["fold"]
+        x = torch.randn(2, 12, 4)  # [N, C*4, L] for C=3, k=2x2, L=4
+        ref = torch.nn.functional.fold(
+            x, output_size=(8, 8), kernel_size=(2, 2), stride=(2, 2))
+        mine = fold(mx.array(x.numpy()), (8, 8), (2, 2), (1, 1), (0, 0), (2, 2))
+        got = torch.from_numpy(__import__("numpy").array(mine))
+        self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
+        self.assertTrue(torch.allclose(got.float(), ref.float(), atol=1e-5, rtol=1e-5),
+                        float((got - ref).abs().max()))
+
 
 if __name__ == "__main__":
     unittest.main()
