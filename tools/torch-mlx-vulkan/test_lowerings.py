@@ -707,21 +707,32 @@ def test_activation_backwards():
     d = float((torch.from_numpy(np.array(mine.astype(mx.float32))) - ref.float()).abs().max())
     assert d < 0.02, f"bf16 sigmoid_backward: {d:.3e}"
 
-    # executor dispatch: each node lands in stats["mlx"], never stats["cpu"]
+    # executor dispatch: each node lands in stats["mlx"], never stats["cpu"].
+    # Scalar args are baked as literals (as aot emits them); only tensors are
+    # placeholders.
     cases = [
-        (torch.ops.aten.elu_backward.default, (dy, 1.0, 1.0, 1.0, True, torch.nn.functional.elu(torch.tensor(x)).numpy()), "elu_backward"),
-        (torch.ops.aten.hardswish_backward.default, (dy, x), "hardswish_backward"),
-        (torch.ops.aten.sigmoid_backward.default, (dy, torch.sigmoid(torch.tensor(x)).numpy()), "sigmoid_backward"),
-        (torch.ops.aten.hardsigmoid_backward.default, (dy, x), "hardsigmoid_backward"),
-        (torch.ops.aten.softplus_backward.default, (dy, x, 1, 20), "softplus_backward"),
+        (torch.ops.aten.elu_backward.default, ("g", 1.0, 1, 1.0, False, "x"), "elu_backward"),
+        (torch.ops.aten.hardswish_backward.default, ("g", "x"), "hardswish_backward"),
+        (torch.ops.aten.sigmoid_backward.default, ("g", "x"), "sigmoid_backward"),
+        (torch.ops.aten.hardsigmoid_backward.default, ("g", "x"), "hardsigmoid_backward"),
+        (torch.ops.aten.softplus_backward.default, ("g", "x", 1, 20), "softplus_backward"),
     ]
-    for op, args_np, name in cases:
+    for op, spec, name in cases:
         gfx = torch.fx.Graph()
-        phs = [gfx.placeholder(f"a{i}") for i in range(len(args_np))]
-        gfx.output(gfx.call_function(op, tuple(phs)))
+        ph = {}
+        args = []
+        for a in spec:
+            if isinstance(a, str):
+                if a not in ph:
+                    ph[a] = gfx.placeholder(a)
+                args.append(ph[a])
+            else:
+                args.append(a)
+        gfx.output(gfx.call_function(op, tuple(args)))
         gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
         run, stats = mlx_vulkan.make_executor(gm)
-        run(*[torch.tensor(a) for a in args_np])
+        inputs = {"g": torch.tensor(dy), "x": torch.tensor(x)}
+        run(*[inputs[k] for k in ph])
         assert name in stats["mlx"], (name, stats)
         assert name not in stats["cpu"], (name, stats)
     print("test_activation_backwards PASS")
