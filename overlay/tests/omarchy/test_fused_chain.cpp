@@ -2454,6 +2454,8 @@ TEST_CASE("rope norm pair picks the narrow build on 128-wide rows") {
   array offset = array(17, int32);
   setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
   setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+  eval({xq, xk, wq, wk, offset});
+  sync_stream(stream);
   array qr = fast::rope_rms_norm(
       xq, D, wq, 1e-5f, false, 10000.0f, 1.0f, offset, stream);
   array kr = fast::rope_rms_norm(
