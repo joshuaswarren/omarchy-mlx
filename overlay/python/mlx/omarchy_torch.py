@@ -260,6 +260,25 @@ def _searchsorted(sorted_seq, values, out_int32=False, right=False,
     r = mx.searchsorted(_mx(sorted_seq), v, side=s)
     return r.astype(mx.int32 if out_int32 else mx.int64)
 
+def _bincount(input, weights=None, minlength=0, **k):
+    # aten.bincount: 1-D non-negative ints -> counts of length
+    # max(minlength, input.max()+1); empty input -> zeros(minlength).
+    # No weights -> int64; weights -> the weights dtype.
+    idx = _mx(input)
+    if idx.ndim != 1:
+        _raise("bincount ndim")
+    n = int(minlength)
+    if idx.size:
+        lo = int(mx.min(idx).item())
+        if lo < 0:
+            _raise("bincount negative")
+        n = max(n, int(mx.max(idx).item()) + 1)
+    w = _mx(weights) if weights is not None else None
+    out = mx.zeros((n,), dtype=w.dtype if w is not None else mx.int64)
+    if idx.size:
+        out = out.at[idx].add(w if w is not None else mx.ones(idx.shape, dtype=out.dtype))
+    return out
+
 # ---------------- lowering tables ----------------
 
 # torch-level function objects -> lowering. Built lazily below so missing
@@ -503,6 +522,9 @@ _FUNC_SPECS = {
     "rsub": lambda a, b: _mx(b) - _mx(a),
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
+    # PT-IDX-b: aten.bincount (embedding-gradient accumulation) — scatter-add
+    # into a zeros(minlength..max+1) buffer via array.at[].add.
+    "bincount": _bincount,
     "searchsorted": _searchsorted,
     "bucketize": lambda a, b, out_int32=False, right=False: _searchsorted(
         b, a, out_int32=out_int32, right=right),

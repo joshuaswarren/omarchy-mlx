@@ -148,6 +148,37 @@ class TestOmarchyTorchBackend(unittest.TestCase):
             self.assertEqual(got32.dtype, torch.int32)
             self.assertTrue(torch.equal(got32, ref32), (seq, vals, got32, ref32))
 
+    def test_bincount_parity(self):
+        """PT-IDX-b: the wheel backend lowers aten.bincount — int64 counts,
+        minlength growing/shrinking the output, and the fp32 weights leg —
+        all vs torch CPU."""
+        import numpy as np
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        bc = ATEN_TABLE["bincount"]
+        idx = torch.tensor([0, 1, 1, 4, 4, 4, 7])
+        for minlen in (0, 5, 8, 12):
+            ref = torch.bincount(idx, minlength=minlen)
+            got = torch.from_numpy(np.array(
+                bc(mx.array(idx.numpy()), minlength=minlen)))
+            self.assertEqual(got.dtype, torch.int64)
+            self.assertTrue(torch.equal(got, ref), (minlen, got, ref))
+        # weights leg: output takes the weights dtype, scatter-add semantics
+        for w in (torch.tensor([0.5, 1.0, 2.0, 3.0, 1.5, 0.25, 4.0]),
+                  torch.tensor([1, 2, 3, 4, 5, 6, 7])):
+            ref = torch.bincount(idx, weights=w)
+            got = torch.from_numpy(np.array(
+                bc(mx.array(idx.numpy()), mx.array(w.numpy()))))
+            self.assertEqual(got.dtype, w.dtype)
+            self.assertTrue(torch.equal(got, ref), (w.dtype, got, ref))
+        # empty input -> zeros(minlength)
+        ref = torch.bincount(torch.tensor([], dtype=torch.int64), minlength=6)
+        got = torch.from_numpy(np.array(bc(mx.zeros((0,), dtype=mx.int64), minlength=6)))
+        self.assertTrue(torch.equal(got, ref), (got, ref))
+
 
 
     def test_piecewise_activations(self):
