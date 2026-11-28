@@ -976,6 +976,129 @@ def _nll_loss_backward(gout, a, target, weight, reduction, ignore_index, tw):
     return mx.where(onehot, g.reshape(n, 1), mx.zeros_like(a))
 
 
+def _flat_scatter_back(g0, idx, n):
+    # g0 (J, ...), idx (J,) -> out (n, ...) with out[k] = sum of g0 rows
+    # whose idx is k.
+    oh = mx.equal(mx.arange(n).reshape(n, 1),
+                  _mx(idx).astype(mx.int32).reshape(1, -1)).astype(g0.dtype)
+    return mx.sum(mx.expand_dims(g0, 0) *
+                  oh.reshape(n, -1, *([1] * (g0.ndim - 1))), axis=1)
+
+
+def _axis_scatter_back(g, idx, n, ax):
+    # scatter-add along axis ax: out[...,k,...] += g[...,j,...] where
+    # idx[j] == k.
+    g = _mx(g)
+    g0 = mx.moveaxis(g, ax, 0)
+    out = _flat_scatter_back(g0, idx, n)
+    return mx.moveaxis(out, 0, ax)
+
+
+def _edge_pad_backward(g, a, pad, kind):
+    # backward of _edge_pad: every padded position holds a copy of one
+    # input element, so grads scatter-add through the same index map.
+    a, g = _mx(a), _mx(g)
+    npad = len(pad) // 2
+    for i in range(npad):
+        ax = a.ndim - 1 - i
+        l, r = int(pad[2 * i]), int(pad[2 * i + 1])
+        n = a.shape[ax]
+        out = n + l + r
+        if kind == "reflect":
+            if l >= n or r >= n:
+                return _raise("reflect pad >= dim")
+            if n <= 1:
+                if l or r:
+                    return _raise("reflect pad len-1 dim")
+                continue
+            p = 2 * (n - 1)
+            jm = (mx.arange(out) - l) % p
+            idx = mx.where(jm < n, jm, p - jm)
+        else:  # edge
+            idx = mx.clip(mx.arange(out) - l, 0, n - 1)
+        g = _axis_scatter_back(g, idx, n, ax)
+    return g
+
+
+def _upsample_nearest2d_backward(g, output_size, input_size,
+                                 scales_h=None, scales_w=None):
+    # forward maps out index j to in floor(j*mscale); backward scatters.
+    g = _mx(g)
+    N, C, H, W = (int(v) for v in input_size)
+    oh, ow = (int(v) for v in output_size)
+    # upstream quirk: the h axis always maps in/out; the w axis maps
+    # floor(j / scale_w) when scale_w is given, else in/out. scale_h is
+    # never read.
+    for n_in, n_out, ax, sc in ((W, ow, 3, scales_w), (H, oh, 2, None)):
+        idx = mx.clip(
+            mx.floor(mx.arange(n_out) *
+                     (1.0 / sc if sc is not None else n_in / n_out))
+            .astype(mx.int32), 0, n_in - 1)
+        g = _axis_scatter_back(g, idx, n_in, ax)
+    return g
+
+
+def _unfold_backward(g, input_sizes, dim, size, step):
+    # forward view: x.unfold(dim,size,step) -> dims (...nwin...,size);
+    # backward sums every window element into slot w*step+k.
+    g = _mx(g)
+    sizes = [int(v) for v in input_sizes]
+    ndim = len(sizes)
+    ax = dim % ndim
+    n = sizes[ax]
+    nwin = (n - size) // step + 1
+    w = mx.arange(nwin).reshape(-1, 1) * step
+    k = mx.arange(size).reshape(1, -1)
+    idx = (w + k).reshape(-1)                       # (nwin*size,)
+    rest = [i for i in range(ndim) if i != ax]
+    perm = rest + [ax] + [ndim]                     # (rest..., nwin, size)
+    gp = mx.transpose(g, perm)
+    rshape = gp.shape[:-2]
+    gp = gp.reshape(-1, nwin * size)                # (R, nwin*size)
+    out = _flat_scatter_back(mx.moveaxis(gp, 1, 0), idx, n)  # (n, R)
+    out = mx.moveaxis(out, 1, 0).reshape(*rshape, n)
+    perm = perm[:-1]  # the appended size axis is consumed by the scatter
+    inv = [perm.index(d) for d in range(ndim)]
+    return mx.transpose(out, inv)
+
+
+def _diagonal_backward(g, input_sizes, offset, dim1, dim2):
+    # scatter g[i] into (i + max(0,-off), i + max(0,off)) on the
+    # (dim1, dim2) plane of a zeros tensor.
+    g = _mx(g)
+    sizes = [int(v) for v in input_sizes]
+    ndim = len(sizes)
+    d1, d2 = dim1 % ndim, dim2 % ndim
+    n1, n2 = sizes[d1], sizes[d2]
+    L = g.shape[-1]
+    i = mx.arange(L)
+    flat = (i + max(0, -offset)) * n2 + (i + max(0, offset))
+    perm = [d for d in range(ndim) if d not in (d1, d2)] + [d1, d2]
+    rest = [sizes[d] for d in perm[:-2]]
+    gf = g.reshape(-1, L)                           # (R, L)
+    of = _flat_scatter_back(mx.moveaxis(gf, 1, 0), flat, n1 * n2)  # (n1n2, R)
+    out = mx.moveaxis(of, 1, 0).reshape(*rest, n1, n2)
+    inv = [perm.index(d) for d in range(ndim)]
+    return mx.transpose(out, inv)
+
+
+def _masked_scatter_backward(g, mask, sizes):
+    # gather grad_output at the mask's true positions (flat order),
+    # zero-padded back out to `sizes`. The count is data-dependent,
+    # so it is read eagerly.
+    g, m = _mx(g).reshape(-1), _mx(mask).reshape(-1)
+    cnt = int(mx.sum(m.astype(mx.int32)).item())
+    pos = mx.argsort(1 - m.astype(mx.int32))[:cnt]
+    n = 1
+    for v in sizes:
+        n *= int(v)
+    return mx.pad(g[pos], [[0, n - cnt]]).reshape(tuple(int(v) for v in sizes))
+
+
+def _native_dropout_backward(g, mask, scale):
+    return _mx(g) * _mx(mask).astype(_mx(g).dtype) * scale
+
+
 def _convolution(x, w, b=None, stride=1, padding=0, dilation=1,
                  transposed=False, output_padding=0, groups=1):
     # aten.convolution: torch layouts NCHW / OIHW; mx weight (O,H,W,I), x NHWC.
@@ -2341,6 +2464,18 @@ _FUNC_SPECS = {
     "tanh_backward": _tanh_backward,
     "nll_loss_forward": _nll_loss_forward,
     "nll_loss_backward": _nll_loss_backward,
+    # PT-AL-bw2: pad/upsample/view backward family.
+    "reflection_pad1d_backward": lambda g, a, padding: _edge_pad_backward(g, a, padding, "reflect"),
+    "reflection_pad2d_backward": lambda g, a, padding: _edge_pad_backward(g, a, padding, "reflect"),
+    "reflection_pad3d_backward": lambda g, a, padding: _edge_pad_backward(g, a, padding, "reflect"),
+    "replication_pad1d_backward": lambda g, a, padding: _edge_pad_backward(g, a, padding, "edge"),
+    "replication_pad2d_backward": lambda g, a, padding: _edge_pad_backward(g, a, padding, "edge"),
+    "replication_pad3d_backward": lambda g, a, padding: _edge_pad_backward(g, a, padding, "edge"),
+    "upsample_nearest2d_backward": _upsample_nearest2d_backward,
+    "unfold_backward": _unfold_backward,
+    "diagonal_backward": _diagonal_backward,
+    "masked_scatter_backward": _masked_scatter_backward,
+    "native_dropout_backward": _native_dropout_backward,
     "gelu_backward": _gelu_backward,
     "group_norm": _group_norm,
     "interpolate": _interpolate,

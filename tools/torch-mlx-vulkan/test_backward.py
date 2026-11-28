@@ -519,6 +519,71 @@ def test_relu_inplace_and_boolean_dispatch():
     assert np.array_equal(np.array(my_idx), idx.numpy())
 
 
+def test_pad_view_backward_family():
+    """PT-AL-bw2: pad/upsample/unfold/diagonal/masked_scatter/dropout
+    backwards vs CPU aten (allclose 1e-5)."""
+    T = mlx_vulkan.ATEN_TABLE
+    torch.manual_seed(0)
+    a = torch.ops.aten
+
+    x = torch.randn(2, 3, 5)
+    g = torch.randn(2, 3, 9)
+    _cmp("reflect1d_bw", T["reflection_pad1d_backward"](_am(g), _am(x), (3, 1)),
+         a.reflection_pad1d_backward(g, x, (3, 1)))
+    _cmp("replic1d_bw", T["replication_pad1d_backward"](_am(g), _am(x), (3, 1)),
+         a.replication_pad1d_backward(g, x, (3, 1)))
+
+    x2 = torch.randn(2, 3, 4)
+    g2 = torch.randn(2, 4, 8)
+    _cmp("reflect2d_bw", T["reflection_pad2d_backward"](_am(g2), _am(x2), (2, 2, 1, 0)),
+         a.reflection_pad2d_backward(g2, x2, (2, 2, 1, 0)))
+    _cmp("replic2d_bw", T["replication_pad2d_backward"](_am(g2), _am(x2), (2, 2, 1, 0)),
+         a.replication_pad2d_backward(g2, x2, (2, 2, 1, 0)))
+
+    x3 = torch.randn(2, 3, 4, 5)
+    g3 = torch.randn(2, 3, 4, 8)
+    _cmp("replic3d_bw", T["replication_pad3d_backward"](_am(g3), _am(x3), (2, 1, 0, 0, 0, 0)),
+         a.replication_pad3d_backward(g3, x3, (2, 1, 0, 0, 0, 0)))
+
+    go = torch.randn(1, 2, 6, 9)
+    _cmp("up2d_nearest_bw",
+         T["upsample_nearest2d_backward"](_am(go), (6, 9), (1, 2, 3, 4)),
+         a.upsample_nearest2d_backward(go, (6, 9), (1, 2, 3, 4)))
+    _cmp("up2d_nearest_bw_sc",
+         T["upsample_nearest2d_backward"](_am(go), (6, 9), (1, 2, 3, 4), 0.5, 0.75),
+         a.upsample_nearest2d_backward(go, (6, 9), (1, 2, 3, 4), 0.5, 0.75))
+
+    gu = torch.arange(6.0).reshape(3, 2) + 1
+    _cmp("unfold_bw_1d", T["unfold_backward"](_am(gu), (4,), 0, 2, 1),
+         a.unfold_backward(gu, (4,), 0, 2, 1))
+    g2d = torch.arange(16.0).reshape(2, 4, 2) + 1
+    _cmp("unfold_bw_2d", T["unfold_backward"](_am(g2d), (2, 5), 1, 2, 1),
+         a.unfold_backward(g2d, (2, 5), 1, 2, 1))
+    g3d = torch.arange(16.0).reshape(2, 2, 2, 2) + 1
+    _cmp("unfold_bw_3d", T["unfold_backward"](_am(g3d), (2, 2, 4), 2, 2, 2),
+         a.unfold_backward(g3d, (2, 2, 4), 2, 2, 2))
+
+    gd = torch.tensor([1., 2., 3., 4.])
+    _cmp("diag_bw_off1", T["diagonal_backward"](_am(gd), (4, 5), 1, 0, 1),
+         a.diagonal_backward(gd, (4, 5), 1, 0, 1))
+    gd2 = torch.tensor([5., 6.])
+    _cmp("diag_bw_off-2", T["diagonal_backward"](_am(gd2), (4, 5), -2, 0, 1),
+         a.diagonal_backward(gd2, (4, 5), -2, 0, 1))
+    gd3 = torch.arange(6.0).reshape(2, 3) + 1
+    _cmp("diag_bw_3d", T["diagonal_backward"](_am(gd3), (2, 3, 3), 0, 1, 2),
+         a.diagonal_backward(gd3, (2, 3, 3), 0, 1, 2))
+
+    gm = torch.tensor([10., 20., 30., 40.])
+    mk = torch.tensor([True, False, True, False])
+    _cmp("masked_scatter_bw", T["masked_scatter_backward"](_am(gm), _am(mk), (4,)),
+         a.masked_scatter_backward(gm, mk, (4,)))
+
+    gdr = torch.tensor([10., 20., 30., 40.])
+    mk2 = torch.tensor([True, False, True, False])
+    _cmp("dropout_bw", T["native_dropout_backward"](_am(gdr), _am(mk2), 2.0),
+         a.native_dropout_backward(gdr, mk2, 2.0))
+
+
 if __name__ == "__main__":
     test_native_layer_norm_backward()
     test_embedding_dense_backward()
@@ -539,6 +604,7 @@ if __name__ == "__main__":
     test_relu_inplace_and_boolean_dispatch()
     test_native_layer_norm_backward_bf16_and_fp32()
     test_native_layer_norm_backward_lowered_in_training_graph()
+    test_pad_view_backward_family()
     print("ALL PASS")
 
 
