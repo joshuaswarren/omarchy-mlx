@@ -314,7 +314,8 @@ int main(int argc, char** argv) {
         caps_ref.subgroup_size,
         caps_ref.subgroup_operations,
         caps_ref.max_compute_work_group_invocations,
-        caps_ref.max_compute_work_group_size[0]};
+        caps_ref.max_compute_work_group_size[0],
+        caps_ref.subgroup_size_32_wide_admitted};
     const bool vram = mlx::core::omarchy::device_local_activations_enabled();
     std::string want = mlx::core::omarchy::select_default_qmm_geometry_name(
         dev, dev_obj.physical_type(), probe_caps, vram);

@@ -2141,6 +2141,14 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   limited.device_name = "Apple M2 Max (G14C B1)";
   limited.subgroup_size = 16;
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, false));
+  // A subgroup-64 device admits the same 32-lane kernels only through the
+  // requiredSubgroupSize = 32 pin (DEC-18).
+  auto sg64 = caps;
+  sg64.device_name = "AMD Radeon RX 9070";
+  sg64.subgroup_size = 64;
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(sg64, 2048, false));
+  sg64.subgroup_size_32_wide_admitted = true;
+  CHECK(omarchy::qmm_residual_norm_enabled(sg64, 2048, false));
   limited.subgroup_size = 32;
   limited.subgroup_operations = 0;
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, false));

@@ -271,6 +271,12 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
   CapabilityReport caps = hw;
   if (profile.subgroup_size >= 0) {
     caps.subgroup_size = static_cast<uint32_t>(profile.subgroup_size);
+    // The simulated device makes no requiredSubgroupSize claim, so the
+    // 32-lane pin admission cannot carry over from hardware truth: a
+    // profile that changes the reported subgroup size clears the bit and
+    // the QMV/norm gates fall back deterministically instead of depending
+    // on what the host hardware could pin.
+    caps.subgroup_size_32_wide_admitted = false;
   }
   caps.subgroup_operations =
       (caps.subgroup_operations | profile.subgroup_ops_mask_or) &

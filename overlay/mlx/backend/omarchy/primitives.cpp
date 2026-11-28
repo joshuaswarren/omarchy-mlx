@@ -216,7 +216,8 @@ const QmmGeometry& qmm_geometry() {
           caps.subgroup_size,
           caps.subgroup_operations,
           caps.max_compute_work_group_invocations,
-          caps.max_compute_work_group_size[0]};
+          caps.max_compute_work_group_size[0],
+          caps.subgroup_size_32_wide_admitted};
       const std::string_view chosen = omarchy::select_default_qmm_geometry_name(
           caps.device_name,
           dev.physical_type(),
@@ -329,15 +330,17 @@ bool apple_norm_subgroup_ready(const omarchy::Device& device) {
     return false;
   }
   const auto& caps = device.capabilities();
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  bool subgroup_ready =
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   omarchy::capsim::require_backed(
       device,
       caps,
       subgroup_ready,
       "*NormApple*",
-      "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-      (device.hardware_capabilities().subgroup_size == 32u &&
+      "subgroup_size==32||32-wide-pin + subgroup_ops_mask[ARITHMETIC]",
+      ((device.hardware_capabilities().subgroup_size == 32u ||
+        device.hardware_capabilities().subgroup_size_32_wide_admitted) &&
        (device.hardware_capabilities().subgroup_operations &
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
   return subgroup_ready;
@@ -356,7 +359,7 @@ bool apple_norm_128_allowed(const omarchy::Device& device) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_128");
   }
   return omarchy::norm_apple_128_default_part(
-      device.capabilities().device_name);
+      device.capabilities().device_name, device.physical_type());
 }
 
 bool apple_norm_enabled(
@@ -9614,15 +9617,18 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (params.matrix_m == 1u) {
     const auto& caps = encoder.device().capabilities();
     bool subgroup_ready =
-        caps.subgroup_size == 32u &&
+        (caps.subgroup_size == 32u ||
+         caps.subgroup_size_32_wide_admitted) &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     omarchy::capsim::require_backed(
         encoder.device(),
         caps,
         subgroup_ready,
         "QmmVec*Subgroup*",
-        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-        (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+        "subgroup_size==32|pin32+subgroup_ops_mask[ARITHMETIC]",
+        ((encoder.device().hardware_capabilities().subgroup_size == 32u ||
+          encoder.device().hardware_capabilities()
+              .subgroup_size_32_wide_admitted) &&
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     // 4-bit group-128 decode GEMV: the shipped word-format fast path only
@@ -9787,15 +9793,18 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       params.matrix_n <= omarchy::kMaxComputeGroupCountX * kGemvColumnsPerGroup) {
     const auto& caps = encoder.device().capabilities();
     bool subgroup_ready =
-        caps.subgroup_size == 32u &&
+        (caps.subgroup_size == 32u ||
+         caps.subgroup_size_32_wide_admitted) &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     omarchy::capsim::require_backed(
         encoder.device(),
         caps,
         subgroup_ready,
         "QmmVec*Subgroup*",
-        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-        (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+        "subgroup_size==32|pin32+subgroup_ops_mask[ARITHMETIC]",
+        ((encoder.device().hardware_capabilities().subgroup_size == 32u ||
+          encoder.device().hardware_capabilities()
+              .subgroup_size_32_wide_admitted) &&
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (subgroup_ready) {
@@ -10737,7 +10746,8 @@ bool dispatch_quantized_gemv_group(
     token_route = true;
     rows = static_cast<uint32_t>(x.shape(-2));
   }
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  bool subgroup_ready =
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   if (outgate != nullptr) {
     // The prologue deletes the Multiply that produced x (it was never
@@ -11202,7 +11212,11 @@ bool dispatch_quantized_gemv_group(
       const bool rn_s32_want = (rn_s32_env != nullptr && rn_s32_env[0] != '\0')
           ? (std::strcmp(rn_s32_env, "0") != 0)
           : omarchy::qmm_resnorm_r2s32_default(qmm_dev_name);
+      // The R2S32W2 build runs a 1024-lane workgroup, over the 512-lane
+      // bound the 32-pin admission was derived at — it stays native-32
+      // only even where a requiredSubgroupSize = 32 pin is legal.
       if (rn_s32_want &&
+          encoder.device().hardware_capabilities().subgroup_size == 32u &&
           encoder.device().capabilities().max_compute_work_group_invocations >= 1024u &&
           encoder.device().capabilities().max_compute_work_group_size[0] >= 1024u) {
         resnorm_kernel = ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2;
@@ -17561,15 +17575,18 @@ void GreedyQuantizedArgmax::eval_gpu(
   auto s = stream();
   auto& encoder = omarchy::get_command_encoder(s);
   const auto& caps = encoder.device().capabilities();
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  bool subgroup_ready =
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   omarchy::capsim::require_backed(
       encoder.device(),
       caps,
       subgroup_ready,
       "QmmVec*Subgroup*",
-      "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-      (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+      "subgroup_size==32|pin32+subgroup_ops_mask[ARITHMETIC]",
+      ((encoder.device().hardware_capabilities().subgroup_size == 32u ||
+        encoder.device().hardware_capabilities()
+            .subgroup_size_32_wide_admitted) &&
        (encoder.device().hardware_capabilities().subgroup_operations &
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
   const array& w = inputs.at(1);
@@ -17700,7 +17717,11 @@ void GreedyQuantizedArgmax::eval_gpu(
             (lm_r2s32_env != nullptr && lm_r2s32_env[0] != '\0')
                 ? (std::strcmp(lm_r2s32_env, "0") != 0)
                 : omarchy::qmm_lm_r2s32_default(caps.device_name);
+        // R2S32W2's 1024-lane workgroup is over the 512-lane bound the
+        // 32-pin admission was derived at: native-32 only, checked on
+        // hardware truth so a simulated subgroup_size cannot arm it.
         if (lm_r2s32_want && n >= 65536u && (params.rhs_offset % 2u == 0u) &&
+            encoder.device().hardware_capabilities().subgroup_size == 32u &&
             caps.max_compute_work_group_invocations >= 1024u &&
             caps.max_compute_work_group_size[0] >= 1024u) {
           const bool lm_fo = (static_cast<uint32_t>(x.shape(-1)) % 512u == 0u) &&
