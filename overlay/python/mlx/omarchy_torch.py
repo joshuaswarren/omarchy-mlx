@@ -290,6 +290,46 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
         y = y + _mx(b).reshape(1, 1, 1, -1)
     return y.transpose(0, 3, 1, 2)
 
+def _nan_to_num(a, nan=0.0, posinf=None, neginf=None, **k):
+    """aten.nan_to_num: mx.nan_to_num carries the same nan/posinf/neginf
+    keyword contract (posinf/neginf default to the dtype's finfo bounds on
+    floats) and is a no-op on integer input, like torch; the hand-rolled
+    finfo form used to raise on integer dtypes."""
+    return mx.nan_to_num(_mx(a), nan=nan, posinf=posinf, neginf=neginf)
+
+
+def _nansum(a, dim=None, keepdim=False, dtype=None, **k):
+    """aten.nansum: NaN cells count as 0 in the reduction (mx.sum over the
+    nan_to_num result), then optional dim/keepdim like torch; dtype is an
+    output cast (unknown torch dtypes raise for the CPU fallback)."""
+    x = _mx(a)
+    x = mx.where(mx.isnan(x), mx.array(0.0, dtype=x.dtype), x)
+    out = x.sum() if dim is None else x.sum(axis=dim, keepdims=bool(keepdim))
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("nansum dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
+
+
+def _nanmean(a, dim=None, keepdim=False, dtype=None, **k):
+    """aten.nanmean: mean over the non-NaN cells only - the nansum divided
+    by the per-slice NaN count, so all-NaN slices give NaN like torch;
+    dtype is an output cast (unknown torch dtypes raise for the CPU
+    fallback)."""
+    x = _mx(a)
+    mask = mx.isnan(x)
+    zeroed = mx.where(mask, mx.array(0.0, dtype=x.dtype), x)
+    good = (~mask).sum() if dim is None else (~mask).sum(axis=dim, keepdims=bool(keepdim))
+    total = zeroed.sum() if dim is None else zeroed.sum(axis=dim, keepdims=bool(keepdim))
+    out = total / good
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("nanmean dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
+
+
 def _group_norm(a, num_groups, w=None, b=None, eps=1e-5):
     # torch NCHW; mlx 0.32 has no fast.group_norm - normalize per group.
     x = _mx(a)
@@ -541,6 +581,9 @@ _FUNC_SPECS = {
     "fold": _fold,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     "conv2d": _conv2d,
+    "nan_to_num": _nan_to_num,
+    "nansum": _nansum,
+    "nanmean": _nanmean,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
