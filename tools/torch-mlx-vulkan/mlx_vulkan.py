@@ -2055,6 +2055,45 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _lrelu(a, negative_slope=0.01):
+    # aten.leaky_relu(input, negative_slope=0.01): max(0,x)+ns*min(0,x);
+    # at x == 0 both arms give 0 so the where edge matches aten.
+    a, f = _opmath_f32(a)
+    return mx.where(mx.greater(f, 0.0), f, negative_slope * f).astype(a.dtype)
+
+
+def _threshold(a, threshold, value):
+    # aten.threshold(input, threshold, value): x > t ? x : value.
+    a, f = _opmath_f32(a)
+    return mx.where(mx.greater(f, float(threshold)),
+                    f, float(value)).astype(a.dtype)
+
+
+def _hardtanh(a, min_val=-1.0, max_val=1.0):
+    # aten.hardtanh(input, min_val=-1, max_val=1): clamp to [min, max];
+    # min > max is an error in aten too. relu6 is the (0, 6) instance.
+    a, f = _opmath_f32(a)
+    if min_val > max_val:
+        return _raise("hardtanh")
+    return mx.minimum(mx.maximum(f, min_val), max_val).astype(a.dtype)
+
+
+def _prelu(a, weight):
+    # aten.prelu(input, weight): x>0 ? x : w*x. A 1-element weight is the
+    # scalar slope; a C-element weight broadcasts over the channel dim
+    # (dim 1; a 1-D input's channel count is 1, so it takes scalar only).
+    # Anything else is an aten error too.
+    a, f = _opmath_f32(a)
+    w = _mx(weight)
+    if w.ndim == 0 or w.size == 1:
+        wb = w.reshape(())
+    elif a.ndim >= 2 and w.size == a.shape[1]:
+        wb = w.reshape([1, w.size] + [1] * (a.ndim - 2))
+    else:
+        return _raise("prelu")
+    return mx.where(mx.greater(f, 0.0), f, wb * f).astype(a.dtype)
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2376,6 +2415,17 @@ _FUNC_SPECS = {
     "elu": lambda a, alpha=1.0, scale=1.0, input_scale=1.0, inplace=False: scale * mx.where(mx.greater(a, 0), a, alpha * mx.expm1(input_scale * a)),
     "selu": lambda a, inplace=False: 1.0507009873554805 * mx.where(mx.greater(a, 0), a, 1.6732632423543772 * mx.expm1(a)),
     "celu": lambda a, alpha=1.0, inplace=False: mx.where(mx.greater(a, 0), a, alpha * mx.expm1(a / alpha)),
+    # activation forwards (MobileNet relu6/hardtanh, CNN leaky_relu/prelu):
+    # threshold(x, t, v) keeps x only where x > t. Q-63 covers the backward
+    # nodes; these are the forward surfaces.
+    "leaky_relu": lambda a, negative_slope=0.01: _lrelu(a, negative_slope),
+    "leaky_relu_": lambda a, negative_slope=0.01: _lrelu(a, negative_slope),
+    "hardtanh": _hardtanh,
+    "hardtanh_": _hardtanh,
+    "relu6": lambda a: _hardtanh(a, 0.0, 6.0),
+    "prelu": _prelu,
+    "threshold": lambda a, threshold, value: _threshold(a, threshold, value),
+    "threshold_": lambda a, threshold, value: _threshold(a, threshold, value),
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,

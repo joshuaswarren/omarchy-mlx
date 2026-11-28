@@ -3014,6 +3014,53 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_activation_forwards():
+    # Activation forwards census piece: leaky_relu (custom slope +
+    # in-place), hardtanh (default and custom bounds), relu6, prelu
+    # (scalar and per-channel weight), threshold (edge at x == t ->
+    # value). fp32 parity vs torch CPU through the executor; the
+    # lowered path must stay on mx with zero CPU fallback.
+    torch.manual_seed(0)
+    x = torch.tensor([-3.0, -1.0, -0.25, 0.0, 0.25, 1.0, 3.0],
+                     dtype=torch.float32)
+    x4 = torch.tensor([[[[-1.0, 2.0]], [[3.0, -4.0]]],
+                       [[[-0.5, 0.5]], [[2.5, -2.5]]]], dtype=torch.float32)
+    w_scalar = torch.tensor([0.15], dtype=torch.float32)
+    w_chan = torch.tensor([0.1, 0.4], dtype=torch.float32)
+    cases = [
+        (torch.ops.aten.leaky_relu.default, (x,), {}, "leaky_relu"),
+        (torch.ops.aten.leaky_relu.default, (x,), {"negative_slope": 0.2},
+         "leaky_relu"),
+        (torch.ops.aten.leaky_relu_.default, (x,), {}, "leaky_relu"),
+        (torch.ops.aten.hardtanh.default, (x,), {}, "hardtanh"),
+        (torch.ops.aten.hardtanh.default, (x,),
+         {"min_val": -0.5, "max_val": 0.5}, "hardtanh"),
+        (torch.ops.aten.hardtanh_.default, (x,), {}, "hardtanh"),
+        (torch.ops.aten.relu6.default, (x,), {}, "relu6"),
+        (torch.ops.aten.prelu.default, (x4, w_scalar), {}, "prelu"),
+        (torch.ops.aten.prelu.default, (x4, w_chan), {}, "prelu"),
+        (torch.ops.aten.threshold.default, (x, 0.0, -1.0), {}, "threshold"),
+        (torch.ops.aten.threshold.default, (x, 0.5, 9.0), {}, "threshold"),
+        (torch.ops.aten.threshold_.default, (x, 0.0, -1.0), {}, "threshold"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() if torch.is_tensor(a) else a
+                       for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(),
+                           atol=1e-5), (str(target), kwargs, got, ref)
+    print("test_activation_forwards PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3121,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_activation_forwards()
     print("ALL PASS")
 
 
