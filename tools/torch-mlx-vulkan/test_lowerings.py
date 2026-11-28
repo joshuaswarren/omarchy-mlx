@@ -3014,6 +3014,60 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_special_stats_residue():
+    # Special-mirror + stats residue: erfcx/log_ndtr swap in asymptotic
+    # branches where the direct product overflows/underflows fp32;
+    # cov centers over the last axis per aten; corrcoef is the
+    # normalized covariance.
+    torch.manual_seed(0)
+    x23 = torch.randn(2, 3)
+    x45 = torch.randn(4, 5)
+    tail = torch.tensor([-40.0, -12.0, -1.0, 0.0, 1.0, 8.5, 10.0])
+    cases = [
+        (torch.ops.aten.erfc.default, (x23,), {}, "erfc"),
+        (torch.ops.aten.special_erf.default, (x23,), {}, "special_erf"),
+        (torch.ops.aten.special_erfc.default, (x23,), {}, "special_erfc"),
+        (torch.ops.aten.special_erfcx.default, (x23,), {}, "special_erfcx"),
+        (torch.ops.aten.special_erfcx.default, (tail,), {}, "special_erfcx"),
+        (torch.ops.aten.special_ndtr.default, (x23,), {}, "special_ndtr"),
+        (torch.ops.aten.special_log_ndtr.default, (x23,), {}, "special_log_ndtr"),
+        (torch.ops.aten.special_log_ndtr.default, (tail[:4],), {}, "special_log_ndtr"),
+        (torch.ops.aten.special_expit.default, (x23,), {}, "special_expit"),
+        (torch.ops.aten.special_entr.default, (x23,), {}, "special_entr"),
+        (torch.ops.aten.special_log1p.default, (x23,), {}, "special_log1p"),
+        (torch.ops.aten.special_round.default, (x23 * 10,), {}, "special_round"),
+        (torch.ops.aten.special_sinc.default, (x23,), {}, "special_sinc"),
+        (torch.ops.aten.chain_matmul.default, ([x23, x45[:3], x45[:5, :4]],), {}, "chain_matmul"),
+        (torch.ops.aten.ravel.default, (x23,), {}, "ravel"),
+        (torch.ops.aten.linalg_vander.default, (x23[0],), {}, "linalg_vander"),
+        (torch.ops.aten.linalg_vander.default, (x23[0],), {"N": 5}, "linalg_vander"),
+        (torch.ops.aten.cov.default, (x45,), {}, "cov"),
+        (torch.ops.aten.cov.default, (x45,), {"correction": 0}, "cov"),
+        (torch.ops.aten.corrcoef.default, (x45,), {}, "corrcoef"),
+        (torch.ops.aten.corrcoef.default, (x45[0],), {}, "corrcoef"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() if isinstance(a, torch.Tensor) else a for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s_ for s_ in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        # erfcx/log_ndtr agree only where fp32 can represent them
+        mask = torch.isfinite(ref)
+        assert torch.equal(torch.isfinite(got), mask), (str(target), kwargs)
+        tol = 2e-2 if fam in ("special_erfcx", "special_log_ndtr") else 1e-4
+        assert np.allclose(got[mask].float().numpy(), ref[mask].float().numpy(), atol=tol, rtol=1e-2), (
+            str(target), kwargs, got, ref)
+    print("test_special_stats_residue PASS")
+
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3128,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_special_stats_residue()
     print("ALL PASS")
 
 
