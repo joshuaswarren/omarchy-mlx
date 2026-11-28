@@ -543,6 +543,38 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 torch.allclose(got, ref.float(), atol=tol, rtol=tol),
                 (name, kw, float((got - ref.float()).abs().max())))
 
+    def test_fft_nd_parity(self):
+        """PT-Q61: the wheel backend lowers aten.fft_fftn/ifftn over an
+        axes tuple with all three norm modes and the s pad/crop, and
+        fft_fftshift/ifftshift as axis rolls — parity vs torch, plus the
+        fftshift/ifftshift round trip at even and odd lengths."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        rng = np.random.RandomState(11)
+        x = torch.tensor(rng.randn(2, 6, 5).astype(np.float32))
+        for axes in [None, [0], [1], [2], [0, 1]]:
+            for norm in [None, "backward", "ortho", "forward"]:
+                ref = torch.fft.fftn(x, axes=axes, norm=norm)
+                got = np.array(ATEN_TABLE["fft_fftn"](mx.array(x.numpy()),
+                                                      axes=axes, norm=norm))
+                self.assertTrue(np.allclose(got, ref.numpy(), atol=1e-4, rtol=1e-4),
+                                (axes, norm, float(np.abs(got - ref.numpy()).max())))
+        ref = torch.fft.fftn(x, s=(4, 8, 5))
+        got = np.array(ATEN_TABLE["fft_fftn"](mx.array(x.numpy()), s=(4, 8, 5)))
+        self.assertTrue(np.allclose(got, ref.numpy(), atol=1e-4, rtol=1e-4))
+        for shape in [(8,), (7,), (4, 6), (5, 7)]:
+            xs = torch.tensor(rng.randn(*shape).astype(np.float32))
+            for dim in [None, 0, -1, [0, -1] if len(shape) > 1 else [0]]:
+                ref = torch.fft.fftshift(xs, dim=dim)
+                got = np.array(ATEN_TABLE["fft_fftshift"](mx.array(xs.numpy()), dim=dim))
+                self.assertTrue(np.array_equal(got, ref.numpy()), (shape, dim))
+                back = np.array(ATEN_TABLE["fft_ifftshift"](mx.array(got), dim=dim))
+                self.assertTrue(np.array_equal(back, xs.numpy()), (shape, dim))
+
 
 if __name__ == "__main__":
     unittest.main()

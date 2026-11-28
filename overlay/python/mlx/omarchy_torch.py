@@ -511,6 +511,16 @@ def _rot90(a, k=1, dims=(0, 1)):
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
 
+def _fft_roll(a, dim, direction):
+    # torch.fft.fftshift rolls each listed dim by +n//2, ifftshift by
+    # -(n//2); the pair composes back at every length (PT-Q61). dim=None
+    # rolls every dim, like torch.
+    dims = range(a.ndim) if dim is None else [d % a.ndim for d in (dim if isinstance(dim, (list, tuple)) else [dim])]
+    for d in dims:
+        a = mx.roll(a, direction * (a.shape[d] // 2), axis=d)
+    return a
+
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -672,6 +682,13 @@ _FUNC_SPECS = {
     "tensor": lambda d, **k: _mx(d) if isinstance(d, torch.Tensor) else mx.array(np.array(_torch(d)) if isinstance(d, (list, tuple)) else d),
     "as_tensor": lambda d, **k: _mx(d),
     "einsum_fn": mx.einsum,
+    # PT-Q61: N-D transforms — torch's axes tuple + norm modes map straight
+    # onto mx.fft (norm=None means "backward" in both); s is the shared
+    # numpy-style pad/crop. Shifts are axis rolls, no CPU fallback.
+    "fft_fftn": lambda a, s=None, axes=None, norm=None: mx.fft.fftn(_mx(a), s, axes=axes, norm=norm or "backward"),
+    "fft_ifftn": lambda a, s=None, axes=None, norm=None: mx.fft.ifftn(_mx(a), s, axes=axes, norm=norm or "backward"),
+    "fft_fftshift": lambda a, dim=None: _fft_roll(_mx(a), dim, +1),
+    "fft_ifftshift": lambda a, dim=None: _fft_roll(_mx(a), dim, -1),
 }
 
 def _raise(name):
