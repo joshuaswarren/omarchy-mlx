@@ -175,35 +175,56 @@ int scenario(const std::string& name, const std::string& out) {
     }
     outs.push_back(sum);
     outs.push_back(normed);
-  } else if (name == "group_ids") {
-    // Same graph as "group"; writes the dispatched compute kernel ids
-    // (MLX_OMARCHY_TRACE_DISPATCH) to `out` instead of the outputs.
-    int saved = ::dup(::fileno(stderr));
-    FILE* cap = std::fopen("/tmp/w7p-group-ids.cap", "w");
-    if (cap == nullptr) {
-      return 4;
+  } else if (name == "smalln" || name == "smalln_ids") {
+    // Decode-mirroring small-N groups: a 3-member qkv fold (4096+1024+
+    // 1024) on x1 and a single-member o_proj fold (2560, residual Add
+    // epilogue) on x2. Every member n <= 4096, so MLX_OMARCHY_QMM_SMALLN
+    // routes both dispatches to the 8-column tiles. A scalar addend
+    // would refuse the fold (addend.size() != node.size()); the
+    // residual must be full-size like the real decode graph.
+    // "smalln_ids" captures the MLX_OMARCHY_TRACE_DISPATCH kernel ids
+    // to `out`; "smalln" writes the outputs for byte comparison.
+    int saved = -1;
+    FILE* cap = nullptr;
+    const bool capture = std::strcmp(name, "smalln_ids") == 0;
+    if (capture) {
+      saved = ::dup(::fileno(stderr));
+      cap = std::fopen("/tmp/w7p-smalln-ids.cap", "w");
+      if (cap == nullptr) {
+        return 4;
+      }
+      ::dup2(::fileno(cap), ::fileno(stderr));
+      setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
     }
-    ::dup2(::fileno(cap), ::fileno(stderr));
-    setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
-    auto x = make_x(2048, rng);
+    auto x1 = make_x(2048, rng);
+    auto x2 = make_x(2048, rng);
     auto a = make_lin(4096, 2048, rng);
-    auto b = make_lin(512, 2048, rng);
-    auto c = make_lin(512, 2048, rng);
-    eval(x, a.w, a.s, a.b, b.w, b.s, b.b, c.w, c.s, c.b);
-    auto resid = astype(array(0.25f), bfloat16);
-    auto oa = add(qmm(x, a), resid);
-    auto ob = qmm(x, b);
-    auto oc = qmm(x, c);
-    eval(oa, ob, oc);
-    std::fflush(stderr);
-    ::dup2(saved, ::fileno(stderr));
-    ::close(saved);
-    std::fclose(cap);
-    unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
-    std::ifstream in("/tmp/w7p-group-ids.cap");
-    std::ofstream f(out);
-    f << in.rdbuf();
-    return 0;
+    auto b = make_lin(1024, 2048, rng);
+    auto c = make_lin(1024, 2048, rng);
+    auto o = make_lin(2560, 2048, rng);
+    auto resid = make_x(2560, rng);
+    eval(x1, x2, a.w, a.s, a.b, b.w, b.s, b.b, c.w, c.s, c.b,
+         o.w, o.s, o.b, resid);
+    auto oa = qmm(x1, a);
+    auto ob = qmm(x1, b);
+    auto oc = qmm(x1, c);
+    auto oo = add(qmm(x2, o), resid);
+    eval(oa, ob, oc, oo);
+    if (capture) {
+      std::fflush(stderr);
+      ::dup2(saved, ::fileno(stderr));
+      ::close(saved);
+      std::fclose(cap);
+      unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+      std::ifstream in("/tmp/w7p-smalln-ids.cap");
+      std::ofstream f(out);
+      f << in.rdbuf();
+      return 0;
+    }
+    outs.push_back(oa);
+    outs.push_back(ob);
+    outs.push_back(oc);
+    outs.push_back(oo);
   } else if (name == "name") {
     std::ofstream f(out);
     f << mlx::core::omarchy::qmm_geometry_name();
@@ -641,10 +662,10 @@ int main(int argc, char** argv) {
     std::string base = "/tmp/w7p-geom-base.bin";
     std::string other = "/tmp/w7p-geom-other.bin";
     setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
-    int rc = run_child("group", base.c_str());
+    int rc = run_child("smalln", base.c_str());
     setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
     setenv("MLX_OMARCHY_QMM_SMALLN", smalln, 1);
-    int rc2 = run_child("group", other.c_str());
+    int rc2 = run_child("smalln", other.c_str());
     unsetenv("MLX_OMARCHY_QMM_SMALLN");
     unsetenv("MLX_OMARCHY_QMM_GEOM");
     if (rc != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
@@ -670,15 +691,15 @@ int main(int argc, char** argv) {
     const omarchy::ComputeKernel r1 = omarchy::ComputeKernel::QmmVecQ4MultiSubgroupBF16R1S8W2;
     setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
     setenv("MLX_OMARCHY_QMM_SMALLN", "2x4w2", 1);
-    int rc_a = run_child("group_ids", "/tmp/w7p-ids-s4.txt");
+    int rc_a = run_child("smalln_ids", "/tmp/w7p-ids-s4.txt");
     setenv("MLX_OMARCHY_QMM_SMALLN", "1x8w2", 1);
-    int rc_b = run_child("group_ids", "/tmp/w7p-ids-r1.txt");
+    int rc_b = run_child("smalln_ids", "/tmp/w7p-ids-r1.txt");
     setenv("MLX_OMARCHY_QMM_SMALLN", "0", 1);
-    int rc_c = run_child("group_ids", "/tmp/w7p-ids-off.txt");
+    int rc_c = run_child("smalln_ids", "/tmp/w7p-ids-off.txt");
     unsetenv("MLX_OMARCHY_QMM_SMALLN");
     unsetenv("MLX_OMARCHY_QMM_GEOM");
     if (rc_a != 0 || rc_b != 0 || rc_c != 0) {
-      std::cout << "FAIL: group_ids child rc " << rc_a << "/" << rc_b << "/"
+      std::cout << "FAIL: smalln_ids child rc " << rc_a << "/" << rc_b << "/"
                 << rc_c << "\n";
       ++failures;
     } else {
