@@ -907,6 +907,9 @@ foreach(_capsim_profile IN ITEMS
             m1-g13-legacy
             workgroup-256
             workgroup-128
+            m3-g15g
+            m3-pro-g15s
+            m3-max-g15c
             nvidia-c16-coopmat)
   add_test(NAME omarchy_capability_sim_tests/${_capsim_profile}
            COMMAND omarchy_capability_sim_tests ${_capsim_profile})

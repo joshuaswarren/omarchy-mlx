@@ -33,6 +33,11 @@ namespace mlx::core::omarchy {
 // exact, because the name does not distinguish a 24-core M1 Max from a
 // 32-core one and guessing high would step tiles down on a part that
 // never showed it needs them.
+// The G15/G17 entries are the exception G17C started: they match the
+// chip id as a substring, so any binned revision of the part takes the
+// row. Those rows state the top bin and a smaller real part only clears
+// the per-core floor sooner — the same conservative direction the
+// exact-match G14C/G16S rows already accept.
 // The M2 Max name ("Apple M2 Max (G14C B1)") does not distinguish the
 // 30-core from the 38-core part either; our fleet M2 is 38-core
 // (device_info.cpp maps apple,t6021 -> 38 from the device tree). If a

@@ -54,6 +54,9 @@ constexpr const char* kG13Legacy = "m1-g13-legacy";
 constexpr const char* kWorkgroup256 = "workgroup-256";
 constexpr const char* kWorkgroup128 = "workgroup-128";
 constexpr const char* kNvidiaC16 = "nvidia-c16-coopmat";
+constexpr const char* kM3G15G = "m3-g15g";
+constexpr const char* kM3ProG15S = "m3-pro-g15s";
+constexpr const char* kM3MaxG15C = "m3-max-g15c";
 
 std::string g_profile;
 
@@ -324,6 +327,12 @@ TEST_CASE("capability report is stamped with the active profile") {
     CHECK(c.device_name == std::string("Apple M1 (G13G B1)"));
   } else if (profile_is(kNvidiaC16)) {
     CHECK(c.device_name == std::string("NVIDIA GeForce RTX 5060 Ti"));
+  } else if (profile_is(kM3G15G)) {
+    CHECK(c.device_name == std::string("Apple M3 (G15G B1)"));
+  } else if (profile_is(kM3ProG15S)) {
+    CHECK(c.device_name == std::string("Apple M3 Pro (G15S B1)"));
+  } else if (profile_is(kM3MaxG15C)) {
+    CHECK(c.device_name == std::string("Apple M3 Max (G15C B1)"));
   } else {
     CHECK(h.device_name == c.device_name);
   }
@@ -392,6 +401,15 @@ TEST_CASE("capability report is stamped with the active profile") {
     // it inherits hardware truth, and require_backed refuses a claimed
     // dispatch the runtime device cannot back.
     CHECK(c.cooperative_matrix_bf16 == h.cooperative_matrix_bf16);
+  } else if (profile_is(kM3G15G) || profile_is(kM3ProG15S) ||
+             profile_is(kM3MaxG15C)) {
+    // M3 family device-name stamps: every capability axis inherits the
+    // hardware report; cooperative_matrix_f32_8 is stamped false (the
+    // profile's "Borealis parts carry no cooperative matrix" claim).
+    CHECK_EQ(c.subgroup_size, h.subgroup_size);
+    CHECK_FALSE(c.cooperative_matrix_f32_8);
+    CHECK(c.subgroup_operations == h.subgroup_operations);
+    CHECK_EQ(c.max_compute_shared_memory_size, h.max_compute_shared_memory_size);
   } else {
     FAIL("unhandled profile ", g_profile);
   }
@@ -1518,7 +1536,7 @@ int main(int argc, char** argv) {
     // Registry sanity: the documented profiles exist.
     for (const char* name : {kM1Fork, kM1Stock, kSubgroup64, kSmallSmem,
                              kNoCoopmat, kG13Legacy, kWorkgroup256,
-                             kWorkgroup128}) {
+                             kWorkgroup128, kM3G15G, kM3ProG15S, kM3MaxG15C}) {
       if (omarchy::capsim::find(name) == nullptr) {
         std::cerr << "unit: profile missing from registry: " << name
                   << "\n";
