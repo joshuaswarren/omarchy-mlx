@@ -1574,7 +1574,7 @@ void main() {
   uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint workgroup = gl_WorkGroupID.x;
-  // DEC-44 dispatch-order probe: flag bit 17 remaps the linear WG ->
+  // DEC-44 dispatch-order probe: flag bit 19 remaps the linear WG ->
   // row-block walk to a 64-wide transpose, so concurrently resident WGs
   // read weight regions ~groups/64 blocks apart instead of adjacent
   // blocks. Pure permutation of which WG computes which row block:
@@ -2196,7 +2196,7 @@ void main() {
   uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
 #endif
   uint workgroup = gl_WorkGroupID.x;
-  // DEC-44 dispatch-order probe: flag bit 17 remaps the linear WG ->
+  // DEC-44 dispatch-order probe: flag bit 19 remaps the linear WG ->
   // row-block walk to a 64-wide transpose, so concurrently resident WGs
   // read weight regions ~groups/64 blocks apart instead of adjacent
   // blocks. Pure permutation of which WG computes which row block:
