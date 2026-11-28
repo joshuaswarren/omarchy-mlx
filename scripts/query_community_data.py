@@ -31,9 +31,11 @@ lines are skipped and counted.
 """
 
 import argparse
+import http.client
 import json
 import os
 import re
+import stat
 import statistics
 import subprocess
 import sys
@@ -46,6 +48,11 @@ DEFAULT_BASE_URL = "https://mlx-omarchy-community-data.joshua-s-warren.workers.d
 USER_AGENT = ("mlx-omarchy-community-data/1.0 "
               "(+https://github.com/joshuaswarren/omarchy-mlx)")
 SNAPSHOT_RELPATH = Path("community-data") / "snapshot"
+# The mirror caps latest.jsonl at this size; reads are capped to match.
+MAX_JSONL_BYTES = 32 * 1024 * 1024
+_READ_BLOCK = 1 << 16
+# O_NONBLOCK: a FIFO opens without a writer and is refused as not regular.
+_LOCAL_OPEN = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
 
 METRIC_UNITS = {"tflops": "TFLOP/s", "median_ms": "ms", "min_ms": "ms",
                 "max_ms": "ms"}
@@ -329,6 +336,63 @@ def snapshot_file(snapshot_dir):
     return Path(snapshot_dir) / "latest.jsonl"
 
 
+def read_capped(read, max_bytes):
+    """Bytes from repeated read(n) calls: all of them, or max_bytes + 1."""
+    chunks, size = [], 0
+    while size <= max_bytes:
+        block = read(min(_READ_BLOCK, max_bytes + 1 - size))
+        if not block:
+            break
+        chunks.append(block)
+        size += len(block)
+    return b"".join(chunks)
+
+
+def read_local(path):
+    """Text of a local latest.jsonl; DatasetError unless it is a regular
+    file (a symlink to one is fine) of at most MAX_JSONL_BYTES."""
+    try:
+        fd = os.open(path, _LOCAL_OPEN)
+    except OSError as exc:
+        raise DatasetError(f"cannot read {path}: {exc.strerror}") from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise DatasetError(f"{path} is not a regular file")
+        if info.st_size > MAX_JSONL_BYTES:
+            raise DatasetError(
+                f"{path} is larger than {MAX_JSONL_BYTES} bytes")
+        data = read_capped(lambda n: os.read(fd, n), MAX_JSONL_BYTES)
+    except OSError as exc:
+        raise DatasetError(f"cannot read {path}: {exc.strerror}") from None
+    finally:
+        os.close(fd)
+    if len(data) > MAX_JSONL_BYTES:
+        raise DatasetError(f"{path} is larger than {MAX_JSONL_BYTES} bytes")
+    return data.decode("utf-8", "replace")
+
+
+def git_blob(repo_root, spec):
+    """Bytes of the blob git names spec, or None when there is none.
+
+    The size is checked before the blob is read, and the object id read
+    by the check is the one read after it, so a moving ref cannot swap
+    in a larger blob between the two.
+    """
+    check = subprocess.run(["git", "cat-file", "--batch-check"],
+                           input=spec.encode("utf-8") + b"\n", cwd=repo_root,
+                           capture_output=True, timeout=30)
+    fields = check.stdout.split()
+    if check.returncode != 0 or len(fields) != 3 or fields[1] != b"blob":
+        return None
+    if int(fields[2]) > MAX_JSONL_BYTES:
+        raise DatasetError(
+            f"git {spec} is larger than {MAX_JSONL_BYTES} bytes")
+    proc = subprocess.run(["git", "cat-file", "blob", fields[0].decode()],
+                          cwd=repo_root, capture_output=True, timeout=30)
+    return proc.stdout if proc.returncode == 0 else None
+
+
 def load_local(args, repo_root):
     """Return (records, skipped, source_label) from the local ladder.
 
@@ -342,8 +406,7 @@ def load_local(args, repo_root):
         path = snapshot_file(Path(args.snapshot))
         tried.append(str(path))
         if path.is_file():
-            records, skipped = parse_jsonl(
-                path.read_text(encoding="utf-8", errors="replace"))
+            records, skipped = parse_jsonl(read_local(path))
             return records, skipped, str(path)
         raise DatasetError(
             "no dataset at the requested --snapshot. Looked at: " +
@@ -360,20 +423,17 @@ def load_local(args, repo_root):
         path = snapshot_file(directory)
         tried.append(str(path))
         if path.is_file():
-            records, skipped = parse_jsonl(
-                path.read_text(encoding="utf-8", errors="replace"))
+            records, skipped = parse_jsonl(read_local(path))
             return records, skipped, str(path)
     for ref in ("origin/community-data", "community-data"):
         spec = f"{ref}:snapshot/latest.jsonl"
         tried.append(f"git {spec}")
         try:
-            proc = subprocess.run(["git", "show", spec], cwd=repo_root,
-                                  capture_output=True, timeout=30)
+            blob = git_blob(repo_root, spec)
         except (OSError, subprocess.SubprocessError):
             break
-        if proc.returncode == 0:
-            records, skipped = parse_jsonl(proc.stdout.decode("utf-8",
-                                                             "replace"))
+        if blob is not None:
+            records, skipped = parse_jsonl(blob.decode("utf-8", "replace"))
             return records, skipped, f"git {spec}"
     raise DatasetError(
         "no local dataset found. Looked at: " + ", ".join(tried) +
@@ -381,15 +441,67 @@ def load_local(args, repo_root):
         "community-data), pass --snapshot DIR, or use --source remote.")
 
 
-def fetch_url(url, timeout=60):
+class _DropRedirectBody(urllib.request.HTTPRedirectHandler):
+    """Close 3xx responses unread: urllib would read their whole body."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def urlopen(request, timeout):
+    """urllib.request.urlopen(), with redirect bodies closed unread."""
+    return urllib.request.build_opener(_DropRedirectBody).open(
+        request, timeout=timeout)
+
+
+def read_response(response, max_bytes, truncate=False):
+    """At most max_bytes + 1 bytes of a 200 response's body.
+
+    DatasetError for any other status, for a Content-Length that is not
+    one plain-digit value http.client could parse, or for a body that
+    ends before its Content-Length (a body without one, ended by the
+    server closing, cannot be checked). Over max_bytes is a DatasetError
+    too, unless truncate: then the caller gets max_bytes + 1 bytes and
+    trims them. http.client errors while reading pass through.
+    """
+    if response.status != 200:
+        raise DatasetError(f"HTTP {response.status}")
+    lengths = response.headers.get_all("Content-Length") or []
+    if lengths:
+        # http.client drops a length it cannot parse (or one beside
+        # Transfer-Encoding) and then reads to the close.
+        if (len(lengths) > 1 or response.length is None
+                or not re.fullmatch(r"[0-9]+", lengths[0].strip(" \t"))):
+            raise DatasetError(
+                f"invalid Content-Length {lengths[0][:40]!r}")
+        if not truncate and response.length > max_bytes:
+            raise DatasetError(f"response is larger than {max_bytes} bytes")
+    body = read_capped(response.read, max_bytes)
+    if len(body) > max_bytes:
+        if truncate:
+            return body
+        raise DatasetError(f"response is larger than {max_bytes} bytes")
+    if response.length:
+        raise DatasetError(
+            f"response body ended {response.length} bytes short")
+    return body
+
+
+def fetch_url(url, timeout=60, max_bytes=MAX_JSONL_BYTES):
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
+        with urlopen(request, timeout=timeout) as response:
+            return read_response(response, max_bytes)
     except urllib.error.HTTPError as exc:
+        exc.close()
         raise DatasetError(f"HTTP {exc.code} from {url}") from exc
     except (urllib.error.URLError, OSError) as exc:
         raise DatasetError(f"endpoint unreachable: {exc}") from exc
+    except http.client.HTTPException as exc:
+        raise DatasetError(f"bad HTTP response from {url}: {exc!r}") from exc
+    except DatasetError as exc:
+        raise DatasetError(f"{exc} from {url}") from None
 
 
 def load_remote(args):
