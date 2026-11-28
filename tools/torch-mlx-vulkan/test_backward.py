@@ -519,6 +519,68 @@ def test_relu_inplace_and_boolean_dispatch():
     assert np.array_equal(np.array(my_idx), idx.numpy())
 
 
+def test_pool_backward_family():
+    """PT-AL-bw3: pool backwards vs CPU aten (allclose 1e-5)."""
+    T = mlx_vulkan.ATEN_TABLE
+    torch.manual_seed(0)
+    a = torch.ops.aten
+
+    x = torch.randn(2, 3, 4, 5)
+    for osize in ((2, 2), (3, 3)):
+        _, idx = a.adaptive_max_pool2d(x, osize)
+        g = torch.randn(2, 3, *osize)
+        _cmp(f"admp2d_bw{osize}",
+             T["adaptive_max_pool2d_backward"](_am(g), _am(x), _am(idx)),
+             a.adaptive_max_pool2d_backward(g, x, idx))
+
+    x3 = torch.randn(2, 2, 3, 4, 3)
+    _, idx3 = a.adaptive_max_pool3d(x3, (2, 2, 2))
+    g3 = torch.randn(2, 2, 2, 2, 2)
+    _cmp("admp3d_bw",
+         T["adaptive_max_pool3d_backward"](_am(g3), _am(x3), _am(idx3)),
+         a.adaptive_max_pool3d_backward(g3, x3, idx3))
+
+    x4 = torch.randn(1, 2, 4, 4, 4)
+    _, idx4 = a.max_pool3d_with_indices(x4, (2, 2, 2), (1, 1, 1), (0, 0, 0),
+                                        (1, 1, 1), False)
+    g4 = torch.randn(1, 2, 3, 3, 3)
+    _cmp("mp3d_idx_bw",
+         T["max_pool3d_with_indices_backward"](_am(g4), _am(x4), (2, 2, 2),
+                                               (1, 1, 1), (0, 0, 0), (1, 1, 1),
+                                               False, _am(idx4)),
+         a.max_pool3d_with_indices_backward(g4, x4, (2, 2, 2), (1, 1, 1),
+                                            (0, 0, 0), (1, 1, 1), False, idx4))
+    _, idx5 = a.max_pool3d_with_indices(x4, (2, 2, 2), (2, 2, 2), (1, 1, 1),
+                                        (1, 1, 1), False)
+    g5 = torch.randn(1, 2, 3, 3, 3)
+    _cmp("mp3d_idx_bw_pad",
+         T["max_pool3d_with_indices_backward"](_am(g5), _am(x4), (2, 2, 2),
+                                               (2, 2, 2), (1, 1, 1), (1, 1, 1),
+                                               False, _am(idx5)),
+         a.max_pool3d_with_indices_backward(g5, x4, (2, 2, 2), (2, 2, 2),
+                                            (1, 1, 1), (1, 1, 1), False, idx5))
+
+    xa = torch.randn(1, 2, 4, 4, 4)
+    for cip in (True, False):
+        go = torch.randn(1, 2, 3, 3, 3)
+        _cmp(f"avg3_bw_cip{cip}",
+             T["avg_pool3d_backward"](_am(go), _am(xa), (2, 2, 2), (1, 1, 1),
+                                      (0, 0, 0), False, cip, None),
+             a.avg_pool3d_backward(go, xa, (2, 2, 2), (1, 1, 1), (0, 0, 0),
+                                   False, cip, None))
+    go2 = torch.randn(1, 2, 5, 5, 5)
+    _cmp("avg3_bw_pad",
+         T["avg_pool3d_backward"](_am(go2), _am(xa), (2, 2, 2), (1, 1, 1),
+                                  (1, 1, 1), False, False, None),
+         a.avg_pool3d_backward(go2, xa, (2, 2, 2), (1, 1, 1), (1, 1, 1),
+                               False, False, None))
+    _cmp("avg3_bw_div",
+         T["avg_pool3d_backward"](_am(go), _am(xa), (2, 2, 2), (1, 1, 1),
+                                  (0, 0, 0), False, False, 4),
+         a.avg_pool3d_backward(go, xa, (2, 2, 2), (1, 1, 1), (0, 0, 0),
+                               False, False, 4))
+
+
 if __name__ == "__main__":
     test_native_layer_norm_backward()
     test_embedding_dense_backward()
@@ -539,6 +601,7 @@ if __name__ == "__main__":
     test_relu_inplace_and_boolean_dispatch()
     test_native_layer_norm_backward_bf16_and_fp32()
     test_native_layer_norm_backward_lowered_in_training_graph()
+    test_pool_backward_family()
     print("ALL PASS")
 
 

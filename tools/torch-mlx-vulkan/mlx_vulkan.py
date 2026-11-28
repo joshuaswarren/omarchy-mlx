@@ -976,6 +976,82 @@ def _nll_loss_backward(gout, a, target, weight, reduction, ignore_index, tw):
     return mx.where(onehot, g.reshape(n, 1), mx.zeros_like(a))
 
 
+def _flat_scatter_back(g0, idx, n):
+    # g0 (J, ...), idx (J,) -> out (n, ...) with out[k] = sum of g0 rows
+    # whose idx is k.
+    oh = mx.equal(mx.arange(n).reshape(n, 1),
+                  _mx(idx).astype(mx.int32).reshape(1, -1)).astype(g0.dtype)
+    return mx.sum(mx.expand_dims(g0, 0) *
+                  oh.reshape(n, -1, *([1] * (g0.ndim - 1))), axis=1)
+
+
+def _idx_pool_backward(g, indices, spatial):
+    # max-pool backward with flat per-(N,C) spatial indices from the
+    # forward: grad_x[nc, idx[j]] += g[nc, j].
+    g, idx = _mx(g), _mx(indices)
+    N, C = g.shape[0], g.shape[1]
+    nsp = 1
+    for v in spatial:
+        nsp *= int(v)
+    g3 = g.reshape(N * C, -1)
+    i3 = idx.reshape(N * C, -1).astype(mx.int32)
+    flat = (i3 + (mx.arange(N * C) * nsp).reshape(-1, 1)).reshape(-1)
+    out = _flat_scatter_back(g3.reshape(-1), flat, N * C * nsp)
+    return out.reshape(N, C, *[int(v) for v in spatial])
+
+
+def _avg_pool3d_backward(g, a, kernel_size, stride, padding, ceil_mode,
+                         count_include_pad, divisor_override):
+    # every output position j scatters g_j / d_j onto its window;
+    # d_j is the valid-overlap count (count_include_pad=False), the
+    # kernel volume (True), or the override.
+    import numpy as np
+    a, g = _mx(a), _mx(g)
+    k, st, pd = (_tup(v, 3) for v in (kernel_size, stride, padding))
+    D, H, W = a.shape[2], a.shape[3], a.shape[4]
+    N, C = a.shape[0], a.shape[1]
+    nsp, kvol = D * H * W, k[0] * k[1] * k[2]
+    outs = []
+    for n, ki, si, pi in zip((D, H, W), k, st, pd):
+        f = (n + 2 * pi - ki) / si + 1
+        outs.append(math.ceil(f) if ceil_mode else math.floor(f))
+    od, oh, ow = outs
+    idx = np.zeros((od * oh * ow, kvol), dtype=np.int64)
+    valid = np.zeros((od * oh * ow, kvol), dtype=bool)
+    j = 0
+    for z in range(od):
+        for y in range(oh):
+            for x in range(ow):
+                t = 0
+                for dz in range(k[0]):
+                    zz = z * st[0] - pd[0] + dz
+                    for dy in range(k[1]):
+                        yy = y * st[1] - pd[1] + dy
+                        for dx in range(k[2]):
+                            xx = x * st[2] - pd[2] + dx
+                            ok = 0 <= zz < D and 0 <= yy < H and 0 <= xx < W
+                            valid[j, t] = ok
+                            idx[j, t] = (min(max(zz, 0), D - 1) * H +
+                                         min(max(yy, 0), H - 1)) * W +                                 min(max(xx, 0), W - 1) if ok else 0
+                            t += 1
+                j += 1
+    nout = od * oh * ow
+    if divisor_override is not None:
+        d = mx.full((nout,), float(divisor_override))
+    elif count_include_pad:
+        d = mx.full((nout,), float(kvol))
+    else:
+        d = mx.maximum(mx.array(valid.sum(1)), 1)
+    v = mx.array(valid.reshape(1, nout, kvol))
+    pos = mx.array(idx.reshape(1, nout * kvol))
+    g3 = g.reshape(N * C, nout)
+    vals = mx.where(v, (g3 / d).reshape(N * C, nout, 1),
+                    mx.zeros((N * C, nout, kvol))).reshape(N * C, -1)
+    flat = (pos + (mx.arange(N * C) * nsp).reshape(-1, 1)).reshape(-1)
+    out = _flat_scatter_back(vals.reshape(-1), flat, N * C * nsp)
+    return out.reshape(N, C, D, H, W)
+
+
 def _convolution(x, w, b=None, stride=1, padding=0, dilation=1,
                  transposed=False, output_padding=0, groups=1):
     # aten.convolution: torch layouts NCHW / OIHW; mx weight (O,H,W,I), x NHWC.
@@ -2341,6 +2417,11 @@ _FUNC_SPECS = {
     "tanh_backward": _tanh_backward,
     "nll_loss_forward": _nll_loss_forward,
     "nll_loss_backward": _nll_loss_backward,
+    # PT-AL-bw3: pool backward family.
+    "adaptive_max_pool2d_backward": lambda g, a, indices: _idx_pool_backward(g, indices, _mx(a).shape[2:]),
+    "adaptive_max_pool3d_backward": lambda g, a, indices: _idx_pool_backward(g, indices, _mx(a).shape[2:]),
+    "max_pool3d_with_indices_backward": lambda g, a, *ar, indices=None, **kw: _idx_pool_backward(g, indices if indices is not None else ar[-1], _mx(a).shape[2:]),
+    "avg_pool3d_backward": _avg_pool3d_backward,
     "gelu_backward": _gelu_backward,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
