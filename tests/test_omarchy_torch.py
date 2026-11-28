@@ -185,6 +185,49 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     torch.allclose(got, ref.float(), atol=tol, rtol=tol),
                     (name, dtype, float((got - ref.float()).abs().max())))
 
+    def test_softplus_mish(self):
+        """PT-AL-c: aten.softplus (with the threshold edge at the defaults
+        and at beta=2/threshold=10) and aten.mish lower in the wheel
+        backend — fp32 and bf16 parity against torch."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x = torch.tensor([[-4.0, -1.0, 0.0], [0.001, 1.0, 5.0]])
+        edge = torch.tensor([[19.5, 20.0], [20.5, 21.0]])      # beta*x == 20
+        edge_b = torch.tensor([[4.5, 5.0], [5.5, 6.0]])        # beta*x == 10
+        m = torch.tensor([[-5.0, -1.0], [0.0, 3.0]])
+        F = torch.nn.functional
+        cases = [
+            ("softplus", (x,), {}, F.softplus(x)),
+            ("softplus", (edge,), {}, F.softplus(edge)),
+            ("softplus", (edge_b,), {"beta": 2, "threshold": 10},
+             F.softplus(edge_b, beta=2, threshold=10)),
+            ("softplus", (x,), {"beta": 0.5, "threshold": 40},
+             F.softplus(x, beta=0.5, threshold=40)),
+            ("mish", (m,), {}, F.mish(m)),
+        ]
+        for name, ins, kw, ref in cases:
+            lowering = ATEN_TABLE[name]
+            for dtype, tol in ((torch.float32, 1e-5),
+                               (torch.bfloat16, 2e-2)):
+                mins = tuple(
+                    (mx.array(t.float().numpy()).astype(mx.bfloat16)
+                     if dtype == torch.bfloat16 else mx.array(t.numpy()))
+                    if torch.is_tensor(t) else t for t in ins)
+                got = torch.from_numpy(
+                    np.array(lowering(*mins, **kw).astype(mx.float32)))
+                self.assertTrue(
+                    torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                    (name, kw, dtype, float((got - ref.float()).abs().max())))
+        # the threshold edge moves with beta: at x == threshold/beta the
+        # log branch still serves (strictly-greater comparison)
+        at_edge = ATEN_TABLE["softplus"](mx.array(10.0), beta=2, threshold=10)
+        ref = F.softplus(torch.tensor(10.0), beta=2, threshold=10)
+        self.assertAlmostEqual(float(np.array(at_edge)), float(ref), places=4)
+
     def test_glu_parity(self):
         """PT-AL-d: aten.glu lowers in the wheel backend — fp32 and
         bf16 parity against torch across dim=-1/0/1."""

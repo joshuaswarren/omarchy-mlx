@@ -307,6 +307,27 @@ def _celu(a, alpha=1.0):
     return out.astype(a.dtype)
 
 
+def _softplus(a, beta=1, threshold=20):
+    # aten.softplus(input, beta=1, threshold=20):
+    #   log1p(exp(beta*x)) / beta, and the linear x when beta*x > threshold
+    #   (strictly greater — the equality point keeps the log branch). The
+    #   linear tail also keeps exp(beta*x) finite for large inputs.
+    a = _mx(a)
+    f = a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a
+    bx = f * beta
+    out = mx.where(bx > threshold, f, mx.log1p(mx.exp(bx)) / beta)
+    return out.astype(a.dtype)
+
+
+def _mish(a, inplace=False):
+    # aten.mish(input): x * tanh(softplus(x)) under softplus' defaults
+    # (beta=1, threshold=20).
+    a = _mx(a)
+    f = a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a
+    sp = mx.where(f > 20, f, mx.log1p(mx.exp(f)))
+    return (f * mx.tanh(sp)).astype(a.dtype)
+
+
 def _glu(a, dim=-1):
     # aten.glu(input, dim=-1): halves along dim, a * sigmoid(b). A scalar
     # or an odd-sized dim is an error in aten too.
@@ -466,6 +487,9 @@ _FUNC_SPECS = {
     "gelu": lambda a, approximate="none": a * mx.sigmoid(1.702 * a) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0))),
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
+    # softplus (T5, GDN gate) and mish (EfficientNet), PT-AL-c
+    "softplus": _softplus,
+    "mish": _mish,
     # the elu family (ViT, Conformer, speech models), PT-AL-a
     "elu": _elu,
     "elu_": _elu,
