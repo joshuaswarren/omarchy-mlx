@@ -543,6 +543,95 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 torch.allclose(got, ref.float(), atol=tol, rtol=tol),
                 (name, kw, float((got - ref.float()).abs().max())))
 
+    def test_mode_kthvalue_parity(self):
+        """PT-PAIR-b: aten.mode + aten.kthvalue lower in the wheel
+        backend — fp32/int64 value parity vs torch, and the index
+        contract (the returned index points at a position holding the
+        returned value; torch CPU's own quickselect indices do not
+        always satisfy it, so equality is checked on int64 mode where
+        torch's contract is stable)."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        # --- mode: fp32 with duplicates, tie toward smallest modal value
+        x = np.random.RandomState(1).randn(4, 9).astype(np.float32)
+        x[0, 0] = x[0, 1] = x[0, 2] = 0.5
+        x[1, :] = [1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0]
+        for dim in (1, 0, -1):
+            vals, idx = ATEN_TABLE["mode"](mx.array(x), dim)
+            tv, ti = torch.mode(torch.tensor(x), dim)
+            self.assertTrue(np.allclose(np.array(vals), tv.numpy()),
+                            (dim, np.array(vals), tv.numpy()))
+            held = np.take_along_axis(
+                x, np.array(idx).reshape(
+                    [x.shape[i] if i != dim % x.ndim else 1
+                     for i in range(x.ndim)]), axis=dim % x.ndim)
+            self.assertTrue(np.array_equal(
+                held.reshape(-1), tv.reshape(-1).numpy()),
+                (dim, held.reshape(-1)))
+        # mode int64: values and indices match torch exactly
+        xi = np.random.RandomState(2).randint(0, 4, size=(3, 11)).astype(np.int64)
+        vi, ii = ATEN_TABLE["mode"](mx.array(xi), 1)
+        tvi, tii = torch.mode(torch.tensor(xi), 1)
+        self.assertTrue(np.array_equal(np.array(vi), tvi.numpy()))
+        self.assertTrue(np.array_equal(np.array(ii), tii.numpy()))
+        # mode 1-D, keepdim both ways
+        x1 = np.array([7, 7, 7, 1, 2], dtype=np.int64)
+        v1, i1 = ATEN_TABLE["mode"](mx.array(x1), keepdim=True)
+        tv1, ti1 = torch.mode(torch.tensor(x1), keepdim=True)
+        self.assertEqual(np.array(v1).shape, tuple(tv1.shape))
+        self.assertTrue(np.array_equal(np.array(v1), tv1.numpy()))
+        # mode 2-D keepdim=True: shape (4,1), values + index contract
+        vk, ik = ATEN_TABLE["mode"](mx.array(x), 1, keepdim=True)
+        tvk, tik = torch.mode(torch.tensor(x), 1, keepdim=True)
+        self.assertEqual(np.array(vk).shape, tuple(tvk.shape))
+        self.assertEqual(tuple(np.array(vk).shape), (4, 1))
+        self.assertTrue(np.array_equal(np.array(vk), tvk.numpy()))
+        held_k = np.take_along_axis(x, np.array(ik), axis=1)
+        self.assertTrue(np.array_equal(held_k, tvk.numpy()))
+
+        # --- kthvalue: fp32 distinct + int64 duplicates
+        for dt in (np.float32, np.int64):
+            rng = np.random.RandomState(3)
+            xk = (rng.randn(4, 9) if dt is np.float32
+                  else rng.randint(0, 4, size=(4, 9))).astype(dt)
+            for k, dim in ((1, 1), (3, 1), (5, -1), (2, 0)):
+                vals, idx = ATEN_TABLE["kthvalue"](mx.array(xk), k, dim)
+                tv, ti = torch.kthvalue(torch.tensor(xk), k, dim)
+                self.assertTrue(np.array_equal(np.array(vals), tv.numpy()),
+                                (dt, k, dim, np.array(vals), tv.numpy()))
+                # index contract: element at the returned index == value
+                deff = dim % xk.ndim
+                gax = np.array(idx).reshape(
+                    [xk.shape[i] if i != deff else 1
+                     for i in range(xk.ndim)])
+                held = np.take_along_axis(xk, gax, axis=deff)
+                self.assertTrue(np.array_equal(
+                    held.reshape(-1), np.array(vals).reshape(-1)),
+                    (dt, k, dim))
+        # kthvalue 1-D + keepdim
+        xk1 = np.array([9, 4, 7, 1, 8, 2], dtype=np.int64)
+        vk1, ik1 = ATEN_TABLE["kthvalue"](mx.array(xk1), 3, 0, keepdim=True)
+        tvk1, tik1 = torch.kthvalue(torch.tensor(xk1), 3, 0, keepdim=True)
+        self.assertEqual(np.array(vk1).shape, tuple(tvk1.shape))
+        self.assertTrue(np.array_equal(np.array(vk1), tvk1.numpy()))
+        self.assertEqual(int(xk1[int(np.array(ik1)[0])]),
+                         int(np.array(vk1)[0]))
+        # kthvalue 2-D keepdim=True: shape (4,1), values + index contract
+        xk2 = np.random.RandomState(4).randint(0, 4, size=(4, 9)).astype(np.int64)
+        vk2, ik2 = ATEN_TABLE["kthvalue"](mx.array(xk2), 3, 1, keepdim=True)
+        tvk2, tik2 = torch.kthvalue(torch.tensor(xk2), 3, 1, keepdim=True)
+        self.assertEqual(np.array(vk2).shape, tuple(tvk2.shape))
+        self.assertEqual(tuple(np.array(vk2).shape), (4, 1))
+        self.assertTrue(np.array_equal(np.array(vk2), tvk2.numpy()))
+        held_k2 = np.take_along_axis(xk2, np.array(ik2), axis=1)
+        self.assertTrue(np.array_equal(held_k2, tvk2.numpy()))
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
