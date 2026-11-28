@@ -294,8 +294,8 @@ class TestOmarchyTorchBackend(unittest.TestCase):
 
     def test_linalg_norm_parity(self):
         """PT-NORM-b: linalg_vector_norm/linalg_norm lower in the wheel
-        backend — parity vs torch across ord=1/2/inf, dims, keepdim,
-        dtype cast; plus the aten.norm inf/-inf pin."""
+        backend — fp32 and bf16 parity vs torch across ord=1/2/inf, dims,
+        keepdim, dtype cast; plus the aten.norm inf/-inf pin."""
         import mlx.core as mx
         import numpy as np
         import torch
@@ -305,33 +305,36 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         x = torch.randn(3, 4)
         x3 = torch.randn(2, 3, 4)
         cases = [
-            ("linalg_vector_norm", (x,), {},
-             torch.linalg.vector_norm(x)),
-            ("linalg_vector_norm", (x,), {"ord": 1.0},
-             torch.linalg.vector_norm(x, ord=1.0)),
-            ("linalg_vector_norm", (x,),
-             {"ord": float("inf"), "dim": [1]},
-             torch.linalg.vector_norm(x, ord=float("inf"), dim=[1])),
-            ("linalg_vector_norm", (x3,),
-             {"ord": 0.5, "dim": [1, 2], "keepdim": True},
-             torch.linalg.vector_norm(x3, ord=0.5, dim=[1, 2],
-                                      keepdim=True)),
-            ("linalg_vector_norm", (x,), {"dtype": torch.float64},
-             torch.linalg.vector_norm(x, dtype=torch.float64)),
-            ("linalg_norm", (x,), {}, torch.linalg.norm(x)),
-            ("linalg_norm", (x,), {"ord": float("-inf"), "dim": [0]},
-             torch.linalg.norm(x, ord=float("-inf"), dim=[0])),
-            ("linalg_norm", (x3,), {"ord": 2.0, "dim": [2]},
-             torch.linalg.norm(x3, ord=2.0, dim=[2])),
+            ("linalg_vector_norm", torch.linalg.vector_norm, (x,), {}),
+            ("linalg_vector_norm", torch.linalg.vector_norm, (x,),
+             {"ord": 1.0}),
+            ("linalg_vector_norm", torch.linalg.vector_norm, (x,),
+             {"ord": float("inf"), "dim": [1]}),
+            ("linalg_vector_norm", torch.linalg.vector_norm, (x3,),
+             {"ord": 0.5, "dim": [1, 2], "keepdim": True}),
+            ("linalg_vector_norm", torch.linalg.vector_norm, (x,),
+             {"dtype": torch.float64}),
+            ("linalg_norm", torch.linalg.norm, (x,), {}),
+            ("linalg_norm", torch.linalg.norm, (x,),
+             {"ord": float("-inf"), "dim": [0]}),
+            ("linalg_norm", torch.linalg.norm, (x3,),
+             {"ord": 2.0, "dim": [2]}),
         ]
-        for name, ins, kw, ref in cases:
+        for name, fn, ins, kw in cases:
             lowering = ATEN_TABLE[name]
-            mins = tuple(mx.array(t.numpy()) for t in ins)
-            got = torch.from_numpy(
-                np.array(lowering(*mins, **kw).astype(mx.float32)))
-            self.assertTrue(
-                torch.allclose(got, ref.float(), atol=1e-5, rtol=1e-5),
-                (name, kw, float((got - ref.float()).abs().max())))
+            for dtype, tol in ((torch.float32, 1e-5),
+                               (torch.bfloat16, 2e-2)):
+                mins = tuple(
+                    (mx.array(t.float().numpy()).astype(mx.bfloat16)
+                     if dtype == torch.bfloat16 else mx.array(t.numpy()))
+                    for t in ins)
+                ref = fn(*[t.to(dtype) for t in ins], **kw)
+                got = torch.from_numpy(
+                    np.array(lowering(*mins, **kw).astype(mx.float32)))
+                self.assertTrue(
+                    torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                    (name, kw, dtype,
+                     float((got - ref.float()).abs().max())))
         m = mx.array(x.numpy())
         for p, ref in ((float("inf"), torch.norm(x, float("inf"))),
                        (float("-inf"), torch.norm(x, float("-inf")))):
