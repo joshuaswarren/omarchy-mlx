@@ -78,9 +78,6 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         aten.logaddexp with fp32/bf16 parity against the aten CPU ops,
         including near-zero inputs where the naive log(1+x)/exp(x)-1
         forms lose precision."""
-    def test_unfold_last_dim(self):
-        """PT-IM-b: aten.unfold lowers via gather + transpose — fp32 parity
-        against the aten CPU op on the last dimension."""
         import mlx.core as mx
         import torch
 
@@ -116,6 +113,10 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     torch.allclose(got, ref.float(), **tol),
                     (name, dtype, float((got - ref.float()).abs().max())))
         torch.manual_seed(1)
+
+    def test_unfold_last_dim(self):
+        """PT-IM-b: aten.unfold lowers via gather + transpose — fp32 parity
+        against the aten CPU op on the last dimension."""
         lowering = ATEN_TABLE["unfold"]
         for shape, dim, size, step in [((2, 3, 10), 2, 4, 2), ((4, 10), 1, 3, 1),
                                        ((2, 3, 12), 2, 5, 3)]:

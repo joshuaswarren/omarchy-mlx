@@ -161,6 +161,9 @@ def _unfold(x, dim, size, step):
     if length < size:
         raise RuntimeError(
             f"unfold: requested size {size} exceeds dimension {d} length {length}")
+    if step <= 0:
+        raise RuntimeError(
+            f"unfold: step must be positive, got {step}")
     n_windows = (length - size) // step + 1
     idx = (mx.arange(n_windows) * step)[:, None] + mx.arange(size)[None, :]
     idx = mx.asarray(idx, mx.int32)
