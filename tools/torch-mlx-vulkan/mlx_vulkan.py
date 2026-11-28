@@ -933,13 +933,43 @@ def _nll_loss_forward(a, target, weight=None, reduction=1, ignore_index=-100):
     if weight is not None:
         return _raise("nll_loss weight")
     a, t = _mx(a), _mx(target).astype(mx.int32)
-    n = a.shape[0]
-    lp = a[mx.arange(n), t]
+    # gather class scores along dim 1; covers both nll_loss (N,C) and
+    # nll_loss2d (N,C,...) since the target keeps the non-class dims
+    lp = mx.take_along_axis(a, mx.expand_dims(t, 1), axis=1).squeeze(1)
     m = t != ignore_index
     tw = mx.sum(m.astype(mx.float32))
     if reduction == 0:
-        return (mx.where(m, -lp, 0.0), tw)
+        return (mx.where(m, -lp, 0.0), tw * 0.0)
     return (-mx.sum(mx.where(m, lp, 0.0)) / (tw if reduction == 1 else 1.0), tw)
+
+
+def _log_sigmoid_forward(a):
+    # aten returns (log_sigmoid(x), exp(-|x|)); the buffer feeds backward.
+    a = _mx(a)
+    out = mx.minimum(a, 0.0) - mx.log1p(mx.exp(-mx.abs(a)))
+    return out, mx.exp(-mx.abs(a))
+
+
+def _mlm_forward(a, target, reduction):
+    # aten.multilabel_margin_loss_forward: loss[n] = (1/C) * sum over
+    # target slots t and non-target classes i of relu(1-(x[t]-x[i]));
+    # second output is the per-class target indicator.
+    a, t = _mx(a), _mx(target).astype(mx.int32)
+    C = a.shape[-1]
+    cls = mx.arange(C)
+    is_tgt = mx.any(t[..., None] == cls, axis=-2).astype(a.dtype)
+    tk = mx.where(t < 0, mx.zeros_like(t), t)
+    xt = mx.take_along_axis(a, tk, axis=-1)          # (..., S)
+    diff = mx.maximum(0.0, 1.0 - (xt[..., None] - a[..., None, :]))
+    mask = (t >= 0)[..., None] * (1.0 - is_tgt)[..., None, :]
+    per = mx.sum(diff * mask, axis=(-2, -1)) / C
+    if reduction == 0:
+        out = per
+    elif reduction == 2:
+        out = mx.sum(per)
+    else:
+        out = mx.mean(per)
+    return out, is_tgt
 
 
 def _gelu_backward(g, a, approximate="none"):
@@ -2340,7 +2370,10 @@ _FUNC_SPECS = {
     "select_backward": _select_backward,
     "tanh_backward": _tanh_backward,
     "nll_loss_forward": _nll_loss_forward,
+    "nll_loss2d_forward": _nll_loss_forward,
     "nll_loss_backward": _nll_loss_backward,
+    "log_sigmoid_forward": _log_sigmoid_forward,
+    "multilabel_margin_loss_forward": _mlm_forward,
     "gelu_backward": _gelu_backward,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
