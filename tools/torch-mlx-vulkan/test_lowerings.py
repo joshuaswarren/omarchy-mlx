@@ -3014,6 +3014,82 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+
+def test_set_extras():
+    # isin / index_reduce(+_) / nansum / dist / to_dense / zero / fill /
+    # trunc-fix family parity vs torch CPU.
+    def run_fx(target, argmask, kwargs, *ins):
+        # argmask: None marks a placeholder slot fed by the next tensor
+        # in ins; any other entry is a literal positional arg.
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        cargs = tuple(next(it) if m is None else m for m in argmask)
+        n = g.call_function(target, cargs, dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*[a.clone() for a in ins])
+        assert stats["cpu"] == [], (stats, str(target))
+        it2 = iter([a.clone() for a in ins])
+        rargs = tuple(next(it2) if m is None else m for m in argmask)
+        ref = target(*rargs, **kwargs)
+        got = torch.as_tensor(out)
+        assert got.shape == ref.shape, (str(target), got.shape, ref.shape)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(),
+                           atol=1e-5, equal_nan=True), (str(target), got, ref)
+
+    A = torch.ops.aten
+    x = torch.randn(3, 4)
+    run_fx(A.isin.Tensor_Tensor, (None, None), {}, torch.arange(6).reshape(2, 3),
+           torch.tensor([1, 5, 7]))
+    run_fx(A.isin.Tensor_Tensor, (None, None), {"invert": True},
+           torch.arange(6).reshape(2, 3), torch.tensor([1, 5, 7]))
+    run_fx(A.isin.Tensor_Scalar, (None, 0.5), {}, x)
+    run_fx(A.isin.Scalar_Tensor, (3.0, None), {}, torch.tensor([1.0, 3.0]))
+
+    for red in ("prod", "mean", "amax", "amin"):
+        for inc in (True, False):
+            idx = torch.tensor([0, 2, 2, 0])
+            run_fx(A.index_reduce.default, (None, 1, None, None, red),
+                   {"include_self": inc}, x, idx, torch.randn(3, 4))
+            run_fx(A.index_reduce_.default, (None, 0, None, None, red),
+                   {"include_self": inc}, x, torch.tensor([1, 1, 0]),
+                   torch.randn(3, 4))
+
+    nanx = torch.tensor([[1.0, float("nan")], [float("nan"), 4.0]])
+    run_fx(A.nansum.default, (None,), {}, nanx)
+    run_fx(A.nansum.default, (None, [1]), {"keepdim": True}, nanx)
+    run_fx(A.dist.default, (None, None), {"p": 2}, x, torch.randn(3, 4))
+    run_fx(A.dist.default, (None, None), {"p": 1.5}, x, torch.randn(3, 4))
+    run_fx(A.dist.default, (None, None), {"p": float("inf")}, x, torch.randn(3, 4))
+    run_fx(A.to_dense.default, (None,), {}, x)
+    run_fx(A.zero.default, (None,), {}, x)
+    run_fx(A.zero_.default, (None,), {}, x)
+    run_fx(A.fill.Scalar, (None, 2.5), {}, x)
+    run_fx(A.fill.Tensor, (None, None), {}, x, torch.tensor(1.5))
+    run_fx(A.fill_.Scalar, (None, -3.0), {}, x)
+    run_fx(A.fill_.Tensor, (None, None), {}, x, torch.tensor(7.0))
+    run_fx(A.trunc.default, (None,), {}, x)
+    run_fx(A.trunc_.default, (None,), {}, x)
+    run_fx(A.fix.default, (None,), {}, x)
+    run_fx(A.fix_.default, (None,), {}, x)
+
+    # in-place writeback must reach later consumers
+    g = torch.fx.Graph()
+    p = g.placeholder("x")
+    g.call_function(A.zero_.default, (p,))
+    m = g.call_function(A.add.Tensor, (p, torch.tensor(3.0)))
+    g.output(m)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(torch.randn(4))
+    assert stats["cpu"] == [], stats
+    assert np.allclose(torch.as_tensor(out).numpy(), np.full(4, 3.0))
+    print("test_set_extras PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3150,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_set_extras()
     print("ALL PASS")
 
 
