@@ -382,11 +382,13 @@ def _meshgrid(*tensors, indexing="ij"):
     # aten signature is Tensor[] so a single list arg can arrive too
     if len(tensors) == 1 and isinstance(tensors[0], (list, tuple)):
         tensors = tuple(tensors[0])
-    # aten requires all inputs same dtype; mx accepts mixed — defer so
-    # the CPU fallback raises torch's own error
-    if any(t.dtype != tensors[0].dtype for t in tensors):
-        return _raise("meshgrid mixed dtypes")
-    return tuple(mx.meshgrid(*tensors, indexing=indexing))
+    ts = [_mx(t) for t in tensors]
+    # aten requires all inputs same dtype and 0D/1D rank; mx accepts
+    # mixed dtypes and silently flattens >1-D input — defer so the CPU
+    # fallback raises torch's own error
+    if any(t.dtype != ts[0].dtype for t in ts) or any(t.ndim > 1 for t in ts):
+        return _raise("meshgrid mixed dtypes or >1-D input")
+    return tuple(mx.meshgrid(*ts, indexing=indexing))
 
 def _red(reduction, size_average, reduce):
     # torch legacy kwargs: reduce=False -> "none"; else size_average picks mean/sum.
