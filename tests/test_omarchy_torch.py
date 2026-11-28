@@ -115,6 +115,66 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     (name, dtype, float((got - ref.float()).abs().max())))
         torch.manual_seed(1)
 
+    def test_dir_stack_split(self):
+        """Q-60: the wheel backend lowers the directional stack/split
+        helpers — aten.hstack/vstack/dstack/column_stack/row_stack,
+        hsplit/vsplit/dsplit and unflatten — with fp32 parity against the
+        torch functions, including the 1-D promotion shapes."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(3)
+        np = __import__("numpy")
+        x1 = [torch.randn(4) for _ in range(2)]
+        x2 = [torch.randn(2, 3), torch.randn(2, 2)]
+        cases = [
+            ("hstack", torch.hstack(x1), (x1,)),
+            ("hstack", torch.hstack(x2), (x2,)),
+            ("vstack", torch.vstack(x1), (x1,)),
+            ("vstack", torch.vstack(x2), (x2,)),
+            ("dstack", torch.dstack(x1), (x1,)),
+            ("dstack", torch.dstack(x2), (x2,)),
+            ("column_stack", torch.column_stack(x1), (x1,)),
+            ("column_stack", torch.column_stack(x2), (x2,)),
+            ("row_stack", torch.row_stack(x1), (x1,)),
+        ]
+        for name, ref, (tensors,) in cases:
+            got = torch.from_numpy(np.array(
+                ATEN_TABLE[name]([mx.array(t.numpy()) for t in tensors])))
+            self.assertEqual(tuple(got.shape), tuple(ref.shape),
+                             (name, got.shape, ref.shape))
+            self.assertTrue(torch.allclose(got, ref, atol=1e-5), name)
+        a = torch.randn(4, 8)
+        a3 = torch.randn(4, 8, 6)
+        m = mx.array(a.numpy())
+        m3 = mx.array(a3.numpy())
+        for name, ref, got in (
+            ("hsplit", torch.hsplit(a, 4), ATEN_TABLE["hsplit"](m, 4)),
+            ("hsplit", torch.hsplit(a, [3, 5]), ATEN_TABLE["hsplit"](m, [3, 5])),
+            ("vsplit", torch.vsplit(a, 2), ATEN_TABLE["vsplit"](m, 2)),
+            ("vsplit", torch.vsplit(a, [3]), ATEN_TABLE["vsplit"](m, [3])),
+            ("dsplit", torch.dsplit(a3, 3), ATEN_TABLE["dsplit"](m3, 3)),
+            ("dsplit", torch.dsplit(a3, [2, 4]),
+             ATEN_TABLE["dsplit"](m3, [2, 4])),
+        ):
+            self.assertEqual(len(ref), len(got), name)
+            for r, g in zip(ref, got):
+                self.assertTrue(
+                    torch.allclose(torch.from_numpy(np.array(g)), r,
+                                   atol=1e-5), name)
+        # fixed-axis rank guards and the unflatten -1 rule.
+        with self.assertRaises(NotImplementedError):
+            ATEN_TABLE["vsplit"](mx.array(x1[0].numpy()), 2)
+        with self.assertRaises(NotImplementedError):
+            ATEN_TABLE["dsplit"](m, 2)
+        got = torch.from_numpy(np.array(
+            ATEN_TABLE["unflatten"](m3, 1, [2, -1])))
+        ref = torch.unflatten(a3, 1, (2, -1))
+        self.assertEqual(tuple(got.shape), tuple(ref.shape))
+        self.assertTrue(torch.allclose(got, ref, atol=1e-5))
+
     def test_unfold_last_dim(self):
         """PT-IM-b: aten.unfold lowers via gather + transpose — fp32 parity
         against the aten CPU op on the last dimension."""
