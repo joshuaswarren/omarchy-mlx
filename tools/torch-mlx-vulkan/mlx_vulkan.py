@@ -2209,6 +2209,52 @@ def _rot90(a, k=1, dims=(0, 1)):
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
 
+def _hfft_norm_scale(s, norm):
+    prod = math.prod(s) if s else 1
+    return {"forward": 1.0 / prod, "ortho": prod ** -0.5}.get(norm or "backward", 1.0)
+
+
+def _hfftn(a, s=None, dim=None, norm=None):
+    # hfft over the axes in dim: irfft of conj(input), unnormalized raw
+    # sum, then the aten norm scale over the product of output sizes.
+    a = _mx(a)
+    if dim is None:
+        dim = tuple(range(a.ndim)) if s is None else tuple(range(a.ndim - len(s), a.ndim))
+    dim = tuple(d % a.ndim for d in dim)
+    if s is None:
+        # only the last transformed dim carries the half spectrum
+        s = tuple(a.shape[d] for d in dim[:-1]) + (2 * (a.shape[dim[-1]] - 1),)
+    s = tuple(int(v) for v in s)
+    return mx.fft.irfftn(mx.conj(a), s=s, axes=dim, norm="forward") * _hfft_norm_scale(s, norm)
+
+
+def _ihfftn(a, s=None, dim=None, norm=None):
+    # ihfft: conj of the raw-sum rfft of conj(input); backward norm
+    # divides by the product of the (full) fft sizes.
+    a = _mx(a)
+    if dim is None:
+        dim = tuple(range(a.ndim)) if s is None else tuple(range(a.ndim - len(s), a.ndim))
+    dim = tuple(d % a.ndim for d in dim)
+    if s is None:
+        s = tuple(a.shape[d] for d in dim)
+    s = tuple(int(v) for v in s)
+    raw = mx.conj(mx.fft.rfftn(mx.conj(a), s=s, axes=dim, norm="backward"))
+    fac = {"backward": 1.0 / math.prod(s), "ortho": math.prod(s) ** -0.5}.get(norm or "backward", 1.0)
+    return raw * fac
+
+
+def _istft(a, n_fft, hop_length=None, win_length=None, window=None,
+           center=True, normalized=False, onesided=None, length=None,
+           return_complex=False):
+    out = mx.fft.istft(_mx(a), n_fft=int(n_fft), hop_length=hop_length,
+                       win_length=win_length,
+                       window=None if window is None else _mx(window),
+                       center=center,
+                       norm="ortho" if normalized else "backward",
+                       onesided=onesided, length=length)
+    return out if return_complex else mx.real(out)
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2270,6 +2316,11 @@ _FUNC_SPECS = {
     # PT-AU-c: 2-D transforms (vision, spectrogram models)
     "fft_fft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.fft2(_mx(a), s, axes=dim, norm=norm or "backward"),
     "fft_ifft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.ifft2(_mx(a), s, axes=dim, norm=norm or "backward"),
+    "fft_hfft2": lambda a, s=None, dim=(-2, -1), norm=None: _hfftn(a, s, dim, norm),
+    "fft_hfftn": _hfftn,
+    "fft_ihfft2": lambda a, s=None, dim=(-2, -1), norm=None: _ihfftn(a, s, dim, norm),
+    "fft_ihfftn": _ihfftn,
+    "istft": _istft,
     "select": lambda a, dim, i: _slice(a, dim, i % a.shape[dim % a.ndim], i % a.shape[dim % a.ndim] + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
     "slice": _slice, "narrow": lambda a, dim, s, n: _slice(a, dim, s, s + n, 1),
     "mean": _mean, "sum": _sum,

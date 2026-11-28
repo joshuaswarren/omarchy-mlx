@@ -3014,6 +3014,55 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+
+def test_fft_residue():
+    # fft_hfft2/hfftn/ihfft2/ihfftn (conj + norm-scale composition) and
+    # istft (mx.fft.istft wrap) parity vs torch CPU.
+    def run_fx(target, argmask, kwargs, *ins):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        cargs = tuple(next(it) if m is None else m for m in argmask)
+        n = g.call_function(target, cargs, dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*[a.clone() for a in ins])
+        assert stats["cpu"] == [], (stats, str(target))
+        it2 = iter([a.clone() for a in ins])
+        rargs = tuple(next(it2) if m is None else m for m in argmask)
+        ref = target(*rargs, **kwargs)
+        got = torch.as_tensor(out)
+        assert got.shape == ref.shape, (str(target), got.shape, ref.shape)
+        gnp = np.array(got, copy=True).astype(np.complex128)
+        rnp = ref.numpy().astype(np.complex128)
+        assert np.allclose(gnp, rnp, atol=1e-4), (str(target), gnp, rnp)
+
+    A = torch.ops.aten
+    hs = torch.randn(3, 5) + 1j * torch.randn(3, 5)  # half-spectrum-ish input
+    for norm in (None, "forward", "ortho", "backward"):
+        run_fx(A.fft_hfft2.default, (None,), {"s": (6, 8), "norm": norm}, hs)
+        run_fx(A.fft_hfft2.default, (None,), {"norm": norm}, hs)
+        run_fx(A.fft_hfftn.default, (None,), {"s": (6, 8), "dim": (0, 1),
+                                              "norm": norm}, hs)
+        run_fx(A.fft_ihfft2.default, (None,), {"s": (6, 8), "norm": norm},
+               torch.randn(3, 4))
+        run_fx(A.fft_ihfftn.default, (None,), {"norm": norm},
+               torch.randn(3, 4))
+
+    w = torch.hann_window(16)
+    spec = torch.stft(torch.randn(400), n_fft=16, hop_length=4,
+                      win_length=16, window=w, center=True,
+                      return_complex=True)
+    for kw in ({}, {"normalized": True}, {"length": 380}):
+        run_fx(A.istft.default, (None, 16, 4, 16, None),
+               {"center": kw.get("center", True),
+                "normalized": kw.get("normalized", False),
+                "length": kw.get("length")}, spec, w)
+    print("test_fft_residue PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3123,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_fft_residue()
     print("ALL PASS")
 
 
