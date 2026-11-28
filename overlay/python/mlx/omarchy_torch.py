@@ -486,6 +486,31 @@ def _pdist(a, p=2.0):
     return mx.flatten(d)[mx.argsort(key)[:m]]
 
 
+def _flip(a, dims):
+    # aten.flip(self, int[] dims): reverse along each listed dim — a
+    # negative-step slice is the same view torch returns (PT-Q11).
+    m = _mx(a)
+    for d in dims:
+        m = _slice(m, int(d) % m.ndim, None, None, -1)
+    return m
+
+
+def _rot90(a, k=1, dims=(0, 1)):
+    # aten.rot90(self, int k=1, int[] dims=[0,1]): k quarter-turns in the
+    # dims plane — the ATen decompositions flip(dims[1])+transpose / flip
+    # both / flip(dims[0])+transpose (PT-Q11).
+    m = _mx(a)
+    d0, d1 = int(dims[0]) % m.ndim, int(dims[1]) % m.ndim
+    kk = int(k) % 4
+    if kk == 0:
+        return m
+    if kk == 1:
+        return mx.swapaxes(_flip(m, (d1,)), d0, d1)
+    if kk == 2:
+        return _flip(m, (d0, d1))
+    return mx.swapaxes(_flip(m, (d0,)), d0, d1)
+
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -589,6 +614,7 @@ _FUNC_SPECS = {
     "movedim": lambda a, src, dst: mx.moveaxis(a, src, dst),
     "moveaxis": lambda a, src, dst: mx.moveaxis(a, src, dst),
     "swapaxes": lambda a, d0, d1: mx.swapaxes(a, d0, d1),
+    "flip": _flip, "rot90": _rot90,
     "abs": mx.abs, "sign": mx.sign,
     "maximum": mx.maximum, "minimum": mx.minimum, "fmax": mx.maximum, "fmin": mx.minimum,
     "floor": mx.floor, "ceil": mx.ceil, "round": mx.round, "floor_divide": mx.floor_divide,

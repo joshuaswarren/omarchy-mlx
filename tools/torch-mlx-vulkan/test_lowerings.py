@@ -2928,6 +2928,49 @@ def test_log1p_expm1_logaddexp():
     print("test_log1p_expm1_logaddexp PASS")
 
 
+def test_flip_rot90():
+    # PT-Q11: aten.flip(self, int[] dims) reverses along each listed dim;
+    # aten.rot90(self, int k=1, int[] dims=[0,1]) is the ATen
+    # flip/transpose decomposition per quarter-turn. Both are view-level
+    # permutes — the lowered path must stay on mx with zero CPU fallback.
+    torch.manual_seed(0)
+    x2 = torch.randn(3, 5)
+    x3 = torch.randn(2, 3, 4)
+    cases = [
+        (torch.ops.aten.flip.default, (x2,), {"dims": [0]}, "flip"),
+        (torch.ops.aten.flip.default, (x2,), {"dims": [1]}, "flip"),
+        (torch.ops.aten.flip.default, (x2,), {"dims": [0, 1]}, "flip"),
+        (torch.ops.aten.flip.default, (x2,), {"dims": [-1]}, "flip"),
+        (torch.ops.aten.flip.default, (x3,), {"dims": [0, 2]}, "flip"),
+        (torch.ops.aten.flip.default, (x2.bfloat16(),), {"dims": [1]}, "flip"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 1}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 2}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 3}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 4}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": -1}, "rot90"),
+        (torch.ops.aten.rot90.default, (x3,), {"k": 1, "dims": [1, 2]}, "rot90"),
+        (torch.ops.aten.rot90.default, (x3,), {"k": 2, "dims": [0, 2]}, "rot90"),
+        (torch.ops.aten.rot90.default, (x3,), {"k": 3, "dims": [-1, -2]}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2.bfloat16(),), {"k": 1}, "rot90"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs, got, ref)
+    print("test_flip_rot90 PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2981,6 +3024,7 @@ if __name__ == "__main__":
     test_linalg_norm()
     test_cosine_similarity()
     test_pdist_cdist()
+    test_flip_rot90()
     print("ALL PASS")
 
 
