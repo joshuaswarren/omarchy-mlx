@@ -176,10 +176,10 @@ def _unfold(x, dim, size, step):
 
 def _fold(x, output_size, kernel_size, dilation=(1, 1), padding=(0, 0), stride=(1, 1)):
     """aten.fold (col2im): sum overlapping window elements back into the
-    output. Zero-stuff each kernel-position slice to the strided layout
-    (dense ops only) and add the clipped shifted window per kernel
-    position with a dense read-modify-write — exact for any
-    stride/dilation/padding, overlaps sum."""
+    output. Per kernel offset, zero-stuff the block to the strided layout
+    (concatenate/reshape, dense ops only) and dense read-modify-write the
+    clipped shifted window — exact for any stride/dilation/padding,
+    overlaps sum across kernel offsets."""
     kh, kw = (kernel_size if isinstance(kernel_size, (list, tuple))
               else (kernel_size, kernel_size))
     dh, dw = (dilation if isinstance(dilation, (list, tuple))
@@ -201,12 +201,26 @@ def _fold(x, output_size, kernel_size, dilation=(1, 1), padding=(0, 0), stride=(
             grid = x[:, :, i, j]
             r = i * dh - ph
             cl = j * dw - pw
+            # zero-stuff the grid to the strided layout: grid dims are
+            # (irows, icols); the stuffed slice window is in canvas coords
+            gc = mx.reshape(grid, (n, c, irows, icols, 1))
+            if sw > 1:
+                gc = mx.concatenate(
+                    [gc, mx.zeros((n, c, irows, icols, sw - 1), dtype=gc.dtype)],
+                    axis=4)
+            gc = mx.reshape(gc, (n, c, irows, icols * sw))
+            gr = mx.reshape(gc, (n, c, irows, 1, icols * sw))
+            if sh > 1:
+                gr = mx.concatenate(
+                    [gr, mx.zeros((n, c, irows, sh - 1, icols * sw), dtype=gr.dtype)],
+                    axis=3)
+            dense = mx.reshape(gr, (n, c, irows * sh, icols * sw))
             r0, c0 = max(r, 0), max(cl, 0)
-            r1, c1 = min(r + irows, oh), min(cl + icols, ow)
+            r1, c1 = min(r + irows * sh, oh), min(cl + icols * sw, ow)
             if r1 <= r0 or c1 <= c0:
                 continue
             cur = canvas[:, :, r0:r1, c0:c1]
-            vals = grid[:, :, r0 - r:r1 - r, c0 - cl:c1 - cl]
+            vals = dense[:, :, r0 - r:r1 - r, c0 - cl:c1 - cl]
             canvas = mx.slice_update(canvas, cur + vals,
                                      mx.array((0, 0, r0, c0)),
                                      mx.array((0, 1, 2, 3)))
