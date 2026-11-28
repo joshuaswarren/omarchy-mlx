@@ -2892,6 +2892,44 @@ def test_pdist_cdist():
     print("test_pdist_cdist PASS")
 
 
+def test_q55_fmod_trunc_lerp():
+    # Q-55: aten.fmod (truncates toward zero — dividend's sign, unlike
+    # remainder's divisor sign), aten.trunc, aten.lerp (weight may leave
+    # [0, 1] and extrapolate). fp32 parity vs torch CPU, no CPU fallback.
+    a = torch.tensor([7.0, -7.0, 3.5, -3.5, 0.0, 9.0], dtype=torch.float32)
+    b = torch.tensor([3.0, 3.0, -2.0, -2.0, 3.0, -4.0], dtype=torch.float32)
+    bt = torch.tensor([3.0, 3.0, -2.0, -2.0, 3.0, -4.0])
+    cases = [
+        (torch.ops.aten.fmod.Scalar, (a, 3.0), {}, "fmod"),
+        (torch.ops.aten.fmod.Tensor, (a, b), {}, "fmod"),
+        (torch.ops.aten.trunc.default, (a,), {}, "trunc"),
+        (torch.ops.aten.lerp.Tensor, (a, b, 0.5), {}, "lerp"),
+        (torch.ops.aten.lerp.Scalar, (a, bt, 1.5), {}, "lerp"),
+        (torch.ops.aten.lerp.Scalar, (a, bt, 2.5), {}, "lerp"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=1e-5), (
+            str(target), kwargs, got, ref)
+    # floor_divide negative operands: floor toward -inf (not truncation)
+    q = torch.tensor([7.0, -7.0, 3.5, -3.5], dtype=torch.float32)
+    ref = torch.floor_divide(q, torch.tensor(-2.0))
+    got = mlx_vulkan._FUNC_TABLE["floor_divide"](mx.array(q.numpy()),
+                                                 mx.array(torch.tensor(-2.0).numpy()))
+    assert np.allclose(_np(got), ref.numpy()), (got, ref.numpy())
+    print("test_q55_fmod_trunc_lerp PASS")
+
+
 def test_log1p_expm1_logaddexp():
     # PT-AL-f: the dev table must match the wheel table — aten.expm1,
     # aten.logaddexp lower with fp32/bf16 parity including near-zero
