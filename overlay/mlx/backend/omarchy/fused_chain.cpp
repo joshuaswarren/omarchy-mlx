@@ -5430,10 +5430,13 @@ bool qmm_residual_norm_enabled(
   }
   // Width allowlist: {256, 2048, 4096} on every part that passed the
   // subgroup-32 probe above. 2560 stays a measured exception: G13C,
-  // G14C, plus non-unified-memory devices. G13G measured
-  // ResNorm(2560)+2x8w2 at -2.2% (M1D-1c #947, 2x2 factorial: geom-only
-  // +0.5%, fold-only +0.4%, both -2.2%), so G13G keeps the exclusion
-  // while G13C opts in with measured zero-env decode gains.
+  // G14C, plus non-unified-memory devices. G13G keeps the exclusion:
+  // the isolated 5-pair jwm1 ABBA the #947 review asked for
+  // (MLX_OMARCHY_QMM_RESIDUAL_NORM =0 vs =1 on one wheel, default
+  // 2x8w2 geometry, identical greedy IDs, DEC-31 receipt
+  // 2026-11-28-g13g-resnorm2560-isolated) measures the fold at
+  // -1.3% ctx512 (0/5 pairs) and -1.2% ctx2048 (1/5) on current
+  // defaults, while the excluded arm decodes 4B at 24.23 tok/s.
   if (norm_cols == 2560) {
     return caps.device_name.find("G13C") != std::string::npos ||
         caps.device_name.find("G14C") != std::string::npos ||
