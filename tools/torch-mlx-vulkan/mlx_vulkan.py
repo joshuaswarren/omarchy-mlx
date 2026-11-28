@@ -284,7 +284,20 @@ def _strided_nodes(nodes):
     for n in nodes:
         name = _opname(n)
         a0 = n.args[0] if (n.args and isinstance(n.args[0], torch.fx.Node)) else None
-        if name in _STRIDED_OPS:
+        if name == "as_strided":
+            # the safe subset lowers: static non-overlapping (size, stride)
+            # on an unflagged input; overlapping or dynamic shapes defer.
+            a0_strided = a0 in strided
+            size = _narg(n, 1, None)
+            stride = _narg(n, 2, None)
+            seq = (list, tuple, torch.fx.immutable_collections.immutable_list)
+            if (a0_strided
+                    or not isinstance(size, seq)
+                    or not isinstance(stride, seq)
+                    or len(size) != len(stride)
+                    or _as_strided_overlaps(size, stride)):
+                strided.add(n)
+        elif name in _STRIDED_OPS:
             strided.add(n)
         elif name in ("select", "narrow"):
             if a0 in strided or _aint(_narg(n, 1, "dim"), -1) != 0:
@@ -377,6 +390,41 @@ def _unbind(a, dim):
         idx[dim] = j
         out.append(a[tuple(idx)])
     return tuple(out)
+
+
+def _as_strided_overlaps(size, stride):
+    """True when two index tuples of this (size, stride) can name one
+    storage offset. Size-1 dimensions are skipped (their index is always
+    0); a stride below 1 (0 = broadcast, negative = reversed) overlaps or
+    escapes by definition; otherwise, sorting the remaining dimensions by
+    stride descending, each stride must be at least the full span of the
+    smaller-strided dimensions after it."""
+    dims = [(int(s), int(st)) for s, st in zip(size, stride) if int(s) > 1]
+    for s, st in dims:
+        if st < 1:
+            return True
+    order = sorted(dims, key=lambda t: -t[1])
+    for (s0, st0), (s1, st1) in zip(order, order[1:]):
+        if st0 < s1 * st1:
+            return True
+    return False
+
+
+def _as_strided(a, size, stride, offset=0):
+    """The safe non-overlapping subset of aten.as_strided: materialize the
+    addressed elements with a gather. The values match torch's view
+    exactly; the result is a copy, which read-only consumers cannot tell.
+    Overlapping inputs raise: the plan-time pass defers them to the CPU
+    path before this ever runs."""
+    if _as_strided_overlaps(size, stride):
+        raise ValueError("as_strided: overlapping strides are deferred")
+    flat = mx.reshape(a, (-1,))
+    offsets = mx.full(size, int(offset))
+    for i, (s, st) in enumerate(zip(size, stride)):
+        shape = [1] * len(size)
+        shape[i] = int(s)
+        offsets = offsets + mx.arange(int(s)).reshape(shape) * int(st)
+    return mx.reshape(mx.take(flat, mx.reshape(offsets, (-1,))), tuple(int(s) for s in size))
 
 def _meshgrid(*tensors, indexing="ij"):
     # torch.meshgrid(*tensors, indexing=) splats the tensor args; the
@@ -2390,6 +2438,7 @@ _FUNC_SPECS = {
     # must match so traced graphs lower them too.
     "expm1": mx.expm1, "expm1_": mx.expm1,
     "logaddexp": lambda a, b: mx.logaddexp(_mx(a), _mx(b)),
+    "as_strided": _as_strided,
     "xlogy": _xlogy, "xlog1py": _xlog1py,
     # aten registers torch.special.xlog1py as special_xlog1py
     "special_xlog1py": _xlog1py,
