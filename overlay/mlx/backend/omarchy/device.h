@@ -1707,7 +1707,7 @@ inline bool norm_apple_128_default_part(
   return device_name.find("G13C") != std::string::npos ||
       device_name.find("G13G") != std::string::npos ||
       device_name.find("G18G") != std::string::npos ||
-      physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU; (omarchy: enable 128-lane fast-decode kernels on G18G (Apple M6))
+      physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
 }
 
 inline bool gemv_balanced_qkv_widths_ok(const std::vector<int64_t>& widths) {

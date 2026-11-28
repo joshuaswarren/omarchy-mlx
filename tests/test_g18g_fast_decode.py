@@ -75,5 +75,12 @@ class SuspectsStayOff(unittest.TestCase):
         self.assertNotIn("G18G", _gate_body("qmm_g14c_multi_r2s16_default_part"))
 
 
+class HeaderTextSane(unittest.TestCase):
+    """A pasted `(text` after a statement `;` broke the build once; regex gates do not see it."""
+
+    def test_no_paren_text_trails_semicolons(self):
+        self.assertEqual(re.findall(r";\s*\(", DEVICE_H), [])
+
+
 if __name__ == "__main__":
     unittest.main()
