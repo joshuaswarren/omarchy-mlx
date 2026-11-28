@@ -1105,7 +1105,7 @@ def _topk(a, k, dim=-1, largest=True, sorted=True):
     dim = (dim if dim is not None else -1) % a.ndim
     perm = [i for i in range(a.ndim) if i != dim] + [dim]
     at = mx.transpose(a, axes=perm)
-    idx = mx.argsort(-at if largest else at, axis=-1)[..., :k]
+    idx = mx.argsort(-at if largest else at, axis=-1)[..., :k].astype(mx.int32)
     vals = mx.take_along_axis(at, idx, axis=-1)
     inv = [perm.index(i) for i in range(a.ndim)]
     return (mx.transpose(vals, axes=inv), mx.transpose(idx, axes=inv).astype(mx.int64))
@@ -1125,10 +1125,10 @@ def _mode(a, dim=-1, keepdim=False):
     # first); float sorts dispatch on the device stream as usual
     if mx.issubdtype(at.dtype, mx.integer):
         with mx.stream(mx.cpu):
-            idx = mx.argsort(at, axis=-1)
+            idx = mx.argsort(at, axis=-1).astype(mx.int32)
             v = mx.take_along_axis(at, idx, axis=-1)
     else:
-        idx = mx.argsort(at, axis=-1)
+        idx = mx.argsort(at, axis=-1).astype(mx.int32)
         v = mx.take_along_axis(at, idx, axis=-1)
     eq = mx.expand_dims(v, -1) == mx.expand_dims(v, -2)
     counts = mx.sum(eq, axis=-1)
@@ -1139,7 +1139,7 @@ def _mode(a, dim=-1, keepdim=False):
     fm = mx.argmax(counts, axis=-1)
     maxc = mx.max(counts, axis=-1)
     pos = fm + maxc - 1
-    pos_ax = mx.expand_dims(pos, -1) if pos.ndim < v.ndim else pos
+    pos_ax = (mx.expand_dims(pos, -1) if pos.ndim < v.ndim else pos).astype(mx.int32)
     vals = mx.take_along_axis(v, pos_ax, axis=-1)
     index = mx.take_along_axis(idx, pos_ax, axis=-1)
     inv = [perm.index(i) for i in range(a.ndim)]
@@ -1169,9 +1169,9 @@ def _kthvalue(a, k, dim=-1, keepdim=False):
     # in the omarchy backend); see _mode
     if mx.issubdtype(at.dtype, mx.integer):
         with mx.stream(mx.cpu):
-            idx = mx.argsort(at, axis=-1)
+            idx = mx.argsort(at, axis=-1).astype(mx.int32)
     else:
-        idx = mx.argsort(at, axis=-1)
+        idx = mx.argsort(at, axis=-1).astype(mx.int32)
     # sel is itself the original position of the k-th smallest (a slot value
     # of the argsort output); taking idx at sel would double-indirect
     sel = idx[..., k - 1: k]
@@ -2143,7 +2143,7 @@ def _pdist(a, p=2.0):
     sel = flat % n > flat // n
     key = mx.logical_not(sel).astype(mx.int32) * (n * n) + flat
     m = n * (n - 1) // 2
-    return mx.flatten(d)[mx.argsort(key)[:m]]
+    return mx.flatten(d)[mx.argsort(key)[:m].astype(mx.int32)]
 
 
 def _repeat_interleave(*args, dim=None, output_size=None):
@@ -3425,7 +3425,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                     dim += src.ndim
                 sh = [1] * src.ndim
                 sh[dim] = idx.shape[0] if idx.ndim else 1
-                ib = mx.broadcast_to(idx.reshape(sh), src.shape)
+                ib = mx.broadcast_to(idx.reshape(sh).astype(mx.int32), src.shape)
                 upd = mx.put_along_axis(t, ib, src.astype(t.dtype), axis=dim)
                 env[n.args[0]] = upd      # model in-place mutation
                 _ph = _ph_of(n.args[0])
