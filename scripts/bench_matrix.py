@@ -37,11 +37,14 @@ Self-test (no GPU, no mlx): python3 bench_matrix.py --self-test
 """
 
 import argparse
+import contextlib
 import json
 import math
 import os
 import platform
 import re
+import secrets
+import stat
 import subprocess
 import sys
 import time
@@ -49,6 +52,14 @@ from pathlib import Path
 
 SCHEMA = "bench-matrix/1"
 SCRIPTS_DIR = Path(__file__).resolve().parent
+MAX_MANIFEST_BYTES = 16 << 20  # 16 MiB
+MAX_JSON_DEPTH = 32
+_READ_CHUNK = 1 << 20
+_JSON_SCAN_RE = re.compile(r'[\\"{}\[\]]')
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
 # Other model-serving processes that make timing contended. Matched
 # against process names only; arguments are never recorded.
@@ -73,6 +84,225 @@ def sanitize(text, home=None):
     """Strip personal identifiers: home paths and nothing else."""
     home = home or os.path.expanduser("~")
     return str(text).replace(home, "~")
+
+
+def _read_regular_bytes(path, max_bytes):
+    """Read a regular file up to max_bytes without blocking on FIFOs.
+
+    Follows symlinks on readable CLI inputs so symlinked manifests load; a
+    symlink to a FIFO, device, or directory is still refused after fstat.
+    """
+    if max_bytes < 0:
+        raise ValueError(f"max_bytes must be non-negative: {max_bytes}")
+    raw_path = os.fspath(path)
+    if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
+        raise ValueError(f"invalid input path: {path!r}")
+    path = Path(raw_path)
+    try:
+        fd = os.open(path, os.O_RDONLY | _O_NONBLOCK | _O_CLOEXEC)
+    except (OSError, ValueError) as exc:
+        detail = (
+            exc.strerror
+            if isinstance(exc, OSError) and exc.strerror
+            else exc
+        )
+        raise OSError(f"cannot read {path}: {detail}") from exc
+    try:
+        try:
+            st = os.fstat(fd)
+        except OSError as exc:
+            raise OSError(
+                f"cannot read {path}: {exc.strerror or exc}"
+            ) from exc
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError(f"refusing non-regular file: {path}")
+        if st.st_size > max_bytes:
+            raise ValueError(f"file exceeds {max_bytes} bytes: {path}")
+        parts = []
+        total = 0
+        limit = max_bytes + 1
+        while total < limit:
+            want = min(_READ_CHUNK, limit - total)
+            try:
+                chunk = os.read(fd, want)
+            except OSError as exc:
+                raise OSError(
+                    f"cannot read {path}: {exc.strerror or exc}"
+                ) from exc
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError(f"file exceeds {max_bytes} bytes: {path}")
+            parts.append(chunk)
+        return b"".join(parts)
+    finally:
+        os.close(fd)
+
+
+def _read_regular_text(path, max_bytes):
+    """Read a UTF-8 regular file up to max_bytes."""
+    raw = _read_regular_bytes(path, max_bytes)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{path} is not valid UTF-8: {exc}") from exc
+
+
+def _check_json_depth(text, what, max_depth=MAX_JSON_DEPTH):
+    """Reject JSON containers nested deeper than max_depth in O(1) extra space.
+
+    Scans raw JSON text before json.loads so over-depth values under repeated
+    object keys cannot be masked by later keys and deeply nested inputs fail
+    before CPython's recursive decoder can hit its stack limit.
+    """
+    depth = 0
+    in_string = False
+    skip = -1
+    for match in _JSON_SCAN_RE.finditer(text):
+        idx = match.start()
+        if idx == skip:
+            continue
+        ch = text[idx]
+        if in_string:
+            if ch == "\\":
+                skip = idx + 1
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == "{" or ch == "[":
+            depth += 1
+            if depth > max_depth:
+                raise ValueError(
+                    f"{what} nests deeper than {max_depth} levels"
+                )
+        elif ch == "}" or ch == "]":
+            if depth > 0:
+                depth -= 1
+
+
+def load_manifest(path, max_bytes=MAX_MANIFEST_BYTES, max_depth=MAX_JSON_DEPTH):
+    """Read, depth-check, and parse a bench-matrix JSON manifest object."""
+    what = f"manifest {path}"
+    text = _read_regular_text(path, max_bytes)
+    _check_json_depth(text, what, max_depth=max_depth)
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError) as exc:
+        raise ValueError(f"{what} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"{what} must be a JSON object, got {type(data).__name__}"
+        )
+    return data
+
+
+def _write_text_atomic(path, text):
+    """Write text to path via a unique sibling temp file inside dir_fd.
+
+    Threat model:
+    - Closed: a planted or dangling symlink at path is replaced rather than
+      followed; existing non-regular, non-symlink destinations (such as FIFOs,
+      sockets, devices, or directories) are refused without modifying them; a
+      pre-existing file or symlink at the temp name is refused (O_EXCL |
+      O_NOFOLLOW); failed or interrupted process writes (including close
+      errors) never leave a partial output and remove only the temp file this
+      call created; the parent directory is pinned with dir_fd across
+      destination check, open, replace, and error cleanup; the created file is
+      verified via fstat to be a regular file owned by the current user and not
+      writable by group or others (allowing vfat-style fmask=0022 mounts).
+    - Non-goal: defending against a hostile co-writer who already has write
+      permission on path's parent directory (who can replace or unlink path
+      directly after os.replace regardless of staging).
+    """
+    raw = os.fspath(path)
+    if not isinstance(raw, str) or not raw or "\x00" in raw:
+        raise ValueError(f"invalid output path: {path!r}")
+    parent_str, name = os.path.split(raw)
+    if not name or name in (".", ".."):
+        raise ValueError(f"invalid output path: {path}")
+    parent = parent_str or "."
+    try:
+        dir_fd = os.open(parent, os.O_RDONLY | _O_DIRECTORY | _O_CLOEXEC)
+    except (OSError, ValueError) as exc:
+        detail = (
+            exc.strerror
+            if isinstance(exc, OSError) and exc.strerror
+            else exc
+        )
+        raise OSError(
+            f"cannot open output directory {parent}: {detail}"
+        ) from exc
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC
+    euid = os.geteuid()
+    fd = None
+    tmp_name = None
+    try:
+        try:
+            dst_st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            dst_st = None
+        except OSError as exc:
+            raise OSError(
+                f"cannot inspect output {path}: {exc.strerror or exc}"
+            ) from exc
+        if dst_st is not None and not (
+            stat.S_ISREG(dst_st.st_mode) or stat.S_ISLNK(dst_st.st_mode)
+        ):
+            raise ValueError(f"refusing non-regular output path: {path}")
+        for _ in range(16):
+            candidate = f".bench_matrix.{secrets.token_hex(8)}.tmp"
+            try:
+                fd = os.open(candidate, flags, 0o600, dir_fd=dir_fd)
+            except FileExistsError:
+                continue
+            except (OSError, ValueError) as exc:
+                detail = (
+                    exc.strerror
+                    if isinstance(exc, OSError) and exc.strerror
+                    else exc
+                )
+                raise OSError(
+                    f"cannot create temp output for {path}: {detail}"
+                ) from exc
+            tmp_name = candidate
+            break
+        if fd is None or tmp_name is None:
+            raise OSError(f"cannot create unique temp output for {path}")
+        try:
+            try:
+                file_st = os.fstat(fd)
+                if (
+                    not stat.S_ISREG(file_st.st_mode)
+                    or file_st.st_uid != euid
+                    or (file_st.st_mode & 0o022) != 0
+                ):
+                    raise OSError(
+                        f"staged output file for {path} is not a private "
+                        "regular file owned by current user"
+                    )
+                fh = os.fdopen(fd, "w", encoding="utf-8")
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+                raise
+            with fh:
+                fh.write(text)
+                fh.flush()
+            # fh is closed cleanly before publication so delayed close errors
+            # abort without replacing an existing output file.
+            os.replace(tmp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException as exc:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name, dir_fd=dir_fd)
+            if isinstance(exc, OSError) and exc.strerror:
+                raise OSError(
+                    f"cannot write {path}: {exc.strerror}"
+                ) from exc
+            raise
+    finally:
+        os.close(dir_fd)
 
 
 # ---------------------------------------------------------------- models
@@ -715,8 +945,8 @@ def main():
     overrides = dict(
         part.split("=", 1) for part in args.model_dir if "=" in part)
     try:
-        manifest = json.loads(Path(args.manifest).read_text())
-    except (OSError, ValueError) as exc:
+        manifest = load_manifest(args.manifest)
+    except (OSError, ValueError, RecursionError) as exc:
         print(f"ERROR: cannot read manifest: {exc}", file=sys.stderr)
         sys.exit(1)
     if manifest.get("schema") != SCHEMA:
@@ -806,8 +1036,14 @@ def main():
 def _emit(result, out_path):
     text = json.dumps(result, indent=2)
     print(text)
-    if out_path:
-        Path(out_path).write_text(text + "\n")
+    if out_path is not None:
+        try:
+            _write_text_atomic(out_path, text + "\n")
+        except (OSError, ValueError) as exc:
+            # Output write failure exits 1 (including after exit-3/4 paths),
+            # matching the prior unhandled write_text traceback exit status.
+            print(f"ERROR: cannot write output: {exc}", file=sys.stderr)
+            sys.exit(1)
 
 
 def self_test():
