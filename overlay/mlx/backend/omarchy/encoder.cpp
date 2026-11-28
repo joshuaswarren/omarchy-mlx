@@ -239,6 +239,7 @@ void CommandEncoder::record_dispatch_barrier() {
 void CommandEncoder::reset_dependency_tracking() {
   tracker_.clear();
   head_synced_ = false;
+  boundary_forced_ = false;
 }
 
 CommandEncoder::CommandEncoder(Device& device) : device_(device) {
@@ -500,7 +501,10 @@ void CommandEncoder::upload_device_local_if_needed(
         }
         if (gated_barriers()) {
           TrackedRange wr{vb->buffer, 0, vb->size};
-          if (!head_synced_ || tracker_.needs_barrier({}, {&wr, 1})) {
+          if (boundary_decision(
+                  tracker_, {}, {&wr, 1},
+                  !head_synced_ && boundary_forced_) ==
+              BoundaryDecision::Barrier) {
             record_dependency_barrier();
             trace::counters().barriers_emitted++;
             prof::get().on_barrier(true);
@@ -508,6 +512,8 @@ void CommandEncoder::upload_device_local_if_needed(
             trace::counters().barriers_skipped++;
             prof::get().on_barrier(false);
           }
+          head_synced_ = true;
+          boundary_forced_ = false;
           tracker_.add_write(wr);
         }
         dt.CmdUpdateBuffer(cmd_, vb->buffer, 0, vb->size, vb->host_shadow);
@@ -585,7 +591,10 @@ void CommandEncoder::copy_buffer(
   if (gated_barriers()) {
     TrackedRange read{src, src_offset, tracked_range_end(src_offset, size)};
     TrackedRange write{dst, dst_offset, tracked_range_end(dst_offset, size)};
-    if (!head_synced_ || tracker_.needs_barrier({&read, 1}, {&write, 1})) {
+    if (boundary_decision(
+            tracker_, {&read, 1}, {&write, 1},
+            !head_synced_ && boundary_forced_) ==
+        BoundaryDecision::Barrier) {
       record_dependency_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
@@ -593,6 +602,8 @@ void CommandEncoder::copy_buffer(
       trace::counters().barriers_skipped++;
       prof::get().on_barrier(false);
     }
+    head_synced_ = true;
+    boundary_forced_ = false;
     tracker_.add_read(read);
     tracker_.add_write(write);
   }
@@ -638,7 +649,10 @@ void CommandEncoder::fill_buffer(
   }
   if (gated_barriers()) {
     TrackedRange write{dst, offset, tracked_range_end(offset, size)};
-    if (!head_synced_ || tracker_.needs_barrier({}, {&write, 1})) {
+    if (boundary_decision(
+            tracker_, {}, {&write, 1},
+            !head_synced_ && boundary_forced_) ==
+        BoundaryDecision::Barrier) {
       record_dependency_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
@@ -646,6 +660,8 @@ void CommandEncoder::fill_buffer(
       trace::counters().barriers_skipped++;
       prof::get().on_barrier(false);
     }
+    head_synced_ = true;
+    boundary_forced_ = false;
     tracker_.add_write(write);
   }
   vk::device_table().CmdFillBuffer(cmd_, dst, offset, size, value);
@@ -1157,8 +1173,10 @@ void CommandEncoder::dispatch_compute_pipeline(
         wr[nw++] = ranges[i];
       }
     }
-    if (!head_synced_ ||
-        tracker_.needs_barrier({rd.data(), nr}, {wr.data(), nw})) {
+    if (boundary_decision(
+            tracker_, {rd.data(), nr}, {wr.data(), nw},
+            !head_synced_ && boundary_forced_) ==
+        BoundaryDecision::Barrier) {
       record_dispatch_barrier();
       trace::counters().barriers_emitted++;
       prof::get().on_barrier(true);
@@ -1167,6 +1185,8 @@ void CommandEncoder::dispatch_compute_pipeline(
       trace::counters().barriers_skipped++;
       prof::get().on_barrier(false);
     }
+    head_synced_ = true;
+    boundary_forced_ = false;
     for (size_t i = 0; i < nr; ++i) {
       tracker_.add_read(rd[i]);
     }
@@ -1383,10 +1403,27 @@ void CommandEncoder::emit_pending() {
     std::fflush(stderr);
   }
 
-  // The batch-head dependency: a freshly begun command buffer records its
-  // first barrier before any command (host writes, allocator flush, the
-  // previous submission's writes), exactly like the tape-order path.
-  const bool head_needs_barrier = !head_synced_;
+  // The batch-head dependency on the carried tracker (M2D-6): only a
+  // wave-0 node has no barrier before it, so it alone decides the
+  // boundary barrier against the carried set (waves 1+ are preceded by
+  // their wave boundary barrier, which orders them after carried work
+  // either way). Disjoint heads ride the submission's in-order wait.
+  bool head_needs_barrier = boundary_forced_;
+  if (!head_synced_ && !head_needs_barrier) {
+    for (size_t i = 0; i < pending_.size(); ++i) {
+      if (levels[i] != 0) {
+        continue;
+      }
+      const auto& node = pending_[i];
+      if (tracker_.needs_barrier(
+              {node.rd.data(), node.nr}, {node.wr.data(), node.nw})) {
+        head_needs_barrier = true;
+        break;
+      }
+    }
+  }
+  head_synced_ = true;
+  boundary_forced_ = false;
   const std::string_view submit_prim = trace::current_prim();
 
   {
@@ -2015,10 +2052,18 @@ void CommandEncoder::submit() {
   signal_semaphores_.clear();
   completed_handlers_.clear();
   deferred_signals_pending_ = false;
-  // The submission's in-order wait (last_completion_) provides the
-  // cross-submission dependency, so the open batch's unsynced ranges
-  // die here either way.
-  reset_dependency_tracking();
+  // Carry the tracker across the submission boundary (M2D-6, phase 2 of
+  // docs/research/m2d6-boundary-barrier-design.md): the submission's
+  // in-order wait drains the closed batch, so the next head's own ranges
+  // decide the boundary barrier on evidence instead of position. The
+  // access budget bounds the carried table: crossing it clears now and
+  // forces a real barrier at the next head.
+  if (tracker_.tracked_accesses() >= kBoundaryTrackerAccessBudget) {
+    tracker_.clear();
+    boundary_forced_ = true;
+  }
+  head_synced_ = false;
+  transfer_since_barrier_ = false;
   prof::get().on_submit_boundary(submitted, close_t, queue_t0, queue_t1);
   prof::get().on_submit_end(
       this,

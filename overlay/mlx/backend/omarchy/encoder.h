@@ -694,10 +694,11 @@ class MLX_API CommandEncoder
   // barrier: a node skips its barrier only when neither its reads nor
   // its writes overlap an unsynced range. Dispatch bindings carry the
   // SPIR-V reflected read/write split, so read-read pairs skip.
-  // head_synced_ is the batch-head dependency: the first node of a
-  // freshly begun command buffer always records a barrier so host writes
-  // and the allocator's noncoherent flush keep exactly the visibility
-  // the unconditional path provides.
+  // head_synced_ marks the batch-head dependency resolved: the first
+  // node of a fresh batch decides the boundary barrier on the carried
+  // tracker (overlap or the access-budget fallback -> barrier; provably
+  // disjoint ranges -> skip, riding the submission's in-order wait).
+  // M2D-6, phase 2 of docs/research/m2d6-boundary-barrier-design.md.
   static bool gated_barriers();
 
   // Wave scheduling (MLX_OMARCHY_WAVE_SCHED, per-part default; requires gated
@@ -773,6 +774,11 @@ class MLX_API CommandEncoder
   bool head_synced_{false};
   // A copy, fill or inline update was recorded since the last full barrier.
   bool transfer_since_barrier_{false};
+  // The carried tracker's access count crossed
+  // kBoundaryTrackerAccessBudget at the last submission boundary: the
+  // next recorded head node emits a real barrier and the table cleared
+  // there, bounding carried state.
+  bool boundary_forced_{false};
 
   Device& device_;
   uint16_t encoder_id_{0};

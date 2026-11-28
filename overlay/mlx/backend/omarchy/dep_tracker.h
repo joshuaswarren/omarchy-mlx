@@ -260,6 +260,7 @@ class DependencyTracker {
       sets_.emplace_back();
     }
     sets_[s].reads.add(r.offset, r.end);
+    ++tracked_accesses_;
   }
 
   void add_write(const TrackedRange& w) {
@@ -268,6 +269,7 @@ class DependencyTracker {
       sets_.emplace_back();
     }
     sets_[s].writes.add(w.offset, w.end);
+    ++tracked_accesses_;
   }
 
   // Forget everything: a full barrier orders all earlier work. A table
@@ -285,11 +287,19 @@ class DependencyTracker {
         s.writes.clear();
       }
     }
+    tracked_accesses_ = 0;
   }
 
   // Slot-table capacity, for tests of the release rule.
   size_t bucket_count() const {
     return slots_.capacity();
+  }
+
+  // Range accesses recorded since the last clear(). The submission
+  // boundary carries the table forward, so this bounds how much carried
+  // state the next batch head scans before the fallback barrier fires.
+  uint32_t tracked_accesses() const {
+    return tracked_accesses_;
   }
 
  private:
@@ -307,7 +317,33 @@ class DependencyTracker {
 
   BufferSlots slots_;
   std::vector<Sets> sets_;
+  uint32_t tracked_accesses_{0};
 };
+
+// When the carried tracker recorded this many accesses, the next batch
+// head emits a real boundary barrier and the table clears: the amortized
+// fallback bounds carried-state memory and scan cost, correctness
+// unchanged. Phase 2 of docs/research/m2d6-boundary-barrier-design.md
+// (the M2D-6 submission-boundary carry).
+inline constexpr uint32_t kBoundaryTrackerAccessBudget = 4096;
+
+enum class BoundaryDecision : uint8_t { Skip, Barrier };
+
+// The submission-boundary decision on the carried tracker: an overlap
+// with surviving ranges, or the access-budget fallback, emits a real
+// barrier; provably disjoint head ranges skip it and ride the
+// submission's in-order wait. budget_forced is the encoder's flag set
+// when tracked_accesses() crossed kBoundaryTrackerAccessBudget at the
+// boundary.
+inline BoundaryDecision boundary_decision(
+    const DependencyTracker& carried,
+    std::span<const TrackedRange> reads,
+    std::span<const TrackedRange> writes,
+    bool budget_forced) {
+  return (budget_forced || carried.needs_barrier(reads, writes))
+             ? BoundaryDecision::Barrier
+             : BoundaryDecision::Skip;
+}
 
 // One buffered node's access sets for wave scheduling: the byte ranges a
 // node reads and writes (SPIR-V reflected readonly/writeonly split).

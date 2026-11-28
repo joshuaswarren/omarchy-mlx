@@ -4138,3 +4138,101 @@ TEST_CASE("wave levels stay linear for nodes sharing buffers without hazards") {
   CHECK(level[8] == 1u);
   CHECK(level[9] == 2u);
 }
+
+TEST_CASE("boundary decision consumes the carried tracker (M2D-6)") {
+  using omarchy::BoundaryDecision;
+  using omarchy::DependencyTracker;
+  using omarchy::TrackedRange;
+  // The scheduler treats VkBuffer as an opaque key: fake handles suffice.
+  auto buf = [](uintptr_t v) {
+    return reinterpret_cast<VkBuffer>(v);
+  };
+  auto rng = [](VkBuffer b, uint64_t off, uint64_t end) {
+    return TrackedRange{b, static_cast<VkDeviceSize>(off),
+                        static_cast<VkDeviceSize>(end)};
+  };
+  VkBuffer b = buf(0x1000);
+  VkBuffer c = buf(0x2000);
+
+  // T1: a closed batch that wrote b[0,64) + a fresh head reading
+  // disjoint c[0,64) skips the boundary barrier.
+  {
+    DependencyTracker carried;
+    carried.add_write(rng(b, 0, 64));
+    TrackedRange head_read{rng(c, 0, 64)};
+    CHECK(omarchy::boundary_decision(carried, {&head_read, 1}, {}, false) ==
+          BoundaryDecision::Skip);
+  }
+
+  // T2: the same closed batch + a head reading b[0,64) emits the
+  // boundary barrier; WAR and WAW heads emit it too.
+  {
+    DependencyTracker carried;
+    carried.add_write(rng(b, 0, 64));
+    TrackedRange raw{rng(b, 0, 64)};
+    CHECK(omarchy::boundary_decision(carried, {&raw, 1}, {}, false) ==
+          BoundaryDecision::Barrier);
+    DependencyTracker carried2;
+    carried2.add_read(rng(b, 0, 64));
+    TrackedRange war{rng(b, 0, 64)};
+    CHECK(omarchy::boundary_decision(carried2, {}, {&war, 1}, false) ==
+          BoundaryDecision::Barrier);
+    TrackedRange waw{rng(b, 32, 96)};
+    CHECK(omarchy::boundary_decision(carried, {}, {&waw, 1}, false) ==
+          BoundaryDecision::Barrier);
+  }
+
+  // T3: the carried set after a SKIP still holds the closed batch's
+  // ranges plus the head's, so a later node overlapping either is
+  // caught by the mid-batch check.
+  {
+    DependencyTracker carried;
+    carried.add_write(rng(b, 0, 64));
+    TrackedRange head_read{rng(c, 0, 64)};
+    REQUIRE(omarchy::boundary_decision(carried, {&head_read, 1}, {}, false) ==
+            BoundaryDecision::Skip);
+    carried.add_read(head_read);
+    TrackedRange probe_b{rng(b, 0, 64)};
+    TrackedRange probe_c{rng(c, 0, 64)};
+    CHECK(carried.needs_barrier({&probe_b, 1}, {}));
+    CHECK(carried.needs_barrier({}, {&probe_c, 1}));
+  }
+
+  // T4: the carried set after a real boundary BARRIER is cleared down
+  // to the head's ranges: earlier closed-batch ranges no longer hit.
+  {
+    DependencyTracker carried;
+    carried.add_write(rng(b, 0, 64));
+    TrackedRange head_read{rng(b, 0, 64)};
+    REQUIRE(omarchy::boundary_decision(carried, {&head_read, 1}, {}, false) ==
+            BoundaryDecision::Barrier);
+    carried.clear();
+    carried.add_read(head_read);
+    TrackedRange closed_b{rng(b, 128, 192)};
+    TrackedRange war_b{rng(b, 0, 64)};
+    CHECK_FALSE(carried.needs_barrier({&closed_b, 1}, {}));
+    CHECK(carried.needs_barrier({}, {&war_b, 1}));
+  }
+
+  // T5: tracked_accesses() counts every add, resets on clear, and the
+  // budget crossing forces the boundary barrier even for disjoint head
+  // ranges.
+  {
+    DependencyTracker carried;
+    CHECK(carried.tracked_accesses() == 0u);
+    carried.add_write(rng(b, 0, 64));
+    carried.add_read(rng(c, 0, 64));
+    CHECK(carried.tracked_accesses() == 2u);
+    carried.clear();
+    CHECK(carried.tracked_accesses() == 0u);
+    for (uint32_t i = 0; i < omarchy::kBoundaryTrackerAccessBudget; ++i) {
+      carried.add_write(rng(b, i * 8, i * 8 + 8));
+    }
+    CHECK(carried.tracked_accesses() >= omarchy::kBoundaryTrackerAccessBudget);
+    TrackedRange disjoint{rng(c, 0, 64)};
+    CHECK(omarchy::boundary_decision(carried, {&disjoint, 1}, {}, true) ==
+          BoundaryDecision::Barrier);
+    CHECK(omarchy::boundary_decision(carried, {&disjoint, 1}, {}, false) ==
+          BoundaryDecision::Skip);
+  }
+}
