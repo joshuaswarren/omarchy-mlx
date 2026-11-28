@@ -3014,6 +3014,103 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_pad_family():
+    # PT-AL-pads: aten pad family — constant_pad_nd (with negative crop
+    # arms), the mode-dispatching aten.pad, reflection/replication pads,
+    # and pad_sequence. reflection/replication lower as index maps so the
+    # aten negative-pad arms stay exact.
+    torch.manual_seed(0)
+    x34 = torch.randn(3, 4)
+    x35 = torch.randn(3, 5)
+    x235 = torch.randn(2, 3, 5)
+    x2345 = torch.randn(2, 3, 4, 5)
+    seqs = [torch.randn(3, 2), torch.randn(5, 2), torch.randn(1, 2)]
+    cases = [
+        (torch.ops.aten.constant_pad_nd.default, (x34,), {"pad": [1, 1]}, "constant_pad_nd"),
+        (torch.ops.aten.constant_pad_nd.default, (x34,), {"pad": [1, 1, 2, 0]}, "constant_pad_nd"),
+        (torch.ops.aten.constant_pad_nd.default, (x34,), {"pad": [-1, -1]}, "constant_pad_nd"),
+        (torch.ops.aten.constant_pad_nd.default, (x34,), {"pad": [-2, 3, -1, 1]}, "constant_pad_nd"),
+        (torch.ops.aten.constant_pad_nd.default, (x34,), {"pad": [1, 1], "value": 2.5}, "constant_pad_nd"),
+        (torch.ops.aten.constant_pad_nd.default, (torch.arange(6).reshape(2, 3),), {"pad": [1, 0], "value": -7}, "constant_pad_nd"),
+        (torch.ops.aten.constant_pad_nd.default, (x34.bfloat16(),), {"pad": [0, 1, 1, 0], "value": 1.5}, "constant_pad_nd"),
+        (torch.ops.aten.pad.default, (x34,), {"pad": [1, 1]}, "pad"),
+        (torch.ops.aten.pad.default, (x34,), {"pad": [1, 1], "value": 3.0}, "pad"),
+        (torch.ops.aten.pad.default, (x34,), {"pad": [1, 1], "mode": "reflect"}, "pad"),
+        (torch.ops.aten.pad.default, (x34,), {"pad": [1, 2], "mode": "replicate"}, "pad"),
+        (torch.ops.aten.pad.default, (x34,), {"pad": [2, 0], "mode": "circular"}, "pad"),
+        (torch.ops.aten.pad.default, (x34,), {"pad": [-1, 1], "mode": "reflect"}, "pad"),
+        (torch.ops.aten.reflection_pad1d.default, (x35,), {"padding": [1, 1]}, "reflection_pad"),
+        (torch.ops.aten.reflection_pad1d.default, (x235,), {"padding": [2, 1]}, "reflection_pad"),
+        (torch.ops.aten.reflection_pad1d.default, (x35,), {"padding": [-1, 4]}, "reflection_pad"),
+        (torch.ops.aten.reflection_pad1d.default, (x35,), {"padding": [4, -1]}, "reflection_pad"),
+        (torch.ops.aten.reflection_pad2d.default, (x2345,), {"padding": [1, 1, 2, 0]}, "reflection_pad"),
+        (torch.ops.aten.reflection_pad2d.default, (x2345[0],), {"padding": [0, 2, 1, 1]}, "reflection_pad"),
+        (torch.ops.aten.reflection_pad3d.default, (x2345,), {"padding": [1, 0, 1, 1, 0, 1]}, "reflection_pad"),
+        (torch.ops.aten.replication_pad1d.default, (x35,), {"padding": [1, 1]}, "replication_pad"),
+        (torch.ops.aten.replication_pad1d.default, (x35,), {"padding": [7, 0]}, "replication_pad"),
+        (torch.ops.aten.replication_pad1d.default, (x35,), {"padding": [-1, 4]}, "replication_pad"),
+        (torch.ops.aten.replication_pad2d.default, (x2345,), {"padding": [2, 0, 1, 1]}, "replication_pad"),
+        (torch.ops.aten.replication_pad3d.default, (x2345,), {"padding": [0, 1, 0, 1, 1, 0]}, "replication_pad"),
+        (torch.ops.aten.pad_sequence.default, (seqs,), {}, "pad_sequence"),
+        (torch.ops.aten.pad_sequence.default, (seqs,), {"batch_first": True}, "pad_sequence"),
+        (torch.ops.aten.pad_sequence.default, (seqs,), {"padding_value": -3.0}, "pad_sequence"),
+        (torch.ops.aten.pad_sequence.default, ([torch.arange(3), torch.arange(1)],), {}, "pad_sequence"),
+        (torch.ops.aten.pad_sequence.default, ([torch.ones(2, dtype=torch.int32), torch.ones(4, dtype=torch.float64)],), {}, "pad_sequence"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() if isinstance(a, torch.Tensor) else [s.clone() for s in a] for a in ins], **kwargs)
+        flat = []
+        for a in ins:
+            flat += a if isinstance(a, list) else [a]
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(flat))]
+        args = []
+        pos = 0
+        for a in ins:
+            if isinstance(a, list):
+                args.append(phs[pos:pos + len(a)])
+                pos += len(a)
+            else:
+                args.append(phs[pos])
+                pos += 1
+        n = g.call_function(target, tuple(args), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*flat)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        # _torch widens bf16 -> f32 at the output boundary (numpy has no
+        # bf16 buffer); only assert dtype parity on representable kinds.
+        if ref.dtype != torch.bfloat16:
+            assert got.dtype == ref.dtype, (str(target), kwargs, got.dtype, ref.dtype)
+        tol = 2e-2 if flat[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs, got, ref)
+    # expected-fail guards: aten rejects these; the lowering must refuse
+    # to the CPU fallback (same error) rather than compute wrong values.
+    for target, ins, kwargs in [
+        (torch.ops.aten.constant_pad_nd.default, (x34,), {"pad": [1]}),
+        (torch.ops.aten.constant_pad_nd.default, (x34,), {"pad": [1, 1, 1, 1, 1, 1]}),
+        (torch.ops.aten.reflection_pad1d.default, (x35,), {"padding": [5, 5]}),
+        (torch.ops.aten.reflection_pad1d.default, (torch.randn(5),), {"padding": [1, 1]}),
+    ]:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        raised = False
+        try:
+            run(*ins)
+        except Exception:
+            raised = True
+        assert raised, (str(target), kwargs)
+    print("test_pad_family PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3171,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_pad_family()
     print("ALL PASS")
 
 
