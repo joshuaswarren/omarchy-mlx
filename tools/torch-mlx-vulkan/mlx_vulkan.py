@@ -2055,6 +2055,69 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _unfold(a, dimension, size, step):
+    # torch: dims[d] -> nwin windows, window axis appended LAST
+    a = _mx(a)
+    d = dimension % a.ndim
+    nwin = (a.shape[d] - size) // step + 1
+    j = mx.arange(nwin)[:, None] * step + mx.arange(size)[None, :]
+    g = mx.moveaxis(a, d, 0)[j]      # (nwin, size, rest...)
+    g = mx.moveaxis(g, 1, -1)        # (nwin, rest..., size)
+    return mx.moveaxis(g, 0, d)
+
+
+def _im2col(a, kernel_size, dilation, padding, stride):
+    a = _mx(a)
+    n, c, h, w = a.shape
+    kh, kw = kernel_size
+    dh, dw = dilation
+    ph, pw = padding
+    sh, sw = stride
+    ap = mx.pad(a, [(0, 0), (0, 0), (ph, ph), (pw, pw)])
+    hp, wp = ap.shape[2], ap.shape[3]
+    oh = (hp - dh * (kh - 1) - 1) // sh + 1
+    ow = (wp - dw * (kw - 1) - 1) // sw + 1
+    ri = (mx.arange(oh)[:, None] * sh + mx.arange(kh)[None, :] * dh)[:, :, None, None]
+    ci = (mx.arange(ow)[:, None] * sw + mx.arange(kw)[None, :] * dw)[None, None, :, :]
+    g = ap[:, :, ri, ci]                       # (N,C,oh,kh,ow,kw)
+    g = mx.transpose(g, (0, 1, 3, 5, 2, 4))    # (N,C,kh,kw,oh,ow)
+    return g.reshape(n, c * kh * kw, oh * ow)
+
+
+def _col2im(x, output_size, kernel_size, dilation, padding, stride):
+    x = _mx(x)
+    n, ckk, l = x.shape
+    kh, kw = kernel_size
+    dh, dw = dilation
+    ph, pw = padding
+    sh, sw = stride
+    c = ckk // (kh * kw)
+    oh, ow = (int(output_size[0]), int(output_size[1]))
+    hp, wp = oh + 2 * ph, ow + 2 * pw
+    nh = (hp - dh * (kh - 1) - 1) // sh + 1
+    nw = (wp - dw * (kw - 1) - 1) // sw + 1
+    if nh * nw != l:
+        return _raise("col2im L mismatch")
+    out = mx.zeros((n * c, oh * ow), dtype=x.dtype)
+    ii = mx.arange(nh)[:, None]
+    jj = mx.arange(nw)[None, :]
+    rows_base = mx.arange(n)[:, None, None] * c  # (n,1,1)
+    for ci_ in range(c):
+        for khi in range(kh):
+            for kwi in range(kw):
+                col = x[:, ci_ * kh * kw + khi * kw + kwi, :].reshape(n, nh, nw)
+                pos_h = khi * dh - ph + ii * sh               # (nh,1)
+                pos_w = kwi * dw - pw + jj * sw               # (1,nw)
+                valid = (pos_h >= 0) & (pos_h < oh) & (pos_w >= 0) & (pos_w < ow)
+                pos_h = mx.where(valid, pos_h, 0)
+                pos_w = mx.where(valid, pos_w, 0)
+                cols = mx.broadcast_to((pos_h * ow + pos_w), (n, nh, nw))
+                rows = mx.broadcast_to(rows_base + ci_, (n, nh, nw))
+                addv = col * valid.astype(x.dtype)
+                out = out.at[(rows.reshape(-1), cols.reshape(-1))].add(addv.reshape(-1))
+    return out.reshape(n, c, oh, ow)
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2457,6 +2520,11 @@ _FUNC_SPECS = {
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
+    # im2col/col2im/unfold (piece 16): pure indexing via gather + at.add
+    "unfold": _unfold,
+    "unfold_copy": _unfold,
+    "im2col": _im2col,
+    "col2im": _col2im,
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": _roll,
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
