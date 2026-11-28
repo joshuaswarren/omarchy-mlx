@@ -543,6 +543,51 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 torch.allclose(got, ref.float(), atol=tol, rtol=tol),
                 (name, kw, float((got - ref.float()).abs().max())))
 
+    def test_gradient_parity(self):
+        """Q-71: aten.gradient lowers in the wheel backend -- uniform
+        and per-dim spacing, dim int/list/None, edge_order 1|2, the
+        three-point boundary formulas, and 2-length dims."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(0)
+        x2 = torch.randn(4, 6)
+        x3 = torch.randn(3, 5, 7)
+        x2b = torch.randn(2, 8)
+        cases = [
+            ((x2,), {"dim": [0]}, torch.gradient(x2, dim=(0,))),
+            ((x2,), {"dim": [0, 1]}, torch.gradient(x2, dim=(0, 1))),
+            ((x2,), {"dim": [0, 1], "edge_order": 2},
+             torch.gradient(x2, dim=(0, 1), edge_order=2)),
+            ((x3,), {"dim": [0, 1, 2]},
+             torch.gradient(x3, dim=(0, 1, 2))),
+            ((x2,), {"spacing": 2.0, "dim": 1},
+             torch.gradient(x2, spacing=2.0, dim=(1,))),
+            ((x3,), {"spacing": 0.5, "dim": -1, "edge_order": 2},
+             torch.gradient(x3, spacing=0.5, dim=(-1,), edge_order=2)),
+            ((x2,), {"spacing": [2.0, 0.5]},
+             torch.gradient(x2, spacing=(2.0, 0.5), dim=(0, 1))),
+            ((x3,), {"spacing": 4.0, "dim": [2, 0], "edge_order": 2},
+             torch.gradient(x3, spacing=4.0, dim=(2, 0), edge_order=2)),
+            ((x2b,), {"dim": [1]}, torch.gradient(x2b, dim=(1,))),
+        ]
+        for ins, kw, ref in cases:
+            mins = tuple(
+                mx.array(t.numpy()) if torch.is_tensor(t) else t
+                for t in ins)
+            got = ATEN_TABLE["gradient"](*mins, **kw)
+            got = list(got) if isinstance(got, (list, tuple)) else [got]
+            ref = list(ref) if isinstance(ref, (list, tuple)) else [ref]
+            self.assertEqual(len(got), len(ref))
+            for g_, r_ in zip(got, ref):
+                gt = torch.from_numpy(np.array(g_.astype(mx.float32)))
+                self.assertTrue(
+                    torch.allclose(gt, r_.float(), atol=1e-5, rtol=1e-5),
+                    (kw, float((gt - r_.float()).abs().max())))
+
 
 if __name__ == "__main__":
     unittest.main()
