@@ -543,6 +543,54 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 torch.allclose(got, ref.float(), atol=tol, rtol=tol),
                 (name, kw, float((got - ref.float()).abs().max())))
 
+    def test_bool_index_deferral(self):
+        """Q-67: a bool index tensor is a mask in aten, never 0/1 ints -
+        every index-family lowering must defer (NotImplementedError to the
+        torch fallback) rather than gather wrong positions."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x = torch.arange(12, dtype=torch.float32).reshape(3, 4)
+        xm = mx.array(x)
+        mask1 = torch.tensor([True, False, True])
+        mask2 = torch.tensor([True, False, True, False])
+
+        def raises(fn, *args):
+            try:
+                fn(*args)
+            except NotImplementedError:
+                return True
+            return False
+
+        # int-index family: defer on bool (aten itself rejects bool here, so
+        # the deferral also reproduces torch's own error path)
+        self.assertTrue(raises(ATEN_TABLE["index_select"], xm, 0, mask1))
+        self.assertTrue(raises(ATEN_TABLE["take"], xm, mask1))
+        self.assertTrue(raises(ATEN_TABLE["gather"], xm, 0, torch.tensor([[True, False]])))
+        self.assertTrue(raises(ATEN_TABLE["take_along_dim"], xm, torch.tensor([[True]]), 0))
+        self.assertTrue(raises(ATEN_TABLE["index"], xm, (mask1,)))
+        self.assertTrue(raises(ATEN_TABLE["index"], xm, (mask1, mask2[:3])))
+        self.assertTrue(raises(ATEN_TABLE["getitem"], xm, (mask1,)))
+        self.assertTrue(raises(ATEN_TABLE["embedding"], mx.array(torch.randn(8, 4)), mask1[:2]))
+        # masked_fill: a bool mask is handled (mask semantics, not an index)
+        got = ATEN_TABLE["masked_fill"](xm, mask2.unsqueeze(0).expand(3, -1), -1.0)
+        ref = torch.ops.aten.masked_fill(x, mask2.unsqueeze(0).expand(3, -1), -1.0)
+        self.assertTrue(np.array_equal(np.array(got), ref.numpy()))
+        # ...but a non-bool mask defers instead of silently astype'ing
+        self.assertTrue(raises(ATEN_TABLE["masked_fill"], xm,
+                               torch.tensor([1, 0, 1, 0], dtype=torch.int64)
+                               .unsqueeze(0).expand(3, -1), -1.0))
+        # the int paths still lower normally
+        got = ATEN_TABLE["index_select"](xm, 0, torch.tensor([0, 2]))
+        ref = torch.index_select(x, 0, torch.tensor([0, 2]))
+        self.assertTrue(np.array_equal(np.array(got), ref.numpy()))
+        got = ATEN_TABLE["index"](xm, (torch.tensor([0, 2]),))
+        ref = torch.ops.aten.index(x, (torch.tensor([0, 2]),))
+        self.assertTrue(np.array_equal(np.array(got), ref.numpy()))
+
 
 if __name__ == "__main__":
     unittest.main()
