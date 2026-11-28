@@ -31,6 +31,7 @@
 #include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/encoder.h"
+#include "mlx/backend/omarchy/qmm_prefill_select.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/device.h"
 #include "mlx/fast.h"
@@ -53,6 +54,9 @@ constexpr const char* kG13Legacy = "m1-g13-legacy";
 constexpr const char* kWorkgroup256 = "workgroup-256";
 constexpr const char* kWorkgroup128 = "workgroup-128";
 constexpr const char* kNvidiaC16 = "nvidia-c16-coopmat";
+constexpr const char* kM3G15G = "m3-g15g";
+constexpr const char* kM3ProG15S = "m3-pro-g15s";
+constexpr const char* kM3MaxG15C = "m3-max-g15c";
 constexpr const char* kRadvPin32 = "radv-rdna-subgroup64-pin32";
 
 std::string g_profile;
@@ -324,6 +328,12 @@ TEST_CASE("capability report is stamped with the active profile") {
     CHECK(c.device_name == std::string("Apple M1 (G13G B1)"));
   } else if (profile_is(kNvidiaC16)) {
     CHECK(c.device_name == std::string("NVIDIA GeForce RTX 5060 Ti"));
+  } else if (profile_is(kM3G15G)) {
+    CHECK(c.device_name == std::string("Apple M3 (G15G B1)"));
+  } else if (profile_is(kM3ProG15S)) {
+    CHECK(c.device_name == std::string("Apple M3 Pro (G15S B1)"));
+  } else if (profile_is(kM3MaxG15C)) {
+    CHECK(c.device_name == std::string("Apple M3 Max (G15C B1)"));
   } else if (profile_is(kRadvPin32)) {
     CHECK(c.device_name == std::string("AMD Radeon RX 9070"));
   } else {
@@ -394,6 +404,15 @@ TEST_CASE("capability report is stamped with the active profile") {
     // it inherits hardware truth, and require_backed refuses a claimed
     // dispatch the runtime device cannot back.
     CHECK(c.cooperative_matrix_bf16 == h.cooperative_matrix_bf16);
+  } else if (profile_is(kM3G15G) || profile_is(kM3ProG15S) ||
+             profile_is(kM3MaxG15C)) {
+    // M3 family device-name stamps: every capability axis inherits the
+    // hardware report; cooperative_matrix_f32_8 is stamped false (the
+    // profile's "Borealis parts carry no cooperative matrix" claim).
+    CHECK_EQ(c.subgroup_size, h.subgroup_size);
+    CHECK_FALSE(c.cooperative_matrix_f32_8);
+    CHECK(c.subgroup_operations == h.subgroup_operations);
+    CHECK_EQ(c.max_compute_shared_memory_size, h.max_compute_shared_memory_size);
   } else if (profile_is(kRadvPin32)) {
     // RADV/RDNA-class part: native subgroup size 64, full op mask, the
     // 16x16x16 fp16 coopmat shape, and a legal requiredSubgroupSize=32
@@ -1539,7 +1558,8 @@ int main(int argc, char** argv) {
     // Registry sanity: the documented profiles exist.
     for (const char* name : {kM1Fork, kM1Stock, kSubgroup64, kSmallSmem,
                              kNoCoopmat, kG13Legacy, kWorkgroup256,
-                             kWorkgroup128, kNvidiaC16, kRadvPin32}) {
+                             kWorkgroup128, kM3G15G, kM3ProG15S, kM3MaxG15C,
+                             kNvidiaC16, kRadvPin32}) {
       if (omarchy::capsim::find(name) == nullptr) {
         std::cerr << "unit: profile missing from registry: " << name
                   << "\n";
@@ -1676,4 +1696,25 @@ int main(int argc, char** argv) {
 
   unsetenv("MLX_OMARCHY_CAPS_SIM");
   return status;
+}
+
+TEST_CASE("apple_gpu_cores covers the M3 family and leaves other parts unchanged") {
+  using omarchy::apple_gpu_cores;
+  // M3 entries: top-bin counts per the chip-id table (t8122/t6030/t6031+t6034).
+  CHECK(apple_gpu_cores("Apple M3 (G15G B1)") == 10u);
+  CHECK(apple_gpu_cores("Apple M3 Pro (G15S B1)") == 18u);
+  CHECK(apple_gpu_cores("Apple M3 Max (G15C B1)") == 40u);
+  // Every revision/binned letter still matches its family token.
+  CHECK(apple_gpu_cores("Apple M3 (G15G A0)") == 10u);
+  CHECK(apple_gpu_cores("Apple M3 Pro (G15S C0)") == 18u);
+  CHECK(apple_gpu_cores("Apple M3 Max (G15C C0)") == 40u);
+  // Unlisted parts keep 0 (the occupancy floor stays ungated).
+  CHECK(apple_gpu_cores("Apple M3 Ultra (G15U B1)") == 0u);
+  CHECK(apple_gpu_cores("some other device") == 0u);
+  // Existing entries unchanged.
+  CHECK(apple_gpu_cores("Apple M1 (G13G B1)") == 8u);
+  CHECK(apple_gpu_cores("Apple M1 Max (G13C C0)") == 32u);
+  CHECK(apple_gpu_cores("Apple M2 Max (G14C B1)") == 38u);
+  CHECK(apple_gpu_cores("Apple M4 Pro (G16S B1)") == 20u);
+  CHECK(apple_gpu_cores("Apple M5 Max (G17C B1)") == 38u);
 }

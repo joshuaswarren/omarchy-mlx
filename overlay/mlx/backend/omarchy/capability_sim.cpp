@@ -174,6 +174,54 @@ const SimulationProfile kProfiles[] = {
         "Apple M6 (G18G B1)",
     },
     {
+        "m3-g15g",
+        "honeykrisp_fork",
+        "Apple M3 (G15G) device name over the runtime capability set: "
+        "the qmm prefill core-count table reads 10 (apple_gpu_cores); "
+        "Borealis parts carry no cooperative matrix",
+        -1,
+        0,
+        kAllSubgroupOps,
+        0,
+        0,
+        0,
+        0,
+        -1,
+        "Apple M3 (G15G B1)",
+    },
+    {
+        "m3-pro-g15s",
+        "honeykrisp_fork",
+        "Apple M3 Pro (G15S) device name over the runtime capability "
+        "set: apple_gpu_cores reads the 18-core top bin; no cooperative "
+        "matrix on Borealis",
+        -1,
+        0,
+        kAllSubgroupOps,
+        0,
+        0,
+        0,
+        0,
+        -1,
+        "Apple M3 Pro (G15S B1)",
+    },
+    {
+        "m3-max-g15c",
+        "honeykrisp_fork",
+        "Apple M3 Max (G15C) device name over the runtime capability "
+        "set: apple_gpu_cores reads the 40-core top bin; no cooperative "
+        "matrix on Borealis",
+        -1,
+        0,
+        kAllSubgroupOps,
+        0,
+        0,
+        0,
+        0,
+        -1,
+        "Apple M3 Max (G15C B1)",
+    },
+    {
         "nvidia-c16-coopmat",
         "nvidia_proprietary",
         "NVIDIA-proprietary coopmat list: no same-operand 8x8x8 shapes, "
