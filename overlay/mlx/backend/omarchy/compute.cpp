@@ -810,6 +810,8 @@
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d2048.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096_midsb.h"
+#include "qmm_vec_q4_swiglu_bf16_r2s16w2_fast.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s16w2_fast_midsb_b1.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast_b1.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast_b1.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
@@ -2717,6 +2719,14 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096_midsb,
           qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096_midsb_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R2S16W2Fast:
+      return {
+          qmm_vec_q4_swiglu_bf16_r2s16w2_fast,
+          qmm_vec_q4_swiglu_bf16_r2s16w2_fast_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16W2FastMidsbB1:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s16w2_fast_midsb_b1,
+          qmm_vec_q4_word_subgroup_bf16_r2s16w2_fast_midsb_b1_size};
     case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2FastB1:
       return {
           qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast_b1,
@@ -3006,6 +3016,8 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
       kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2Fast ||
       kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast ||
       kernel == ComputeKernel::QmmVecQ4SwigluBF16R2S8W2Fast ||
+      kernel == ComputeKernel::QmmVecQ4SwigluBF16R2S16W2Fast ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16W2FastMidsbB1 ||
       kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Upfront ||
       kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast ||
       kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast3w ||

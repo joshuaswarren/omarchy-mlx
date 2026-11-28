@@ -1469,6 +1469,8 @@ enum class ComputeKernel : uint16_t {
   // specialization (64 WGs = 2 full waves on 32 cores; 0-ULP bit-identical).
   // Appended to keep profile kernel ids stable.
   QmmVecQ4ResNormVec4BF16R2S32W2FastD4096Midsb,
+  QmmVecQ4SwigluBF16R2S16W2Fast,
+  QmmVecQ4WordSubgroupBF16R2S16W2FastMidsbB1,
   Count,
 };
 

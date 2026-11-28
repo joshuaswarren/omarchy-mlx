@@ -130,6 +130,13 @@ int scenario(const std::string& name, const std::string& out) {
     outs.push_back(oa);
     outs.push_back(ob);
     outs.push_back(oc);
+  } else if (name == "lm_s16") {
+    auto x = make_x(4096, rng);
+    auto a = make_lin(65536, 4096, rng);
+    eval(x, a.w, a.s, a.b);
+    auto o = qmm(x, a);
+    eval(o);
+    outs.push_back(o);
   } else if (name == "swiglu") {
     auto x = make_x(2048, rng);
     auto gate = make_lin(6144, 2048, rng);
@@ -520,6 +527,45 @@ int main(int argc, char** argv) {
       ++failures;
     }
     unsetenv("MLX_OMARCHY_RESNORM_D4096_MIDSB");
+    unsetenv("MLX_OMARCHY_SWIGLU_R2S16");
+    if (!mlx::core::omarchy::qmm_swiglu_r2s16_default_part("Apple M1 Max (G13C C0)", 12288u) ||
+        !mlx::core::omarchy::qmm_swiglu_r2s16_default_part("Apple M1 Max (G13C C0)", 6144u) ||
+        mlx::core::omarchy::qmm_swiglu_r2s16_default_part("Apple M1 Max (G13C C0)", 9728u) ||
+        mlx::core::omarchy::qmm_swiglu_r2s16_default_part("Apple M2 Max (G14C B1)", 12288u) ||
+        mlx::core::omarchy::qmm_swiglu_r2s16_default_part("Apple M1 (G13G B1)", 12288u)) {
+      std::cout << "FAIL: qmm_swiglu_r2s16_default_part check\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_SWIGLU_R2S16", "0", 1);
+    if (mlx::core::omarchy::qmm_swiglu_r2s16_default_part("Apple M1 Max (G13C C0)", 12288u)) {
+      std::cout << "FAIL: qmm_swiglu_r2s16_default_part =0 override\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_SWIGLU_R2S16", "1", 1);
+    if (!mlx::core::omarchy::qmm_swiglu_r2s16_default_part("Apple M2 Max (G14C B1)", 9728u)) {
+      std::cout << "FAIL: qmm_swiglu_r2s16_default_part =1 override\n";
+      ++failures;
+    }
+    unsetenv("MLX_OMARCHY_SWIGLU_R2S16");
+    unsetenv("MLX_OMARCHY_LM_R2S16_MIDSB");
+    if (!mlx::core::omarchy::qmm_lm_r2s16_midsb_default_part("Apple M1 Max (G13C C0)") ||
+        mlx::core::omarchy::qmm_lm_r2s16_midsb_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::qmm_lm_r2s16_midsb_default_part("Apple M1 (G13G B1)") ||
+        mlx::core::omarchy::qmm_lm_r2s16_midsb_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
+      std::cout << "FAIL: qmm_lm_r2s16_midsb_default_part check\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_LM_R2S16_MIDSB", "0", 1);
+    if (mlx::core::omarchy::qmm_lm_r2s16_midsb_default_part("Apple M1 Max (G13C C0)")) {
+      std::cout << "FAIL: qmm_lm_r2s16_midsb_default_part =0 override\n";
+      ++failures;
+    }
+    setenv("MLX_OMARCHY_LM_R2S16_MIDSB", "1", 1);
+    if (!mlx::core::omarchy::qmm_lm_r2s16_midsb_default_part("Apple M2 Max (G14C B1)")) {
+      std::cout << "FAIL: qmm_lm_r2s16_midsb_default_part =1 override\n";
+      ++failures;
+    }
+    unsetenv("MLX_OMARCHY_LM_R2S16_MIDSB");
     unsetenv("MLX_OMARCHY_MULTI_R2S16");
     if (!mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M2 Max (G14C B1)") ||
         mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M1 Max (G13C C0)") ||
@@ -971,6 +1017,54 @@ int main(int argc, char** argv) {
         ++failures;
       } else {
         std::cout << "ok: resnorm4096_g13c_r2s32_d4096_midsb identical\n";
+      }
+    }
+    // G13C SwiGLU R2S16W2Fast (512t, 32 cols/WG) must be 0-ULP bit-identical
+    // to SwiGLU R2S8W2Fast.
+    {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_SWIGLU_R1", "0", 1);
+      setenv("MLX_OMARCHY_QMM_FAST_ONLY", "1", 1);
+      setenv("MLX_OMARCHY_SWIGLU_R2S16", "0", 1);
+      int rc1 = run_child("swiglu", base.c_str());
+      setenv("MLX_OMARCHY_SWIGLU_R2S16", "1", 1);
+      int rc2 = run_child("swiglu", other.c_str());
+      unsetenv("MLX_OMARCHY_SWIGLU_R2S16");
+      unsetenv("MLX_OMARCHY_QMM_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_SWIGLU_R1");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: swiglu_g13c_r2s16_fast differed from R2S8W2Fast (rc "
+                  << rc1 << "/" << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: swiglu_g13c_r2s16_fast identical\n";
+      }
+    }
+    // G13C large-vocab lm_head R2S16W2FastMidsbB1 (512t, 32 cols/WG, BATCH1)
+    // must be 0-ULP bit-identical to Word R2S8W2Fast.
+    {
+      std::string base = "/tmp/w7p-geom-base.bin";
+      std::string other = "/tmp/w7p-geom-other.bin";
+      setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+      setenv("MLX_OMARCHY_WORD_R2S4", "0", 1);
+      setenv("MLX_OMARCHY_QMM_FAST_ONLY", "1", 1);
+      setenv("MLX_OMARCHY_LM_R2S16_MIDSB", "0", 1);
+      int rc1 = run_child("lm_s16", base.c_str());
+      setenv("MLX_OMARCHY_LM_R2S16_MIDSB", "1", 1);
+      int rc2 = run_child("lm_s16", other.c_str());
+      unsetenv("MLX_OMARCHY_LM_R2S16_MIDSB");
+      unsetenv("MLX_OMARCHY_QMM_FAST_ONLY");
+      unsetenv("MLX_OMARCHY_WORD_R2S4");
+      unsetenv("MLX_OMARCHY_QMM_GEOM");
+      if (rc1 != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+        std::cout << "FAIL: lm_g13c_r2s16_midsb_b1 differed from R2S8W2Fast (rc "
+                  << rc1 << "/" << rc2 << ")\n";
+        ++failures;
+      } else {
+        std::cout << "ok: lm_g13c_r2s16_midsb_b1 identical\n";
       }
     }
   }

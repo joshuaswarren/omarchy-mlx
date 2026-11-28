@@ -987,6 +987,34 @@ inline bool qmm_resnorm_d4096_midsb_default_part(
   return device_name.find("G13C") != std::string::npos;
 }
 
+// G13C-gated 512-thread (32 cols/WG) dedicated SwiGLU decode kernel
+// (QmmVecQ4SwigluBF16R2S16W2Fast): enabled strictly when N is a multiple of
+// 1024 (32 cols/WG x 32 cores = exact full waves with zero tail-wave cliff,
+// matching Qwen3.5-9B N=12288 at 384 WGs = 12.00 waves and halving X L1 reads
+// while leaving Qwen3-4B N=9728 on R2S8W2Fast). 0-ULP bit-identical.
+// Default on G13C for N % 1024 == 0; MLX_OMARCHY_SWIGLU_R2S16=0/1 overrides.
+// Pure.
+inline bool qmm_swiglu_r2s16_default_part(
+    const std::string& device_name,
+    uint32_t n) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SWIGLU_R2S16")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G13C") != std::string::npos && (n % 1024u) == 0u;
+}
+
+// G13C-gated 512-thread (32 cols/WG) large-vocab lm_head Q4 word decode kernel
+// (QmmVecQ4WordSubgroupBF16R2S16W2FastMidsbB1: QMM_Q4_MIDSB + QMM_WORD_BATCH1,
+// dispatched for batch==1, N>=65536, K>=4096 such as Qwen3.5-9B 248320x4096).
+// 0-ULP bit-identical. Default on G13C; MLX_OMARCHY_LM_R2S16_MIDSB=0/1
+// overrides. Pure.
+inline bool qmm_lm_r2s16_midsb_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_LM_R2S16_MIDSB")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G13C") != std::string::npos;
+}
+
 // 1024-thread (32 subgroups, 64 cols/WG) Q4 word decode GEMV for large
 // vocabulary lm_head (n >= 65536) in GreedyQuantizedArgmax. Cuts 248320-vocab
 // workgroup count from 15520 (R2S8W2) to 3880 for 4x better x L1 reuse and

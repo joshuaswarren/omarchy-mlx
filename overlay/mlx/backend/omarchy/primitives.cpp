@@ -9750,6 +9750,15 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                 encoder.device().capabilities().device_name)) {
           vec_kernel =
               omarchy::ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2Fast;
+          if (batch == 1u && params.matrix_n >= 65536u &&
+              params.matrix_k >= 4096u &&
+              caps.max_compute_work_group_invocations >= 512u &&
+              caps.max_compute_work_group_size[0] >= 512u &&
+              omarchy::qmm_lm_r2s16_midsb_default_part(caps.device_name)) {
+            vec_kernel = omarchy::ComputeKernel::
+                QmmVecQ4WordSubgroupBF16R2S16W2FastMidsbB1;
+            qmm_groups = (params.matrix_n + 31u) / 32u;
+          }
         }
       }
     }
@@ -11194,6 +11203,18 @@ bool dispatch_quantized_gemv_group(
       } else {
         swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R1S8W2;
         swiglu_cols = 8u;
+      }
+    } else if (
+        swiglu_kernel == ComputeKernel::QmmVecQ4SwigluBF16R2S8W2 &&
+        (k % 512 == 0) &&
+        encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
+        encoder.device().capabilities().max_compute_work_group_size[0] >= 512u) {
+      const uint32_t sw_n =
+          static_cast<uint32_t>(members[0].node.shape(-1));
+      if ((sw_n % 8u) == 0u &&
+          omarchy::qmm_swiglu_r2s16_default_part(qmm_dev_name, sw_n)) {
+        swiglu_kernel = ComputeKernel::QmmVecQ4SwigluBF16R2S16W2Fast;
+        swiglu_cols = 32u;
       }
     }
   }
