@@ -3014,6 +3014,71 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+def _run_fx(target, args, kwargs, *feed):
+    g = torch.fx.Graph()
+    tensors = [f for f in feed if isinstance(f, torch.Tensor)]
+    phs = [g.placeholder(f"p{i}") for i in range(len(tensors))]
+    it = iter(phs)
+
+    def _w(v):
+        return next(it) if isinstance(v, torch.Tensor) else v
+
+    wargs = tuple(_w(v) for v in args)
+    wkwargs = {k: _w(v) for k, v in kwargs.items()}
+    node = g.call_function(target, wargs, wkwargs)
+    g.output(node)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(*tensors)
+    assert stats["cpu"] == [], (stats, [str(n.target) for n in gm.graph.nodes])
+    return out
+
+
+def test_scatter_extras():
+    rng = np.random.RandomState(0)
+    t = torch.tensor(rng.randn(4, 5).astype(np.float32))
+    src = torch.tensor(rng.randn(4).astype(np.float32))
+    out = _run_fx(torch.ops.aten.select_scatter.default, (t, src, 1, 2), {}, t, src)
+    assert np.allclose(_np(out), torch.select_scatter(t, src, 1, 2).numpy())
+
+    src2 = torch.tensor(rng.randn(4, 2).astype(np.float32))
+    out = _run_fx(torch.ops.aten.slice_scatter.default, (t, src2, 1, 1), {"step": 2}, t, src2)
+    assert np.allclose(_np(out), torch.slice_scatter(t, src2, 1, 1, step=2).numpy())
+
+    ds = torch.tensor(rng.randn(4).astype(np.float32))
+    out = _run_fx(torch.ops.aten.diagonal_scatter.default, (t, ds, 1, 0, 1), {}, t, ds)
+    assert np.allclose(_np(out), torch.diagonal_scatter(t, ds, offset=1).numpy())
+
+    mask = torch.tensor(rng.rand(4, 5) > 0.5)
+    ms = torch.tensor(rng.randn(20).astype(np.float32))
+    out = _run_fx(torch.ops.aten.masked_scatter.default, (t, mask, ms), {}, t, mask, ms)
+    ref = t.clone()
+    ref.masked_scatter_(mask, ms)
+    assert np.allclose(_np(out), ref.numpy())
+
+    asrc = torch.tensor(rng.randn(3, 3).astype(np.float32))
+    out = _run_fx(torch.ops.aten.as_strided_scatter.default,
+                  (t, asrc, [3, 3], [1, 4], 0), {}, t, asrc)
+    ref = t.clone()
+    torch.as_strided(ref, [3, 3], [1, 4], 0).copy_(asrc)
+    assert np.allclose(_np(out), ref.numpy())
+
+    nc = _run_fx(torch.ops.aten.narrow_copy.default, (t, 1, 1, 3), {}, t)
+    assert np.allclose(_np(nc), torch.narrow_copy(t, 1, 1, 3).numpy())
+
+    idx = torch.tensor([[0, 2, 4], [1, 3, 4], [0, 0, 2], [4, 4, 1]], dtype=torch.int64)
+    ssrc = torch.tensor(rng.randn(4, 3).astype(np.float32))
+    for red, inc in (("sum", True), ("sum", False), ("amax", True), ("amax", False),
+                     ("amin", True), ("prod", True), ("prod", False),
+                     ("mean", True), ("mean", False)):
+        out = _run_fx(torch.ops.aten.scatter_reduce.two, (t, 1, idx, ssrc, red),
+                      {"include_self": inc}, t, idx, ssrc)
+        ref = t.scatter_reduce(1, idx, ssrc, reduce=red, include_self=inc)
+        assert np.allclose(_np(out), ref.numpy(), atol=1e-5), (red, inc)
+    print("test_scatter_extras PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3139,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_scatter_extras()
     print("ALL PASS")
 
 

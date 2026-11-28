@@ -2055,6 +2055,117 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _select_scatter(self, src, dim, index):
+    s, t = _mx(src), _mx(self)
+    d = dim % t.ndim
+    mask = (mx.arange(t.shape[d]) == int(index))
+    mask = mx.reshape(mask, [1] * d + [-1] + [1] * (t.ndim - d - 1))
+    return mx.where(mask, mx.broadcast_to(mx.expand_dims(s, d), t.shape), t)
+
+
+def _slice_scatter(self, src, dim=0, start=None, end=None, step=1):
+    s, t = _mx(src), _mx(self)
+    d = dim % t.ndim
+    n = t.shape[d]
+    st = 0 if start is None else int(start) % n if int(start) < 0 else min(int(start), n)
+    en = n if end is None else max(n + int(end), 0) if int(end) < 0 else min(int(end), n)
+    step = int(step)
+    pos = mx.arange(n)
+    mask = (pos >= st) & (pos < en) & ((pos - st) % step == 0)
+    # src index at masked position i is (i - st)//step
+    src_idx = mx.clip((pos - st) // step, 0, s.shape[d] - 1)
+    gathered = mx.take(s, src_idx, axis=d)
+    mask = mx.reshape(mask, [1] * d + [-1] + [1] * (t.ndim - d - 1))
+    return mx.where(mask, gathered, t)
+
+
+def _diagonal_scatter(self, src, offset=0, dim1=0, dim2=1):
+    # src's last axis enumerates the diagonal; positions (i, i+offset)
+    s, t = _mx(src), _mx(self)
+    d1, d2 = dim1 % t.ndim, dim2 % t.ndim
+    perm = [i for i in range(t.ndim) if i not in (d1, d2)] + [d1, d2]
+    tm = mx.transpose(t, perm)
+    m, n = tm.shape[-2], tm.shape[-1]
+    ii = mx.arange(m)[:, None]
+    jj = mx.arange(n)[None, :]
+    if offset >= 0:
+        cond, lin = jj - ii == offset, ii
+    else:
+        cond, lin = ii - jj == -offset, jj
+    gathered = mx.take(s, mx.where(cond, lin, 0), axis=-1)
+    cond = mx.broadcast_to(mx.expand_dims(cond, tuple(range(tm.ndim - 2))), tm.shape)
+    out = mx.where(cond, gathered, tm)
+    out = mx.transpose(out, [perm.index(i) for i in range(t.ndim)])
+    return out
+
+
+def _masked_scatter(self, mask, source):
+    t = _mx(self)
+    fm = mx.broadcast_to(_mx(mask).astype(mx.bool_), t.shape).reshape(-1)
+    src = _mx(source).reshape(-1)
+    cnt = int(np.array(mx.sum(fm.astype(mx.int32))))
+    rank = mx.cumsum(fm.astype(mx.int32), axis=0) - 1
+    vals = mx.take(src, mx.clip(rank, 0, max(cnt - 1, 0)))
+    return mx.where(fm, vals, t.reshape(-1)).reshape(t.shape)
+
+
+def _as_strided_scatter(self, src, size, stride, storage_offset=None):
+    s, t = _mx(src), _mx(self)
+    off = int(storage_offset or 0)
+    idx = mx.full(tuple(size), off, dtype=mx.int32)
+    for i, (sz, st) in enumerate(zip(size, stride)):
+        sh = [1] * len(size)
+        sh[i] = sz
+        idx = idx + mx.reshape(mx.arange(sz, dtype=mx.int32) * int(st), sh)
+    flat_idx = idx.reshape(-1)
+    flat_src = s.reshape(-1)
+    out = t.reshape(-1)
+    out = out.at[flat_idx].multiply(mx.zeros(flat_idx.shape[0], dtype=out.dtype))
+    return out.at[flat_idx].add(flat_src).reshape(t.shape)
+
+
+def _scatter_reduce(self, dim, index, src, reduce, include_self=True):
+    t, idx, s = _mx(self), _mx(index).astype(mx.int64), _mx(src)
+    d = dim % t.ndim
+    tm = mx.moveaxis(t, d, -1)
+    im = mx.moveaxis(idx, d, -1)
+    sm = mx.moveaxis(s, d, -1)
+    n_d = tm.shape[-1]
+    rows = int(np.prod(tm.shape[:-1])) if tm.ndim > 1 else 1
+    tf = tm.reshape(rows, n_d)
+    if_ = im.reshape(rows, -1)
+    sf = sm.reshape(rows, -1)
+    row = mx.arange(rows)[:, None]
+    lin = (row * n_d + if_).reshape(-1)
+    vals = sf.reshape(-1)
+    out = tf.reshape(-1)
+    if reduce == "sum":
+        if not include_self:
+            out = out.at[lin].multiply(mx.zeros(lin.shape[0], dtype=out.dtype))
+        out = out.at[lin].add(vals)
+    elif reduce == "prod":
+        if not include_self:
+            cnt = mx.zeros(out.shape, dtype=out.dtype).at[lin].add(mx.ones(lin.shape[0]))
+            out = mx.where(cnt > 0, mx.ones_like(out), out)
+        out = out.at[lin].multiply(vals)
+    elif reduce in ("amax", "amin"):
+        if not include_self:
+            bound = -float("inf") if reduce == "amax" else float("inf")
+            out = out.at[lin].multiply(mx.zeros(lin.shape[0], dtype=out.dtype))
+            out = out.at[lin].add(mx.full(lin.shape[0], bound, dtype=out.dtype))
+        out = out.at[lin].maximum(vals) if reduce == "amax" else out.at[lin].minimum(vals)
+    elif reduce == "mean":
+        cnt = mx.zeros(out.shape, dtype=out.dtype).at[lin].add(mx.ones(lin.shape[0]))
+        if include_self:
+            out = out.at[lin].add(vals) / mx.maximum(cnt + 1, 1)
+        else:
+            sm = mx.zeros(out.shape, dtype=out.dtype).at[lin].add(vals)
+            out = mx.where(cnt > 0, sm / mx.maximum(cnt, 1), out)
+    else:
+        return _raise(f"scatter_reduce {reduce}")
+    return mx.moveaxis(out.reshape(rows, n_d).reshape(tm.shape), -1, d)
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2272,6 +2383,13 @@ _FUNC_SPECS = {
     "fft_ifft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.ifft2(_mx(a), s, axes=dim, norm=norm or "backward"),
     "select": lambda a, dim, i: _slice(a, dim, i % a.shape[dim % a.ndim], i % a.shape[dim % a.ndim] + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
     "slice": _slice, "narrow": lambda a, dim, s, n: _slice(a, dim, s, s + n, 1),
+    "narrow_copy": lambda a, dim, start, length: _slice(a, dim, start, start + length, 1),
+    "select_scatter": _select_scatter,
+    "slice_scatter": _slice_scatter,
+    "diagonal_scatter": _diagonal_scatter,
+    "masked_scatter": _masked_scatter,
+    "as_strided_scatter": _as_strided_scatter,
+    "scatter_reduce": _scatter_reduce,
     "mean": _mean, "sum": _sum,
     # PT-AL-g: aten.logsumexp(self, int[1] dim, keepdim) — the dim list
     # becomes the axis tuple; mx.logsumexp is the same stable reduction.
