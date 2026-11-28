@@ -2917,16 +2917,6 @@ uint32_t kernel_subgroup32_workgroup(ComputeKernel kernel) {
     case ComputeKernel::QmmVecGreedyBF16:
     // Decode-native SDPA bf16/composition-exact arms
     // (sdpa_decode_native.comp BF16_IO builds, 256-lane workgroups).
-    case ComputeKernel::SdpaDecodeNativeBF16:
-    case ComputeKernel::SdpaDecodeNativeBF16Hd32:
-    case ComputeKernel::SdpaDecodeNativeBF16Hd96:
-    case ComputeKernel::SdpaDecodeNativeBF16Hd128:
-    case ComputeKernel::SdpaDecodeNativeBF16Hd160:
-    case ComputeKernel::SdpaDecodeNativeBF16Hd192:
-    case ComputeKernel::SdpaDecodeNativeBF16Hd224:
-    case ComputeKernel::SdpaDecodeNativeBF16Hd256:
-    case ComputeKernel::SdpaDecodeMaskedBF16Hd128:
-    case ComputeKernel::SdpaDecodeRowsBF16Hd128:
     // MoE subgroup gather kernels (gather_qmm_sub.comp): the cross-slot
     // merge indexes subgroup_totals[r * 8 + gl_SubgroupID], a hardcoded
     // eight subgroups in the 256-lane workgroup.
