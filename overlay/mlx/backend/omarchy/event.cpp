@@ -330,10 +330,10 @@ void Event::signal(Stream s) {
         // signal registers after the wait already flushed.
         encoder.note_deferred_signals();
         if (event.has_waiters_.load(std::memory_order_seq_cst)) {
-          encoder.commit();
+          encoder.commit("event_signal_has_waiters");
         }
       } else {
-        encoder.commit();
+        encoder.commit("event_signal");
       }
     } else {
       scheduler::signal_event(s, *this, [target_value](Event& self) {
@@ -388,10 +388,10 @@ void Event::signal(Stream s) {
         // signal registers after the wait already flushed.
         encoder.note_deferred_signals();
         if (event.has_waiters_.load(std::memory_order_seq_cst)) {
-          encoder.commit();
+          encoder.commit("event_signal_has_waiters");
         }
       } else {
-        encoder.commit();
+        encoder.commit("event_signal");
       }
     }
   } else {

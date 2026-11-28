@@ -485,7 +485,7 @@ void eval_compiled_tape(
             omarchy::batch_work_budget(
                 encoder.device().hardware_capabilities().device_name,
                 encoder.batch_has_prefill()))) {
-      encoder.commit();
+      encoder.commit("compiled_batch_over_budget");
     }
   }
   close_chain();

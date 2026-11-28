@@ -205,7 +205,7 @@ void eval(array& arr) {
         alloc.pending_quarantine_bytes() >=
             alloc.batch_limit() / omarchy::kBatchByteBudgetDivisor) {
       EvalPhaseTimer commit_timer(3, fold_timing);
-      encoder.commit();
+      encoder.commit("batch_over_budget");
     }
   }
 }
@@ -244,7 +244,7 @@ void finalize(Stream s) {
       omarchy::timeline::SubKind::Finalize,
       encoder.timeline_id(),
       static_cast<uint64_t>(encoder.nodes()));
-  encoder.commit();
+  encoder.commit("finalize");
 }
 
 

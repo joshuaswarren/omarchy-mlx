@@ -558,8 +558,9 @@ class MLX_API CommandEncoder
   // execution time — worse with deeper batches and longer models, never
   // better. A future attempt must flush when the scheduler would block,
   // not on a node budget (upstream-shape work). Safe to call repeatedly;
-  // a no-op when nothing is pending.
-  void commit();
+  // a no-op when nothing is pending. The reason tag rides the rtmod
+  // SUBMIT trace line (DEC-41 callsite census).
+  void commit(const char* reason = "commit");
 
   // Submit pending work and block (bounded) until it completes.
   void synchronize(const char* reason = "explicit");
@@ -670,7 +671,7 @@ class MLX_API CommandEncoder
   // noncoherent host mappings. Guarantees the newest command buffer has
   // left the pending state.
   void join_last_completion(const char* reason);
-  void submit();
+  void submit(const char* reason = "commit");
 
   // Dependency-gated barrier state (MLX_OMARCHY_GATED_BARRIERS, default
   // ON since 2026-09-29; set 0 to restore the unconditional pre+post
