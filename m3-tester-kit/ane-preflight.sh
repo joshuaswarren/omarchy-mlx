@@ -24,7 +24,7 @@ fails=0
 # <name> <0=ok|other> <detail>; records REFUSED lines, never stops early.
 report() {
   if [ "$2" = "0" ]; then
-    echo "ANE preflight $1: PASS${3:+ ($3)}"
+    echo "ANE preflight $1: PASS"
   else
     echo "ANE preflight $1: REFUSED ($3)"
     fails=$((fails + 1))

@@ -102,7 +102,7 @@ for m in $MODELS; do
     [ "${LOCAL_ONLY:-0}" = "1" ] && extra+=(--local-files-only)
     "$VENV/bin/python3" "$KIT/scripts/wheel_card_row.py" --installed \
       --machine "$MACHINE" --model "$m" --ctx "$c" \
-      --out "$OUT/$tag" "${extra[@]}"
+      --out "$OUT/$tag" ${extra[@]+"${extra[@]}"}
     power_snapshot "post-$tag"
   done
 done

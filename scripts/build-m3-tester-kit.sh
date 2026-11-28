@@ -60,6 +60,11 @@ fi
 [ -n "$wheel" ] || { echo "usage: $0 --wheel <whl> | --self-test" >&2; exit 2; }
 [ -r "$wheel" ] || { echo "wheel not readable: $wheel" >&2; exit 1; }
 
+# Canonicalize once: the archive step cd's into the stage dir, so a
+# relative --out (the "." default) would resolve to the stage itself.
+mkdir -p "$out"
+out="$(cd "$out" && pwd)"
+
 name="m3-tester-kit-r1-$tag"
 stage="$out/$name"
 rm -rf "$stage"
