@@ -962,6 +962,95 @@ def _tanh_backward(g, out):
     return (g32 * (1.0 - o32 * o32)).astype(d)
 
 
+def _tri_indices(row, col, offset, lower):
+    r = mx.arange(row)[:, None]
+    c = mx.arange(col)[None, :]
+    keep = (r - c >= -offset) if lower else (c - r >= offset)
+    flat = mx.arange(row * col)
+    key = mx.logical_not(keep.reshape(-1)).astype(mx.int32) * (row * col) + flat
+    sel = mx.argsort(key)[: int(mx.sum(keep.astype(mx.int32)).item())]
+    f = sel
+    return mx.stack([f // col, f % col])
+
+
+def _unfold_impl(a, dim, size, step):
+    a = _mx(a)
+    dim = dim % a.ndim
+    n = a.shape[dim]
+    nwin = (n - size) // step + 1
+    if nwin <= 0:
+        return _raise("unfold range")
+    y = mx.moveaxis(a, dim, -1)
+    idx = (mx.arange(nwin)[:, None] * step + mx.arange(size)[None, :])
+    g = mx.take(y, idx.reshape(-1), axis=-1).reshape(*y.shape[:-1], nwin, size)
+    # window count axis belongs at the unfolded dim position, size last
+    g = mx.moveaxis(g, -2, dim if dim < g.ndim - 2 else -2)
+    return g
+
+
+def _unsafe_chunk(a, chunks, dim):
+    a = _mx(a)
+    dim = dim % a.ndim
+    n = a.shape[dim]
+    each = -(-n // chunks)
+    pts = [min(i * each, n) for i in range(1, chunks) if min(i * each, n) < n]
+    return list(mx.split(a, pts, axis=dim))
+
+
+def _masked_select(a, mask):
+    x, m = _mx(a), _mx(mask)
+    m = mx.broadcast_to(m.astype(mx.int32), x.shape)
+    flat = mx.arange(x.size)
+    key = (1 - m.reshape(-1)) * x.size + flat
+    k = int(mx.sum(m.reshape(-1)).item())
+    sel = mx.argsort(key)[:k]
+    return x.reshape(-1)[sel]
+
+
+def _nonzero(a):
+    x = _mx(a)
+    flat = mx.arange(x.size)
+    keep = (x.reshape(-1) != 0).astype(mx.int32)
+    key = (1 - keep) * x.size + flat
+    k = int(mx.sum(keep).item())
+    sel = mx.argsort(key)[:k]
+    if x.ndim == 1:
+        return sel.reshape(-1, 1)
+    strides = []
+    acc = 1
+    for d in reversed(x.shape[1:]):
+        acc *= d
+        strides.append(acc)
+    strides.append(1)
+    strides = strides[-x.ndim:] if len(strides) > x.ndim else strides
+    cols = [sel]
+    rem = sel
+    out_cols = []
+    acc = x.size
+    for d in x.shape:
+        acc //= d
+        out_cols.append(rem // acc)
+        rem = rem % acc
+    return mx.stack(out_cols, axis=1)
+
+
+def _nonzero_numpy(a):
+    x = _mx(a)
+    flat = mx.arange(x.size)
+    keep = (x.reshape(-1) != 0).astype(mx.int32)
+    key = (1 - keep) * x.size + flat
+    k = int(mx.sum(keep).item())
+    sel = mx.argsort(key)[:k]
+    rem = sel
+    acc = x.size
+    cols = []
+    for d in x.shape:
+        acc //= d
+        cols.append(rem // acc)
+        rem = rem % acc
+    return cols
+
+
 def _nll_loss_backward(gout, a, target, weight, reduction, ignore_index, tw):
     if weight is not None:
         return _raise("nll_loss_backward weight")
@@ -2341,6 +2430,35 @@ _FUNC_SPECS = {
     "tanh_backward": _tanh_backward,
     "nll_loss_forward": _nll_loss_forward,
     "nll_loss_backward": _nll_loss_backward,
+    "trace": lambda a, **k: mx.sum(mx.diagonal(_mx(a), axis1=-2, axis2=-1), axis=-1),
+    "tril_indices": lambda row, col, offset=0, **k:
+        _tri_indices(int(row), int(col), int(offset), True),
+    "triu_indices": lambda row, col, offset=0, **k:
+        _tri_indices(int(row), int(col), int(offset), False),
+    "unfold": lambda a, dimension, size, step, **k:
+        _unfold_impl(a, int(dimension), int(size), int(step)),
+    "unfold_copy": lambda a, dimension, size, step, **k:
+        _unfold_impl(a, int(dimension), int(size), int(step)),
+    "unsafe_chunk": lambda a, chunks, dim=0, **k:
+        _unsafe_chunk(a, int(chunks), int(dim)),
+    "unsafe_split_with_sizes": lambda a, split_sizes, dim=0, **k:
+        _split_sizes(a, list(split_sizes), int(dim)),
+    "unsqueeze_copy": lambda a, dim, **k: mx.expand_dims(a, axis=int(dim)),
+    "view_copy": lambda a, dtype_or_size=None, *sz, **k:
+        mx.reshape(a, tuple(sz) if sz else tuple(dtype_or_size)),
+    "copy": lambda a, src, non_blocking=False, **k:
+        _mx(src).astype(_mx(a).dtype),
+    "to_dense": lambda a, dtype=None, **k:
+        _mx(a) if dtype is None else _mx(a).astype(dtype),
+    "zero": lambda a, **k: mx.zeros_like(_mx(a)),
+    "trunc": lambda a, **k: mx.trunc(_mx(a)),
+    "masked_select": _masked_select,
+    "nonzero": _nonzero,
+    "nonzero_numpy": _nonzero_numpy,
+    "view_as_real": lambda a, **k:
+        mx.stack([_mx(a).real, _mx(a).imag], axis=-1),
+    "view_as_complex": lambda a, **k:
+        _mx(a)[..., 0] + _mx(a)[..., 1] * 1j,
     "gelu_backward": _gelu_backward,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
@@ -2598,7 +2716,8 @@ for _fn, _low in FUNC_TABLE.items():
 _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
               "tensor", "zeros_like", "ones_like", "full_like", "empty_like",
               "rand", "randn", "randint", "randperm", "new_zeros", "new_ones",
-              "new_empty", "new_full", "scalar_tensor"}
+              "new_empty", "new_full", "scalar_tensor", "tril_indices",
+              "triu_indices"}
 
 # sampling ops: mx.compile would trace an mx.random draw once and replay
 # it, and mx.random cannot honor torch's RNG contract anyway — the family
