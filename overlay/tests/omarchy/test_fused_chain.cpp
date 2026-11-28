@@ -4508,3 +4508,52 @@ TEST_CASE(
   unsetenv("MLX_OMARCHY_FUSED_TRIO");
   unsetenv("MLX_OMARCHY_FUSED_GEMV");
 }
+
+TEST_CASE("dispatch_rope_pair two-arg overload links and matches unfused rope") {
+  // Q-24: the two-arg overload is the planner's plain-pair route. It
+  // shipped as a declaration plus a call site with no definition, which
+  // hid a link error behind dead code. This test calls the overload
+  // directly so the symbol cannot regress, and pins the pair kernel's
+  // output bit-exact against the unfused ropes.
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  set_compile_mode(CompileMode::disabled);
+  const int D = 64;
+  array q = astype(
+      random::normal(Shape{1, 8, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array k = astype(
+      random::normal(Shape{1, 2, 1, D}, float32, std::nullopt, stream),
+      bfloat16, stream);
+  array offset = array(5, int32);
+  eval({q, k, offset});
+  sync_stream(stream);
+
+  array q_ref = fast::rope(
+      q, D, false, 10000.0f, 1.0f, offset, std::nullopt, stream);
+  array k_ref = fast::rope(
+      k, D, false, 10000.0f, 1.0f, offset, std::nullopt, stream);
+  eval({q_ref, k_ref});
+  sync_stream(stream);
+
+  array qr = fast::rope(
+      q, D, false, 10000.0f, 1.0f, offset, std::nullopt, stream);
+  array kr = fast::rope(
+      k, D, false, 10000.0f, 1.0f, offset, std::nullopt, stream);
+  std::array<array, 2> nodes{qr, kr};
+  bool fired = omarchy::dispatch_rope_pair(nodes, stream);
+  if (fired) {
+    sync_stream(stream);
+    expect_bit_exact(q_ref, nodes[0], stream);
+    expect_bit_exact(k_ref, nodes[1], stream);
+  } else {
+    // The capability gate refused: the ordinary path stays exact and the
+    // link contract (the symbol resolves) is still exercised.
+    eval({qr, kr});
+    sync_stream(stream);
+    expect_bit_exact(q_ref, qr, stream);
+    expect_bit_exact(k_ref, kr, stream);
+  }
+}

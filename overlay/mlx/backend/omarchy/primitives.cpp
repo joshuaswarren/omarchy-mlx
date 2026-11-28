@@ -12983,6 +12983,18 @@ bool dispatch_rope_pair(
   return true;
 }
 
+bool dispatch_rope_pair(std::array<array, 2>& nodes, const Stream& stream) {
+  // The plain-pair route: neither member carries an absorbed norm fold,
+  // so the pair dispatch reads the norm payload from the rope primitives
+  // themselves (the norms form's inline derivation covers the 3-input
+  // rope_rms_norm case; the plain 2-input rope case flows through
+  // without a norm payload). Declared in fused_chain.h; without this
+  // definition the planner's plain-pair arm carries an undefined symbol
+  // that only surfaces when something links against it (Q-24).
+  constexpr std::array<const RopePairNorm*, 2> no_norms{nullptr, nullptr};
+  return dispatch_rope_pair(nodes, no_norms, stream);
+}
+
 bool dispatch_add_norm_pair(
     std::array<array, 2>& nodes,
     const Stream& stream) {
