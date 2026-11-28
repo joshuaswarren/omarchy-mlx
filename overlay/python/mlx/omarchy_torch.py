@@ -290,6 +290,75 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
         y = y + _mx(b).reshape(1, 1, 1, -1)
     return y.transpose(0, 3, 1, 2)
 
+def _im2col(a, kernel_size, dilation=1, padding=0, stride=1, **k):
+    """aten.im2col: NCHW -> (N, C*kh*kw, oh*ow); block order c, kh, kw; the
+    L dimension enumerates (oh, ow) row-major. Built from pad + strided
+    slices + one transpose: every element is a copy, no scatter."""
+    x = _mx(a)
+    n, c, h, w = x.shape
+    kh, kw = kernel_size
+    dl = (dilation, dilation) if isinstance(dilation, int) else tuple(dilation)
+    pd = (padding, padding) if isinstance(padding, int) else tuple(padding)
+    sh, sw = (stride, stride) if isinstance(stride, int) else tuple(stride)
+    oh = (h + 2 * pd[0] - dl[0] * (kh - 1) - 1) // sh + 1
+    ow = (w + 2 * pd[1] - dl[1] * (kw - 1) - 1) // sw + 1
+    if oh <= 0 or ow <= 0:
+        return _raise(f"im2col shape {h}x{w} k {kh}x{kw}")
+    if pd[0] or pd[1]:
+        x = mx.pad(x, ((0, 0), (0, 0), (pd[0], pd[0]), (pd[1], pd[1])))
+    patches = [
+        x[:, :, i * dl[0]: i * dl[0] + sh * (oh - 1) + 1: sh,
+          j * dl[1]: j * dl[1] + sw * (ow - 1) + 1: sw]
+        for i in range(kh) for j in range(kw)
+    ]
+    # (kh*kw, N, C, oh, ow) -> (N, C, kh, kw, oh, ow) -> (N, C*kh*kw, oh*ow)
+    cols = mx.stack(patches).transpose(1, 2, 0, 3, 4).reshape(n, c * kh * kw, oh * ow)
+    return cols
+
+
+def _col2im(cols, output_size, kernel_size, dilation=1, padding=0, stride=1, **k):
+    """aten.col2im: (N, C*kh*kw, L) -> NCHW canvas; overlapping positions sum
+    (the conv-backward scatter). Zero-stuff the patch grid to the strided
+    layout with a concatenate/reshape interleave (dense ops only — this
+    wheel's slice_update cannot stride), then add the clipped shifted
+    window per kernel offset with a dense read-modify-write: exact for any
+    stride/dilation/padding, overlaps sum."""
+    kh, kw = kernel_size
+    dl = (dilation, dilation) if isinstance(dilation, int) else tuple(dilation)
+    pd = (padding, padding) if isinstance(padding, int) else tuple(padding)
+    sh, sw = (stride, stride) if isinstance(stride, int) else tuple(stride)
+    oh = (output_size[0] + 2 * pd[0] - dl[0] * (kh - 1) - 1) // sh + 1
+    ow = (output_size[1] + 2 * pd[1] - dl[1] * (kw - 1) - 1) // sw + 1
+    n = cols.shape[0]
+    c = cols.shape[1] // (kh * kw)
+    h, w = output_size
+    x = _mx(cols).reshape(n, c, kh, kw, oh, ow, 1)
+    if sw > 1:
+        x = mx.concatenate([x, mx.zeros((n, c, kh, kw, oh, ow, sw - 1), dtype=x.dtype)],
+                           axis=6)
+    x = x.reshape(n, c, kh, kw, oh, ow * sw)
+    x = x.reshape(n, c, kh, kw, oh, 1, ow * sw)
+    if sh > 1:
+        x = mx.concatenate([x, mx.zeros((n, c, kh, kw, oh, sh - 1, ow * sw), dtype=x.dtype)],
+                           axis=5)
+    x = x.reshape(n, c, kh, kw, oh * sh, ow * sw)
+    stuffed = x.reshape(n, c, kh, kw, oh * sh, ow * sw)
+    canvas = mx.zeros((n, c, h, w), dtype=x.dtype)
+    for i in range(kh):
+        for j in range(kw):
+            r = i * dl[0] - pd[0]
+            cl = j * dl[1] - pd[1]
+            r0, c0 = max(r, 0), max(cl, 0)
+            r1, c1 = min(r + oh * sh, h), min(cl + ow * sw, w)
+            if r1 <= r0 or c1 <= c0:
+                continue
+            grid = stuffed[:, :, i, j, r0 - r:r1 - r, c0 - cl:c1 - cl]
+            canvas = mx.slice_update(
+                canvas, canvas[:, :, r0:r1, c0:c1] + grid,
+                mx.array((0, 0, r0, c0)), mx.array((0, 1, 2, 3)))
+    return canvas
+
+
 def _group_norm(a, num_groups, w=None, b=None, eps=1e-5):
     # torch NCHW; mlx 0.32 has no fast.group_norm - normalize per group.
     x = _mx(a)
@@ -566,6 +635,8 @@ _FUNC_SPECS = {
     "fold": _fold,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     "conv2d": _conv2d,
+    "im2col": _im2col,
+    "col2im": _col2im,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
