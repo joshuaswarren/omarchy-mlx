@@ -2688,7 +2688,7 @@ def test_parametric_activations():
     # else value. aten.prelu(input, weight) scales negatives by a scalar or
     # per-channel weight. aten.rrelu eval mode is leaky_relu at the mean of
     # [lower, upper]; training samples noise and refuses.
-    x = torch.tensor([[-6.0, -2.0, -0.25, 0.0], [0.5, 1.0, 4.0, -0.001]])
+    x = torch.tensor([[-6.0, -0.25], [0.5, -0.001]])  # 2 channels: wc needs size(1) == 2
     w1 = torch.tensor([0.2])          # scalar weight
     wc = torch.tensor([0.1, 0.3])     # per-channel weight (dim 1)
     x4 = torch.tensor([[[[-2.0], [-1.0]], [[0.5], [3.0]]]])  # NCHW, C=2
