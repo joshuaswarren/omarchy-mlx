@@ -3014,6 +3014,75 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_predicates_sign_compare():
+    # Predicate/sign/compare family: mask outputs are data-independent,
+    # heaviside keeps the aten a==0 -> values contract, copysign keeps the
+    # IEEE sign bit (incl -0.0) via 1/x, nan_to_num defaults to the dtype's
+    # largest finite, and isin lowers as broadcast-eq + any because unlike
+    # nonzero its output shape is static.
+    torch.manual_seed(0)
+    x23 = torch.randn(2, 3)
+    vals = torch.tensor([10.0, 20.0, -30.0])
+    zpm = torch.tensor([-0.0, 0.0, 1.5, -2.5])
+    nans = torch.tensor([float("nan"), 1.0, float("inf"), float("-inf"), -0.0])
+    cases = [
+        (torch.ops.aten.heaviside.default, (x23, x23 + 1), {}, "heaviside"),
+        (torch.ops.aten.heaviside.default, (zpm, torch.tensor([-1.0, 5.0, 7.0, -3.0])), {}, "heaviside"),
+        (torch.ops.aten.copysign.Tensor, (x23, -x23), {}, "copysign"),
+        (torch.ops.aten.copysign.Tensor, (x23[:, :1], zpm), {}, "copysign"),
+        (torch.ops.aten.copysign.Scalar, (x23, -1.5), {}, "copysign"),
+        (torch.ops.aten.signbit.default, (zpm,), {}, "signbit"),
+        (torch.ops.aten.signbit.default, (nans,), {}, "signbit"),
+        (torch.ops.aten.isreal.default, (x23,), {}, "isreal"),
+        (torch.ops.aten.isin.Tensor_Tensor, (x23, torch.randn(5)), {}, "isin"),
+        (torch.ops.aten.isin.Tensor_Tensor, (x23, torch.randn(4)), {"invert": True}, "isin"),
+        (torch.ops.aten.isin.Tensor_Scalar, (x23, 0.5), {}, "isin"),
+        (torch.ops.aten.isclose.default, (x23, x23 + 1e-6), {}, "isclose"),
+        (torch.ops.aten.isclose.default, (x23, x23), {"equal_nan": True}, "isclose"),
+        (torch.ops.aten.isclose.default, (nans, nans), {"equal_nan": True}, "isclose"),
+        (torch.ops.aten.nan_to_num.default, (nans,), {}, "nan_to_num"),
+        (torch.ops.aten.nan_to_num.default, (nans,), {"nan": 5.0, "posinf": 9.0, "neginf": -9.0}, "nan_to_num"),
+        (torch.ops.aten.nan_to_num.default, (torch.tensor([0.5, -0.5], dtype=torch.bfloat16),), {}, "nan_to_num"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s_ for s_ in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        if ref.dtype == torch.bool:
+            assert torch.equal(got, ref), (str(target), kwargs, got, ref)
+            continue
+        if ref.dtype != torch.bfloat16:
+            assert got.dtype == ref.dtype, (str(target), kwargs, got.dtype, ref.dtype)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs, got, ref)
+    # allclose returns a Python bool — verify the lowered scalar agrees.
+    for target, ins, kwargs in [
+        (torch.ops.aten.allclose.default, (x23, x23), {}),
+        (torch.ops.aten.allclose.default, (x23, x23 + 1.0), {}),
+    ]:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert bool(np.array(torch.as_tensor(out))) == ref, (str(target), kwargs)
+    print("test_predicates_sign_compare PASS")
+
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3143,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_predicates_sign_compare()
     print("ALL PASS")
 
 

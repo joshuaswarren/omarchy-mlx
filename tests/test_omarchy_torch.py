@@ -73,6 +73,54 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     torch.allclose(got, r, atol=1e-5, rtol=1e-5),
                     (ns_shape, tag, float((got - r).abs().max())))
 
+    def test_predicates_sign_compare(self):
+        """Predicate/sign/compare family in the wheel backend: heaviside's
+        a==0 -> values contract, copysign's IEEE sign bit (incl -0.0 via
+        1/x since the wheel has no mx.signbit), nan_to_num's largest-finite
+        defaults, isin as broadcast-eq + any (static output shape)."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(0)
+        np = __import__("numpy")
+
+        def to_mx(args):
+            return tuple(
+                mx.array(a.numpy()) if isinstance(a, torch.Tensor) else a
+                for a in args)
+
+        zpm = torch.tensor([-0.0, 0.0, 1.5, -2.5])
+        nans = torch.tensor([float("nan"), 1.0, float("inf"),
+                             float("-inf"), -0.0])
+        x23 = torch.randn(2, 3)
+        cases = [
+            ("heaviside", torch.ops.aten.heaviside.default,
+             (zpm, torch.tensor([-1.0, 5.0, 7.0, -3.0])), {}),
+            ("copysign", torch.ops.aten.copysign.Tensor, (x23, -x23), {}),
+            ("copysign", torch.ops.aten.copysign.Tensor, (x23[:, :1], zpm), {}),
+            ("copysign", torch.ops.aten.copysign.Scalar, (x23, -1.5), {}),
+            ("signbit", torch.ops.aten.signbit.default, (zpm,), {}),
+            ("isreal", torch.ops.aten.isreal.default, (x23,), {}),
+            ("isin", torch.ops.aten.isin.Tensor_Tensor, (x23, torch.randn(5)), {}),
+            ("isin", torch.ops.aten.isin.Tensor_Tensor, (x23, torch.randn(4)),
+             {"invert": True}),
+            ("isin", torch.ops.aten.isin.Tensor_Scalar, (x23, 0.5), {}),
+            ("isclose", torch.ops.aten.isclose.default, (nans, nans),
+             {"equal_nan": True}),
+            ("nan_to_num", torch.ops.aten.nan_to_num.default, (nans,), {}),
+            ("nan_to_num", torch.ops.aten.nan_to_num.default, (nans,),
+             {"nan": 5.0, "posinf": 9.0, "neginf": -9.0}),
+        ]
+        for name, aten_fn, args, kwargs in cases:
+            ref = aten_fn(*args, **kwargs).numpy()
+            got = np.array(ATEN_TABLE[name](*to_mx(args), **kwargs))
+            self.assertTrue(np.array_equal(got, ref), (name, kwargs, got))
+        got = np.array(ATEN_TABLE["allclose"](*to_mx((x23, x23))))
+        self.assertTrue(bool(got) == torch.ops.aten.allclose.default(x23, x23))
+        torch.manual_seed(1)
+
     def test_log1p_expm1_logaddexp(self):
         """PT-AL-f: the wheel backend lowers aten.log1p, aten.expm1 and
         aten.logaddexp with fp32/bf16 parity against the aten CPU ops,
