@@ -1767,13 +1767,12 @@ inline bool greedy_prune_enabled(const std::string& device_name) {
 // chunk/combine dispatches, beating the 8-stage staged path by +8.08% (5/5 wins)
 // and matching/edging the 5-dispatch composed tail with bit-identical token IDs.
 // On G13G (Apple M1) Qwen3.8-2B ctx 512 it wins +1.69% solo (42.13 -> 42.84
-// tok/s, bit-exact 4784df039da0) and +8.42% / +7.81% (5/5) once the Python
-// word_route sync guard matches.
+// tok/s, bit-exact 4784df039da0).
 // On G13C (Apple M1 Max, 16-inch) Qwen3.8-2B (5-pair ABBA, DT=0, Mesa
-// 53ad9af1) it wins +44.38% at ctx 512 (116.595 -> 168.342 tok/s, 5/5,
-// power_off 38 -> 0, bit-exact 2f4697d06db73dba) and +44.42% at ctx 2048
-// (111.240 -> 160.651 tok/s, 5/5, power_off 55 -> 0, bit-exact
-// 93a61074d50a2788).
+// 53ad9af1, receipts/2026-11-27-g13c-greedy-word-2b-abba.md) it wins +44.38%
+// at ctx 512 (116.595 -> 168.342 tok/s, 5/5, power_off 38 -> 0, bit-exact
+// 2f4697d06db73dba) and +44.42% at ctx 2048 (111.240 -> 160.651 tok/s, 5/5,
+// power_off 55 -> 0, bit-exact 93a61074d50a2788).
 // MLX_OMARCHY_GREEDY_WORD=1/0 overrides on any part. Pure.
 inline bool greedy_word_over_staged_part(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos ||
