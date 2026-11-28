@@ -522,7 +522,7 @@ int main(int argc, char** argv) {
     unsetenv("MLX_OMARCHY_RESNORM_D4096_MIDSB");
     unsetenv("MLX_OMARCHY_MULTI_R2S16");
     if (!mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M2 Max (G14C B1)") ||
-        mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M1 Max (G13C C0)") ||
+        !mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_g14c_multi_r2s16_default_part part check\n";
