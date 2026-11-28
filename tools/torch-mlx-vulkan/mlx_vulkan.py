@@ -2055,6 +2055,234 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _linalg_qr(a, mode="reduced"):
+    a = _mx(a)
+    q, r = mx.linalg.qr(a)
+    if mode == "r":
+        return (mx.zeros((0,), dtype=a.dtype), r)
+    if mode == "complete" and a.shape[-2] > a.shape[-1]:
+        return _raise("qr complete")  # mx.qr is reduced-only
+    return (q, r)
+
+
+def _linalg_lu(a, pivot=True):
+    # mx.lu returns a permutation vector with LU = A[p]; aten wants the
+    # P matrix with PA = LU -> P = I[p].
+    if not pivot:
+        return _raise("lu pivot=False")  # mx always pivots; CPU aten raises too
+    a = _mx(a)
+    p, l, u = mx.linalg.lu(a)
+    return (mx.eye(a.shape[-2], dtype=a.dtype)[p], l, u)
+
+
+def _linalg_lu_factor_ex(a, pivot=True, check_errors=False):
+    if not pivot:
+        return _raise("lu_factor pivot=False")
+    lu, piv = mx.linalg.lu_factor(_mx(a))
+    info = mx.zeros(piv.shape[:-1], dtype=mx.int32)
+    return (lu, piv + 1, info)  # aten pivots are 1-based
+
+
+def _linalg_inv_ex(a, check_errors=False):
+    a = _mx(a)
+    return (mx.linalg.inv(a), mx.zeros(a.shape[:-2], dtype=mx.int32))
+
+
+def _linalg_solve_tri(a, b, upper, left=True, unitriangular=False):
+    a, b = _mx(a), _mx(b)
+    if unitriangular:
+        # diagonal forced to 1: A' = A + (1 - diag(A)) * I
+        a = a + (1 - mx.diagonal(a, axis1=-2, axis2=-1))[..., None] * mx.eye(a.shape[-1], dtype=a.dtype)
+    if not left:
+        # X A = B  <=>  A^T X^T = B^T
+        return mx.swapaxes(mx.linalg.solve_triangular(
+            mx.swapaxes(a, -1, -2), mx.swapaxes(b, -1, -2),
+            upper=not upper), -1, -2)
+    return mx.linalg.solve_triangular(a, b, upper=upper)
+
+
+def _matrix_exp(a):
+    # scaling & squaring on the Taylor series: scale to ||A||_inf < ~0.5
+    a = _mx(a)
+    n = a.shape[-1]
+    infn = float(np.array(mx.max(mx.sum(mx.abs(a), axis=-1))))
+    s = max(0, int(np.ceil(np.log2(infn / 0.4))) if infn > 0.4 else 0)
+    x = a / float(2 ** s)
+    e = mx.eye(n, dtype=a.dtype)
+    term = mx.eye(n, dtype=a.dtype)
+    for k in range(1, 18):
+        term = term @ x / k
+        e = e + term
+    for _ in range(s):
+        e = e @ e
+    return e
+
+
+def _linalg_cholesky_ex(a, upper=False, check_errors=False):
+    a = _mx(a)
+    return (mx.linalg.cholesky(a, upper=upper),
+            mx.zeros(a.shape[:-2], dtype=mx.int32))
+
+
+def _svd(a, some=True, compute_uv=True):
+    a = _mx(a)
+    u, s, vh = mx.linalg.svd(a, compute_uv=compute_uv)
+    if not compute_uv:
+        return (u, s, vh)
+    m, n = a.shape[-2], a.shape[-1]
+    if some:
+        u = u[..., :min(m, n)]
+        vh = vh[..., :min(m, n), :]
+    return (u, s, vh)
+
+
+def _lu_unpack(lu_data, lu_piv, unpack_data=True, unpack_pivots=True):
+    lu, piv = _mx(lu_data), _mx(lu_piv).astype(mx.int32)
+    if lu.ndim > 2 or piv.ndim > 1:
+        return _raise("lu_unpack batched")  # pivot replay is unbatched only
+    m, n = lu.shape[-2], lu.shape[-1]
+    k = min(m, n)
+    l = mx.eye(m, k, dtype=lu.dtype) + mx.tril(lu[..., :m, :k], -1)
+    u = mx.triu(lu[..., :k, :n])
+    pmat = mx.eye(m, dtype=lu.dtype)
+    if unpack_pivots:
+        perm = mx.arange(m)
+        for i in range(piv.shape[-1]):
+            pi = piv[i] - 1
+            at_i = mx.take(perm, pi)
+            at_pi = perm[i]
+            perm = mx.where(mx.arange(m) == i, at_i,
+                            mx.where(mx.arange(m) == pi, at_pi, perm))
+        # torch's P is the inverse of the applied-swaps matrix (A = P L U)
+        pmat = mx.swapaxes(mx.eye(m, dtype=lu.dtype)[perm], -1, -2)
+    return (pmat, l, u)
+
+
+def _triangular_solve(b, a, upper=True, transpose=False, unitriangular=False):
+    a = _mx(a)
+    aa = mx.swapaxes(a, -1, -2) if transpose else a
+    return (_linalg_solve_tri(aa, _mx(b), upper if not transpose else not upper,
+                              True, unitriangular), a)
+
+
+def _cholesky_solve(b, c, upper=False):
+    # A = LL^T (or U^T U): two triangular solves.
+    c = _mx(c)
+    if upper:
+        y = mx.linalg.solve_triangular(mx.swapaxes(c, -1, -2), _mx(b), upper=False)
+        return mx.linalg.solve_triangular(c, y, upper=True)
+    y = mx.linalg.solve_triangular(c, _mx(b), upper=False)
+    return mx.linalg.solve_triangular(mx.swapaxes(c, -1, -2), y, upper=True)
+
+
+def _renorm(a, p, dim, maxnorm):
+    # aten norm is over all axes EXCEPT dim (each index of dim bounds a slice)
+    a = _mx(a)
+    axes = tuple(i for i in range(a.ndim) if i != dim % a.ndim)
+    d = mx.sum(mx.abs(a) ** float(p), axis=axes, keepdims=True) ** (1.0 / float(p))
+    scale = mx.minimum(mx.array(1.0, dtype=a.dtype), float(maxnorm) / (d + 1e-7))
+    return a * scale
+
+
+def _pinv(a, rcond, hermitian=False):
+    a = _mx(a)
+    m, n = a.shape[-2], a.shape[-1]
+    if hermitian:
+        w, v = mx.linalg.eigh(a)
+        tol = float(rcond) * mx.max(mx.abs(w))
+        iw = mx.where(mx.abs(w) > tol, 1.0 / w, mx.zeros_like(w))
+        return (v * iw[..., None, :]) @ mx.swapaxes(v, -1, -2)
+    u, s, vh = mx.linalg.svd(a)
+    k = min(m, n)
+    tol = float(rcond) * mx.max(s)
+    is_ = mx.where(s > tol, 1.0 / s, mx.zeros_like(s))
+    # pinv = V S+ U^T with the thin k-slices of the full factors
+    vk = mx.swapaxes(vh[..., :k, :], -1, -2)
+    uk = u[..., :k]
+    return (vk * is_[..., None, :]) @ mx.swapaxes(uk, -1, -2)
+
+
+def _matrix_power(a, n):
+    a = _mx(a)
+    if n == 0:
+        return mx.broadcast_to(mx.eye(a.shape[-1], dtype=a.dtype), a.shape)
+    if n < 0:
+        a, n = mx.linalg.inv(a), -n
+    out = mx.broadcast_to(mx.eye(a.shape[-1], dtype=a.dtype), a.shape)
+    while n:
+        if n & 1:
+            out = out @ a
+        a = a @ a
+        n >>= 1
+    return out
+
+
+def _hh_full(r, t):
+    # Q = H_1 ... H_k, H_i = I - tau_i v_i v_i^T with v_i = e_i + R[i+1:, i]
+    m, n = r.shape[-2], r.shape[-1]
+    q = mx.eye(m, dtype=r.dtype)
+    for i in range(min(m, n)):
+        v = mx.concatenate([mx.zeros((i,), dtype=r.dtype),
+                            mx.ones((1,), dtype=r.dtype),
+                            r[i + 1:, i]])
+        q = q - t[i] * (q @ v)[:, None] * v[None, :]
+    return q
+
+
+def _householder(input_, tau):
+    r = _mx(input_)
+    if r.ndim != 2:
+        return _raise("householder_product batched")
+    return _hh_full(r, _mx(tau))[:, :r.shape[-1]]  # aten returns the thin Q
+
+
+def _ormqr(input_, input2, input3, left=True, transpose=False):
+    # aten arg order: (reflectors, tau, other) — out is op(Q) @ other.
+    r, t = _mx(input_), _mx(input2)
+    if r.ndim != 2:
+        return _raise("ormqr batched")
+    q = _hh_full(r, t)
+    if transpose:
+        q = mx.swapaxes(q, -1, -2)
+    return (q @ _mx(input3)) if left else (_mx(input3) @ q)
+
+
+def _lu_solve(b, lu_data, lu_piv):
+    lu, piv = _mx(lu_data), _mx(lu_piv).astype(mx.int32)
+    if lu.ndim > 2 or piv.ndim > 1 or lu.shape[-2] != lu.shape[-1]:
+        return _raise("lu_solve non-square/batched")
+    m = lu.shape[-2]
+    perm = mx.arange(m)
+    for i in range(piv.shape[-1]):
+        pi = piv[i] - 1
+        at_i = mx.take(perm, pi)
+        at_pi = perm[i]
+        perm = mx.where(mx.arange(m) == i, at_i,
+                        mx.where(mx.arange(m) == pi, at_pi, perm))
+    y = mx.take(_mx(b), perm, axis=-2)  # P b
+    z = mx.linalg.solve_triangular(
+        mx.tril(lu[..., :m, :], -1) + mx.eye(m, dtype=lu.dtype), y, upper=False)
+    return mx.linalg.solve_triangular(mx.triu(lu), z, upper=True)
+
+
+def _matrix_rank(a, tol, hermitian=False):
+    a = _mx(a)
+    s = mx.linalg.eigvalsh(a) if hermitian else mx.linalg.svd(a)[1]
+    s = mx.abs(s)
+    return mx.sum(s > _mx(tol), axis=-1).astype(mx.int64)
+
+
+def _eigh_uplo(a, UPLO="L"):
+    a = _mx(a)
+    if UPLO != "L":
+        a = mx.swapaxes(a, -1, -2)
+    return mx.linalg.eigh(a)
+
+
+def _eigvalsh_uplo(a, UPLO="L"):
+    return _eigh_uplo(a, UPLO)[0]
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2344,6 +2572,53 @@ _FUNC_SPECS = {
     "nll_loss": lambda logp, target, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction="mean", *a_, **k_: (
         _nll(logp, target, weight, ignore_index, _red(reduction, size_average, reduce))),
     "mse_loss": lambda a, b, size_average=None, reduce=None, reduction="mean": _mxnn.losses.mse_loss(a, b, reduction=_red(reduction, size_average, reduce)),
+    # linalg extras (piece 14): thin-wraps around mx.linalg plus composed
+    # ops (lu_unpack pivot replay, matrix_exp scaling-squaring, pinv with
+    # explicit rcond, unitriangular diag forcing).
+    "linalg_qr": _linalg_qr,
+    "linalg_eig": lambda a: mx.linalg.eig(_mx(a)),
+    "linalg_lu": _linalg_lu,
+    "linalg_lu_factor_ex": _linalg_lu_factor_ex,
+    "linalg_inv_ex": _linalg_inv_ex,
+    "linalg_solve_triangular": _linalg_solve_tri,
+    "linalg_matrix_exp": _matrix_exp,
+    "linalg_cross": lambda a, b, dim=-1: mx.linalg.cross(_mx(a), _mx(b), axis=dim),
+    "linalg_cholesky_ex": _linalg_cholesky_ex,
+    "svd": _svd,
+    "lu_unpack": _lu_unpack,
+    "triangular_solve": _triangular_solve,
+    "cholesky_solve": _cholesky_solve,
+    "cholesky_inverse": lambda a, upper=False: mx.linalg.cholesky_inv(_mx(a), upper=upper),
+    "trace": lambda a: mx.sum(mx.diagonal(_mx(a), axis1=-2, axis2=-1), axis=-1),
+    "renorm": _renorm,
+    "linalg_pinv": _pinv,
+    "linalg_eigvals": lambda a: mx.linalg.eigvals(_mx(a)),
+    "linalg_eigvalsh": _eigvalsh_uplo,
+    "linalg_eigh": _eigh_uplo,
+    "linalg_slogdet": lambda a: mx.linalg.slogdet(_mx(a)),
+    "matrix_power": _matrix_power,
+    "matrix_exp": _matrix_exp,
+    "linalg_solve": lambda A, B, left=True: (
+        mx.linalg.solve(_mx(A), _mx(B)) if left else mx.swapaxes(
+            mx.linalg.solve(mx.swapaxes(_mx(A), -1, -2),
+                            mx.swapaxes(_mx(B), -1, -2)), -1, -2)),
+    "linalg_solve_ex": lambda A, B, left=True, check_errors=False: (
+        mx.linalg.solve(_mx(A), _mx(B)) if left else mx.swapaxes(
+            mx.linalg.solve(mx.swapaxes(_mx(A), -1, -2),
+                            mx.swapaxes(_mx(B), -1, -2)), -1, -2),
+        mx.zeros(_mx(A).shape[:-2], dtype=mx.int32)),
+    "linalg_det": lambda a: mx.linalg.det(_mx(a)),
+    "det": lambda a: mx.linalg.det(_mx(a)),
+    "linalg_inv": lambda a: mx.linalg.inv(_mx(a)),
+    "linalg_cholesky": lambda a, upper=False: mx.linalg.cholesky(_mx(a), upper=upper),
+    "linalg_householder_product": _householder,
+    "ormqr": _ormqr,
+    "lu_solve": _lu_solve,
+    "linalg_matrix_rank": _matrix_rank,
+    "matrix_rank": lambda a, symmetric=False: _matrix_rank(
+        a, max(a.shape[-2:]) * 2.220446049250313e-16 *
+        float(np.array(mx.max(mx.abs(mx.linalg.svd(_mx(a))[1])))),
+        hermitian=symmetric),
     "native_layer_norm_backward": _ln_backward,
     "_scaled_dot_product_flash_attention_for_cpu": _sdpa_flash_cpu,
     "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_flash_cpu_bwd,

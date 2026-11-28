@@ -3014,6 +3014,185 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_linalg_extras():
+    # piece 14: the linalg family — thin mx.linalg wraps plus composed
+    # ops (lu_unpack/lu_solve pivot replay, matrix_exp scaling-squaring,
+    # pinv rcond, unitriangular diag forcing, householder products).
+    rng = np.random.RandomState(0)
+
+    def run_aten(target, args, kwargs=None):
+        kwargs = kwargs or {}
+        ins = [a for a in list(args) + list(kwargs.values()) if torch.is_tensor(a)]
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+
+        def wire(v):
+            return next(it) if torch.is_tensor(v) else v
+
+        n = g.call_function(target, tuple(wire(a) for a in args),
+                            {k: wire(v) for k, v in kwargs.items()})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, target)
+        return out
+
+    def refnum(t):
+        t = t.resolve_conj() if t.is_conj() else t
+        return t.float().numpy()
+
+    def close(out, ref, tol=2e-4, name=""):
+        outs = out if isinstance(out, (tuple, list)) else (out,)
+        refs = ref if isinstance(ref, (tuple, list)) else (ref,)
+        assert len(outs) == len(refs), (name, len(outs), len(refs))
+        for o, r in zip(outs, refs):
+            rn = refnum(r)
+            on = np.array(o).astype(rn.dtype) if rn.dtype == np.float64 else np.array(o)
+            assert np.allclose(on, rn.astype(on.dtype), atol=tol), (name, on, rn)
+
+    def spd(n, seed=0):
+        m = rng.randn(n, n).astype(np.float32)
+        return torch.tensor(m @ m.T + np.eye(n, dtype=np.float32))
+
+    a34 = torch.tensor(rng.randn(3, 4).astype(np.float32))
+    a53 = torch.tensor(rng.randn(5, 3).astype(np.float32))
+    a44 = torch.tensor(rng.randn(4, 4).astype(np.float32))
+    sym = torch.tensor((lambda m: m @ m.T + np.eye(4, dtype=np.float32))(
+        rng.randn(4, 4).astype(np.float32)))
+
+    # --- factorizations -------------------------------------------------
+    close(run_aten(torch.ops.aten.linalg_qr.default, (a53,), {"mode": "reduced"}),
+          torch.ops.aten.linalg_qr(a53, "reduced"), name="qr reduced")
+    qr_r = run_aten(torch.ops.aten.linalg_qr.default, (a53,), {"mode": "r"})
+    assert np.allclose(np.array(qr_r[1]), torch.ops.aten.linalg_qr(a53, "r")[1].numpy(), atol=1e-5)
+    assert np.array(qr_r[0]).size == 0  # torch mode="r" returns an empty Q
+    close(run_aten(torch.ops.aten.linalg_qr.default, (a34,), {"mode": "complete"}),
+          torch.ops.aten.linalg_qr(a34, "complete"), name="qr complete wide")
+    p, l, u = run_aten(torch.ops.aten.linalg_lu.default, (a44,))
+    pt, lt, ut = torch.ops.aten.linalg_lu(a44)
+    close((p, l, u), (pt, lt, ut), name="linalg_lu")
+    lu, piv, info = run_aten(torch.ops.aten.linalg_lu_factor_ex.default, (a44,))
+    lut, pivt, infot = torch.ops.aten.linalg_lu_factor_ex(a44)
+    assert np.array_equal(np.array(lu), lut.numpy()), "lu_factor LU"
+    assert np.array_equal(np.array(piv).astype(np.int64), pivt.numpy()), "lu_factor pivots"
+    assert np.array_equal(np.array(info), infot.numpy()), "lu_factor info"
+    # lu_unpack on the torch-produced factors
+    pl, ll, ul = run_aten(torch.ops.aten.lu_unpack.default, (lut, pivt))
+    plt, llt, ult = torch.ops.aten.lu_unpack(lut, pivt)
+    close((pl, ll, ul), (plt, llt, ult), name="lu_unpack")
+    close(run_aten(torch.ops.aten.linalg_inv_ex.default, (a44,)),
+          torch.ops.aten.linalg_inv_ex(a44), name="inv_ex")
+    w, v = run_aten(torch.ops.aten.linalg_eig.default, (a44,))
+    wt, vt = torch.ops.aten.linalg_eig(a44)
+    assert np.allclose(np.sort_complex(np.array(w).astype(np.complex128)),
+                       np.sort_complex(wt.numpy()), atol=1e-3), "eig w"
+    av = np.array(a44) @ np.array(v)
+    assert np.allclose(av, np.array(v) * np.array(w)[None, :], atol=1e-4), "eig Av=wv"
+    wv = run_aten(torch.ops.aten.linalg_eigvals.default, (a44,))
+    assert np.allclose(np.sort_complex(np.array(wv).astype(np.complex128)),
+                       np.sort_complex(torch.ops.aten.linalg_eigvals(a44).numpy()),
+                       atol=1e-3), "eigvals"
+    ew, ev = run_aten(torch.ops.aten.linalg_eigh.default, (sym,))
+    ewt, evt = torch.ops.aten.linalg_eigh(sym)
+    assert np.allclose(np.array(ew), ewt.numpy(), atol=1e-4), "eigh w"
+    eu, _ = run_aten(torch.ops.aten.linalg_eigh.default, (sym,), {"UPLO": "U"})
+    assert np.allclose(np.array(eu), torch.ops.aten.linalg_eigh(sym, UPLO="U")[0].numpy(),
+                       atol=1e-4), "eigh UPLO=U w"
+    close(run_aten(torch.ops.aten.linalg_eigvalsh.default, (sym,)),
+          torch.ops.aten.linalg_eigvalsh(sym), name="eigvalsh")
+    us, ss, vs = run_aten(torch.ops.aten.svd.default, (a53,))
+    ust, sst, vst = torch.ops.aten.svd(a53)
+    assert np.allclose(np.array(ss), sst.numpy(), atol=1e-5), "svd S"
+    recon = np.array(us) @ np.diag(np.array(ss)) @ np.array(vs)
+    assert np.allclose(recon, np.array(a53), atol=1e-4), "svd recon"
+    usf, ssf, vsf = run_aten(torch.ops.aten.svd.default, (a53,), {"some": False})
+    assert tuple(np.array(usf).shape) == tuple(torch.ops.aten.svd(a53, some=False)[0].shape)
+    close(run_aten(torch.ops.aten.linalg_slogdet.default, (a44,)),
+          torch.ops.aten.linalg_slogdet(a44), name="slogdet")
+    close(run_aten(torch.ops.aten.det.default, (a44,)),
+          torch.ops.aten.det(a44), name="det")
+    close(run_aten(torch.ops.aten.linalg_det.default, (a44,)),
+          torch.ops.aten.linalg_det(a44), name="linalg_det")
+    close(run_aten(torch.ops.aten.linalg_inv.default, (a44,)),
+          torch.ops.aten.linalg_inv(a44), name="linalg_inv")
+
+    # --- solves ---------------------------------------------------------
+    b43 = torch.tensor(rng.randn(4, 2).astype(np.float32))
+    b42 = torch.tensor(rng.randn(4, 2).astype(np.float32))
+    close(run_aten(torch.ops.aten.linalg_solve.default, (a44, b43)),
+          torch.ops.aten.linalg_solve(a44, b43), name="solve")
+    b24 = torch.tensor(rng.randn(2, 4).astype(np.float32))
+    close(run_aten(torch.ops.aten.linalg_solve.default, (a44, b24), {"left": False}),
+          torch.ops.aten.linalg_solve(a44, b24, left=False), name="solve left=False")
+    close(run_aten(torch.ops.aten.linalg_solve_ex.default, (a44, b43)),
+          torch.ops.aten.linalg_solve_ex(a44, b43), name="solve_ex")
+    upper = torch.tensor(np.triu(rng.randn(4, 4)) + 4 * np.eye(4), dtype=torch.float32)
+    close(run_aten(torch.ops.aten.linalg_solve_triangular.default, (upper, b43),
+                   {"upper": True}),
+          torch.ops.aten.linalg_solve_triangular(upper, b43, upper=True), name="tri upper")
+    close(run_aten(torch.ops.aten.linalg_solve_triangular.default, (upper, b42.T),
+                   {"upper": True, "left": False}),
+          torch.ops.aten.linalg_solve_triangular(upper, b42.T, upper=True, left=False),
+          name="tri left=False")
+    close(run_aten(torch.ops.aten.linalg_solve_triangular.default, (upper, b43),
+                   {"upper": True, "unitriangular": True}),
+          torch.ops.aten.linalg_solve_triangular(upper, b43, upper=True, unitriangular=True),
+          name="tri unit")
+    ts = run_aten(torch.ops.aten.triangular_solve.default, (b43, upper))
+    tst = torch.ops.aten.triangular_solve(b43, upper)
+    close(ts, tst, name="triangular_solve")
+    xlu = run_aten(torch.ops.aten.lu_solve.default, (b43, lut, pivt))
+    xlut = torch.ops.aten.lu_solve(b43, lut, pivt)
+    close(xlu, xlut, name="lu_solve")
+    c44 = torch.linalg.cholesky(sym)
+    close(run_aten(torch.ops.aten.linalg_cholesky.default, (sym,)),
+          torch.ops.aten.linalg_cholesky(sym), name="linalg_cholesky")
+    close(run_aten(torch.ops.aten.linalg_cholesky_ex.default, (sym,), {"upper": True}),
+          torch.ops.aten.linalg_cholesky_ex(sym, upper=True), name="cholesky_ex")
+    close(run_aten(torch.ops.aten.cholesky_solve.default, (b43, c44)),
+          torch.ops.aten.cholesky_solve(b43, c44), name="cholesky_solve")
+    close(run_aten(torch.ops.aten.cholesky_inverse.default, (c44,)),
+          torch.ops.aten.cholesky_inverse(c44), name="cholesky_inverse")
+
+    # --- products / ranks / misc ---------------------------------------
+    close(run_aten(torch.ops.aten.matrix_power.default, (a44,), {"n": 3}),
+          torch.ops.aten.matrix_power(a44, 3), name="matpow3")
+    close(run_aten(torch.ops.aten.matrix_power.default, (a44,), {"n": -2}),
+          torch.ops.aten.matrix_power(a44, -2), name="matpow-2")
+    close(run_aten(torch.ops.aten.matrix_power.default, (a44,), {"n": 0}),
+          torch.ops.aten.matrix_power(a44, 0), name="matpow0")
+    close(run_aten(torch.ops.aten.linalg_matrix_exp.default, (a44 * 0.3,)),
+          torch.ops.aten.linalg_matrix_exp(a44 * 0.3), tol=1e-4, name="matrix_exp")
+    cx = torch.tensor(rng.randn(2, 3).astype(np.float32))
+    cy = torch.tensor(rng.randn(2, 3).astype(np.float32))
+    close(run_aten(torch.ops.aten.linalg_cross.default, (cx, cy), {"dim": -1}),
+          torch.ops.aten.linalg_cross(cx, cy, dim=-1), name="cross")
+    h, tau = torch.ops.aten.geqrf.default(a53)
+    close(run_aten(torch.ops.aten.linalg_householder_product.default, (h, tau)),
+          torch.ops.aten.linalg_householder_product(h, tau), name="householder")
+    c52 = torch.tensor(rng.randn(5, 2).astype(np.float32))
+    close(run_aten(torch.ops.aten.ormqr.default, (h, tau, c52), {"left": True}),
+          torch.ops.aten.ormqr(h, tau, c52, True), name="ormqr left")
+    close(run_aten(torch.ops.aten.ormqr.default, (h, tau, c52),
+                   {"left": True, "transpose": True}),
+          torch.ops.aten.ormqr(h, tau, c52, True, True), name="ormqr T")
+    close(run_aten(torch.ops.aten.trace.default, (a44,)),
+          torch.ops.aten.trace(a44), name="trace")
+    close(run_aten(torch.ops.aten.renorm.default, (a53,),
+                   {"p": 2.0, "dim": 1, "maxnorm": 0.5}),
+          torch.ops.aten.renorm(a53, 2.0, 1, 0.5), name="renorm")
+    close(run_aten(torch.ops.aten.linalg_pinv.default, (a34,), {"rcond": 1e-7}),
+          torch.ops.aten.linalg_pinv(a34, 1e-7), tol=1e-4, name="pinv")
+    close(run_aten(torch.ops.aten.linalg_pinv.default, (sym,),
+                   {"rcond": 1e-7, "hermitian": True}),
+          torch.ops.aten.linalg_pinv(sym, 1e-7, True), tol=1e-4, name="pinv herm")
+    close(run_aten(torch.ops.aten.linalg_matrix_rank.default, (a34,), {"tol": 0.1}),
+          torch.ops.aten.linalg_matrix_rank(a34, 0.1), name="matrix_rank")
+    print("test_linalg_extras PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3253,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_linalg_extras()
     print("ALL PASS")
 
 
