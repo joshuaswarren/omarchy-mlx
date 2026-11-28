@@ -952,6 +952,13 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
 }
 
 TEST_CASE("per-submission timestamps are gated per board") {
+  // The override env var replaces the table for every device, so the
+  // table checks below only mean anything without it.
+  if (std::getenv("MLX_OMARCHY_SUBMIT_TIMESTAMPS") != nullptr) {
+    MESSAGE("skipping: MLX_OMARCHY_SUBMIT_TIMESTAMPS overrides the table");
+    return;
+  }
+
   // The M6 (G18G) cannot carry a timestamp-bearing compute submit: the
   // 7.1.12-aurora-m6usb-ARCH G18 compute admission check refuses it
   // ("check d value 0", then "invalid resource metadata"), the submit
@@ -968,6 +975,17 @@ TEST_CASE("per-submission timestamps are gated per board") {
   CHECK(omarchy::submission_timestamps_supported("Apple M5 Max (G17C B1)") == true);
   CHECK(omarchy::submission_timestamps_supported("Apple A18 Pro (G17P B1)") == true);
   CHECK(omarchy::submission_timestamps_supported("llvmpipe (LLVM 19.1.0, 256 bits)") == true);
+
+  // MLX_OMARCHY_SUBMIT_TIMESTAMPS overrides the table on any board
+  // (M3-04 env-override audit): "0" disables on a supported board, a
+  // non-empty non-"0" value enables on G18G, unset restores the table.
+  setenv("MLX_OMARCHY_SUBMIT_TIMESTAMPS", "0", 1);
+  CHECK(omarchy::submission_timestamps_supported("Apple M2 Max (G14C B1)") == false);
+  setenv("MLX_OMARCHY_SUBMIT_TIMESTAMPS", "1", 1);
+  CHECK(omarchy::submission_timestamps_supported("Apple M6 (G18G B1)") == true);
+  unsetenv("MLX_OMARCHY_SUBMIT_TIMESTAMPS");
+  CHECK(omarchy::submission_timestamps_supported("Apple M6 (G18G B1)") == false);
+  CHECK(omarchy::submission_timestamps_supported("Apple M2 Max (G14C B1)") == true);
 }
 
 TEST_CASE("work budget resolves per device name, not per process") {

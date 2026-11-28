@@ -286,7 +286,13 @@ inline constexpr std::string_view kBoardsWithoutSubmissionTimestamps[] = {
 
 // Pure board lookup: whether a per-submission timestamp compute submit can
 // reach the device on the board with this device name.
+// MLX_OMARCHY_SUBMIT_TIMESTAMPS overrides the table: =0 disables on any board
+// (screens the no-timestamp path), any other non-empty value enables
+// (screens the timestamp submit path on a board whose table row says no).
 inline bool submission_timestamps_supported(std::string_view device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SUBMIT_TIMESTAMPS")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
   for (const auto board : kBoardsWithoutSubmissionTimestamps) {
     if (device_name.find(board) != std::string_view::npos) {
       return false;
@@ -1781,7 +1787,14 @@ inline bool greedy_word_preferred(const std::string& device_name) {
 //   G16G (Apple M4, Honeykrisp Apple9 port with VK_KHR_cooperative_matrix): receipts/2026-11-01-m4-cooperative-matrix-default.
 // Elsewhere the cooperative matrix keeps the pick (receipts/2026-09-12-prefill-fma-qualify). Attention-shaped matmuls are not affected.
 // Keyed on the device name so an unmeasured part keeps the cooperative matrix; dispatch_matmul passes the executing device's name. Pure.
+// MLX_OMARCHY_BF16_FMA_OVER_COOPMAT overrides the part list: a non-empty
+// value other than "0" picks the scalar-FMA kernel over the cooperative
+// matrix on any part (measured A/B screening), "0" keeps the cooperative
+// matrix even on a listed part. Unset follows the table.
 inline bool matmul_bf16_fma_over_coopmat_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_BF16_FMA_OVER_COOPMAT")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
   return device_name.find("G16G") != std::string::npos;
 }
 

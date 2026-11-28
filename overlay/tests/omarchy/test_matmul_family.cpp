@@ -8213,6 +8213,13 @@ TEST_CASE("bf16 Q4 prefill dispatches the Xe16 coopmat build on ragged rows") {
 }
 
 TEST_CASE("bf16 linear-layer FMA over the cooperative matrix: the part rule") {
+  // The override env var replaces the table for every device, so the
+  // table checks below only mean anything without it.
+  if (std::getenv("MLX_OMARCHY_BF16_FMA_OVER_COOPMAT") != nullptr) {
+    MESSAGE("skipping: MLX_OMARCHY_BF16_FMA_OVER_COOPMAT overrides the table");
+    return;
+  }
+
   // Pure and per call: alternating parts in either order never inherits
   // an earlier answer.
   for (int round = 0; round < 2; ++round) {
@@ -8227,6 +8234,19 @@ TEST_CASE("bf16 linear-layer FMA over the cooperative matrix: the part rule") {
   CHECK_FALSE(
       omarchy::matmul_bf16_fma_over_coopmat_part("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part(""));
+
+  // MLX_OMARCHY_BF16_FMA_OVER_COOPMAT overrides the part list on any
+  // board (M3-04 env-override audit): "0" keeps the cooperative matrix
+  // even on G16G, a non-empty non-"0" value picks FMA on an unlisted
+  // part, unset restores the table.
+  setenv("MLX_OMARCHY_BF16_FMA_OVER_COOPMAT", "0", 1);
+  CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M4 (G16G B1)"));
+  setenv("MLX_OMARCHY_BF16_FMA_OVER_COOPMAT", "1", 1);
+  CHECK(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M2 Max (G14C B1)"));
+  CHECK(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M1 (G13G B1)"));
+  unsetenv("MLX_OMARCHY_BF16_FMA_OVER_COOPMAT");
+  CHECK(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M4 (G16G B1)"));
+  CHECK_FALSE(omarchy::matmul_bf16_fma_over_coopmat_part("Apple M2 Max (G14C B1)"));
 }
 
 // The rule through dispatch_matmul: on a part of
