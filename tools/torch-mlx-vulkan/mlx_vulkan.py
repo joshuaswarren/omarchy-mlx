@@ -2217,6 +2217,185 @@ def _isin(elements, test_elements, assume_unique=False, invert=False):
     return mx.logical_not(hit) if invert else hit
 
 
+
+def _erfinv(a):
+    # Winitzki seed (a=0.147) + 4 Newton steps on erf(x)-y. Newton uses
+    # exp(+x^2); the exponent is clamped so an overshoot near |a|->1
+    # cannot produce inf*0.
+    a = _mx(a)
+    k = 2.0 / (math.pi * 0.147)
+    l = mx.log(1.0 - a * a)
+    c = k + 0.5 * l
+    x = mx.sign(a) * mx.sqrt(mx.sqrt(c * c - l / 0.147) - c)
+    for _ in range(4):
+        x = x - (mx.erf(x) - a) * 0.8862269254527580 * mx.exp(
+            mx.minimum(x * x, 80.0))
+    return x
+
+
+def _ndtri(a):
+    return math.sqrt(2.0) * _erfinv(2.0 * _mx(a) - 1.0)
+
+
+def _i0(a):
+    # I0(x) = sum (x^2/4)^k / (k!)^2 ; |x|>15 uses the asymptotic
+    # e^|x|/sqrt(2*pi*|x|) * (1 + 1/(8|x|) + 9/(128|x|^2)).
+    a = _mx(a)
+    x2 = (a * 0.5) * (a * 0.5)
+    t = mx.ones_like(a)
+    s = mx.ones_like(a)
+    for k in range(1, 31):
+        t = t * x2 / (k * k)
+        s = s + t
+    ax = mx.abs(a)
+    asym = (mx.exp(ax) / mx.sqrt(2.0 * math.pi * ax)
+            * (1.0 + 1.0 / (8.0 * ax) + 9.0 / (128.0 * ax * ax)))
+    return mx.where(ax > 15.0, asym, s)
+
+
+def _i1(a):
+    # I1(x) = sum (x/2)^(2k+1) / (k!(k+1)!) ; same asymptotic form with
+    # correction signs flipped and the input's sign preserved.
+    a = _mx(a)
+    xh = a * 0.5
+    x2 = xh * xh
+    t = xh
+    s = xh
+    for k in range(1, 31):
+        t = t * x2 / (k * (k + 1))
+        s = s + t
+    ax = mx.abs(a)
+    asym = (mx.sign(a) * mx.exp(ax) / mx.sqrt(2.0 * math.pi * ax)
+            * (1.0 - 3.0 / (8.0 * ax) - 15.0 / (128.0 * ax * ax)))
+    return mx.where(ax > 15.0, asym, s)
+
+
+def _i0e(a):
+    a = _mx(a)
+    ax = mx.abs(a)
+    direct = _i0(a) * mx.exp(-ax)
+    asym = (1.0 / mx.sqrt(2.0 * math.pi * ax)
+            * (1.0 + 1.0 / (8.0 * ax) + 9.0 / (128.0 * ax * ax)))
+    return mx.where(ax > 40.0, asym, direct)
+
+
+def _i1e(a):
+    a = _mx(a)
+    ax = mx.abs(a)
+    direct = _i1(a) * mx.exp(-ax)
+    asym = (mx.sign(a) / mx.sqrt(2.0 * math.pi * ax)
+            * (1.0 - 3.0 / (8.0 * ax) - 15.0 / (128.0 * ax * ax)))
+    return mx.where(ax > 40.0, asym, direct)
+
+
+def _digamma_pos(x):
+    # recurrence psi(x+1)=psi(x)+1/x shifts x to >=8, then Stirling.
+    r = mx.zeros_like(x)
+    for _ in range(9):
+        up = x < 8.0
+        r = mx.where(up, r - 1.0 / x, r)
+        x = mx.where(up, x + 1.0, x)
+    x2 = x * x
+    return (mx.log(x) - 0.5 / x - 1.0 / (12.0 * x2)
+            + 1.0 / (120.0 * x2 * x2) - 1.0 / (252.0 * x2 * x2 * x2)) + r
+
+
+def _digamma(a):
+    a = _mx(a)
+    res = _digamma_pos(mx.where(a < 0, 1.0 - a, a))
+    # reflection: psi(x) = psi(1-x) - pi*cot(pi*x)
+    return mx.where(a < 0, res - math.pi * mx.cos(math.pi * a) / mx.sin(math.pi * a), res)
+
+
+def _lgamma_pos(x):
+    # recurrence lg(x+1)=lg(x)+ln(x) shifts x to >=10, then Stirling.
+    r = mx.zeros_like(x)
+    for _ in range(10):
+        up = x < 10.0
+        r = mx.where(up, r - mx.log(x), r)
+        x = mx.where(up, x + 1.0, x)
+    x2 = x * x
+    return ((x - 0.5) * mx.log(x) - x + 0.9189385332046727
+            + 1.0 / (12.0 * x) - 1.0 / (360.0 * x2 * x)
+            + 1.0 / (1260.0 * x2 * x2 * x)) + r
+
+
+def _lgamma(a):
+    a = _mx(a)
+    res = _lgamma_pos(mx.where(a < 0, 1.0 - a, a))
+    # reflection: lg(x) = ln(pi) - ln|sin(pi*x)| - lg(1-x); poles of the
+    # gamma fall out as +inf where sin(pi*x)=0.
+    return mx.where(
+        a < 0,
+        math.log(math.pi) - mx.log(mx.abs(mx.sin(math.pi * a))) - res,
+        res)
+
+
+def _mvlgamma(a, p):
+    a = _mx(a)
+    p = int(p)
+    r = mx.zeros_like(a)
+    for j in range(p):
+        r = r + _lgamma(a - j * 0.5)
+    return r + (p * (p - 1) / 4.0) * math.log(math.pi)
+
+
+def _trigamma(a):
+    # psi'(x) = sum 1/(x+k)^2, shifted to x>=30 then Euler-Maclaurin.
+    r = mx.zeros_like(a)
+    x = a
+    for _ in range(31):
+        up = x < 30.0
+        r = mx.where(up, r + 1.0 / (x * x), r)
+        x = mx.where(up, x + 1.0, x)
+    x2 = x * x
+    return (r + 1.0 / x + 0.5 / x2 + 1.0 / (6.0 * x2 * x)
+            - 1.0 / (30.0 * x2 * x2 * x)
+            + 1.0 / (42.0 * x2 * x2 * x2 * x))
+
+
+def _polygamma(n, a):
+    n = int(n)
+    if n == 0:
+        return _digamma(a)
+    if n == 1:
+        return _trigamma(_mx(a))
+    return _raise("polygamma n")
+
+
+def _igamma_core(a, x):
+    # regularized lower/upper incomplete gamma, NR scheme: series for
+    # x<a+1, Lentz continued fraction for x>=a+1 (both fixed unrolls).
+    a, x = _mx(a), _mx(x)
+    t = 1.0 / a
+    s = t
+    for k in range(1, 100):
+        t = t * x / (a + k)
+        s = s + t
+    P = s * mx.exp(-x + a * mx.log(x) - _lgamma(a))
+    b = x + 1.0 - a
+    c = mx.full(a.shape, 1e300)
+    d = 1.0 / mx.where(b == 0, 1e300, b)
+    h = d
+    for i in range(1, 100):
+        an = -i * (i - a)
+        b = b + 2.0
+        d = 1.0 / mx.where(an * d + b == 0, 1e300, an * d + b)
+        c = mx.where(b / c == 0, 1e300, b / c)
+        h = h * d * c
+    Q = h * mx.exp(-x + a * mx.log(x) - _lgamma(a))
+    small = x < a + 1.0
+    return (mx.where(small, P, 1.0 - Q),
+            mx.where(small, 1.0 - P, Q))
+
+
+def _igamma(a, x):
+    return _igamma_core(a, x)[0]
+
+
+def _igammac(a, x):
+    return _igamma_core(a, x)[1]
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2287,6 +2466,35 @@ _FUNC_SPECS = {
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
+    "erfinv": _erfinv,
+    "erfinv_": _erfinv,
+    "special_erfinv": _erfinv,
+    "special_ndtri": _ndtri,
+    "i0": _i0,
+    "i0_": _i0,
+    "i1": _i1,
+    "i1_": _i1,
+    "special_i0": _i0,
+    "special_i0e": _i0e,
+    "special_i1": _i1,
+    "special_i1e": _i1e,
+    "digamma": _digamma,
+    "digamma_": _digamma,
+    "special_psi": _digamma,
+    "special_digamma": _digamma,
+    "lgamma": _lgamma,
+    "lgamma_": _lgamma,
+    "special_gammaln": _lgamma,
+    "mvlgamma": _mvlgamma,
+    "mvlgamma_": _mvlgamma,
+    "polygamma": _polygamma,
+    "polygamma_": lambda a, n: _polygamma(n, a),
+    "igamma": _igamma,
+    "igamma_": _igamma,
+    "igammac": _igammac,
+    "igammac_": _igammac,
+    "special_expm1": lambda a: mx.expm1(_mx(a)),
+    "special_exp2": lambda a: mx.power(2.0, _mx(a)),
     "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
     "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
