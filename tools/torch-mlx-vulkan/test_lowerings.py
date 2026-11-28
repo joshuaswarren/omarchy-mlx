@@ -3014,6 +3014,46 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_special_zeta():
+    # Q-72: aten.special_zeta lowers as Hurwitz zeta -- Euler-Maclaurin
+    # (50-term sum + tail integral + three Bernoulli corrections).
+    # Covers the tensor-tensor and both scalar overloads; the s->1 pole
+    # falls out as +-inf through the 1/(s-1) term.
+    torch.manual_seed(0)
+    s_vals = torch.tensor([0.5, 1.5, 2.0, 3.7, 6.0, 0.2])
+    x_vals = torch.tensor([1.0, 2.5, 1.1, 0.5, 4.0, 8.0])
+    cases = [
+        (torch.ops.aten.special_zeta.default, (s_vals, x_vals), {},
+         "special_zeta"),
+        (torch.ops.aten.special_zeta.other_scalar, (s_vals, 2.5), {},
+         "special_zeta"),
+        (torch.ops.aten.special_zeta.self_scalar, (1.7, x_vals), {},
+         "special_zeta"),
+        (torch.ops.aten.special_zeta.default,
+         (torch.tensor([2.5, 8.0]), torch.tensor([0.3, 20.0])), {},
+         "special_zeta"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        tin = tuple(a for a in ins if torch.is_tensor(a))
+        ref = target(*[a.clone() if torch.is_tensor(a) else a
+                       for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(tin))]
+        it = iter(phs)
+        args = tuple(next(it) if torch.is_tensor(a) else a for a in ins)
+        n = g.call_function(target, args, dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*tin)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(),
+                           atol=2e-4, rtol=2e-4), (
+            str(target), kwargs, got, ref)
+    print("test_special_zeta PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3114,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_special_zeta()
     print("ALL PASS")
 
 

@@ -543,6 +543,37 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 torch.allclose(got, ref.float(), atol=tol, rtol=tol),
                 (name, kw, float((got - ref.float()).abs().max())))
 
+    def test_special_zeta_parity(self):
+        """Q-72: aten.special_zeta lowers in the wheel backend -- Hurwitz
+        zeta by Euler-Maclaurin, tensor+scalar overloads, small and large
+        x, s in the strip near 1 and well past it."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        s_vals = torch.tensor([0.5, 1.5, 2.0, 3.7, 6.0, 0.2])
+        x_vals = torch.tensor([1.0, 2.5, 1.1, 0.5, 4.0, 8.0])
+        cases = [
+            ((s_vals, x_vals), {}, torch.special.zeta(s_vals, x_vals)),
+            ((s_vals, 2.5), {}, torch.special.zeta(s_vals, torch.tensor(2.5))),
+            ((1.7, x_vals), {},
+             torch.special.zeta(torch.tensor(1.7), x_vals)),
+            ((torch.tensor([2.5, 8.0]), torch.tensor([0.3, 20.0])), {},
+             torch.special.zeta(
+                 torch.tensor([2.5, 8.0]), torch.tensor([0.3, 20.0]))),
+        ]
+        for ins, kw, ref in cases:
+            mins = tuple(
+                mx.array(t.numpy()) if torch.is_tensor(t) else t
+                for t in ins)
+            got = torch.from_numpy(np.array(
+                ATEN_TABLE["special_zeta"](*mins, **kw).astype(mx.float32)))
+            self.assertTrue(
+                torch.allclose(got, ref.float(), atol=2e-4, rtol=2e-4),
+                (kw, float((got - ref.float()).abs().max())))
+
 
 if __name__ == "__main__":
     unittest.main()
