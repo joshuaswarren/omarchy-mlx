@@ -1099,6 +1099,76 @@ def _interpolate(a, size=None, scale_factor=None, mode="nearest",
     return x[:, yi][:, :, xi].transpose(0, 3, 1, 2)
 
 
+def _quantile(a, q, interpolation: str = "linear"):
+    """aten.quantile parity on a small 1-D input: sort + gather + lerp.
+
+    q is a scalar or 1-D sequence of quantiles in [0, 1]; the result is a
+    1-D float tensor with one entry per q (keep_size=False, the default).
+    """
+    x = _mx(a)
+    if x.ndim != 1:
+        raise ValueError("quantile() input tensor must be 1-D")
+    if bool(mx.isnan(x).any().item()):
+        raise ValueError("quantile() input tensor must not contain NaN")
+    if interpolation != "linear":
+        raise ValueError("quantile() only supports the linear interpolation")
+    xs = mx.sort(mx.astype(x, mx.float32))
+    n = xs.shape[0]
+    if n == 0:
+        raise ValueError("quantile() input tensor must contain at least one element")
+    qs = _mx(q if isinstance(q, (list, tuple)) else [q]).astype(mx.float32)
+    if bool(mx.any((qs < 0) | (qs > 1)).item()):
+        raise ValueError("quantiles must be in the range [0, 1]")
+    pos = qs * float(n - 1)
+    lo = mx.floor(pos).astype(mx.int32)
+    hi = mx.minimum(lo + 1, mx.full(lo.shape, n - 1, mx.int32))
+    frac = pos - lo.astype(mx.float32)
+    lo_v = mx.take_along_axis(xs, lo[None], axis=0)[0]
+    hi_v = mx.take_along_axis(xs, hi[None], axis=0)[0]
+    return lo_v + (hi_v - lo_v) * frac
+
+
+def _nanquantile(a, q, interpolation: str = "linear"):
+    """aten.nanquantile parity: aten.quantile over the non-NaN entries."""
+    x = _mx(a)
+    keep = ~mx.isnan(x)
+    return _quantile(mx.take_along_axis(x, mx.nonzero(keep)[0].astype(mx.int32), axis=0)[0],
+                     q, interpolation=interpolation)
+
+
+def _cum_scan_extremum(a, dim, scan, is_max):
+    """Shared core for aten.cummax/cummin: torch returns (values, indices)
+    where indices give the position where the running extremum was last
+    achieved - ties adopt the LATEST position and each NaN adopts once,
+    then blocks every later finite value (mx's scans carry the same
+    sticky-NaN values)."""
+    a = _mx(a)
+    dim = (dim if dim is not None else -1) % a.ndim
+    vals = scan(a, dim)
+    excl = scan(a, dim, inclusive=False)
+    better = (a >= excl) if is_max else (a <= excl)
+    if mx.issubdtype(a.dtype, mx.floating):
+        better = better | mx.isnan(a)
+    shape = [1] * a.ndim
+    shape[dim] = a.shape[dim]
+    pos = mx.broadcast_to(
+        mx.arange(a.shape[dim], dtype=mx.int32).reshape(shape), a.shape)
+    marked = mx.where(better | (pos == 0), pos,
+                      mx.full(a.shape, -1, mx.int32))
+    idx = mx.cummax(marked, dim)
+    return (vals, idx.astype(mx.int64))
+
+
+def _cummax(a, dim, **k):
+    """aten.cummax: (running max, position where it was last achieved)."""
+    return _cum_scan_extremum(a, dim, mx.cummax, True)
+
+
+def _cummin(a, dim, **k):
+    """aten.cummin: (running min, position where it was last achieved)."""
+    return _cum_scan_extremum(a, dim, mx.cummin, False)
+
+
 def _topk(a, k, dim=-1, largest=True, sorted=True):
     """torch.topk parity: returns (values, indices) sorted along dim."""
     a = _mx(a)
@@ -2405,6 +2475,8 @@ _FUNC_SPECS = {
     "histogram": _histogram,
     "mode": _mode,
     "kthvalue": _kthvalue,
+    "quantile": _quantile,
+    "nanquantile": _nanquantile,
     "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "index_select": lambda a, dim, i: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
@@ -2457,7 +2529,10 @@ _FUNC_SPECS = {
     "sub_.Tensor": _sub_inplace,
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
-    "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
+    "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, dim, dtype=dtype) if dtype else mx.cumsum(a, dim),
+    "cumprod": lambda a, dim, dtype=None: mx.cumprod(a, dim, dtype=dtype) if dtype else mx.cumprod(a, dim),
+    "cummax": _cummax,
+    "cummin": _cummin,
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": _roll,
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
