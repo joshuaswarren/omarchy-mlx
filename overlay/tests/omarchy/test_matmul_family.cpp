@@ -6676,6 +6676,86 @@ TEST_CASE("G13G 64-row SG4 STEPK=32 coopmat prefill default and env overrides") 
   }
 }
 
+TEST_CASE("CMAT16 qmm prefill variant ladder (DEC-20)") {
+  using mlx::core::omarchy::ComputeKernel;
+  using mlx::core::omarchy::qmm_coopmat16_kernel;
+  using mlx::core::omarchy::qmm_coopmat16_tile_rows;
+
+  EnvGuard rows_guard("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  EnvGuard stepk_guard("MLX_OMARCHY_QMM_COOPMAT_STEPK");
+  unsetenv("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+  unsetenv("MLX_OMARCHY_QMM_COOPMAT_STEPK");
+
+  // NVIDIA-class probe: 256-lane workgroups and a wide shared budget.
+  omarchy::CapabilityReport nv;
+  nv.device_name = "NVIDIA GeForce RTX (probe)";
+  nv.subgroup_size = 32u;
+  nv.max_compute_work_group_invocations = 1024u;
+  nv.max_compute_work_group_size = {1024u, 1024u, 1024u};
+  nv.max_compute_shared_memory_size = 49152u;
+
+  // Default: shipped 32-row K=16 kernel.
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16);
+  CHECK(qmm_coopmat16_tile_rows(
+            ComputeKernel::QmmPrefillCoopmat16BF16) == 32u);
+
+  // Kill switch: ROWS=32 and unrecognized values keep the shipped pick.
+  setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "32", 1);
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16);
+  setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "bogus", 1);
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16);
+
+  // 64-row 64-lane ladder.
+  setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "64", 1);
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16M64);
+  setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "32", 1);
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16M64K32);
+  setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "64", 1);
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16M64K64);
+  CHECK(qmm_coopmat16_tile_rows(
+            ComputeKernel::QmmPrefillCoopmat16BF16M64K64) == 64u);
+
+  // 64-row SG4 ladder.
+  setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "64sg4", 1);
+  setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "16", 1);
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16SG4);
+  setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "32", 1);
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16SG4K32);
+  setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "64", 1);
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16SG4K64);
+
+  // 128-row SG8: a K=16 request takes the full-chunk K=64 build.
+  setenv("MLX_OMARCHY_QMM_COOPMAT_ROWS", "128", 1);
+  setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "16", 1);
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16SG8K64);
+  setenv("MLX_OMARCHY_QMM_COOPMAT_STEPK", "32", 1);
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16SG8K32);
+  CHECK(qmm_coopmat16_tile_rows(
+            ComputeKernel::QmmPrefillCoopmat16BF16SG8K32) == 128u);
+
+  // A part that cannot run a 256-lane workgroup falls back to the
+  // shipped kernel for a 128-row request.
+  nv.max_compute_work_group_invocations = 128u;
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16);
+  nv.max_compute_work_group_invocations = 1024u;
+  // Same for a part whose shared budget cannot hold the staged tile.
+  nv.max_compute_shared_memory_size = 4096u;
+  CHECK(qmm_coopmat16_kernel(nv) ==
+        ComputeKernel::QmmPrefillCoopmat16BF16);
+}
+
 TEST_CASE("QmmPrefillCoopmat tile family selects by capability not name") {
   using mlx::core::omarchy::coopmat_tile_rows;
   using mlx::core::omarchy::qmm_bf16w_default_part;

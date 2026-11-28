@@ -391,4 +391,91 @@ inline bool qmm_prefill_allow_rows64(bool q4_g64_transpose, bool full_n) {
   return q4_g64_transpose && full_n;
 }
 
+// CMAT16 (fp16-operand 16x16x16) variant ladder for the qmm prefill
+// (DEC-20): the shipped 32-row K=16 build stays the default and
+// MLX_OMARCHY_QMM_COOPMAT_ROWS / MLX_OMARCHY_QMM_COOPMAT_STEPK opt into
+// the 64/128-row twins where the device's workgroup-size and
+// shared-memory caps admit them. Every variant stages the same values
+// and keeps each output's ascending-k chain, so the pick does not move
+// generated ids. ROWS=32 (or an unset/unrecognized value) is the
+// kill-switch restore of the shipped kernel; STEPK has no 32-row twin
+// and only applies at 64/128 rows.
+inline omarchy::ComputeKernel qmm_coopmat16_kernel(
+    const CapabilityReport& caps) {
+  using K = omarchy::ComputeKernel;
+  uint32_t rows = 32u;
+  bool sg4 = false;
+  bool sg8 = false;
+  if (const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_ROWS");
+      env != nullptr && env[0] != '\0') {
+    const std::string v(env);
+    if (v == "64") {
+      rows = 64u;
+    } else if (v == "64sg4") {
+      rows = 64u;
+      sg4 = true;
+    } else if (v == "128" || v == "128sg8") {
+      rows = 128u;
+      sg8 = true;
+    }
+  }
+  uint32_t step_k = 16u;
+  if (const char* env = omarchy::env_str("MLX_OMARCHY_QMM_COOPMAT_STEPK");
+      env != nullptr && env[0] != '\0') {
+    const std::string v(env);
+    if (v == "32") {
+      step_k = 32u;
+    } else if (v == "64") {
+      step_k = 64u;
+    }
+  }
+  if (rows == 32u) {
+    return K::QmmPrefillCoopmat16BF16;
+  }
+  // SG8 stages at least K=32: the 8-part dequant has no 16-K layout, so
+  // a 128-row request at K=16 takes the full-chunk K=64 build.
+  if (sg8 && step_k == 16u) {
+    step_k = 64u;
+  }
+  const uint32_t lanes = sg8 ? 256u : (sg4 ? 128u : 64u);
+  // fp16 x_s (rows x step_k) + fp16 w_s (step_k x 32) + f32 drain
+  // (2 x 16x16): the widest tile the candidate asks shared memory for.
+  const uint32_t shared_bytes =
+      (rows * step_k + step_k * 32u) * 2u + 2u * 16u * 16u * 4u;
+  if (caps.max_compute_work_group_invocations < lanes ||
+      caps.max_compute_work_group_size[0] < lanes ||
+      shared_bytes > caps.max_compute_shared_memory_size) {
+    return K::QmmPrefillCoopmat16BF16;
+  }
+  if (rows == 128u) {
+    return step_k == 32u ? K::QmmPrefillCoopmat16BF16SG8K32
+                         : K::QmmPrefillCoopmat16BF16SG8K64;
+  }
+  if (sg4) {
+    return step_k == 64u ? K::QmmPrefillCoopmat16BF16SG4K64
+         : step_k == 32u ? K::QmmPrefillCoopmat16BF16SG4K32
+                         : K::QmmPrefillCoopmat16BF16SG4;
+  }
+  return step_k == 64u ? K::QmmPrefillCoopmat16BF16M64K64
+       : step_k == 32u ? K::QmmPrefillCoopmat16BF16M64K32
+                       : K::QmmPrefillCoopmat16BF16M64;
+}
+
+inline uint32_t qmm_coopmat16_tile_rows(omarchy::ComputeKernel kernel) {
+  switch (kernel) {
+    case omarchy::ComputeKernel::QmmPrefillCoopmat16BF16M64:
+    case omarchy::ComputeKernel::QmmPrefillCoopmat16BF16M64K32:
+    case omarchy::ComputeKernel::QmmPrefillCoopmat16BF16M64K64:
+    case omarchy::ComputeKernel::QmmPrefillCoopmat16BF16SG4:
+    case omarchy::ComputeKernel::QmmPrefillCoopmat16BF16SG4K32:
+    case omarchy::ComputeKernel::QmmPrefillCoopmat16BF16SG4K64:
+      return 64u;
+    case omarchy::ComputeKernel::QmmPrefillCoopmat16BF16SG8K32:
+    case omarchy::ComputeKernel::QmmPrefillCoopmat16BF16SG8K64:
+      return 128u;
+    default:
+      return 32u;
+  }
+}
+
 } // namespace mlx::core::omarchy
