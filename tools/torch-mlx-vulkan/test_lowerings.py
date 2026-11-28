@@ -3014,6 +3014,118 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_view_copy_extras():
+    # PT-AL-view: aten view/copy extras — the functionalization *_copy
+    # family (value semantics on mx), the unsafe/split-with-sizes split
+    # spellings, hsplit/vsplit/dsplit, tensor_split's near-equal and
+    # boundary modes, broadcast_tensors, copy_, nonzero_static, and the
+    # strided-empty producers.
+    torch.manual_seed(0)
+    x34 = torch.randn(3, 4)
+    x234 = torch.randn(2, 3, 4)
+    x10 = torch.randn(10)
+    nz = torch.tensor([[0, 1, 0], [2, 0, 3]])
+    cases = [
+        (torch.ops.aten.diagonal.default, (x34,), {}, "diagonal"),
+        (torch.ops.aten.diagonal.default, (x34,), {"offset": 1}, "diagonal"),
+        (torch.ops.aten.diagonal.default, (x234,), {"offset": -1, "dim1": 1, "dim2": 2}, "diagonal"),
+        (torch.ops.aten.diagonal_copy.default, (x34,), {"offset": 2}, "diagonal_copy"),
+        (torch.ops.aten.narrow_copy.default, (x34,), {"dim": 1, "start": 1, "length": 2}, "narrow_copy"),
+        (torch.ops.aten.view_copy.default, (x34,), {"size": [12]}, "view_copy"),
+        (torch.ops.aten.view_copy.dtype, (x34,), {"dtype": torch.float16}, "view_copy"),
+        (torch.ops.aten.view_copy.dtype, (x34,), {"dtype": torch.int32}, "view_copy"),
+        (torch.ops.aten.permute_copy.default, (x234,), {"dims": [2, 0, 1]}, "permute_copy"),
+        (torch.ops.aten.transpose_copy.int, (x234,), {"dim0": 0, "dim1": 2}, "transpose_copy"),
+        (torch.ops.aten.t_copy.default, (x34,), {}, "t_copy"),
+        (torch.ops.aten.squeeze_copy.default, (torch.randn(1, 3, 1),), {}, "squeeze_copy"),
+        (torch.ops.aten.squeeze_copy.dim, (torch.randn(1, 3, 1),), {"dim": 0}, "squeeze_copy"),
+        (torch.ops.aten.squeeze_copy.dims, (torch.randn(1, 3, 1),), {"dim": [0, 2]}, "squeeze_copy"),
+        (torch.ops.aten.unsqueeze_copy.default, (x34,), {"dim": 1}, "unsqueeze_copy"),
+        (torch.ops.aten.expand_copy.default, (torch.randn(3, 1),), {"size": [3, 4]}, "expand_copy"),
+        (torch.ops.aten.unbind_copy.int, (x34,), {"dim": 0}, "unbind_copy"),
+        (torch.ops.aten.split_with_sizes_copy.default, (x10,), {"split_sizes": [3, 7], "dim": 0}, "split_with_sizes_copy"),
+        (torch.ops.aten.alias_copy.default, (x34,), {}, "alias_copy"),
+        (torch.ops.aten.copy_.Tensor, (torch.zeros(3, 4), x34), {}, "copy_"),
+        (torch.ops.aten.copy_.default, (torch.zeros(2, 2), torch.tensor([5.0])), {}, "copy_"),
+        (torch.ops.aten.broadcast_tensors.default, ([torch.randn(3, 1), torch.randn(1, 4)],), {}, "broadcast_tensors"),
+        (torch.ops.aten.tensor_split.sections, (x10,), {"sections": 3}, "tensor_split"),
+        (torch.ops.aten.tensor_split.sections, (x10,), {"sections": 4, "dim": 0}, "tensor_split"),
+        (torch.ops.aten.tensor_split.indices, (x10,), {"indices": [3, 8]}, "tensor_split"),
+        (torch.ops.aten.tensor_split.tensor_indices_or_sections, (x10,), {"tensor_indices_or_sections": torch.tensor([2, 5])}, "tensor_split"),
+        (torch.ops.aten.tensor_split.tensor_indices_or_sections, (x10,), {"tensor_indices_or_sections": torch.tensor(3)}, "tensor_split"),
+        (torch.ops.aten.unsafe_split.Tensor, (x10,), {"split_size": 4}, "unsafe_split"),
+        (torch.ops.aten.unsafe_split_with_sizes.default, (x10,), {"split_sizes": [6, 4]}, "unsafe_split_with_sizes"),
+        (torch.ops.aten.unsafe_chunk.default, (x10,), {"chunks": 3, "dim": 0}, "unsafe_chunk"),
+        (torch.ops.aten.hsplit.int, (x10,), {"sections": 5}, "hsplit"),
+        (torch.ops.aten.hsplit.array, (x34,), {"indices": [1, 3]}, "hsplit"),
+        (torch.ops.aten.vsplit.int, (x34,), {"sections": 3}, "vsplit"),
+        (torch.ops.aten.vsplit.array, (x34,), {"indices": [1]}, "vsplit"),
+        (torch.ops.aten.dsplit.int, (x234,), {"sections": 2}, "dsplit"),
+        (torch.ops.aten.unflatten.int, (x34,), {"dim": 0, "sizes": [1, 3]}, "unflatten"),
+        (torch.ops.aten.swapdims.default, (x234,), {"dim0": 0, "dim1": 2}, "swapdims"),
+        (torch.ops.aten.adjoint.default, (x34,), {}, "adjoint"),
+        (torch.ops.aten.mT.default, (x234,), {}, "mT"),
+        (torch.ops.aten.t_.default, (x34,), {}, "t_"),
+        (torch.ops.aten.transpose_.default, (x234,), {"dim0": 1, "dim1": 2}, "transpose_"),
+        (torch.ops.aten.nonzero_static.default, (nz,), {"size": 4}, "nonzero_static"),
+        (torch.ops.aten.nonzero_static.default, (nz,), {"size": 2, "fill_value": -9}, "nonzero_static"),
+        (torch.ops.aten.nonzero_static.default, (nz,), {"size": 1}, "nonzero_static"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() if isinstance(a, torch.Tensor) else [s.clone() for s in a] for a in ins], **kwargs)
+        flat = []
+        for a in ins:
+            flat += a if isinstance(a, list) else [a]
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(flat))]
+        args = []
+        pos = 0
+        for a in ins:
+            if isinstance(a, list):
+                args.append(phs[pos:pos + len(a)])
+                pos += len(a)
+            else:
+                args.append(phs[pos])
+                pos += 1
+        n = g.call_function(target, tuple(args), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*flat)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        refs = ref if isinstance(ref, (tuple, list)) else (ref,)
+        outs = out if isinstance(out, (tuple, list)) else (out,)
+        assert len(outs) == len(refs), (str(target), kwargs)
+        for o, r in zip(outs, refs):
+            got = torch.as_tensor(o)
+            # mx narrows f64 -> f32 (no f64 compute): skip dtype parity
+            # when the ref kind is unrepresentable.
+            if r.dtype != torch.float64:
+                assert got.dtype == r.dtype, (str(target), kwargs, got.dtype, r.dtype)
+            assert np.allclose(got.float().numpy(), r.float().numpy(), atol=1e-5), (
+                str(target), kwargs, got, r)
+    # producers: no tensor input, uninitialized content — assert the
+    # lowered node ran on mlx and shape/dtype match, not values.
+    for target, kwargs in [
+        (torch.ops.aten.empty_strided.default, {"size": [2, 3], "stride": [3, 1]}),
+        (torch.ops.aten.empty_strided.default, {"size": [2, 3], "stride": [3, 1], "dtype": torch.int32}),
+        (torch.ops.aten.empty_permuted.default, {"size": [2, 3], "physical_layout": [0, 1]}),
+    ]:
+        ref = target(**kwargs)
+        g = torch.fx.Graph()
+        n = g.call_function(target, (), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run()
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert got.shape == ref.shape and got.dtype == ref.dtype, (
+            str(target), kwargs, got.shape, ref.shape)
+    print("test_view_copy_extras PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3186,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_view_copy_extras()
     print("ALL PASS")
 
 

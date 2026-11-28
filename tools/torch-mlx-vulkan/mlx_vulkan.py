@@ -361,8 +361,11 @@ def _split_sizes(a, sizes, dim):
     return tuple(mx.split(a, idx, axis=dim))
 
 def _split_even(a, split_size, dim):
-    nsec = -(-a.shape[dim] // split_size)
-    return tuple(mx.split(a, nsec, axis=dim))
+    # torch split(x, ss): pieces of length ss, last piece shorter when
+    # sz % ss — explicit sizes, not mx.split's equal-only sections.
+    sz = a.shape[dim]
+    return _split_sizes(a, [split_size] * (sz // split_size)
+                        + ([sz % split_size] if sz % split_size else []), dim)
 
 def _chunk(a, chunks, dim):
     sz = a.shape[dim]
@@ -2055,6 +2058,137 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _split_spec(args, kw):
+    # the split family's overloads name their spec arg differently:
+    # sections / indices / tensor_indices_or_sections / split_size /
+    # split_sizes; positional works for all.
+    if args:
+        return args[0]
+    for k in ("sections", "indices", "tensor_indices_or_sections",
+              "split_size", "split_sizes"):
+        if kw.get(k) is not None:
+            return kw[k]
+    return None
+
+
+def _tensor_split(a, *args, dim=0, **kw):
+    # aten.tensor_split: int -> nearly equal sections (first r get one
+    # extra); index list -> split at those boundaries; a tensor arg is
+    # sections when 0-dim, indices when 1-dim.
+    a = _mx(a)
+    spec = _split_spec(args, kw)
+    if len(args) > 1:
+        dim = args[1]
+    if isinstance(spec, mx.array):
+        spec = int(spec) if spec.ndim == 0 else np.array(spec).tolist()
+    if isinstance(spec, torch.Tensor):
+        spec = int(spec) if spec.ndim == 0 else spec.tolist()
+    dim %= a.ndim
+    n = a.shape[dim]
+    if isinstance(spec, int):
+        if spec <= 0:
+            return _raise("tensor_split sections <= 0")
+        q, r = divmod(n, spec)
+        return _split_sizes(a, [q + 1] * r + [q] * (spec - r), dim)
+    return _split_sizes(a, [j - i for i, j in
+                            zip([0] + list(spec), list(spec) + [n])], dim)
+
+
+def _axis_split(a, spec, dim):
+    # hsplit/vsplit/dsplit: int sections must divide evenly (unlike
+    # tensor_split); index list splits at boundaries.
+    a = _mx(a)
+    if isinstance(spec, mx.array):
+        spec = np.array(spec).tolist()
+    if isinstance(spec, torch.Tensor):
+        spec = spec.tolist()
+    dim %= a.ndim
+    n = a.shape[dim]
+    if isinstance(spec, int):
+        if spec <= 0 or n % spec:
+            return _raise("axis_split uneven")
+        return _split_even(a, n // spec, dim)
+    return _split_sizes(a, [j - i for i, j in
+                            zip([0] + list(spec), list(spec) + [n])], dim)
+
+
+def _hsplit(a, *args, **kw):
+    return _axis_split(a, _split_spec(args, kw), 0 if a.ndim == 1 else 1)
+
+
+def _vsplit(a, *args, **kw):
+    return _axis_split(a, _split_spec(args, kw), 0)
+
+
+def _dsplit(a, *args, **kw):
+    return _axis_split(a, _split_spec(args, kw), 2)
+
+
+def _unsafe_split(a, *args, **kw):
+    # unsafe_split / unsafe_split_with_sizes / split_with_sizes_copy:
+    # int -> even run-length split; list -> explicit boundaries.
+    dim = kw.get("dim", args[1] if len(args) > 1 else 0)
+    spec = _split_spec(args, kw)
+    a = _mx(a)
+    return (_split_even(a, spec, dim) if isinstance(spec, int)
+            else _split_sizes(a, spec, dim))
+
+
+def _view_copy(a, size=None, dtype=None):
+    # aten.view_copy(.dtype): the .dtype overload is Tensor.view(dtype) —
+    # a bitcast that rescales the last dim by the element-size ratio,
+    # which mx.view implements directly. f64 has no mx storage dtype.
+    a = _mx(a)
+    dt = dtype if isinstance(dtype, torch.dtype) else size
+    if isinstance(dt, torch.dtype):
+        mdt = _MX_DT.get(dt)
+        if mdt is None or dt == torch.float64:
+            return _raise("view_copy dtype")
+        return mx.view(a, mdt)
+    if size is None:
+        return _raise("view_copy")
+    return _reshape(a, size)
+
+
+def _copy_(a, src=None, non_blocking=False, other=None):
+    # aten.copy_: src broadcast into self's shape, cast to self's dtype;
+    # the .Tensor overload names it `other`.
+    a = _mx(a)
+    s = _mx(src if src is not None else other)
+    if not isinstance(s, mx.array):
+        s = mx.array(s)
+    return mx.broadcast_to(s, a.shape).astype(a.dtype)
+
+
+def _nonzero_static(a, size, fill_value=-1):
+    # aten.nonzero_static: (size, ndim) coords of nonzero elements,
+    # fill_value-padded; truncates when size < count. mx has no
+    # data-dependent shape, but the capped size makes it static: sort
+    # flat nonzero positions to the front, decompose into coords.
+    a = _mx(a)
+    n = int(np.prod(a.shape)) if a.shape else 1
+    flat = mx.reshape(a, (n,))
+    pos = mx.where(flat != 0, mx.arange(n, dtype=mx.int64),
+                   mx.full((n,), n, dtype=mx.int64))
+    # sorted pos values ARE the flat nonzero indices (ascending), the
+    # n-sentinel entries land at the tail and become fill rows.
+    idx = mx.sort(pos)[:int(size)]
+    cols = []
+    for d in range(a.ndim):
+        stride = int(np.prod(a.shape[d + 1:])) if d + 1 < a.ndim else 1
+        c = (idx // stride) % a.shape[d]
+        cols.append(mx.where(idx >= n, fill_value, c))
+    return mx.stack(cols, axis=-1) if cols else mx.zeros((int(size), 0),
+                                                        dtype=mx.int64)
+
+
+def _empty_strided(size, stride=None, dtype=None, **kw):
+    # strides are a torch storage concept; mx arrays are always
+    # contiguous, so the stride arg is honored trivially by the layout.
+    return mx.empty(tuple(size),
+                    dtype=_MX_DT.get(dtype, mx.float32) if dtype else mx.float32)
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2260,6 +2394,40 @@ _FUNC_SPECS = {
     "split": lambda a, ss, dim=0: _split_even(a, ss, dim) if isinstance(ss, int) else _split_sizes(a, ss, dim),
     "split_with_sizes": lambda a, ss, dim=0: _split_sizes(a, ss, dim),
     "chunk": _chunk, "unbind": lambda a, dim=0: _unbind(a, dim),
+    # functionalization *_copy ops are value-semantics on mx — the
+    # view result is already materialized.
+    "diagonal": lambda a, offset=0, dim1=0, dim2=1: mx.diagonal(_mx(a), offset=offset, axis1=dim1, axis2=dim2),
+    "diagonal_copy": lambda a, offset=0, dim1=0, dim2=1: mx.diagonal(_mx(a), offset=offset, axis1=dim1, axis2=dim2),
+    "narrow_copy": lambda a, dim, start, length: _slice(a, dim, start, start + length, 1),
+    "view_copy": _view_copy,
+    "permute_copy": lambda a, dims: mx.transpose(a, axes=tuple(dims)),
+    "transpose_copy": lambda a, dim0, dim1: mx.transpose(a, axes=_perm_swap(a, dim0, dim1)),
+    "t_copy": lambda a: a if a.ndim < 2 else mx.transpose(a, axes=(-1, -2)),
+    "squeeze_copy": _squeeze,
+    "unsqueeze_copy": lambda a, dim: mx.expand_dims(a, axis=dim),
+    "expand_copy": lambda a, size, implicit=False: _expand(a, size),
+    "unbind_copy": lambda a, dim=0: _unbind(a, dim),
+    "split_with_sizes_copy": _unsafe_split,
+    "alias_copy": lambda a: a,
+    "copy_": _copy_,
+    "broadcast_tensors": lambda tensors: tuple(mx.broadcast_arrays(*[_mx(t) for t in tensors])),
+    "tensor_split": _tensor_split,
+    "unsafe_split": _unsafe_split,
+    "unsafe_split_with_sizes": _unsafe_split,
+    "unsafe_chunk": _chunk,
+    "hsplit": _hsplit,
+    "vsplit": _vsplit,
+    "dsplit": _dsplit,
+    "unflatten": lambda a, dim, sizes: mx.reshape(_mx(a), a.shape[:dim % a.ndim] + tuple(sizes) + a.shape[dim % a.ndim + 1:]),
+    "swapdims": lambda a, dim0, dim1: mx.transpose(a, axes=_perm_swap(a, dim0, dim1)),
+    "adjoint": lambda a: mx.swapaxes(_mx(a), -2, -1),
+    "mT": lambda a: mx.swapaxes(_mx(a), -2, -1),
+    "t_": lambda a: a if a.ndim < 2 else mx.transpose(a, axes=(-1, -2)),
+    "transpose_": lambda a, dim0, dim1: mx.transpose(a, axes=_perm_swap(a, dim0, dim1)),
+    "nonzero_static": _nonzero_static,
+    "empty_strided": _empty_strided,
+    "empty_permuted": lambda size, physical_layout=None, dtype=None, **kw: _empty_strided(size, None, dtype, **kw),
+    "new_empty_strided": lambda a, size, stride=None, dtype=None, **kw: mx.empty(tuple(size), dtype=_MX_DT.get(dtype, a.dtype) if dtype else a.dtype),
     "meshgrid": _meshgrid,
     # torch's norm=None means "backward", same as mx's default
     "fft_fft": lambda a, n=None, dim=-1, norm=None: mx.fft.fft(_mx(a), n, axis=dim, norm=norm or "backward"),
@@ -2587,7 +2755,8 @@ for _fn, _low in FUNC_TABLE.items():
 _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
               "tensor", "zeros_like", "ones_like", "full_like", "empty_like",
               "rand", "randn", "randint", "randperm", "new_zeros", "new_ones",
-              "new_empty", "new_full", "scalar_tensor"}
+              "new_empty", "new_full", "scalar_tensor",
+              "empty_strided", "empty_permuted"}
 
 # sampling ops: mx.compile would trace an mx.random draw once and replay
 # it, and mx.random cannot honor torch's RNG contract anyway — the family
