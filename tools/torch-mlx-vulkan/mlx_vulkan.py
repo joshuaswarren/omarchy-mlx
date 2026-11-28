@@ -2217,6 +2217,78 @@ def _isin(elements, test_elements, assume_unique=False, invert=False):
     return mx.logical_not(hit) if invert else hit
 
 
+
+def _erfc(a):
+    return 1.0 - mx.erf(_mx(a))
+
+
+def _erfcx(a):
+    # scaled erfc: exp(x^2) * erfc(x). The direct product overflows for
+    # x > ~9 in fp32, so the right tail switches to the two-term
+    # asymptotic series 1/(x*sqrt(pi)) * (1 - 1/(2x^2)).
+    a = _mx(a)
+    direct = _erfc(a) * mx.exp(a * a)
+    x2 = a * a
+    asym = (1.0 / (a * math.sqrt(math.pi))) * (1.0 - 0.5 / x2)
+    return mx.where(a > 8.0, asym, direct)
+
+
+def _ndtr(a):
+    return 0.5 * (1.0 + mx.erf(_mx(a) / math.sqrt(2.0)))
+
+
+def _log_ndtr(a):
+    # far-left tail: Phi(x) underflows fp32, so log(Phi) needs the
+    # asymptotic form -x^2/2 - log(-x*sqrt(2*pi)).
+    a = _mx(a)
+    direct = mx.log(_ndtr(a))
+    asym = -0.5 * a * a - mx.log(-a * math.sqrt(2.0 * math.pi))
+    return mx.where(a < -10.0, asym, direct)
+
+
+def _entr(a):
+    a = _mx(a)
+    return mx.where(a > 0, -a * mx.log(a),
+                    mx.where(a == 0, 0.0, float("-inf")))
+
+
+def _sinc_pi(a):
+    a = _mx(a)
+    px = a * math.pi
+    return mx.where(a == 0, mx.ones_like(a), mx.sin(px) / px)
+
+
+def _chain_matmul(mats):
+    ms = [_mx(m) for m in mats]
+    r = ms[0]
+    for m in ms[1:]:
+        r = r @ m
+    return r
+
+
+def _cov(a, correction=1, fweights=None, aweights=None):
+    if fweights is not None or aweights is not None:
+        return _raise("cov weights")
+    a = _mx(a)
+    xc = a - mx.mean(a, axis=-1, keepdims=True)
+    n = a.shape[-1]
+    return (xc @ mx.transpose(xc)) / (n - int(correction))
+
+
+def _corrcoef(a):
+    a = _mx(a)
+    if a.ndim < 2:
+        return mx.array(1.0)
+    c = _cov(a)
+    d = mx.sqrt(mx.diagonal(c))
+    return c / (d.reshape((-1, 1)) * d.reshape((1, -1)))
+
+
+def _vander_like(x, N=None):
+    x = _mx(x)
+    n = x.shape[-1] if N is None else int(N)
+    return mx.power(x.reshape((-1, 1)), (n - 1 - mx.arange(n)).reshape((1, -1)))
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2287,6 +2359,24 @@ _FUNC_SPECS = {
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
+    "erfc": _erfc,
+    "erfc_": _erfc,
+    "special_erf": lambda a: mx.erf(_mx(a)),
+    "special_erfc": _erfc,
+    "special_erfcx": _erfcx,
+    "special_ndtr": _ndtr,
+    "special_log_ndtr": _log_ndtr,
+    "special_expit": lambda a: mx.sigmoid(_mx(a)),
+    "entr": _entr,
+    "special_entr": _entr,
+    "special_log1p": lambda a: mx.log1p(_mx(a)),
+    "special_round": lambda a: mx.round(_mx(a)),
+    "special_sinc": _sinc_pi,
+    "chain_matmul": _chain_matmul,
+    "ravel": lambda a: _mx(a).reshape(-1),
+    "linalg_vander": lambda a, N=None: _vander_like(a, N),
+    "cov": _cov,
+    "corrcoef": _corrcoef,
     "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
     "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),

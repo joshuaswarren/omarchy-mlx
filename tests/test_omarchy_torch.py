@@ -73,6 +73,63 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     torch.allclose(got, r, atol=1e-5, rtol=1e-5),
                     (ns_shape, tag, float((got - r).abs().max())))
 
+    def test_special_stats_residue(self):
+        """Special-mirror + stats residue in the wheel backend: erfcx and
+        log_ndtr swap in asymptotic branches where the direct product
+        overflows/underflows fp32; cov centers over the last axis;
+        corrcoef normalizes the covariance."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(0)
+        np = __import__("numpy")
+
+        def to_mx(args):
+            return tuple(
+                mx.array(a.numpy()) if isinstance(a, torch.Tensor) else a
+                for a in args)
+
+        x23 = torch.randn(2, 3)
+        x45 = torch.randn(4, 5)
+        tail = torch.tensor([-40.0, -12.0, -1.0, 0.0, 1.0, 8.5, 10.0])
+        cases = [
+            ("erfc", torch.ops.aten.erfc.default, (x23,), {}),
+            ("special_erf", torch.ops.aten.special_erf.default, (x23,), {}),
+            ("special_erfcx", torch.ops.aten.special_erfcx.default, (tail,), {}),
+            ("special_ndtr", torch.ops.aten.special_ndtr.default, (x23,), {}),
+            ("special_log_ndtr", torch.ops.aten.special_log_ndtr.default,
+             (tail[:4],), {}),
+            ("special_expit", torch.ops.aten.special_expit.default, (x23,), {}),
+            ("entr", torch.ops.aten.special_entr.default, (x23,), {}),
+            ("special_log1p", torch.ops.aten.special_log1p.default, (x23,), {}),
+            ("special_round", torch.ops.aten.special_round.default,
+             (x23 * 10,), {}),
+            ("special_sinc", torch.ops.aten.special_sinc.default, (x23,), {}),
+            ("ravel", torch.ops.aten.ravel.default, (x23,), {}),
+            ("linalg_vander", torch.ops.aten.linalg_vander.default,
+             (x23[0],), {"N": 5}),
+            ("cov", torch.ops.aten.cov.default, (x45,), {}),
+            ("corrcoef", torch.ops.aten.corrcoef.default, (x45,), {}),
+            ("corrcoef", torch.ops.aten.corrcoef.default, (x45[0],), {}),
+        ]
+        for name, aten_fn, args, kwargs in cases:
+            ref = aten_fn(*args, **kwargs).numpy()
+            got = np.array(ATEN_TABLE[name](*to_mx(args), **kwargs))
+            mask = np.isfinite(ref)
+            self.assertTrue(np.array_equal(np.isfinite(got), mask),
+                            (name, kwargs, got))
+            self.assertTrue(np.allclose(got[mask], ref[mask],
+                                        atol=2e-2, rtol=1e-2),
+                            (name, kwargs, got))
+        ref = torch.ops.aten.chain_matmul.default(
+            [x23, x45[:3], x45[:5, :4]]).numpy()
+        got = np.array(ATEN_TABLE["chain_matmul"](
+            [mx.array(t.numpy()) for t in [x23, x45[:3], x45[:5, :4]]]))
+        self.assertTrue(np.allclose(got, ref, atol=1e-4))
+        torch.manual_seed(1)
+
     def test_log1p_expm1_logaddexp(self):
         """PT-AL-f: the wheel backend lowers aten.log1p, aten.expm1 and
         aten.logaddexp with fp32/bf16 parity against the aten CPU ops,
