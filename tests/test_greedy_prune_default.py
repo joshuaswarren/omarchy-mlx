@@ -241,10 +241,14 @@ class GreedyPruneDefaultTests(unittest.TestCase):
         self.assertEqual(run_case("Apple M1 (G13G B1)", None), 0)
         # Explicit MLX_OMARCHY_GREEDY_WORD=0 restores the staged route and its sync.
         self.assertEqual(run_case("Apple M1 (G13G B1)", "0"), 1)
-        # G13C default stays on the staged K=2048 route and keeps its sync.
-        self.assertEqual(run_case("Apple M1 Max (G13C C0)", None), 1)
+        # G13C default uses the 3-dispatch word route: no per-token int(token) sync.
+        self.assertEqual(run_case("Apple M1 Max (G13C C0)", None), 0)
+        # Explicit MLX_OMARCHY_GREEDY_WORD=0 restores the staged route and its sync.
+        self.assertEqual(run_case("Apple M1 Max (G13C C0)", "0"), 1)
+        # Unmeasured parts stay on the staged K=2048 route and keep the sync.
+        self.assertEqual(run_case("Apple M4 (G16G B1)", None), 1)
         # Explicit MLX_OMARCHY_GREEDY_WORD=1 skips the sync on any chip.
-        self.assertEqual(run_case("Apple M1 Max (G13C C0)", "1"), 0)
+        self.assertEqual(run_case("Apple M4 (G16G B1)", "1"), 0)
 
         # Guard against C++/Python drift: every chip token listed in
         # greedy_word_over_staged_part() in device.h must skip the int(token)
