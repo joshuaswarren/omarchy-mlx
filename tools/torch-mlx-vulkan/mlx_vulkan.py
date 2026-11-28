@@ -1400,6 +1400,16 @@ def _addcdiv(a, t1, t2, value=1, **k):
             / _astype(t2, cd)).astype(dt)
 
 
+def _cumsum(a, dim, dtype=None):
+    # aten.cumsum(x, dim, dtype=): per the torch docs the input is cast
+    # to dtype BEFORE the operation (same contract as the reductions).
+    a = _mx(a)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise(f"cumsum dtype {dtype}")
+        a = a.astype(_MX_DT[dtype])
+    return mx.cumsum(a, axis=dim)
+
 def _arange(*a, **k):
     # torch.arange(end) | (start, end[, step]); dynamo may pass everything
     # as kwargs (start/end/step/dtype/device) — fold them into positional.
@@ -1412,7 +1422,7 @@ def _arange(*a, **k):
         if len(args) == 1:
             args.insert(0, 0)
         args.append(k["step"])
-    dtype = _MX_DT.get(k.get("dtype"))
+    dtype = _q71_dt(k)
     if dtype is None and all(type(v) is int for v in args):
         dtype = mx.int64   # torch.arange defaults to int64 for integral args
     return mx.arange(*args, dtype=dtype)
@@ -2283,12 +2293,12 @@ _FUNC_SPECS = {
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
-    "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
-    "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
-    "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
-    "ones_like": lambda a, **k: mx.ones(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
-    "full": lambda s, v, **k: mx.full(tuple(s), v, dtype=_MX_DT.get(k.get("dtype"))),
-    "full_like": lambda a, v, **k: mx.full(a.shape, v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
+    "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_q71_dt(k)),
+    "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_q71_dt(k, _mx(a).dtype)),
+    "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_q71_dt(k)),
+    "ones_like": lambda a, **k: mx.ones(a.shape, dtype=_q71_dt(k, _mx(a).dtype)),
+    "full": lambda s, v, **k: mx.full(tuple(s), v, dtype=_q71_dt(k)),
+    "full_like": lambda a, v, **k: mx.full(a.shape, v, dtype=_q71_dt(k, _mx(a).dtype)),
     "tril": lambda a, d=0: mx.tril(a, d) if hasattr(mx, "tril") else _raise("tril"),
     "getitem": lambda t, i: t[_coerce_index(i)],
     "detach": lambda a, *a_, **k_: a, "clone": lambda a, *a_, **k_: a.clone() if isinstance(a, torch.Tensor) else a, "contiguous": lambda a, *a_, **k_: a,
@@ -2457,7 +2467,7 @@ _FUNC_SPECS = {
     "sub_.Tensor": _sub_inplace,
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
-    "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
+    "cumsum": _cumsum,
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": _roll,
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
@@ -2483,9 +2493,9 @@ _FUNC_SPECS = {
     "empty_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "new_zeros": lambda a, s, **k: mx.zeros(tuple(s), dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "new_ones": lambda a, s, **k: mx.ones(tuple(s), dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
-    "new_empty": lambda a, s, **k: mx.zeros(tuple(s), dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
-    "new_full": lambda a, s, v, **k: mx.full(tuple(s), v, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
-    "scalar_tensor": lambda v, **k: mx.array(v, _MX_DT.get(k.get("dtype"), mx.int64 if type(v) is int else None)),
+    "new_empty": lambda a, s, **k: mx.zeros(tuple(s), dtype=_q71_dt(k, _mx(a).dtype)),
+    "new_full": lambda a, s, v, **k: mx.full(tuple(s), v, dtype=_q71_dt(k, _mx(a).dtype)),
+    "scalar_tensor": lambda v, **k: mx.array(v, _q71_dt(k, mx.int64 if type(v) is int else None)),
     "tensor": lambda d, **k: _mx(d) if isinstance(d, torch.Tensor) else mx.array(np.array(_torch(d)) if isinstance(d, (list, tuple)) else d),
     "as_tensor": lambda d, **k: _mx(d),
     "einsum_fn": mx.einsum,
@@ -2495,6 +2505,17 @@ _FUNC_SPECS = {
 
 def _raise(name):
     raise NotImplementedError(name)
+
+def _q71_dt(k, default=None):
+    # Producer dtype kwarg: torch dtypes must map through _MX_DT; an
+    # unknown dtype raises by name instead of silently falling back to
+    # the default (Q-71 sweep contract, same shape as the reductions).
+    tdtype = k.get("dtype")
+    if tdtype is None:
+        return default
+    if tdtype not in _MX_DT:
+        return _raise(f"dtype {tdtype}")
+    return _MX_DT[tdtype]
 
 FUNC_TABLE = {}
 _FN_SOURCES = [torch, F, torch.special, operator]
