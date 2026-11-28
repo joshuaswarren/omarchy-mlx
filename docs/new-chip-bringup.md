@@ -142,10 +142,13 @@ over the discovered hardware report (sentinels inherit):
 - `name`: the chip's working row name (e.g. `m2-asahi-default`).
 - `represents_driver_variant`: the audit's `driver_variant` enum value.
 - Pin exactly the axes the chip is expected to define: `subgroup_size`,
+  `subgroup_size_32_admitted`, `subgroup_size_64_admitted`,
   `subgroup_ops_mask` (OR/AND masks), `cooperative_matrix`,
-  `shared_memory_limit_bytes`, `workgroup_invocations`, `workgroup_size_x`,
-  `atomic_float_add`. Leave `memory_model` and everything else at
-  hardware values.
+  `cooperative_matrix_f16_16`, `cooperative_matrix_bf16_16`,
+  `shared_memory_limit_bytes`, `workgroup_invocations`,
+  `workgroup_size_x`, `atomic_float_add`, `device_name`,
+  `max_storage_buffer_range`. Leave `memory_model` and everything else
+  at hardware values.
 - Register the profile in the test CMake `foreach` and in
   `test_capability_simulation.cpp` so the leg-3 battery covers it.
 

@@ -16,7 +16,11 @@
 //                                   real driver. A profile records which
 //                                   driver_variant it stands in for.
 //   cooperative_matrix_fp32_8x8x8   CapabilityReport::cooperative_matrix_f32_8
+//   cooperative_matrix_fp16_16x16x16  CapabilityReport::cooperative_matrix_shapes
+//   cooperative_matrix_bf16_16x16x16  CapabilityReport::cooperative_matrix_shapes
 //   subgroup_size                   CapabilityReport::subgroup_size
+//   subgroup_size_64_admitted       CapabilityReport::subgroup_size_64_admitted
+//   subgroup_size_32_admitted       CapabilityReport::subgroup_size_32_admitted
 //   subgroup_ops_mask               CapabilityReport::subgroup_operations
 //   shared_memory_limit_bytes       CapabilityReport::max_compute_shared_memory_size
 //   workgroup_limits                CapabilityReport::max_compute_work_group_invocations
@@ -93,6 +97,23 @@ struct SimulationProfile {
   int cooperative_matrix_f16_16 = -1;
   // Axis max_storage_buffer_range_bytes. 0 = inherit.
   uint64_t max_storage_buffer_range = 0;
+  // Axis cooperative_matrix_bf16_16x16x16: the 16x16x16 bf16-operand
+  // subgroup shape the wave64 QMM prefill and causal-flash builds emit
+  // (RADV-class coopmat lists). Same contract as the fp16 axis: it moves
+  // the advertised-shape list only and require_backed refuses a claimed
+  // dispatch the runtime device cannot back. -1 = inherit, 0/1 = set.
+  int cooperative_matrix_bf16_16 = -1;
+  // Axis subgroup_size_64_admitted: the device legally admits a
+  // requiredSubgroupSize = 64 pin for a 64-lane compute workgroup (the
+  // one-subgroup 16x16x16 coopmat builds). -1 = inherit, 0/1 = set. A
+  // profile that pins subgroup_size clears this bit itself, so declare
+  // it here when the simulated driver admits the pin.
+  int subgroup_size_64_admitted = -1;
+  // Axis subgroup_size_32_admitted: the device legally admits a
+  // requiredSubgroupSize = 32 pin for a 128-lane workgroup (the dense
+  // CMAT16 direct builds on non-32-native drivers). -1 = inherit,
+  // 0/1 = set; same clear-then-declare contract as the 64-lane bit.
+  int subgroup_size_32_admitted = -1;
 };
 
 // The registered profiles, in registry order. docs/new-chip-bringup.md

@@ -193,6 +193,33 @@ const SimulationProfile kProfiles[] = {
         1,
     },
     {
+        "radv-wave64-bf16-coopmat",
+        "radv",
+        "RADV GFX1201 (RX 9070): native 64-lane subgroups with the "
+        "requiredSubgroupSize = 64 pin admitted, no fp32 8x8x8 shape, "
+        "the 16x16x16 bf16-operand subgroup shape the "
+        "QmmPrefillCoopmatBF16x16 route emits. The 32-lane pin "
+        "admission is left off: unmeasured on this part and the wave64 "
+        "route does not need it",
+        64,
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+            VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+            VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT |
+            VK_SUBGROUP_FEATURE_BALLOT_BIT,
+        kAllSubgroupOps,
+        0,
+        0,
+        0,
+        0,
+        -1,
+        "AMD Radeon RX 9070 (RADV GFX1201)",
+        1,
+        0,
+        1,
+        1,
+        0,
+    },
+    {
         "min-storage-buffer-range",
         "other",
         "Vulkan-minimum storage-buffer binding: maxStorageBufferRange "
@@ -272,11 +299,14 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
   if (profile.subgroup_size >= 0) {
     caps.subgroup_size = static_cast<uint32_t>(profile.subgroup_size);
     // The simulated device makes no requiredSubgroupSize claim, so the
-    // 32-lane pin admission cannot carry over from hardware truth: a
-    // profile that changes the reported subgroup size clears the bit and
-    // the QMV/norm gates fall back deterministically instead of depending
-    // on what the host hardware could pin.
+    // pin admissions cannot carry over from hardware truth: a profile
+    // that changes the reported subgroup size clears the bits and the
+    // QMV/norm and wave64 gates fall back deterministically instead of
+    // depending on what the host hardware could pin. A profile that
+    // admits a pin declares it through its own *_admitted axis below.
+    caps.subgroup_size_32_admitted = false;
     caps.subgroup_size_32_wide_admitted = false;
+    caps.subgroup_size_64_admitted = false;
   }
   caps.subgroup_operations =
       (caps.subgroup_operations | profile.subgroup_ops_mask_or) &
@@ -360,6 +390,44 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
           CoopmatType::Float32, CoopmatType::Float32,
           CoopmatScope::Subgroup, false});
     }
+  }
+  // The 16x16x16 bf16-operand axis (RADV-class shape lists): insert or
+  // drop exactly the shape the wave64 QMM prefill and causal-flash
+  // builds emit. Same contract as the fp16 axis: the shape list is the
+  // claim, the bf16 cooperative-matrix device feature still comes from
+  // hardware truth, and require_backed refuses a claimed dispatch the
+  // runtime device cannot run.
+  if (profile.cooperative_matrix_bf16_16 >= 0) {
+    auto& shapes = caps.cooperative_matrix_shapes;
+    shapes.erase(
+        std::remove_if(
+            shapes.begin(),
+            shapes.end(),
+            [](const CoopmatShape& s) {
+              return s.m == 16u && s.n == 16u && s.k == 16u &&
+                  s.a == CoopmatType::BFloat16 &&
+                  s.b == CoopmatType::BFloat16 &&
+                  s.c == CoopmatType::Float32 &&
+                  s.result == CoopmatType::Float32 &&
+                  s.scope == CoopmatScope::Subgroup && !s.saturating;
+            }),
+        shapes.end());
+    if (profile.cooperative_matrix_bf16_16 != 0) {
+      shapes.push_back(CoopmatShape{
+          16u, 16u, 16u, CoopmatType::BFloat16, CoopmatType::BFloat16,
+          CoopmatType::Float32, CoopmatType::Float32,
+          CoopmatScope::Subgroup, false});
+    }
+  }
+  // The wave64 pin admission: a profile that pins subgroup_size already
+  // cleared this bit above; declare it only through the axis.
+  if (profile.subgroup_size_64_admitted >= 0) {
+    caps.subgroup_size_64_admitted = profile.subgroup_size_64_admitted != 0;
+  }
+  // The narrow 32-lane pin admission (dense CMAT16 direct route): same
+  // contract as the wave64 bit.
+  if (profile.subgroup_size_32_admitted >= 0) {
+    caps.subgroup_size_32_admitted = profile.subgroup_size_32_admitted != 0;
   }
   if (profile.shared_memory_limit_bytes != 0) {
     caps.max_compute_shared_memory_size = profile.shared_memory_limit_bytes;

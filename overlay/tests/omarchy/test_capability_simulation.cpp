@@ -53,6 +53,7 @@ constexpr const char* kG13Legacy = "m1-g13-legacy";
 constexpr const char* kWorkgroup256 = "workgroup-256";
 constexpr const char* kWorkgroup128 = "workgroup-128";
 constexpr const char* kNvidiaC16 = "nvidia-c16-coopmat";
+constexpr const char* kRadvWave64 = "radv-wave64-bf16-coopmat";
 
 std::string g_profile;
 
@@ -323,6 +324,8 @@ TEST_CASE("capability report is stamped with the active profile") {
     CHECK(c.device_name == std::string("Apple M1 (G13G B1)"));
   } else if (profile_is(kNvidiaC16)) {
     CHECK(c.device_name == std::string("NVIDIA GeForce RTX 5060 Ti"));
+  } else if (profile_is(kRadvWave64)) {
+    CHECK(c.device_name == std::string("AMD Radeon RX 9070 (RADV GFX1201)"));
   } else {
     CHECK(h.device_name == c.device_name);
   }
@@ -390,6 +393,24 @@ TEST_CASE("capability report is stamped with the active profile") {
     // The cooperative-matrix device feature itself is never simulated:
     // it inherits hardware truth, and require_backed refuses a claimed
     // dispatch the runtime device cannot back.
+    CHECK(c.cooperative_matrix_bf16 == h.cooperative_matrix_bf16);
+  } else if (profile_is(kRadvWave64)) {
+    // RADV GFX1201: native wave64, the wave64 pin admitted, no fp32
+    // 8x8x8 shape, the 16x16x16 bf16-operand shape the
+    // QmmPrefillCoopmatBF16x16 route emits.
+    CHECK_EQ(c.subgroup_size, 64u);
+    CHECK(c.subgroup_size_64_admitted);
+    CHECK_FALSE(c.cooperative_matrix_f32_8);
+    CHECK(omarchy::cooperative_matrix_advertises(
+        c.cooperative_matrix_shapes,
+        omarchy::qmm_prefill_coopmat16_bf16_shape()));
+    CHECK(omarchy::cooperative_matrix_advertises(
+        c.cooperative_matrix_shapes,
+        omarchy::qmm_prefill_coopmat_shape_f16x16()));
+    // The 32-lane pin admissions do not carry over: the simulated
+    // device makes no requiredSubgroupSize = 32 claim.
+    CHECK_FALSE(c.subgroup_size_32_admitted);
+    CHECK_FALSE(c.subgroup_size_32_wide_admitted);
     CHECK(c.cooperative_matrix_bf16 == h.cooperative_matrix_bf16);
   } else {
     FAIL("unhandled profile ", g_profile);
@@ -640,10 +661,15 @@ TEST_CASE("cmat16 dense matmul routes per the profile") {
       omarchy::matmul_direct_coopmat_shape_c16(omarchy::CoopmatType::Float16);
   const auto bf16_shape =
       omarchy::matmul_direct_coopmat_shape_c16(omarchy::CoopmatType::BFloat16);
-  const bool f16_claim = !c.cooperative_matrix_f32_8 &&
+  // The route's workgroup assumes 32-lane subgroups: a non-32-native
+  // device reaches it only through an admitted requiredSubgroupSize=32
+  // pin (production's c16_subgroup term).
+  const bool c16_subgroup =
+      c.subgroup_size == 32u || c.subgroup_size_32_admitted;
+  const bool f16_claim = !c.cooperative_matrix_f32_8 && c16_subgroup &&
       omarchy::cooperative_matrix_advertises(
           c.cooperative_matrix_shapes, f16_shape);
-  const bool bf16_claim = !c.cooperative_matrix_f32_8 &&
+  const bool bf16_claim = !c.cooperative_matrix_f32_8 && c16_subgroup &&
       c.cooperative_matrix_bf16 &&
       omarchy::cooperative_matrix_advertises(
           c.cooperative_matrix_shapes, bf16_shape);
@@ -822,15 +848,43 @@ TEST_CASE("bf16 q4 g64 prefill routes per the profile") {
     array out = quantized_matmul(
         x, w_words, scales, biases, true, 64, 4, "affine", stream);
     std::string error = evaluation_error(out);
-    const bool coopmat_arm = coopmat_reachable && !rb;
+    // 16x16x16 bf16 wave64 route (dispatch's first coopmat arm): the
+    // envelope here is exactly that route's shape (m=64 is a multiple
+    // of 16, k=128 fills 64-wide chunks, n*itemsize needs no row split),
+    // so a device native-64 or able to pin requiredSubgroupSize = 64
+    // that advertises the bf16-operand shape takes it ahead of every
+    // other arm.
+    const bool coopmat_wave64_arm = !rb &&
+        omarchy::env_str("MLX_OMARCHY_NO_COOPMAT16") == nullptr &&
+        (c.subgroup_size == 64u || c.subgroup_size_64_admitted) &&
+        omarchy::cooperative_matrix_advertises(
+            c.cooperative_matrix_shapes,
+            omarchy::qmm_prefill_coopmat16_bf16_shape()) &&
+        (16u * 32u * 2u + 16u * 16u * 4u) <=
+            c.max_compute_shared_memory_size;
+    if (coopmat_wave64_arm &&
+        !(omarchy::cooperative_matrix_advertises(
+              hw().cooperative_matrix_shapes,
+              omarchy::qmm_prefill_coopmat16_bf16_shape()) &&
+          (hw().subgroup_size == 64u ||
+           hw().subgroup_size_64_admitted))) {
+      expect_simulated_refusal(
+          error,
+          "QmmPrefillCoopmatBF16x16",
+          "cooperative_matrix_bf16_16x16x16_wave64");
+      continue;
+    }
+    const bool coopmat_arm = coopmat_reachable && !rb && !coopmat_wave64_arm;
     if (coopmat_arm && !coopmat_backed()) {
       expect_simulated_refusal(error, "QmmPrefillCoopmatBF16");
       continue;
     }
     // 16x16x16 fp16-operand twin (dispatch's coopmat16_reachable mirror):
     // the q4 g64 transposed cell here is exactly that route's shape, so
-    // on a device advertising it the claim lands before the FMA arm.
+    // on a device advertising it the claim lands before the FMA arm but
+    // after the wave64 bf16 arm above.
     const bool coopmat16_arm = !rb && !coopmat_reachable &&
+        !coopmat_wave64_arm &&
         !omarchy::env_flag("MLX_OMARCHY_NO_COOPMAT") &&
         c.cooperative_matrix_bf16 &&
         omarchy::cooperative_matrix_advertises(
@@ -857,6 +911,10 @@ TEST_CASE("bf16 q4 g64 prefill routes per the profile") {
     };
     if (rb) {
       CHECK_EQ(kernel, id(omarchy::ComputeKernel::QmmTileBF16));
+    } else if (coopmat_wave64_arm) {
+      CHECK_EQ(
+          kernel,
+          id(omarchy::ComputeKernel::QmmPrefillCoopmatBF16x16));
     } else if (coopmat_reachable) {
       // One of the cooperative-matrix bf16 prefill kernels (the tile-row
       // and direct-load variants are picked by shape); never the FMA or
@@ -1080,6 +1138,19 @@ TEST_CASE("bf16 decode sdpa arm routes per the workgroup and shared-memory gate"
       CHECK_NE(kernel, static_cast<int64_t>(leg.kernel));
     }
     CHECK_NE(composed_kernel, static_cast<int64_t>(leg.kernel));
+    // Bit parity between the native kernel and the composed chain only
+    // holds while the profile leaves every axis the decomposition
+    // consults at hardware truth: the composed path partitions and
+    // picks its kernels per subgroup size and the cooperative-matrix
+    // claims, so a spoofed wave width or shape list runs a different
+    // reduction order here and cannot promise identical bf16 bits.
+    // The routing claims above still stand under the spoof.
+    if (c.subgroup_size != hw().subgroup_size ||
+        c.cooperative_matrix_shapes != hw().cooperative_matrix_shapes ||
+        c.cooperative_matrix_f32_8 != hw().cooperative_matrix_f32_8 ||
+        c.cooperative_matrix_bf16 != hw().cooperative_matrix_bf16) {
+      continue;
+    }
     auto a = readback_f32(stream, routed);
     auto b = readback_f32(stream, composed);
     REQUIRE_EQ(a.size(), b.size());
@@ -1517,7 +1588,7 @@ int main(int argc, char** argv) {
     // Registry sanity: the documented profiles exist.
     for (const char* name : {kM1Fork, kM1Stock, kSubgroup64, kSmallSmem,
                              kNoCoopmat, kG13Legacy, kWorkgroup256,
-                             kWorkgroup128}) {
+                             kWorkgroup128, kRadvWave64}) {
       if (omarchy::capsim::find(name) == nullptr) {
         std::cerr << "unit: profile missing from registry: " << name
                   << "\n";
@@ -1562,6 +1633,32 @@ int main(int argc, char** argv) {
         std::cerr << "unit: " << name
                   << " kept the wide-32 pin bit under a simulated "
                      "subgroup size\n";
+        return 1;
+      }
+    }
+    // Same rule one wave up: pinning the subgroup size clears the
+    // 64-lane and narrow-32 pin admissions unless the profile declares
+    // them; the RADV profile declares the 64-lane one only.
+    {
+      auto radv_hw = hw_report;
+      radv_hw.subgroup_size_64_admitted = true;
+      radv_hw.subgroup_size_32_admitted = true;
+      radv_hw.subgroup_size = 32;
+      auto out = omarchy::capsim::apply(
+          radv_hw, *omarchy::capsim::find(kSubgroup64));
+      if (out.subgroup_size_64_admitted || out.subgroup_size_32_admitted) {
+        std::cerr << "unit: subgroup-size-64 kept a pin bit under a "
+                     "simulated subgroup size\n";
+        return 1;
+      }
+      out = omarchy::capsim::apply(
+          radv_hw, *omarchy::capsim::find(kRadvWave64));
+      if (!out.subgroup_size_64_admitted || out.subgroup_size_32_admitted ||
+          out.subgroup_size != 64 || out.cooperative_matrix_f32_8 ||
+          !omarchy::cooperative_matrix_advertises(
+              out.cooperative_matrix_shapes,
+              omarchy::qmm_prefill_coopmat16_bf16_shape())) {
+        std::cerr << "unit: radv-wave64-bf16-coopmat delta wrong\n";
         return 1;
       }
     }
