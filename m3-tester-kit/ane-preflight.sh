@@ -57,10 +57,14 @@ key=""
 [ "$module" = "ane_h15" ] && key="ane-h15-experimental"
 [ "$module" = "ane_h16" ] && key="ane-h16-experimental"
 optin="$ROOT/etc/omarchy-mac-boot/dtb-overlays.opt-in"
-rc=1
-[ -n "$key" ] && [ -f "$optin" ] && grep -qx "$key" "$optin" && rc=0
-report opt-in-key "$rc" \
-  "line '$key' not in $optin — add it and reboot before any bring-up stage"
+if [ -n "$key" ]; then
+  rc=1
+  [ -f "$optin" ] && grep -qx "$key" "$optin" && rc=0
+  report opt-in-key "$rc" \
+    "line '$key' not in $optin — add it and reboot before any bring-up stage"
+else
+  info opt-in-key "no opt-in key applies (no bring-up module for this chip)"
+fi
 
 fwrc=0
 if [ "$module" = "ane_h16" ]; then
@@ -76,7 +80,6 @@ else
 fi
 
 ko=""
-for d in /lib/modules/$(uname -r) "$ROOT/lib/modules/$(uname -r)" "$KIT_DIR"; do :; done
 for c in "$ROOT/usr/lib/omarchy-ane/${module:-ane_h15}.ko" \
          "$ROOT/usr/lib/modules/$(uname -r)/extra/${module:-ane_h15}.ko"; do
   [ -r "$c" ] && ko="$c" && break

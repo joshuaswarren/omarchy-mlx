@@ -108,5 +108,63 @@ class M3TesterKitTests(unittest.TestCase):
         self.assertEqual(bad.stdout.strip(), "", bad.stdout)
 
 
+PREFLIGHT = ROOT / "m3-tester-kit" / "ane-preflight.sh"
+
+
+def fake_root(d: pathlib.Path, soc: bytes, optin_key: str | None) -> pathlib.Path:
+    root = d / "aneroot"
+    (root / "proc/device-tree").mkdir(parents=True)
+    (root / "proc/device-tree/compatible").write_bytes(soc + b"\0")
+    if optin_key is not None:
+        (root / "etc/omarchy-mac-boot").mkdir(parents=True)
+        (root / "etc/omarchy-mac-boot/dtb-overlays.opt-in").write_text(
+            optin_key + "\n")
+    return root
+
+
+class AnePreflightTests(unittest.TestCase):
+    """ane-preflight.sh runs (not just bash -n): the ANE_ROOT seam re-roots
+    /proc, /etc and /sys onto a stub device-tree root so the report and the
+    refusal summary are exercised."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = pathlib.Path(self.tmp.name)
+
+    def run_preflight(self, root: pathlib.Path) -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", str(PREFLIGHT)], capture_output=True,
+                              text=True,
+                              env={**os.environ, "ANE_ROOT": str(root)})
+
+    def test_ready_stub_root_passes_with_the_ready_summary(self):
+        root = fake_root(self.base, b"apple,t6031", "ane-h15-experimental")
+        r = self.run_preflight(root)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("chip-map: PASS", r.stdout)
+        self.assertIn("opt-in-key: PASS", r.stdout)
+        self.assertIn("no refusals — this base M3 is bring-up ready",
+                      r.stdout)
+        self.assertNotIn("unbound variable", r.stderr)
+
+    def test_missing_opt_in_refuses_and_names_the_fix(self):
+        root = fake_root(self.base, b"apple,t6031", None)
+        r = self.run_preflight(root)
+        self.assertEqual(r.returncode, 1, r.stderr + r.stdout)
+        self.assertIn("opt-in-key: REFUSED", r.stdout)
+        self.assertIn("ane-h15-experimental", r.stdout)
+        self.assertIn("1 refusal(s)", r.stdout)
+        self.assertNotIn("unbound variable", r.stderr)
+
+    def test_unknown_chip_skips_the_opt_in_check(self):
+        root = fake_root(self.base, b"apple,t6000", None)
+        r = self.run_preflight(root)
+        self.assertEqual(r.returncode, 1, r.stderr + r.stdout)
+        self.assertIn("chip-map: REFUSED", r.stdout)
+        self.assertIn("no opt-in key applies", r.stdout)
+        self.assertNotIn("line ''", r.stdout)
+        self.assertNotIn("unbound variable", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
