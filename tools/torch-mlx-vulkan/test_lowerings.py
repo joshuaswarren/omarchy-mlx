@@ -3014,6 +3014,110 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_order_stats():
+    # piece 15: order-stats/set family — sort/median/nanmedian/aminmax,
+    # cummax/cummin (tie-late indices), cumprod/logcumsumexp, searchsorted,
+    # bucketize, unique_consecutive. Executor parity vs torch CPU, no fallback.
+    rng = np.random.RandomState(0)
+
+    def run_aten(target, args, kwargs=None):
+        kwargs = kwargs or {}
+        ins = [a for a in list(args) + list(kwargs.values()) if torch.is_tensor(a)]
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        it = iter(phs)
+        n = g.call_function(target,
+                            tuple(next(it) if torch.is_tensor(a) else a for a in args),
+                            {k: next(it) if torch.is_tensor(v) else v for k, v in kwargs.items()})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, target)
+        return out
+
+    def close(out, ref, name="", tol=1e-6, exact=None):
+        outs = out if isinstance(out, (tuple, list)) else (out,)
+        refs = ref if isinstance(ref, (tuple, list)) else (ref,)
+        assert len(outs) == len(refs), (name, len(outs), len(refs))
+        for i, (o, r) in enumerate(zip(outs, refs)):
+            on, rn = np.array(o), r.numpy()
+            if exact and i in exact:
+                assert np.array_equal(on.astype(np.int64), rn.astype(np.int64)), (name, i, on, rn)
+            else:
+                assert np.allclose(on, rn.astype(on.dtype), atol=tol), (name, i, on, rn)
+
+    # distinct values -> unique argsort, exact index parity
+    x = torch.tensor(rng.randn(3, 7).astype(np.float32))
+    close(run_aten(torch.ops.aten.sort.default, (x,)),
+          torch.ops.aten.sort(x), name="sort", exact={1})
+    close(run_aten(torch.ops.aten.sort.default, (x,), {"dim": 0, "descending": True}),
+          torch.ops.aten.sort(x, dim=0, descending=True), name="sort desc", exact={1})
+    close(run_aten(torch.ops.aten.sort.stable, (x,), {"stable": True, "dim": 1}),
+          torch.ops.aten.sort.stable(x, stable=True, dim=1), name="sort.stable", exact={1})
+
+    # median: values exact, indices must point at a position holding the value
+    mv, mi = run_aten(torch.ops.aten.median.dim, (x,), {"dim": 1})
+    tv, ti = torch.median(x, dim=1)
+    assert np.allclose(np.array(mv), tv.numpy()), "median dim values"
+    picked = x.numpy()[np.arange(x.shape[0]), np.array(mi)]
+    assert np.allclose(picked, tv.numpy()), "median idx"
+    close(run_aten(torch.ops.aten.median.default, (x,)),
+          torch.ops.aten.median(x), name="median flat")
+    xn = x.clone(); xn[0, 2] = float("nan"); xn[1, :] = float("nan")
+    nv, ni = run_aten(torch.ops.aten.nanmedian.dim, (xn,), {"dim": 1})
+    tvn, tin = torch.nanmedian(xn, dim=1)
+    assert np.allclose(np.array(nv), tvn.numpy(), equal_nan=True), "nanmedian values"
+    close(run_aten(torch.ops.aten.nanmedian.default, (xn,)),
+          torch.ops.aten.nanmedian(xn), name="nanmedian flat")
+
+    close(run_aten(torch.ops.aten.aminmax.default, (x,)),
+          torch.ops.aten.aminmax(x), name="aminmax flat")
+    close(run_aten(torch.ops.aten.aminmax.default, (x,), {"dim": 1, "keepdim": True}),
+          torch.ops.aten.aminmax(x, dim=1, keepdim=True), name="aminmax dim")
+
+    # cummax/cummin: duplicate-heavy input to pin the tie-late index contract
+    xd = torch.tensor([[3., 1., 2., 1., 3., 0., 3.]], dtype=torch.float32)
+    close(run_aten(torch.ops.aten.cummax.default, (xd,), {"dim": 1}),
+          torch.ops.aten.cummax(xd, 1), name="cummax", exact={1})
+    close(run_aten(torch.ops.aten.cummin.default, (xd,), {"dim": 1}),
+          torch.ops.aten.cummin(xd, 1), name="cummin", exact={1})
+
+    close(run_aten(torch.ops.aten.cumprod.default, (x,), {"dim": 1}),
+          torch.ops.aten.cumprod(x, 1), name="cumprod")
+    close(run_aten(torch.ops.aten.logcumsumexp.default, (x,), {"dim": 1}),
+          torch.ops.aten.logcumsumexp(x, 1), name="logcumsumexp")
+
+    seq = torch.tensor([1., 2., 3., 3., 5.])
+    vals = torch.tensor([0., 1., 1.5, 3., 9.])
+    close(run_aten(torch.ops.aten.searchsorted.Tensor, (seq, vals), {}),
+          torch.ops.aten.searchsorted(seq, vals), name="searchsorted", exact={0})
+    close(run_aten(torch.ops.aten.searchsorted.Tensor, (seq, vals), {"right": True}),
+          torch.ops.aten.searchsorted(seq, vals, right=True), name="searchsorted right", exact={0})
+    close(run_aten(torch.ops.aten.searchsorted.Tensor, (seq, vals), {"out_int32": True}),
+          torch.ops.aten.searchsorted(seq, vals, out_int32=True), name="searchsorted i32", exact={0})
+    sorter = torch.argsort(torch.tensor([3., 1., 2., 5., 3.]))
+    seq2 = torch.tensor([3., 1., 2., 5., 3.])
+    close(run_aten(torch.ops.aten.searchsorted.Tensor, (seq2, vals), {"sorter": sorter}),
+          torch.ops.aten.searchsorted(seq2, vals, sorter=sorter), name="searchsorted sorter", exact={0})
+    close(run_aten(torch.ops.aten.bucketize.Tensor, (vals, seq), {}),
+          torch.ops.aten.bucketize(vals, seq), name="bucketize", exact={0})
+    close(run_aten(torch.ops.aten.bucketize.Tensor, (vals, seq), {"right": True}),
+          torch.ops.aten.bucketize(vals, seq, right=True), name="bucketize right", exact={0})
+
+    xu = torch.tensor([3., 3., 1., 1., 1., 2., 3., 3.])
+    close(run_aten(torch.ops.aten.unique_consecutive.default, (xu,),
+                   {"return_inverse": True, "return_counts": True}),
+          torch.ops.aten.unique_consecutive(xu, return_inverse=True, return_counts=True),
+          name="unique_consecutive", exact={0, 1, 2})
+    m2 = torch.tensor([[1., 2.], [1., 2.], [5., 6.], [1., 2.]])
+    close(run_aten(torch.ops.aten.unique_consecutive.default, (m2,),
+                   {"return_inverse": True, "dim": 0}),
+          torch.ops.aten.unique_consecutive(m2, return_inverse=True, dim=0),
+          name="unique_consecutive dim", exact={0, 1})
+    print("test_order_stats PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3178,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_order_stats()
     print("ALL PASS")
 
 

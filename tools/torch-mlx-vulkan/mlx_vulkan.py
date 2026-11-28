@@ -2055,6 +2055,132 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _sort(a, dim=-1, descending=False, stable=None):
+    a = _mx(a)
+    if descending:
+        # negating keeps equal-element order semantics of torch's unstable sort
+        idx = mx.argsort(-a, axis=dim)
+    else:
+        idx = mx.argsort(a, axis=dim)
+    v = mx.take_along_axis(a, idx, axis=dim)
+    return (v, idx.astype(mx.int64))
+
+
+def _median_dim(a, dim, keepdim=False):
+    # torch takes the LOWER middle element and reports its source index
+    a = _mx(a)
+    n = a.shape[dim]
+    idx = mx.argsort(a, axis=dim)
+    k = (n - 1) // 2
+    sl = [slice(None)] * a.ndim
+    sl[dim] = slice(k, k + 1)
+    mid_idx = idx[tuple(sl)]
+    mid_val = mx.take_along_axis(a, mid_idx, axis=dim)
+    if not keepdim:
+        mid_idx = mx.squeeze(mid_idx, axis=dim)
+        mid_val = mx.squeeze(mid_val, axis=dim)
+    return (mid_val, mid_idx.astype(mx.int64))
+
+
+def _median_flat(a):
+    a = _mx(a).reshape(-1)
+    s = mx.sort(a)
+    return s[(a.size - 1) // 2]
+
+
+def _median(a, dim=None, keepdim=False):
+    if dim is None:
+        return _median_flat(a)
+    return _median_dim(a, dim, keepdim)
+
+
+def _nanmedian(a, dim=None, keepdim=False):
+    # NaN excluded: sort with NaN pinned to +inf, pick (cnt-1)//2 per slice
+    a = _mx(a)
+    if dim is None:
+        flat = a.reshape(-1)
+        fin = mx.where(mx.isnan(flat), mx.array(float("inf"), flat.dtype), flat)
+        cnt = int(np.array(mx.sum(~mx.isnan(flat))))
+        if cnt == 0:
+            return mx.array(float("nan"), flat.dtype)
+        s = mx.sort(fin)
+        return s[(cnt - 1) // 2]
+    n = a.shape[dim]
+    fin = mx.where(mx.isnan(a), mx.array(float("inf"), a.dtype), a)
+    idx = mx.argsort(fin, axis=dim)
+    vals = mx.take_along_axis(fin, idx, axis=dim)
+    cnt = mx.sum(~mx.isnan(a), axis=dim, keepdims=True)
+    k = mx.maximum((cnt - 1) // 2, 0)
+    mid_val = mx.take_along_axis(vals, k, axis=dim)
+    mid_val = mx.where(cnt == 0, mx.array(float("nan"), a.dtype), mid_val)
+    mid_idx = mx.take_along_axis(idx, k, axis=dim)
+    if not keepdim:
+        mid_val = mx.squeeze(mid_val, axis=dim)
+        mid_idx = mx.squeeze(mid_idx, axis=dim)
+    return (mid_val, mid_idx.astype(mx.int64))
+
+
+def _aminmax(a, dim=None, keepdim=False):
+    a = _mx(a)
+    if dim is None:
+        return (mx.min(a), mx.max(a))
+    return (mx.min(a, axis=dim, keepdims=keepdim),
+            mx.max(a, axis=dim, keepdims=keepdim))
+
+
+def _cummaxmin(a, dim, which):
+    # indices = last j <= i where a[j] equals the running extreme (ties go late)
+    a = _mx(a)
+    am = mx.moveaxis(a, dim, -1)
+    n = am.shape[-1]
+    v = mx.cummax(am, axis=-1) if which == "max" else mx.cummin(am, axis=-1)
+    j = mx.arange(n)
+    le = j[None, :] <= j[:, None]                      # (i, j)
+    eq = (am[..., None, :] == v[..., :, None]) & le
+    idx = mx.max(mx.where(eq, j[None, :], -1), axis=-1)
+    return (mx.moveaxis(v, -1, dim),
+            mx.moveaxis(idx, -1, dim).astype(mx.int64))
+
+
+def _searchsorted(seq, self_, out_int32=False, right=False, side=None, sorter=None):
+    seq, v = _mx(seq), _mx(self_)
+    if sorter is not None:
+        seq = mx.take(seq, _mx(sorter).astype(mx.int64))
+    idx = mx.searchsorted(seq, v, side=side or ("right" if right else "left"))
+    return idx.astype(mx.int32 if out_int32 else mx.int64)
+
+
+def _bucketize(a, boundaries, out_int32=False, right=False):
+    idx = mx.searchsorted(_mx(boundaries), _mx(a),
+                          side="right" if right else "left")
+    return idx.astype(mx.int32 if out_int32 else mx.int64)
+
+
+def _unique_consecutive(a, return_inverse=False, return_counts=False, dim=None):
+    a = _mx(a)
+    if dim is None:
+        a = a.reshape(-1)
+        ax = 0
+    else:
+        ax = dim % a.ndim
+    am = mx.moveaxis(a, ax, 0)
+    n = am.shape[0]
+    keep = mx.concatenate([
+        mx.ones((1,), dtype=mx.bool_),
+        mx.any(am[1:] != am[:-1], axis=tuple(range(1, am.ndim))),
+    ])
+    cnt_arr = mx.sum(keep.astype(mx.int32))
+    # kept positions, in order: stable argsort of ~keep puts kept first
+    order = mx.argsort((~keep).astype(mx.int32))
+    kept = order[:int(np.array(cnt_arr))]
+    out = mx.take(am, kept, axis=0)
+    out = mx.moveaxis(out, 0, ax)
+    inv = (mx.cumsum(keep.astype(mx.int32), axis=0) - 1).astype(mx.int64)
+    ends = mx.concatenate([kept[1:], mx.array([n], dtype=kept.dtype)])
+    counts = (ends - kept).astype(mx.int64)
+    return (out, inv, counts)  # aten always populates all three
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2457,6 +2583,20 @@ _FUNC_SPECS = {
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
+    # order-stats / set family (piece 15)
+    "sort": _sort,
+    "median": _median,
+    "median.dim": _median,
+    "nanmedian": _nanmedian,
+    "nanmedian.dim": _nanmedian,
+    "aminmax": _aminmax,
+    "cummax": lambda a, dim: _cummaxmin(a, dim, "max"),
+    "cummin": lambda a, dim: _cummaxmin(a, dim, "min"),
+    "cumprod": lambda a, dim, dtype=None: mx.cumprod(_mx(a), axis=dim),
+    "logcumsumexp": lambda a, dim: mx.logcumsumexp(_mx(a), axis=dim),
+    "searchsorted": _searchsorted,
+    "bucketize": _bucketize,
+    "unique_consecutive": _unique_consecutive,
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": _roll,
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
