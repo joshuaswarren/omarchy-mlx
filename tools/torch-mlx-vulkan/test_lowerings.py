@@ -2896,6 +2896,8 @@ def test_q55_fmod_trunc_lerp():
     # Q-55: aten.fmod (truncates toward zero — dividend's sign, unlike
     # remainder's divisor sign), aten.trunc, aten.lerp (weight may leave
     # [0, 1] and extrapolate). fp32 parity vs torch CPU, no CPU fallback.
+    # A zero divisor NaN-propagates in both backends (a/0 is inf, inf*0 is
+    # nan through the fmod identity), matching aten.
     a = torch.tensor([7.0, -7.0, 3.5, -3.5, 0.0, 9.0], dtype=torch.float32)
     b = torch.tensor([3.0, 3.0, -2.0, -2.0, 3.0, -4.0], dtype=torch.float32)
     bt = torch.tensor([3.0, 3.0, -2.0, -2.0, 3.0, -4.0])
