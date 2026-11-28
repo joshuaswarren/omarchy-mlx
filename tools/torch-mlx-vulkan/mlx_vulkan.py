@@ -1543,6 +1543,40 @@ def _bitwise_or_logical(a, b, bitop, logop):
     return bitop(a, b)
 
 
+def _bitwise_not(a):
+    # aten.bitwise_not: ~x on ints, logical_not on bools; a floating
+    # input is NotImplemented in aten too — refuse to the fallback so
+    # the same error surfaces.
+    a = _mx(a)
+    _b = getattr(mx, "bool_", None) or mx.uint8
+    if a.dtype == _b:
+        return mx.logical_not(a)
+    if a.dtype in (mx.float32, mx.float16, mx.bfloat16):
+        _raise("bitwise_not on floating input")
+    return ~a
+
+
+def _bitwise_shift(a, b, op, name):
+    # aten.bitwise_left/right_shift are integer-only — a floating input
+    # is NotImplemented in aten too.
+    a, b = _mx(a), _mx(b)
+    if a.dtype in (mx.float32, mx.float16, mx.bfloat16) or \
+            b.dtype in (mx.float32, mx.float16, mx.bfloat16):
+        _raise(f"{name} on floating input")
+    return op(a, b)
+
+
+def _cmp_inplace(upd, dst):
+    # comparison/logical _ ops: the bool result writes back into the
+    # destination's dtype — aten casts bool into any numeric dest
+    # (ge_ on a float tensor writes 1.0/0.0 floats). Broadcast shape
+    # growth still refuses like aten.
+    dst = _mx(dst)
+    if tuple(upd.shape) != tuple(dst.shape):
+        _raise(f"in-place result shape {tuple(upd.shape)} vs dest {tuple(dst.shape)}")
+    return upd.astype(dst.dtype)
+
+
 _KIND_GROUPS = None
 def _dtype_kind(dt):
     global _KIND_GROUPS
@@ -2441,6 +2475,57 @@ _FUNC_SPECS = {
     "logical_or": lambda a, b: mx.logical_or(_mx(a), _mx(b)),
     "logical_not": lambda a: mx.logical_not(a),
     "invert": lambda a: mx.logical_not(a),
+    # PT-AL-h: comparison/bitwise extras. Comparison/logical in-place
+    # variants go through _cmp_inplace (bool result casts into the dest
+    # dtype like aten); bitwise in-place keep _inplace_result.
+    # Floating bitwise shifts/not are NotImplemented in aten too.
+    "greater_equal": lambda a, b: mx.greater_equal(_mx(a), _mx(b)),
+    "greater_equal_": lambda a, b: _cmp_inplace(
+        mx.greater_equal(_mx(a), _mx(b)), a),
+    "ge_": lambda a, b: _cmp_inplace(
+        mx.greater_equal(_mx(a), _mx(b)), a),
+    "greater_": lambda a, b: _cmp_inplace(
+        mx.greater(_mx(a), _mx(b)), a),
+    "less_equal": lambda a, b: mx.less_equal(_mx(a), _mx(b)),
+    "less_equal_": lambda a, b: _cmp_inplace(
+        mx.less_equal(_mx(a), _mx(b)), a),
+    "le_": lambda a, b: _cmp_inplace(
+        mx.less_equal(_mx(a), _mx(b)), a),
+    "less_": lambda a, b: _cmp_inplace(
+        mx.less(_mx(a), _mx(b)), a),
+    "gt_": lambda a, b: _cmp_inplace(
+        mx.greater(_mx(a), _mx(b)), a),
+    "lt_": lambda a, b: _cmp_inplace(
+        mx.less(_mx(a), _mx(b)), a),
+    "eq_": lambda a, b: _cmp_inplace(
+        mx.equal(_mx(a), _mx(b)), a),
+    "not_equal_": lambda a, b: _cmp_inplace(
+        mx.not_equal(_mx(a), _mx(b)), a),
+    "logical_xor": lambda a, b: mx.logical_xor(_mx(a), _mx(b)),
+    "logical_xor_": lambda a, b: _cmp_inplace(
+        mx.logical_xor(_mx(a), _mx(b)), a),
+    "logical_and_": lambda a, b: _cmp_inplace(
+        mx.logical_and(_mx(a), _mx(b)), a),
+    "logical_or_": lambda a, b: _cmp_inplace(
+        mx.logical_or(_mx(a), _mx(b)), a),
+    "logical_not_": lambda a: _cmp_inplace(
+        mx.logical_not(_mx(a)), a),
+    "isneginf": lambda a: mx.isneginf(_mx(a)),
+    "isposinf": lambda a: mx.isposinf(_mx(a)),
+    "bitwise_not": _bitwise_not,
+    "bitwise_not_": lambda a: _inplace_result(_bitwise_not(a), a),
+    "bitwise_left_shift": lambda a, b: _bitwise_shift(
+        a, b, mx.left_shift, "bitwise_left_shift"),
+    "bitwise_left_shift_": lambda a, b: _inplace_result(
+        _bitwise_shift(a, b, mx.left_shift, "bitwise_left_shift"), a),
+    "bitwise_right_shift": lambda a, b: _bitwise_shift(
+        a, b, mx.right_shift, "bitwise_right_shift"),
+    "bitwise_right_shift_": lambda a, b: _inplace_result(
+        _bitwise_shift(a, b, mx.right_shift, "bitwise_right_shift"), a),
+    "bitwise_or_": lambda a, b: _inplace_result(
+        _bitwise_or_logical(a, b, mx.bitwise_or, mx.logical_or), a),
+    "bitwise_xor_": lambda a, b: _inplace_result(
+        _bitwise_or_logical(a, b, mx.bitwise_xor, mx.bitwise_xor), a),
     "clamp": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
     "clamp_": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
     "clip": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
