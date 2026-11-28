@@ -143,7 +143,8 @@ inline int batch_node_budget() {
 // has it:
 // receipts/2026-10-02-submission-cap-19 (G14C),
 // receipts/2026-10-12-submission-cap-calibration (G13C),
-// receipts/2026-11-21-g13g-batch-work-20000 (G13G, tail rule),
+// receipts/2026-11-21-g13g-batch-work-20000 (G13G, prior 20000 row),
+// receipts/2026-11-27-g13g-batch-work-35000.md (G13G, 2B single-submit decode),
 // receipts/2026-11-13-g18g-batch-work (G18G),
 // receipts/2026-11-23-g621-batch-budget-submits (G18G),
 // receipts/2026-11-24-m4-g16g-batch-work (G16G),
@@ -176,7 +177,7 @@ struct BatchWorkCalibration {
 inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G13S", 10000},  // M1 Pro (16-inch, 16 GB, 16 GPU cores), Borealis Mesa be147e3625: Qwen3-4B submission p50 2.50 ms, p99 36.2 ms, max 43.2 ms; 20000 raised the p99 to 72.3 ms (max 86.0, at the #19 stutter); decode +17.4% 2B and +20.6% 4B against 5000, tokens identical (receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p, /tail)
     {"G13C", 80000},  // M1 Max (32 GPU cores): 40000 split every Qwen3-4B decode token mid-eval at layer 29 (~60k WG, 2 submits/tok); 80000 keeps the whole decode step in one submit (decode p50 10.61 ms, all-submissions including ctx=2048 prefill p99 32.05 ms / max 32.09 ms <= 33.3 ms; 200000 reached 63.72 ms prefill tail), +1.57% isolated / +2.30% with chunked vocab tail, greedy ids bit-identical to macOS (receipts/2026-11-26-g13c-batch-work-80000.md)
-    {"G13G", 20000},  // 13-inch M1, Mesa 69bde15340, v0.7.49: decode +4.0% (Qwen3.8-2B, 16 -> 7 submissions per token) and +1.3% (Qwen3-4B) against 8000, greedy ids identical; Qwen3-4B submission p50 20.2 ms, p99 24.1 ms, max 24.5 ms (40000 reached p99 45.5 ms) (receipts/2026-11-21-g13g-batch-work-20000)
+    {"G13G", 35000},  // 13-inch M1 (8 GPU cores): 20000 split every Qwen3.8-2B decode token across 2 submits (125 dispatches); 35000 keeps 2B@512 and 2B@2048 decode in 1 submit/tok (2B@512 decode p50 18.83 ms / p99 21.36 ms; Qwen3-4B decode 3 submits/tok, p50 18.12 ms / p99 20.58 ms at ctx=512 and p50 20.03 ms / p99 23.05 ms at ctx=2048, both <= 33 ms), greedy ids bit-identical to macOS (receipts/2026-11-27-g13g-batch-work-35000.md)
     {"G14C", 200000},  // M2 Max: the 100000 row split every Qwen3.8-9B decode token mid-eval at ~181 of ~357 dispatches (1.969 submissions per token); 200000 keeps the whole step in one submit (0.984), greedy ids identical (receipts/2026-11-24-g14c-batch-work-200000). Earlier row: +0.5% (Qwen3-4B), +0.9% (Qwen3.8-2B), +1.4% (Qwen3.8-9B) decode against 40000, 0 frames over 33.3 ms beside decode (receipts/2026-11-13-g14c-batch-work)
     {"G14G", 8000},  // M2 (13-inch, 8 GB, 8 GPU cores), Borealis Mesa be147e3625: Qwen3-4B submission p50 3.64 ms, p99 37.9 ms, max 47.8 ms; 10000 raised the p99 to 48.3 ms (max 56.3); decode +2.7% 2B and +2.7% 4B against 5000, tokens identical (same receipt, /tail)
     {"G15S", 15000},  // M3 Pro (14-inch, 18 GB, 14 GPU cores), Borealis Mesa a196911147: decode +6.6% (Qwen3.8-2B, 12 -> 4 submissions per token; score_bench +6.5%) and +5.3% (Qwen3-4B-2507, 20 -> 8 submissions per token; score_bench +6.2%) against 5000, greedy ids identical; release-build submission GPU time (DRM scheduler) Qwen3-4B decode p50 3.98 ms / p99 4.31 ms / max 4.62 ms, all submissions p99 45.17 ms / max 45.52 ms (5000 floor: 44.80 / 44.89 ms), Qwen3.8-2B all p99 38.42 ms / max 38.51 ms (under 40 ms); 20000 raised 4B all-submissions p99 to 65.14 ms (2B to 43.85 ms) and 30000 reached 80.08 ms with 7.40 ms decode p50 (receipts/2026-11-22-m3-pro-g15s-batch-work)
