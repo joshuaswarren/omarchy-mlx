@@ -264,6 +264,17 @@ struct CapabilityReport {
   // Apple-norm kernel family (DEC-18). Same derivation rule as
   // subgroup_size_32_admitted, at the wider VUID-02757 bound.
   bool subgroup_size_32_wide_admitted{false};
+  // Largest compute workgroup lane-count this hardware can run pinned
+  // at requiredSubgroupSize = 32: 32 * maxComputeWorkgroupSubgroups
+  // capped by maxComputeWorkGroupInvocations when size control is on,
+  // the compute stage is covered and 32 sits in [min, max]; 0
+  // otherwise. Same enable rule as the per-size admitted bits; a value
+  // >= 128 implies subgroup_size_32_admitted (probed at a 128-lane
+  // workgroup), >= 512 implies subgroup_size_32_wide_admitted. The
+  // 32-lane kernels whose workgroup is not the DEC-18 512 bound gate
+  // on it so RADV (native 64) and ANV-class parts run the NVIDIA
+  // 32-lane routes under a requiredSubgroupSize = 32 pipeline pin.
+  uint32_t subgroup_size_32_admitted_max_wg{0};
   // True: this hardware can pin requiredSubgroupSize = 64 for a 64-lane
   // compute workgroup (the one-subgroup 16x16x16 coopmat builds). Same
   // derivation rule as subgroup_size_16_admitted.

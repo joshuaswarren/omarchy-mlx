@@ -93,6 +93,11 @@ struct SimulationProfile {
   int cooperative_matrix_f16_16 = -1;
   // Axis max_storage_buffer_range_bytes. 0 = inherit.
   uint64_t max_storage_buffer_range = 0;
+  // Axis subgroup_size_32_admitted_max_wg: the largest compute
+  // workgroup lane-count the device can run pinned at
+  // requiredSubgroupSize = 32 (DEC-45; RADV/RDNA native-64 and
+  // ANV-class native-16 parts). -1 = inherit, >=0 = set.
+  int subgroup_pin32_max_wg = -1;
 };
 
 // The registered profiles, in registry order. docs/new-chip-bringup.md
