@@ -2693,9 +2693,9 @@ def test_scatter_family():
     for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
         bd, sd = base.to(dtype), src.to(dtype)
         cases = [
-            (torch.ops.aten.scatter.default, (bd, 1, idx, sd), {},
+            (torch.ops.aten.scatter.src, (bd, 1, idx, sd), {},
              torch.scatter(bd, 1, idx, sd), "scatter"),
-            (torch.ops.aten.scatter.default, (bd, 0, idx.t(), sd.t()), {},
+            (torch.ops.aten.scatter.src, (bd, 0, idx.t(), sd.t()), {},
              torch.scatter(bd, 0, idx.t(), sd.t()), "scatter"),
             (torch.ops.aten.scatter.value, (bd, 1, idx, 9.5), {},
              torch.ops.aten.scatter.value(bd, 1, idx, 9.5), "scatter"),
