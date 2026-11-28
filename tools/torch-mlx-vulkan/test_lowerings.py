@@ -3014,6 +3014,85 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+def _run_fx(target, args, kwargs, *feed):
+    g = torch.fx.Graph()
+    tensors = [f for f in feed if isinstance(f, torch.Tensor)]
+    phs = [g.placeholder(f"p{i}") for i in range(len(tensors))]
+    it = iter(phs)
+
+    def _w(v):
+        return next(it) if isinstance(v, torch.Tensor) else v
+
+    wargs = tuple(_w(v) for v in args)
+    wkwargs = {k: _w(v) for k, v in kwargs.items()}
+    node = g.call_function(target, wargs, wkwargs)
+    g.output(node)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(*tensors)
+    assert stats["cpu"] == [], (stats, [str(n.target) for n in gm.graph.nodes])
+    return out
+
+
+def test_pool_extras():
+    rng = np.random.RandomState(0)
+    x = torch.tensor(rng.randn(2, 3, 7, 6).astype(np.float32))
+    out = _run_fx(torch.ops.aten.adaptive_max_pool2d.default, (x, [2, 3]), {}, x)
+    rv, ri = torch.ops.aten.adaptive_max_pool2d(x, [2, 3])
+    assert np.allclose(_np(out[0]), rv.numpy())
+    assert np.array_equal(_np(out[1]), ri.numpy())
+
+    x3 = torch.tensor(rng.randn(1, 2, 4, 5, 6).astype(np.float32))
+    out = _run_fx(torch.ops.aten.adaptive_max_pool3d.default, (x3, [2, 3, 2]), {}, x3)
+    rv, ri = torch.ops.aten.adaptive_max_pool3d(x3, [2, 3, 2])
+    assert np.allclose(_np(out[0]), rv.numpy())
+    assert np.array_equal(_np(out[1]), ri.numpy())
+
+    out = _run_fx(torch.ops.aten.avg_pool3d.default, (x3, [2, 2, 2]), {}, x3)
+    assert np.allclose(_np(out), torch.ops.aten.avg_pool3d(x3, [2, 2, 2]).numpy())
+    out = _run_fx(torch.ops.aten.avg_pool3d.default, (x3, [3, 3, 3], [2, 2, 2], [1, 1, 1],
+                                                      False, False, 8), {}, x3)
+    ref = torch.ops.aten.avg_pool3d(x3, [3, 3, 3], [2, 2, 2], [1, 1, 1], False, False, 8)
+    assert np.allclose(_np(out), ref.numpy())
+    out = _run_fx(torch.ops.aten.avg_pool3d.default, (x3, [3, 3, 3], [2, 2, 2], [1, 1, 1],
+                                                      True, False), {}, x3)
+    ref = torch.ops.aten.avg_pool3d(x3, [3, 3, 3], [2, 2, 2], [1, 1, 1], True, False)
+    assert np.allclose(_np(out), ref.numpy())
+
+    out = _run_fx(torch.ops.aten.max_pool3d_with_indices.default,
+                  (x3, [2, 2, 2], [2, 2, 2], [0, 0, 0], [1, 1, 1], False), {}, x3)
+    rv, ri = torch.ops.aten.max_pool3d_with_indices(
+        x3, [2, 2, 2], [2, 2, 2], [0, 0, 0], [1, 1, 1], False)
+    assert np.allclose(_np(out[0]), rv.numpy())
+    assert np.array_equal(_np(out[1]), ri.numpy())
+    out = _run_fx(torch.ops.aten.max_pool3d_with_indices.default,
+                  (x3, [3, 3, 3], [2, 2, 2], [1, 1, 1], [2, 2, 2], True), {}, x3)
+    rv, ri = torch.ops.aten.max_pool3d_with_indices(
+        x3, [3, 3, 3], [2, 2, 2], [1, 1, 1], [2, 2, 2], True)
+    assert np.allclose(_np(out[0]), rv.numpy())
+    assert np.array_equal(_np(out[1]), ri.numpy())
+
+    rs = torch.tensor(rng.rand(2, 3, 2).astype(np.float32))
+    out = _run_fx(torch.ops.aten.fractional_max_pool2d.default,
+                  (x, [2, 2], [2, 3], rs), {}, x, rs)
+    rv, ri = torch.ops.aten.fractional_max_pool2d(x, [2, 2], [2, 3], rs)
+    assert np.allclose(_np(out[0]), rv.numpy())
+    assert np.array_equal(_np(out[1]), ri.numpy())
+
+    v, i = torch.ops.aten.max_pool3d_with_indices(
+        x3, [2, 2, 2], [2, 2, 2], [0, 0, 0], [1, 1, 1], False)
+    out = _run_fx(torch.ops.aten.max_unpool3d.default,
+                  (v, i, [4, 5, 6], [2, 2, 2], [0, 0, 0]), {}, v, i)
+    ref = torch.ops.aten.max_unpool3d(v, i, [4, 5, 6], [2, 2, 2], [0, 0, 0])
+    assert np.allclose(_np(out), ref.numpy())
+    v2, i2 = torch.ops.aten.adaptive_max_pool2d(x, [2, 3])
+    out = _run_fx(torch.ops.aten.max_unpool2d.default, (v2, i2, [7, 6]), {}, v2, i2)
+    ref = torch.ops.aten.max_unpool2d(v2, i2, [7, 6])
+    assert np.allclose(_np(out), ref.numpy())
+    print("test_pool_extras PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3153,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_pool_extras()
     print("ALL PASS")
 
 
