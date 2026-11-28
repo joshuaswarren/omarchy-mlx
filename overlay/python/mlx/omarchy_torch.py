@@ -282,6 +282,130 @@ def _coerce_index(v):
     return v
 
 
+def _elu(a, alpha=1.0, scale=1.0, input_scale=1.0):
+    # aten.elu(input, alpha=1, scale=1, input_scale=1):
+    #   scale*x when x > 0, else alpha*scale*(exp(input_scale*x) - 1);
+    # fp16/bf16 inputs compute in fp32 opmath and round once.
+    a = _mx(a)
+    f = a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a
+    out = mx.where(mx.greater(f, 0.0), scale * f,
+                   scale * alpha * (mx.exp(input_scale * f) - 1.0))
+    return out.astype(a.dtype)
+
+
+def _selu(a):
+    # aten.selu is elu at the published constants (scale
+    # 1.0507009873554805, alpha 1.6732632423543772, input_scale 1).
+    return _elu(a, alpha=1.6732632423543772, scale=1.0507009873554805)
+
+
+def _celu(a, alpha=1.0):
+    # aten.celu(input, alpha=1): max(0,x) + min(0, alpha*(exp(x/alpha)-1)).
+    a = _mx(a)
+    f = a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a
+    out = mx.maximum(f, 0.0) + mx.minimum(alpha * (mx.exp(f / alpha) - 1.0), 0.0)
+    return out.astype(a.dtype)
+
+
+def _glu(a, dim=-1):
+    # aten.glu(input, dim=-1): halves along dim, a * sigmoid(b). A scalar
+    # or an odd-sized dim is an error in aten too.
+    a = _mx(a)
+    if a.ndim == 0 or a.shape[dim % a.ndim] % 2:
+        return _raise("glu")
+    f = a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a
+    lo, hi = mx.split(f, 2, axis=dim % a.ndim)
+    return (lo * mx.sigmoid(hi)).astype(a.dtype)
+def _frac(a):
+    # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
+    # NOT x - floor(x) which would give +0.7).
+    a = _mx(a)
+    return a - mx.trunc(a)
+
+
+def _linalg_norm(a, ord=None, dim=None, keepdim=False, dtype=None):
+    # aten.linalg_norm: mx.linalg.norm shares the vector/matrix
+    # ord/axis/keepdims contract (ord=None + axis=None flattens, a
+    # 2-axis dim is a matrix norm); dtype is an output cast.
+    a = _mx(a)
+    out = mx.linalg.norm(a, ord=ord, axis=dim, keepdims=keepdim)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("linalg_norm dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
+
+
+def _linalg_vector_norm(a, ord=2, dim=None, keepdim=False, dtype=None):
+    # aten.linalg_vector_norm always means a VECTOR norm — flattening
+    # when dim is None and reducing every listed dim. mx.linalg.norm
+    # reads ord+axis=None or a 2-axis dim as a MATRIX norm, so compose
+    # from power/sum instead.
+    a = _mx(a)
+    ax = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    if ax is None:
+        ax = tuple(range(a.ndim))
+    o = float(ord)
+    if o == float("inf"):
+        out = mx.max(mx.abs(a), axis=ax, keepdims=keepdim)
+    elif o == float("-inf"):
+        out = mx.min(mx.abs(a), axis=ax, keepdims=keepdim)
+    elif o == 0:
+        out = mx.sum((a != 0).astype(mx.int32), axis=ax,
+                     keepdims=keepdim).astype(a.dtype)
+    else:
+        out = mx.power(
+            mx.sum(mx.power(mx.abs(a), o), axis=ax, keepdims=keepdim),
+            1.0 / o)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("linalg_vector_norm dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
+
+
+def _pnorm(a, p=2, dim=None, keepdim=False):
+    # aten.norm: sum(|x|^p)^(1/p); inf/-inf take the max/min magnitude,
+    # not the 2-norm.
+    a = _mx(a)
+    ax = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    if str(p) in ("inf", "-inf"):
+        m = mx.max if str(p) == "inf" else mx.min
+        return m(mx.abs(a), axis=ax, keepdims=keepdim)
+    return mx.power(mx.sum(mx.power(mx.abs(a), float(p)), axis=ax,
+                                  keepdims=keepdim), 1.0 / float(p))
+
+
+def _cdist(a, b, p=2.0, compute_mode=None):
+    # aten.cdist(x1, x2, p, compute_mode): pairwise p-norm distances
+    # between the rows of [.., N, D] and [.., M, D]. Broadcast-
+    # difference covers every p; compute_mode only picks a numerics
+    # strategy in aten, the values are unchanged.
+    a, b = _mx(a), _mx(b)
+    d = a[..., :, None, :] - b[..., None, :, :]
+    fp = float(p)
+    if fp == float("inf"):
+        return mx.max(mx.abs(d), axis=-1)
+    if fp == 0:
+        return mx.sum((d != 0).astype(mx.int32), axis=-1).astype(a.dtype)
+    return mx.power(mx.sum(mx.power(mx.abs(d), fp), axis=-1), 1.0 / fp)
+
+
+def _pdist(a, p=2.0):
+    # aten.pdist(self, p): condensed i<j pairwise distances of the N
+    # row vectors. mx has no compress/nonzero, so the condense order is
+    # built arithmetically: flat positions with jj>ii key below n*n and
+    # sort first; the keys are unique so the order is exact.
+    a = _mx(a)
+    n = a.shape[-2]
+    d = _cdist(a, a, p)
+    flat = mx.arange(n * n)
+    sel = flat % n > flat // n
+    key = mx.logical_not(sel).astype(mx.int32) * (n * n) + flat
+    m = n * (n - 1) // 2
+    return mx.flatten(d)[mx.argsort(key)[:m]]
+
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -294,6 +418,9 @@ _FUNC_SPECS = {
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
+    # basic math ops used in normalization chains, PT-AL-e
+    "reciprocal": mx.reciprocal, "frac": _frac,
+    "reciprocal_": mx.reciprocal, "frac_": _frac,
     "sigmoid": mx.sigmoid, "tanh": mx.tanh, "erf": mx.erf,
     "transpose": lambda a, d0, d1: mx.transpose(a, axes=_perm_swap(a, d0, d1)),
     "t": lambda a: mx.transpose(a), "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
@@ -311,6 +438,9 @@ _FUNC_SPECS = {
     "select": lambda a, dim, i: _slice(a, dim, i % a.shape[dim % a.ndim], i % a.shape[dim % a.ndim] + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
     "slice": _slice, "narrow": lambda a, dim, s, n: _slice(a, dim, s, s + n, 1),
     "mean": _mean, "sum": _sum,
+    # the dim list becomes the axis tuple; mx.logsumexp is the same
+    # stable reduction (PT-AL-g)
+    "logsumexp": lambda a, dim, keepdim=False: mx.logsumexp(_mx(a), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
@@ -336,6 +466,15 @@ _FUNC_SPECS = {
     "gelu": lambda a, approximate="none": a * mx.sigmoid(1.702 * a) if approximate == "tanh" else 0.5 * a * (1.0 + mx.erf(a / math.sqrt(2.0))),
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
+    # the elu family (ViT, Conformer, speech models), PT-AL-a
+    "elu": _elu,
+    "elu_": _elu,
+    "selu": _selu,
+    "selu_": _selu,
+    "celu": _celu,
+    "celu_": _celu,
+    # aten.glu (GDN gate, Conformer), PT-AL-d
+    "glu": _glu,
     # the piecewise activation family (MobileNetV3 et al.), PT-AL-b
     "hardsigmoid": lambda a, inplace=False: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
     "hardswish": lambda a, inplace=False: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),
@@ -351,7 +490,8 @@ _FUNC_SPECS = {
     "gt": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "lt": lambda a, b: mx.less(_mx(a), _mx(b)),
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
-    "expm1": mx.expm1, "logaddexp": lambda a, b: mx.logaddexp(_mx(a), _mx(b)),
+    "expm1": mx.expm1, "expm1_": mx.expm1,
+    "logaddexp": lambda a, b: mx.logaddexp(_mx(a), _mx(b)),
     "outer": mx.outer, "einsum": lambda *a: mx.einsum(*a),
     "argmax": lambda a, dim=None, keepdim=False: mx.argmax(a, axis=dim, keepdims=keepdim),
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),
@@ -402,7 +542,13 @@ _FUNC_SPECS = {
     "roll": lambda a, shifts, dims=None: mx.roll(a, shifts, axis=dims),
     "log_softmax": lambda a, dim=-1, **k: a - mx.log(mx.sum(mx.exp(a), axis=dim, keepdims=True)),
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
-    "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
+    "norm": _pnorm,
+    # the linalg norm family (normalization, grad clipping), PT-NORM-b
+    "linalg_vector_norm": lambda a, ord=2, dim=None, keepdim=False, *, dtype=None: _linalg_vector_norm(a, ord, dim, keepdim, dtype),
+    "linalg_norm": lambda a, ord=None, dim=None, keepdim=False, *, dtype=None: _linalg_norm(a, ord, dim, keepdim, dtype),
+    # pairwise distances used in metric learning (PT-PAIR-a)
+    "cdist": lambda a, b, p=2.0, compute_mode=None: _cdist(a, b, p, compute_mode),
+    "pdist": lambda a, p=2.0: _pdist(a, p),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
     "embedding": lambda w, idx, *a_, **k_: _mx(w)[_mx(idx).astype(mx.int32)],
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),

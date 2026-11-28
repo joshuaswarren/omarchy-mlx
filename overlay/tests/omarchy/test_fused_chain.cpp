@@ -15,11 +15,13 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <iostream>
 #include <limits>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "mlx/backend/gpu/device_info.h"
@@ -3872,4 +3874,625 @@ TEST_CASE("prologue fold accepts uint32 token ids bit-exact and collapses 4 disp
   CHECK(ref_n >= 4u);
   CHECK_EQ(fold_n, 1u);
   expect_bit_exact(ref_out, fold_out, stream);
+}
+
+
+namespace {
+
+std::deque<array> collect_lazy_tape(const std::vector<array>& outputs) {
+  std::deque<array> tape;
+  std::unordered_set<std::uintptr_t> visited;
+  std::function<void(const array&)> dfs = [&](const array& a) {
+    if (!a.has_primitive() || !visited.insert(a.id()).second) {
+      return;
+    }
+    for (const auto& inp : a.inputs()) {
+      dfs(inp);
+    }
+    tape.push_front(a);
+  };
+  for (const auto& out : outputs) {
+    dfs(out);
+  }
+  return tape;
+}
+
+} // namespace
+
+TEST_CASE("FoldPlanKey matches identical graphs and misses on shape, op, wiring, alias, attribute, and config changes") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream s = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+  auto mk_vec = [&](int n, Dtype dt) {
+    array a = zeros(Shape{1, 1, n}, dt, s);
+    eval({a});
+    return a;
+  };
+  auto mk_q4 = [&](int n, int k, int group_size = 64, int bits = 4) {
+    array w = zeros(Shape{n, k}, bfloat16, s);
+    auto q = quantize(w, group_size, bits, "affine", std::nullopt, s);
+    eval(q);
+    return q;
+  };
+
+  array x = mk_vec(128, bfloat16);
+  array x_alt = mk_vec(128, bfloat16);
+  array x_wide = mk_vec(256, bfloat16);
+  array x_f16 = mk_vec(128, float16);
+  array r = mk_vec(128, bfloat16);
+  array nw = zeros(Shape{128}, bfloat16, s);
+  eval({nw});
+  auto q4_a = mk_q4(128, 128, 64, 4);
+  auto q4_b = mk_q4(128, 128, 64, 4);
+  auto q8_a = mk_q4(128, 128, 64, 8);
+  auto q4_g32 = mk_q4(128, 128, 32, 4);
+  auto q4_wide = mk_q4(256, 256, 64, 4);
+  array w_f16 = zeros(Shape{128, 128}, float16, s);
+  auto q4_f16 = quantize(w_f16, 64, 4, "affine", std::nullopt, s);
+  eval(q4_f16);
+  sync_stream(s);
+
+  // 1. Identical freshly built graphs -> identical key.
+  auto build_base = [&](const array& in_x,
+                        const std::vector<array>& qa,
+                        const std::vector<array>& qb,
+                        int bits,
+                        int group_size,
+                        float eps,
+                        bool distinct_x) {
+    const array& x2 = distinct_x ? x_alt : in_x;
+    array y0 = quantized_matmul(
+        in_x, qa[0], qa[1], qa[2], true, group_size, bits, "affine", s);
+    array y1 = quantized_matmul(
+        x2, qb[0], qb[1], qb[2], true, group_size, bits, "affine", s);
+    array sum = add(y0, r, s);
+    array normed = fast::rms_norm(sum, nw, eps, s);
+    array prod = multiply(y1, normed, s);
+    return collect_lazy_tape({prod});
+  };
+
+  auto k_base_1 = omarchy::compute_fold_plan_key(
+      build_base(x, q4_a, q4_b, 4, 64, 1e-6f, false));
+  auto k_base_2 = omarchy::compute_fold_plan_key(
+      build_base(x, q4_a, q4_b, 4, 64, 1e-6f, false));
+  CHECK_EQ(k_base_1, k_base_2);
+
+  // 2. Op change (add vs subtract with same shapes/dtypes).
+  {
+    array y0 = quantized_matmul(
+        x, q4_a[0], q4_a[1], q4_a[2], true, 64, 4, "affine", s);
+    array y1 = quantized_matmul(
+        x, q4_b[0], q4_b[1], q4_b[2], true, 64, 4, "affine", s);
+    array diff = subtract(y0, r, s);
+    array normed = fast::rms_norm(diff, nw, 1e-6f, s);
+    array prod = multiply(y1, normed, s);
+    auto k_op = omarchy::compute_fold_plan_key(collect_lazy_tape({prod}));
+    CHECK_NE(k_base_1, k_op);
+  }
+
+  // 3. Shape change (128 vs 256).
+  {
+    array r_w = mk_vec(256, bfloat16);
+    array nw_w = zeros(Shape{256}, bfloat16, s);
+    eval({nw_w});
+    array y0 = quantized_matmul(
+        x_wide, q4_wide[0], q4_wide[1], q4_wide[2], true, 64, 4, "affine", s);
+    array y1 = quantized_matmul(
+        x_wide, q4_wide[0], q4_wide[1], q4_wide[2], true, 64, 4, "affine", s);
+    array sum = add(y0, r_w, s);
+    array normed = fast::rms_norm(sum, nw_w, 1e-6f, s);
+    array prod = multiply(y1, normed, s);
+    auto k_shape = omarchy::compute_fold_plan_key(collect_lazy_tape({prod}));
+    CHECK_NE(k_base_1, k_shape);
+  }
+
+  // 4. Dtype change (bfloat16 vs float16).
+  {
+    array r_f16 = mk_vec(128, float16);
+    array nw_f16 = zeros(Shape{128}, float16, s);
+    eval({nw_f16});
+    array y0 = quantized_matmul(
+        x_f16, q4_f16[0], q4_f16[1], q4_f16[2], true, 64, 4, "affine", s);
+    array y1 = quantized_matmul(
+        x_f16, q4_f16[0], q4_f16[1], q4_f16[2], true, 64, 4, "affine", s);
+    array sum = add(y0, r_f16, s);
+    array normed = fast::rms_norm(sum, nw_f16, 1e-6f, s);
+    array prod = multiply(y1, normed, s);
+    auto k_dtype = omarchy::compute_fold_plan_key(collect_lazy_tape({prod}));
+    CHECK_NE(k_base_1, k_dtype);
+  }
+
+  // 5. Edge / wiring change (identical per-node op/dtype/shape sequence,
+  // different internal producer edge into the consumer).
+  {
+    auto build_wired = [&](bool wire_a) {
+      array a = sigmoid(x, s);
+      array b = negative(x, s);
+      array c = add(a, b, s);
+      array d = multiply(wire_a ? a : b, c, s);
+      return collect_lazy_tape({a, b, c, d});
+    };
+    auto kw_a = omarchy::compute_fold_plan_key(build_wired(true));
+    auto kw_b = omarchy::compute_fold_plan_key(build_wired(false));
+    CHECK_NE(kw_a, kw_b);
+  }
+
+  // 6. External-input aliasing change (shared x vs distinct same-shape x_alt).
+  auto k_alias = omarchy::compute_fold_plan_key(
+      build_base(x, q4_a, q4_b, 4, 64, 1e-6f, true));
+  CHECK_NE(k_base_1, k_alias);
+
+  // 7. Primitive attribute changes (QMM bits, QMM group_size, RMSNorm eps).
+  auto k_bits = omarchy::compute_fold_plan_key(
+      build_base(x, q8_a, q8_a, 8, 64, 1e-6f, false));
+  auto k_gs = omarchy::compute_fold_plan_key(
+      build_base(x, q4_g32, q4_g32, 4, 32, 1e-6f, false));
+  auto k_eps = omarchy::compute_fold_plan_key(
+      build_base(x, q4_a, q4_b, 4, 64, 1e-5f, false));
+  CHECK_NE(k_base_1, k_bits);
+  CHECK_NE(k_base_1, k_gs);
+  CHECK_NE(k_base_1, k_eps);
+
+  // 8. RoPE + Transpose attributes + KV-cache dynamic pos/k_len invariance.
+  auto build_kv_step = [&](int cap,
+                           int pos,
+                           int rope_dims,
+                           bool traditional,
+                           float base_freq,
+                           float rope_scale,
+                           std::vector<int> axes) {
+    array kc = zeros(Shape{1, 2, cap, 128}, bfloat16, s);
+    array vc = zeros(Shape{1, 2, cap, 128}, bfloat16, s);
+    array q_in = zeros(Shape{1, 1, 4, 128}, bfloat16, s);
+    array k_in = zeros(Shape{1, 1, 2, 128}, bfloat16, s);
+    array v_in = zeros(Shape{1, 1, 2, 128}, bfloat16, s);
+    array off = array(pos, int32);
+    eval({kc, vc, q_in, k_in, v_in, off});
+    array q_t = transpose(q_in, axes, s);
+    array k_t = transpose(k_in, axes, s);
+    array v_t = transpose(v_in, axes, s);
+    array qr = fast::rope(
+        q_t, rope_dims, traditional, base_freq, rope_scale, off, std::nullopt, s);
+    array kr = fast::rope(
+        k_t, rope_dims, traditional, base_freq, rope_scale, off, std::nullopt, s);
+    const int k_len = pos + 1;
+    array k_out = slice_update(
+        kc, kr, Shape{0, 0, pos, 0}, Shape{1, 2, k_len, 128}, s);
+    array v_out = slice_update(
+        vc, v_t, Shape{0, 0, pos, 0}, Shape{1, 2, k_len, 128}, s);
+    array k_view = slice(k_out, Shape{0, 0, 0, 0}, Shape{1, 2, k_len, 128}, s);
+    array v_view = slice(v_out, Shape{0, 0, 0, 0}, Shape{1, 2, k_len, 128}, s);
+    array attn = fast::scaled_dot_product_attention(
+        qr, k_view, v_view, 0.0883883476f, "", std::nullopt, std::nullopt, false, s);
+    return collect_lazy_tape({k_out, v_out, attn});
+  };
+  auto k_kv10 = build_kv_step(256, 10, 128, false, 10000.0f, 1.0f, {0, 2, 1, 3});
+  auto k_kv11 = build_kv_step(256, 11, 128, false, 10000.0f, 1.0f, {0, 2, 1, 3});
+  auto key_kv10 = omarchy::compute_fold_plan_key(k_kv10);
+  auto key_kv11 = omarchy::compute_fold_plan_key(k_kv11);
+  // Consecutive decode positions inside the same KV capacity share one key.
+  CHECK_EQ(key_kv10, key_kv11);
+
+  // KV capacity growth misses.
+  auto key_kv_cap = omarchy::compute_fold_plan_key(
+      build_kv_step(512, 10, 128, false, 10000.0f, 1.0f, {0, 2, 1, 3}));
+  CHECK_NE(key_kv10, key_kv_cap);
+
+  // RoPE attribute changes miss.
+  CHECK_NE(
+      key_kv10,
+      omarchy::compute_fold_plan_key(
+          build_kv_step(256, 10, 64, false, 10000.0f, 1.0f, {0, 2, 1, 3})));
+  CHECK_NE(
+      key_kv10,
+      omarchy::compute_fold_plan_key(
+          build_kv_step(256, 10, 128, true, 10000.0f, 1.0f, {0, 2, 1, 3})));
+  CHECK_NE(
+      key_kv10,
+      omarchy::compute_fold_plan_key(
+          build_kv_step(256, 10, 128, false, 1000000.0f, 1.0f, {0, 2, 1, 3})));
+  CHECK_NE(
+      key_kv10,
+      omarchy::compute_fold_plan_key(
+          build_kv_step(256, 10, 128, false, 10000.0f, 0.5f, {0, 2, 1, 3})));
+
+  // Transpose axes change misses.
+  {
+    array sq = zeros(Shape{1, 2, 2, 128}, bfloat16, s);
+    eval({sq});
+    auto kt_a = omarchy::compute_fold_plan_key(
+        collect_lazy_tape({transpose(sq, {0, 2, 1, 3}, s)}));
+    auto kt_b = omarchy::compute_fold_plan_key(
+        collect_lazy_tape({transpose(sq, {0, 1, 2, 3}, s)}));
+    CHECK_NE(kt_a, kt_b);
+  }
+
+  // Non-KV 4D Slice (not over a SliceUpdate) must NOT mask axis 2.
+  {
+    array plain = zeros(Shape{1, 2, 64, 128}, bfloat16, s);
+    eval({plain});
+    auto ks1 = omarchy::compute_fold_plan_key(collect_lazy_tape(
+        {slice(plain, Shape{0, 0, 0, 0}, Shape{1, 2, 11, 128}, s)}));
+    auto ks2 = omarchy::compute_fold_plan_key(collect_lazy_tape(
+        {slice(plain, Shape{0, 0, 0, 0}, Shape{1, 2, 12, 128}, s)}));
+    CHECK_NE(ks1, ks2);
+  }
+
+  // 9. Fold configuration env toggle changes miss.
+  auto tape_cfg = build_base(x, q4_a, q4_b, 4, 64, 1e-6f, false);
+  setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+  auto key_cfg_on = omarchy::compute_fold_plan_key(tape_cfg);
+  setenv("MLX_OMARCHY_FUSED_GEMV", "0", 1);
+  auto key_cfg_off = omarchy::compute_fold_plan_key(tape_cfg);
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
+  CHECK_NE(key_cfg_on, key_cfg_off);
+}
+
+TEST_CASE("FoldPlanCache reuses decode fold plan bit-exact with fresh KV offsets and fallback safety") {
+  if (!compute_available()) {
+    return;
+  }
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+
+  const int H = 8;
+  const int KVH = 2;
+  const int D = 256;
+  const int ROPE_DIMS = 64;
+  const int CAP = 64;
+  const int IN_DIM = 512;
+  const int MLP_DIM = 512;
+  const float scale = 1.0f / std::sqrt(static_cast<float>(D));
+
+  array x = astype(
+      random::normal(Shape{1, 1, IN_DIM}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  array resid = astype(
+      random::normal(Shape{1, 1, IN_DIM}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  auto mk_qweight = [&](int out_dim, int in_dim) {
+    array w = astype(
+        random::normal(Shape{out_dim, in_dim}, float32, std::nullopt, stream) *
+            0.05f,
+        bfloat16,
+        stream);
+    return quantize(w, 64, 4, "affine", std::nullopt, stream);
+  };
+  auto wq = mk_qweight(H * D * 2, IN_DIM);
+  auto wk = mk_qweight(KVH * D, IN_DIM);
+  auto wv = mk_qweight(KVH * D, IN_DIM);
+  auto wgate = mk_qweight(MLP_DIM, IN_DIM);
+  auto wup = mk_qweight(MLP_DIM, IN_DIM);
+  auto wdown = mk_qweight(IN_DIM, MLP_DIM);
+  array norm_q = astype(ones(Shape{D}, float32, stream), bfloat16, stream);
+  array norm_k = astype(ones(Shape{D}, float32, stream), bfloat16, stream);
+  array norm_post = astype(ones(Shape{IN_DIM}, float32, stream), bfloat16, stream);
+  array kc_init = astype(
+      random::normal(Shape{1, KVH, CAP, D}, float32, std::nullopt, stream) * 0.1f,
+      bfloat16,
+      stream);
+  array vc_init = astype(
+      random::normal(Shape{1, KVH, CAP, D}, float32, std::nullopt, stream) * 0.1f,
+      bfloat16,
+      stream);
+  eval({x, resid, norm_q, norm_k, norm_post, kc_init, vc_init,
+        wq[0], wq[1], wq[2], wk[0], wk[1], wk[2], wv[0], wv[1], wv[2],
+        wgate[0], wgate[1], wgate[2], wup[0], wup[1], wup[2],
+        wdown[0], wdown[1], wdown[2]});
+  sync_stream(stream);
+
+  auto run_sequence = [&](const char* cache_flag, bool mismatch_last_offset) {
+    setenv("MLX_OMARCHY_FOLD_PLAN_CACHE", cache_flag, 1);
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+    setenv("MLX_OMARCHY_SDPA_OUTGATE", "1", 1);
+    setenv("MLX_OMARCHY_SDPA_ONLINE", "32", 1);
+    setenv("MLX_OMARCHY_SDPA_ONLINE_ROPE", "1", 1);
+    omarchy::clear_fold_plan_cache();
+
+    array kc = copy(kc_init, stream);
+    array vc = copy(vc_init, stream);
+    eval({kc, vc});
+    sync_stream(stream);
+
+    std::vector<array> outs;
+    for (int step = 0; step < 4; ++step) {
+      const int pos = 10 + step;
+      const int k_len = pos + 1;
+      array off_q = array(pos, int32);
+      array off_k = array(
+          (mismatch_last_offset && step == 3) ? (pos + 1) : pos, int32);
+      array step_x = x + astype(array(static_cast<float>(step) * 0.01f), bfloat16, stream);
+      eval({off_q, off_k, step_x});
+      sync_stream(stream);
+
+      array qproj = quantized_matmul(
+          step_x, wq[0], wq[1], wq[2], true, 64, 4, "affine", stream);
+      array kproj = quantized_matmul(
+          step_x, wk[0], wk[1], wk[2], true, 64, 4, "affine", stream);
+      array vproj = quantized_matmul(
+          step_x, wv[0], wv[1], wv[2], true, 64, 4, "affine", stream);
+      array qg = reshape(qproj, Shape{1, 1, H, D * 2}, stream);
+      auto parts = split(qg, 2, -1, stream);
+      array q_t = transpose(parts[0], {0, 2, 1, 3}, stream);
+      array k_t = transpose(
+          reshape(kproj, Shape{1, 1, KVH, D}, stream), {0, 2, 1, 3}, stream);
+      array v_t = transpose(
+          reshape(vproj, Shape{1, 1, KVH, D}, stream), {0, 2, 1, 3}, stream);
+      array qn = fast::rms_norm(q_t, norm_q, 1e-6f, stream);
+      array kn = fast::rms_norm(k_t, norm_k, 1e-6f, stream);
+      array qr = fast::rope(
+          qn, ROPE_DIMS, false, 10000000.0f, 1.0f, off_q, std::nullopt, stream);
+      array kr = fast::rope(
+          kn, ROPE_DIMS, false, 10000000.0f, 1.0f, off_k, std::nullopt, stream);
+      array keys_out = slice_update(
+          kc, kr, Shape{0, 0, pos, 0}, Shape{1, KVH, k_len, D}, stream);
+      array values_out = slice_update(
+          vc, v_t, Shape{0, 0, pos, 0}, Shape{1, KVH, k_len, D}, stream);
+      kc = array(0.0f);
+      vc = array(0.0f);
+      array k_view = slice(
+          keys_out, Shape{0, 0, 0, 0}, Shape{1, KVH, k_len, D}, stream);
+      array v_view = slice(
+          values_out, Shape{0, 0, 0, 0}, Shape{1, KVH, k_len, D}, stream);
+      array attn = fast::scaled_dot_product_attention(
+          qr, k_view, v_view, scale, "", std::nullopt, std::nullopt, false, stream);
+      array attn_flat = reshape(
+          transpose(attn, {0, 2, 1, 3}, stream), Shape{1, 1, H * D}, stream);
+      array gate_flat = reshape(parts[1], Shape{1, 1, H * D}, stream);
+      array gated = multiply(attn_flat, sigmoid(gate_flat, stream), stream);
+
+      // SwiGLU + Residual-RMSNorm block in the same eval tape.
+      array g = quantized_matmul(
+          step_x, wgate[0], wgate[1], wgate[2], true, 64, 4, "affine", stream);
+      array u = quantized_matmul(
+          step_x, wup[0], wup[1], wup[2], true, 64, 4, "affine", stream);
+      array swiglu = multiply(multiply(g, sigmoid(g, stream), stream), u, stream);
+      array down = quantized_matmul(
+          swiglu, wdown[0], wdown[1], wdown[2], true, 64, 4, "affine", stream);
+      array res_sum = add(down, resid, stream);
+      array res_norm = fast::rms_norm(res_sum, norm_post, 1e-6f, stream);
+
+      eval({values_out, keys_out, gated, res_norm});
+      sync_stream(stream);
+      kc = keys_out;
+      vc = values_out;
+      outs.push_back(gated);
+      outs.push_back(res_norm);
+    }
+    outs.push_back(kc);
+    outs.push_back(vc);
+    auto stats = omarchy::fold_plan_cache_stats();
+    unsetenv("MLX_OMARCHY_SDPA_ONLINE_ROPE");
+    unsetenv("MLX_OMARCHY_SDPA_ONLINE");
+    unsetenv("MLX_OMARCHY_SDPA_OUTGATE");
+    unsetenv("MLX_OMARCHY_FUSED_TRIO");
+    unsetenv("MLX_OMARCHY_FUSED_GEMV");
+    unsetenv("MLX_OMARCHY_FOLD_PLAN_CACHE");
+    return std::make_pair(outs, stats);
+  };
+
+  auto [outs_off, stats_off] = run_sequence("0", false);
+  auto [outs_on, stats_on] = run_sequence("1", false);
+  CHECK_EQ(stats_off.hits, 0u);
+  CHECK_EQ(stats_off.misses, 0u);
+  // Step 0 misses and caches; steps 1, 2, 3 hit the cached fold plan.
+  CHECK_EQ(stats_on.misses, 1u);
+  CHECK_EQ(stats_on.hits, 3u);
+  CHECK_EQ(stats_on.revalidation_fallbacks, 0u);
+  REQUIRE_EQ(outs_off.size(), outs_on.size());
+  for (size_t i = 0; i < outs_off.size(); ++i) {
+    INFO("output index=" << i);
+    expect_bit_exact(outs_off[i], outs_on[i], stream);
+  }
+
+  // Revalidation fallback: step 3 breaks rope_offset_shared (off_q != off_k).
+  // Must cleanly decline the cached plan, fall back, and match cache-off bit-exact.
+  auto [outs_fb_off, stats_fb_off] = run_sequence("0", true);
+  auto [outs_fb_on, stats_fb_on] = run_sequence("1", true);
+  (void)stats_fb_off;
+  CHECK_GE(stats_fb_on.hits, 2u);
+  REQUIRE_EQ(outs_fb_off.size(), outs_fb_on.size());
+  for (size_t i = 0; i < outs_fb_off.size(); ++i) {
+    INFO("fallback output index=" << i);
+    expect_bit_exact(outs_fb_off[i], outs_fb_on[i], stream);
+  }
+}
+
+
+TEST_CASE(
+    "sdpa online rope g13c blocked softmax: b2 (<1024) and b4 (>=1024) match baseline") {
+  if (!compute_available()) {
+    return;
+  }
+  const auto& caps = omarchy::device(0).capabilities();
+  constexpr VkSubgroupFeatureFlags kFeatures =
+      VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+      VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+  const bool ready = caps.subgroup_size == 32u &&
+      caps.max_compute_work_group_invocations >= 1024u &&
+      caps.max_compute_work_group_size[0] >= 1024u &&
+      caps.max_compute_shared_memory_size >= 16896u &&
+      (caps.subgroup_operations & kFeatures) == kFeatures;
+  Stream stream = gpu_stream();
+  enable_fusion();
+  set_compile_mode(CompileMode::disabled);
+
+  const int H = 8;
+  const int KVH = 2;
+  const int D = 128;
+  const int CAP = 1280;
+  const float scale = 1.0f / std::sqrt(static_cast<float>(D));
+  array xq_4d = astype(
+      random::normal(Shape{1, H, 1, D}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  array xk_4d = astype(
+      random::normal(Shape{1, KVH, 1, D}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  array wq = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  array wk = astype(
+      random::normal(Shape{D}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  std::vector<float> xv_float(128, 0.125f);
+  array xv = astype(array(xv_float.data(), {1, 128}, float32), bfloat16, stream);
+  array wq_proj = transpose(
+      astype(
+          random::normal(Shape{H * D, 128}, float32, std::nullopt, stream),
+          bfloat16,
+          stream),
+      stream);
+  array wk_proj = transpose(
+      astype(
+          random::normal(Shape{KVH * D, 128}, float32, std::nullopt, stream),
+          bfloat16,
+          stream),
+      stream);
+  array wv = transpose(
+      astype(
+          random::normal(Shape{KVH * D, 128}, float32, std::nullopt, stream),
+          bfloat16,
+          stream),
+      stream);
+  array keys_init = astype(
+      random::normal(Shape{1, KVH, CAP, D}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  array values_init = astype(
+      random::normal(Shape{1, KVH, CAP, D}, float32, std::nullopt, stream),
+      bfloat16,
+      stream);
+  eval({xq_4d, xk_4d, wq, wk, xv, wq_proj, wk_proj, wv, keys_init, values_init});
+  sync_stream(stream);
+
+  std::vector<float> keys_host(1 * KVH * CAP * D);
+  std::vector<float> values_host(1 * KVH * CAP * D);
+  {
+    array kf = astype(keys_init, float32, stream);
+    array vf = astype(values_init, float32, stream);
+    eval({kf, vf});
+    sync_stream(stream);
+    std::memcpy(keys_host.data(), kf.data<float>(), keys_host.size() * 4);
+    std::memcpy(values_host.data(), vf.data<float>(), values_host.size() * 4);
+  }
+
+  const char* prev_g13c = std::getenv("MLX_OMARCHY_SDPA_G13C_FAST");
+  std::string saved_g13c = prev_g13c ? std::string(prev_g13c) : std::string();
+  const bool had_g13c = (prev_g13c != nullptr);
+
+  auto run = [&](int pos, const char* g13c_flag) {
+    setenv("MLX_OMARCHY_FUSED_GEMV", "1", 1);
+    setenv("MLX_OMARCHY_FUSED_TRIO", "1", 1);
+    setenv("MLX_OMARCHY_ROPE_NORM_PAIR", "0", 1);
+    setenv("MLX_OMARCHY_SDPA_ONLINE", "1", 1);
+    setenv("MLX_OMARCHY_SDPA_ONLINE_ROPE", "1", 1);
+    setenv("MLX_OMARCHY_SDPA_G13C_FAST", g13c_flag, 1);
+
+    array keys_cache = astype(
+        array(keys_host.data(), {1, KVH, CAP, D}, float32), bfloat16, stream);
+    array values_cache = astype(
+        array(values_host.data(), {1, KVH, CAP, D}, float32), bfloat16, stream);
+    array offset = array(pos, int32);
+    eval({keys_cache, values_cache, offset});
+    sync_stream(stream);
+
+    array qproj = matmul(xv, wq_proj, stream);
+    array kproj = matmul(xv, wk_proj, stream);
+    array vproj = matmul(xv, wv, stream);
+    array vrow = transpose(
+        reshape(vproj, Shape{1, 1, KVH, D}, stream), {0, 2, 1, 3}, stream);
+    array qr = fast::rope_rms_norm(
+        xq_4d, D, wq, 1e-6f, false, 1000000.0f, 1.0f, offset, stream);
+    array kr = fast::rope_rms_norm(
+        xk_4d, D, wk, 1e-6f, false, 1000000.0f, 1.0f, offset, stream);
+    const int k_len = pos + 1;
+    array keys_out = slice_update(
+        keys_cache, kr, Shape{0, 0, pos, 0}, Shape{1, KVH, k_len, D}, stream);
+    array values_out = slice_update(
+        values_cache,
+        vrow,
+        Shape{0, 0, pos, 0},
+        Shape{1, KVH, k_len, D},
+        stream);
+    keys_cache = array(0.0f);
+    values_cache = array(0.0f);
+    array k_view =
+        slice(keys_out, Shape{0, 0, 0, 0}, Shape{1, KVH, k_len, D}, stream);
+    array v_view =
+        slice(values_out, Shape{0, 0, 0, 0}, Shape{1, KVH, k_len, D}, stream);
+    array attn = fast::scaled_dot_product_attention(
+        qr, k_view, v_view, scale, "", std::nullopt, std::nullopt, false, stream);
+    eval({values_out, keys_out, attn, qproj, kproj});
+    sync_stream(stream);
+    int64_t last_k = counters().last_dispatched_kernel.load();
+    return std::make_tuple(attn, keys_out, last_k);
+  };
+
+  // Cover b2kv (<1024: 0 & 1 tail keys) and b4kf (>=1024: 0, 1, 2, 3 tail keys).
+  for (int pos : {135, 511, 1023, 1056, 1089, 1122, 1155}) {
+    auto [a_base, k_base, lk_base] = run(pos, "0");
+    auto [a_fast, k_fast, lk_fast] = run(pos, "1");
+    const int k_len = pos + 1;
+    INFO("pos=" << pos << " k_len=" << k_len);
+    if (ready) {
+      CHECK_EQ(
+          lk_base,
+          static_cast<int64_t>(
+              omarchy::ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128));
+      const auto expect_kernel = (k_len >= 1024)
+          ? omarchy::ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128G13CB4
+          : omarchy::ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128G13C;
+      CHECK_EQ(lk_fast, static_cast<int64_t>(expect_kernel));
+    }
+    expect_bit_exact(k_base, k_fast, stream);
+
+    array ab_f = astype(a_base, float32, stream);
+    array af_f = astype(a_fast, float32, stream);
+    eval({ab_f, af_f});
+    sync_stream(stream);
+    const size_t n = ab_f.size();
+    const float* pb = ab_f.data<float>();
+    const float* pf = af_f.data<float>();
+    uint32_t max_bf16_ulp = 0u;
+    for (size_t i = 0; i < n; ++i) {
+      uint32_t ub = 0u;
+      uint32_t uf = 0u;
+      std::memcpy(&ub, &pb[i], 4);
+      std::memcpy(&uf, &pf[i], 4);
+      uint16_t hb = static_cast<uint16_t>(ub >> 16);
+      uint16_t hf = static_cast<uint16_t>(uf >> 16);
+      int32_t ob = (hb & 0x8000u) ? -static_cast<int32_t>(hb & 0x7fffu)
+                                  : static_cast<int32_t>(hb);
+      int32_t of = (hf & 0x8000u) ? -static_cast<int32_t>(hf & 0x7fffu)
+                                  : static_cast<int32_t>(hf);
+      uint32_t diff = static_cast<uint32_t>(ob > of ? (ob - of) : (of - ob));
+      if (diff > max_bf16_ulp) {
+        max_bf16_ulp = diff;
+      }
+    }
+    CHECK_LE(max_bf16_ulp, 1u);
+  }
+
+  if (had_g13c) {
+    setenv("MLX_OMARCHY_SDPA_G13C_FAST", saved_g13c.c_str(), 1);
+  } else {
+    unsetenv("MLX_OMARCHY_SDPA_G13C_FAST");
+  }
+  unsetenv("MLX_OMARCHY_SDPA_ONLINE_ROPE");
+  unsetenv("MLX_OMARCHY_SDPA_ONLINE");
+  unsetenv("MLX_OMARCHY_ROPE_NORM_PAIR");
+  unsetenv("MLX_OMARCHY_FUSED_TRIO");
+  unsetenv("MLX_OMARCHY_FUSED_GEMV");
 }

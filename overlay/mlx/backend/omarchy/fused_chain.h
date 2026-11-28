@@ -132,6 +132,39 @@ bool try_eval_eager_fusion(array& node, const Stream& stream);
 // 3=encoder.commit in eval, 4=finalize total, 5=eval() node count.
 double* eval_phase_slots();
 
+// Structural + configuration key for caching an EagerFusionScope fold plan
+// across repeated decode steps with the same graph shape.
+struct FoldPlanKey {
+  uint64_t lo{0};
+  uint64_t hi{0};
+  size_t tape_size{0};
+
+  bool operator==(const FoldPlanKey& other) const {
+    return lo == other.lo && hi == other.hi && tape_size == other.tape_size;
+  }
+  bool operator!=(const FoldPlanKey& other) const {
+    return !(*this == other);
+  }
+};
+
+// Computes the structural + configuration fold-plan cache key for |tape|.
+FoldPlanKey compute_fold_plan_key(const std::deque<array>& tape);
+
+// MLX_OMARCHY_FOLD_PLAN_CACHE=0 disables fold-plan reuse across eval scopes
+// (default ON).
+bool fold_plan_cache_enabled();
+
+// Per-thread fold-plan cache telemetry (for unit tests and diagnostics).
+struct FoldPlanCacheStats {
+  uint64_t hits{0};
+  uint64_t misses{0};
+  uint64_t revalidation_fallbacks{0};
+  size_t entries{0};
+};
+
+FoldPlanCacheStats fold_plan_cache_stats();
+void clear_fold_plan_cache();
+
 // Producer-direct KV cache write window. When a SliceUpdate pair's new
 // rows can be stored by the row's PRODUCER (the RoPE kernel for keys,
 // the fused GEMV Add epilogue for values), the merged pair dispatch is
