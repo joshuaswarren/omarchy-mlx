@@ -1351,6 +1351,113 @@ def _index_put(self, indices, values, accumulate=False):
     upd = mx.take(vals_b, mx.maximum((sel - 1) * trailing + tail, 0))
     out_flat = mx.where(sel > 0, upd, flat)
     return out_flat.reshape(a.shape).astype(a.dtype)
+
+
+def _index_dim_ctx(self, dim, index, source=None):
+    """Shared contract for the dim-scoped index siblings (index_add /
+    index_copy / index_fill): one 1-D index tensor along a resolved dim,
+    negative indices wrap, out-of-range refuses, source rank/shape match
+    self with dim sized to index.numel(). Returns (a, dim, idx, n,
+    outer, inner). Raises via _raise (the executor's torch fallback)."""
+    a = _mx(self)
+    if a.ndim == 0:
+        return _raise("aten.index op: 0-dim self")
+    if not isinstance(index, (tuple, list)):
+        index = (index,)
+    if len(index) != 1 or getattr(index[0], "ndim", 1) > 1:
+        return _raise("aten.index op: index must be one 1-D tensor")
+    if dim is None:
+        return _raise("aten.index op: dim required")
+    if isinstance(dim, (tuple, list)) or hasattr(dim, "ndim"):
+        if getattr(dim, "numel", lambda: 1)() != 1 and getattr(
+                dim, "size", lambda: [1])()[0] != 1:
+            return _raise("aten.index op: dim tensor must be 0-dim/1-elem")
+        dim = int(_mx(dim).reshape(-1)[0].item())
+    if dim < 0:
+        dim += a.ndim
+    if not 0 <= dim < a.ndim:
+        return _raise("aten.index op: dim out of range")
+    idx = _mx(index[0]).reshape(-1).astype(mx.int32)
+    n = int(idx.shape[0])
+    if source is not None:
+        src = _mx(source)
+        if src.ndim != a.ndim:
+            return _raise("aten.index op: source rank must match self")
+        want = tuple(a.shape[:dim]) + (n,) + tuple(a.shape[dim + 1:])
+        if tuple(src.shape) != want:
+            return _raise(
+                f"aten.index op: source shape {tuple(src.shape)} != {want}")
+    idx = idx + a.shape[dim] * (idx < 0)  # negative indices wrap, like torch
+    if bool(((idx < 0) | (idx >= a.shape[dim])).any().item()):
+        return _raise("aten.index op: index out of range")
+    outer = int(np.prod(a.shape[:dim])) if dim else 1
+    inner = int(np.prod(a.shape[dim + 1:])) if dim < a.ndim - 1 else 1
+    return a, dim, idx, n, outer, inner
+
+
+def _index_add(self, dim, index, source, alpha=1):
+    """aten.index_add(self, dim, index, source, alpha=1): source values
+    accumulate-add at the indexed dim slots - duplicates SUM (torch's
+    accumulate semantics), unlike index_put's last-write-wins. Same
+    compare-matrix composition as index_put at lowering-graph scale,
+    folded through a matmul so every matching slot contributes exactly
+    once per output element."""
+    a, dim, idx, n, outer, inner = _index_dim_ctx(self, dim, index, source)
+    if bool((idx < 0).any().item()):
+        # torch's index_add does not wrap negatives (index out of range)
+        return _raise("aten.index_add: negative indices (torch refuses)")
+    src = _mx(source)
+    rt = mx.result_type(a.dtype, src.dtype)
+    if isinstance(alpha, float) and _is_integral_dtype(rt):
+        return _raise(
+            "aten.index_add: a floating alpha with integral operands")
+    vals = src.reshape(outer, n, inner).astype(rt)
+    if alpha != 1:
+        vals = vals * alpha
+    # slots x n mask @ n x inner = the per-slot accumulated contribution
+    # (each match contributes exactly once; the sum is order-free up to
+    # the matmul's own reduction order)
+    mask = (idx[None, :] == mx.arange(a.shape[dim], dtype=mx.int32)[:, None])
+    # the batched matmul runs in float32: exact for integral values
+    # through 2**24, which every realistic index_add carries; float
+    # dtypes keep their own promotion through rt above
+    contrib = (mask.astype(mx.float32)[None, :, :]
+               @ vals.astype(mx.float32)).astype(vals.dtype)
+    return (a.astype(rt) + contrib.reshape(a.shape)).astype(a.dtype)
+
+
+def _index_copy(self, dim, index, source):
+    """aten.index_copy(self, dim, index, source): assign source rows at
+    the indexed dim slots. Torch leaves duplicate indices undefined; the
+    same last-write-wins slot rule as index_put picks the largest
+    matching slot per position deterministically."""
+    a, dim, idx, n, outer, inner = _index_dim_ctx(self, dim, index, source)
+    vals = _mx(source).reshape(outer, n, inner).astype(a.dtype)
+    slots = mx.arange(a.shape[dim], dtype=mx.int32)
+    sel = mx.max((idx[None, :] == slots[:, None]).astype(mx.int32)
+                 * (mx.arange(n, dtype=mx.int32) + 1)[None, :], axis=1)
+    chosen = mx.take(vals, mx.maximum(sel - 1, 0), axis=1)
+    base = a.reshape(outer, a.shape[dim], inner)
+    upd = mx.where((sel > 0)[None, :, None], chosen, base)
+    return upd.reshape(a.shape).astype(a.dtype)
+
+
+def _index_fill(self, dim, index, value):
+    """aten.index_fill(self, dim, index, value): broadcast a scalar (or
+    0-dim tensor) into the indexed dim slots, everything else unchanged."""
+    a, dim, idx, _n, outer, inner = _index_dim_ctx(self, dim, index)
+    if isinstance(value, (tuple, list)) or (
+            hasattr(value, "ndim") and getattr(_mx(value), "size", 1) != 1):
+        return _raise("aten.index_fill: value must be a scalar")
+    slots = mx.arange(a.shape[dim], dtype=mx.int32)
+    hit = (idx[None, :] == slots[:, None]).any(axis=1)
+    base = a.reshape(outer, a.shape[dim], inner)
+    v = mx.array(value if not hasattr(value, "ndim") else _mx(value).item(),
+                 dtype=a.dtype)
+    upd = mx.where(hit[None, :, None], v, base)
+    return upd.reshape(a.shape).astype(a.dtype)
+
+
 def _alpha_arith(a, b, alpha, sign):
     # aten.add/sub (self, other, *, alpha=1): self +/- alpha*other. Torch
     # rejects sub on bool operands and a floating alpha when the promoted
@@ -2463,6 +2570,12 @@ _FUNC_SPECS = {
     "kthvalue": _kthvalue,
     "index_put": _index_put,
     "index_put_": _index_put,
+    "index_add": _index_add,
+    "index_add_": _index_add,
+    "index_copy": _index_copy,
+    "index_copy_": _index_copy,
+    "index_fill": _index_fill,
+    "index_fill_": _index_fill,
     "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "index_select": lambda a, dim, i: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
@@ -2682,6 +2795,15 @@ ATEN_TABLE["aten.rsub.Tensor"] = _FUNC_SPECS["rsub"]
 ATEN_TABLE["aten.index_put"] = _FUNC_SPECS["index_put"]
 ATEN_TABLE["aten.index_put.Tensor"] = _FUNC_SPECS["index_put"]
 ATEN_TABLE["aten.index_put_"] = _FUNC_SPECS["index_put_"]
+ATEN_TABLE["aten.index_add"] = _FUNC_SPECS["index_add"]
+ATEN_TABLE["aten.index_add_"] = _FUNC_SPECS["index_add_"]
+ATEN_TABLE["aten.index_add.Tensor"] = _FUNC_SPECS["index_add"]
+ATEN_TABLE["aten.index_copy"] = _FUNC_SPECS["index_copy"]
+ATEN_TABLE["aten.index_copy_"] = _FUNC_SPECS["index_copy_"]
+ATEN_TABLE["aten.index_fill.int"] = _FUNC_SPECS["index_fill"]
+ATEN_TABLE["aten.index_fill_.int"] = _FUNC_SPECS["index_fill_"]
+ATEN_TABLE["aten.index_fill.Tensor"] = _FUNC_SPECS["index_fill"]
+ATEN_TABLE["aten.index_fill_.Tensor"] = _FUNC_SPECS["index_fill_"]
 ATEN_TABLE["_native_batch_norm_legit"] = _FUNC_SPECS["native_batch_norm"]
 # aten.embedding is (weight, indices): F.embedding is (input, weight).
 ATEN_TABLE["embedding"] = _embedding_any
@@ -3501,6 +3623,25 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 sh[dim] = idx.shape[0] if idx.ndim else 1
                 ib = mx.broadcast_to(idx.reshape(sh), src.shape)
                 upd = mx.put_along_axis(t, ib, src.astype(t.dtype), axis=dim)
+                env[n.args[0]] = upd      # model in-place mutation
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name in ("index_add_", "index_add"):
+                t, dim, idx, src = args[0], args[1], args[2], args[3]
+                alpha = kwargs.get("alpha", args[4] if len(args) > 4 else 1)
+                upd = _index_add(t, dim, idx, src, alpha)
+                env[n.args[0]] = upd      # model in-place mutation
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name in ("index_fill_", "index_fill"):
+                t, dim, idx, val = args[0], args[1], args[2], args[3]
+                upd = _index_fill(t, dim, idx, val)
                 env[n.args[0]] = upd      # model in-place mutation
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
