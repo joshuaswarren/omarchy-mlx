@@ -143,7 +143,8 @@ inline int batch_node_budget() {
 // has it:
 // receipts/2026-10-02-submission-cap-19 (G14C),
 // receipts/2026-10-12-submission-cap-calibration (G13C),
-// receipts/2026-11-21-g13g-batch-work-20000 (G13G, tail rule),
+// receipts/2026-11-21-g13g-batch-work-20000 (G13G, prior 20000 row),
+// receipts/2026-11-27-g13g-batch-work-35000.md (G13G, 2B single-submit decode),
 // receipts/2026-11-13-g18g-batch-work (G18G),
 // receipts/2026-11-23-g621-batch-budget-submits (G18G),
 // receipts/2026-11-24-m4-g16g-batch-work (G16G),
@@ -167,16 +168,20 @@ inline int batch_node_budget() {
 struct BatchWorkCalibration {
   // CapabilityReport device-name substring, e.g. "Apple M1 Max (G13C)".
   std::string_view board;
-  // Calibrated work-groups per submission. A row is added only once the
-  // board has been swept, so every row below is measured; an unlisted
-  // board falls through to kBatchWorkFallback (calibrated_batch_work()
-  // returns 0 for it).
+  // Calibrated work-groups per submission (decode / general). A row is
+  // added only once the board has been swept, so every row below is
+  // measured; an unlisted board falls through to kBatchWorkFallback
+  // (calibrated_batch_work() returns 0 for it).
   uint64_t budget;
+  // Optional tighter work-group budget applied once an open batch records
+  // a multi-token prefill / tiled-matrix kernel (is_prefill_work_kernel_name),
+  // and used by dispatch_qmm_tile() for QMM prefill slicing. 0 reuses budget.
+  uint64_t prefill_budget = 0;
 };
 inline constexpr BatchWorkCalibration kBatchWorkCalibration[] = {
     {"G13S", 10000},  // M1 Pro (16-inch, 16 GB, 16 GPU cores), Borealis Mesa be147e3625: Qwen3-4B submission p50 2.50 ms, p99 36.2 ms, max 43.2 ms; 20000 raised the p99 to 72.3 ms (max 86.0, at the #19 stutter); decode +17.4% 2B and +20.6% 4B against 5000, tokens identical (receipts/2026-11-13-batch-work-g13s-g14g-g16s-g17p, /tail)
     {"G13C", 80000},  // M1 Max (32 GPU cores): 40000 split every Qwen3-4B decode token mid-eval at layer 29 (~60k WG, 2 submits/tok); 80000 keeps the whole decode step in one submit (decode p50 10.61 ms, all-submissions including ctx=2048 prefill p99 32.05 ms / max 32.09 ms <= 33.3 ms; 200000 reached 63.72 ms prefill tail), +1.57% isolated / +2.30% with chunked vocab tail, greedy ids bit-identical to macOS (receipts/2026-11-26-g13c-batch-work-80000.md)
-    {"G13G", 20000},  // 13-inch M1, Mesa 69bde15340, v0.7.49: decode +4.0% (Qwen3.8-2B, 16 -> 7 submissions per token) and +1.3% (Qwen3-4B) against 8000, greedy ids identical; Qwen3-4B submission p50 20.2 ms, p99 24.1 ms, max 24.5 ms (40000 reached p99 45.5 ms) (receipts/2026-11-21-g13g-batch-work-20000)
+    {"G13G", 35000, 20000},  // 13-inch M1 (8 GPU cores): 20000 split every Qwen3.8-2B decode token across 2 submits (125 dispatches); 35000 keeps 2B@512 and 2B@2048 decode in 1 submit/tok (2B@512 +1.30% / 5/5 wins, decode p50 18.81 ms / p99 21.32 ms; Qwen3-4B decode 3 submits/tok, p99 21.53 ms at ctx=512 and 21.57 ms at ctx=2048, both <= 33 ms) while prefill_budget=20000 holds 4B prefill at baseline (4B@512 all p99 45.60 vs 45.34 ms; 4B@2048 all p99 83.31 vs 83.04 ms, avoiding the 128.36 ms uncapped-prefill tail), greedy ids bit-identical to macOS (receipts/2026-11-27-g13g-batch-work-35000.md)
     {"G14C", 200000},  // M2 Max: the 100000 row split every Qwen3.8-9B decode token mid-eval at ~181 of ~357 dispatches (1.969 submissions per token); 200000 keeps the whole step in one submit (0.984), greedy ids identical (receipts/2026-11-24-g14c-batch-work-200000). Earlier row: +0.5% (Qwen3-4B), +0.9% (Qwen3.8-2B), +1.4% (Qwen3.8-9B) decode against 40000, 0 frames over 33.3 ms beside decode (receipts/2026-11-13-g14c-batch-work)
     {"G14G", 8000},  // M2 (13-inch, 8 GB, 8 GPU cores), Borealis Mesa be147e3625: Qwen3-4B submission p50 3.64 ms, p99 37.9 ms, max 47.8 ms; 10000 raised the p99 to 48.3 ms (max 56.3); decode +2.7% 2B and +2.7% 4B against 5000, tokens identical (same receipt, /tail)
     {"G15S", 15000},  // M3 Pro (14-inch, 18 GB, 14 GPU cores), Borealis Mesa a196911147: decode +6.6% (Qwen3.8-2B, 12 -> 4 submissions per token; score_bench +6.5%) and +5.3% (Qwen3-4B-2507, 20 -> 8 submissions per token; score_bench +6.2%) against 5000, greedy ids identical; release-build submission GPU time (DRM scheduler) Qwen3-4B decode p50 3.98 ms / p99 4.31 ms / max 4.62 ms, all submissions p99 45.17 ms / max 45.52 ms (5000 floor: 44.80 / 44.89 ms), Qwen3.8-2B all p99 38.42 ms / max 38.51 ms (under 40 ms); 20000 raised 4B all-submissions p99 to 65.14 ms (2B to 43.85 ms) and 30000 reached 80.08 ms with 7.40 ms decode p50 (receipts/2026-11-22-m3-pro-g15s-batch-work)
@@ -197,7 +202,8 @@ inline constexpr uint64_t kBatchWorkFallback = 5000;
 
 // Pure table lookup for the runtime doctest: the calibrated budget for a
 // device name; 0 when no row's board substring matches (an unlisted board).
-inline uint64_t calibrated_batch_work(std::string_view device_name) {
+inline const BatchWorkCalibration* calibrated_batch_work_row(
+    std::string_view device_name) {
   const BatchWorkCalibration* best = nullptr;
   for (const auto& row : kBatchWorkCalibration) {
     if (device_name.find(row.board) == std::string_view::npos) {
@@ -207,7 +213,32 @@ inline uint64_t calibrated_batch_work(std::string_view device_name) {
       best = &row;
     }
   }
+  return best;
+}
+
+inline uint64_t calibrated_batch_work(std::string_view device_name) {
+  const BatchWorkCalibration* best = calibrated_batch_work_row(device_name);
   return best ? best->budget : 0;
+}
+
+inline uint64_t calibrated_prefill_batch_work(std::string_view device_name) {
+  const BatchWorkCalibration* best = calibrated_batch_work_row(device_name);
+  if (!best) {
+    return 0;
+  }
+  return best->prefill_budget > 0 ? best->prefill_budget : best->budget;
+}
+
+// True when a ComputeKernel name belongs to a multi-token prefill or tiled
+// matrix-multiply family (never 1-token decode GEMV/SDPA/GDN kernels). Used
+// with BatchWorkCalibration::prefill_budget so a board can keep single-submit
+// decode without enlarging prefill submissions.
+inline constexpr bool is_prefill_work_kernel_name(std::string_view name) {
+  return name.starts_with("QmmPrefill") ||
+      name.starts_with("SdpaCausalFlash") ||
+      name.starts_with("GatedDeltaPrefill") ||
+      name == "QmmF32" || name == "QmmF16" || name == "QmmBF16" ||
+      (name.starts_with("Matmul") && !name.starts_with("MatmulVec"));
 }
 
 // The default for an uncalibrated board: kBatchWorkFallback (shortest
@@ -225,7 +256,9 @@ inline std::atomic<long long>& batch_work_budget_test_override() {
   return value;
 }
 
-inline uint64_t batch_work_budget(std::string_view device_name) {
+inline uint64_t batch_work_budget(
+    std::string_view device_name,
+    bool has_prefill = false) {
   if (const long long forced = batch_work_budget_test_override().load(
           std::memory_order_relaxed);
       forced >= 0) {
@@ -250,15 +283,18 @@ inline uint64_t batch_work_budget(std::string_view device_name) {
   // passing a temporary cannot leave a dangling view in the cache.
   thread_local std::string cached_name;
   thread_local uint64_t cached_budget = 0;
+  thread_local uint64_t cached_prefill_budget = 0;
   thread_local bool cached = false;
   if (cached && cached_name == device_name) {
-    return cached_budget;
+    return has_prefill ? cached_prefill_budget : cached_budget;
   }
   const uint64_t budget = calibrated_batch_work(device_name);
+  const uint64_t prefill = calibrated_prefill_batch_work(device_name);
   cached_budget = budget > 0 ? budget : batch_work_fallback();
+  cached_prefill_budget = prefill > 0 ? prefill : batch_work_fallback();
   cached_name.assign(device_name);
   cached = true;
-  return cached_budget;
+  return has_prefill ? cached_prefill_budget : cached_budget;
 }
 // The one flush predicate for the open batch, shared by the eager
 // evaluator (eval.cpp) and the compiled-tape recorder (compiled.cpp) so
@@ -414,6 +450,14 @@ class MLX_API CommandEncoder
   uint64_t batch_work() const {
     std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
     return batch_work_;
+  }
+
+  // True once the open batch has recorded a prefill / tiled-matrix kernel
+  // (is_prefill_work_kernel_name), so batch_work_budget() can apply a tighter
+  // prefill cap without splitting single-submit decode steps.
+  bool batch_has_prefill() const {
+    std::lock_guard<std::recursive_mutex> op_lk(op_mutex_);
+    return batch_has_prefill_;
   }
 
   // True when nothing is recorded, nothing is queued for submission, and
@@ -731,6 +775,7 @@ class MLX_API CommandEncoder
   bool recording_{false};
   int node_count_{0};
   uint64_t batch_work_{0};
+  bool batch_has_prefill_{false};
   uint64_t last_completion_{0};
   VkDescriptorPool desc_pool_{VK_NULL_HANDLE};
   uint32_t desc_pool_remaining_{0};

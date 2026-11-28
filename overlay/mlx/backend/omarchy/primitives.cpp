@@ -8916,7 +8916,8 @@ void dispatch_qmm_tile(
   const uint64_t budget = encoder.in_tape_recording
       ? 0u
       : omarchy::batch_work_budget(
-            encoder.device().hardware_capabilities().device_name);
+            encoder.device().hardware_capabilities().device_name,
+            /*has_prefill=*/true);
   const uint32_t m_groups =
       (params.matrix_m + m_tile_rows - 1u) / m_tile_rows;
   const uint32_t piece = qmm_tile_columns_per_piece(n_groups, m_groups, budget);
