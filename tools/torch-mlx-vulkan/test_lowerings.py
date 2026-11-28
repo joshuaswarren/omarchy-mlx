@@ -2928,6 +2928,71 @@ def test_log1p_expm1_logaddexp():
     print("test_log1p_expm1_logaddexp PASS")
 
 
+def test_sign_copysign_extras():
+    # PT-AL-j: sign/copysign family — sgn/signbit/heaviside/copysign/
+    # frexp/ldexp/nextafter/float_power/positive/fix/absolute. The IEEE
+    # cases pin the bits: signbit(-0.0) is True, copysign(1,-0)=-1,
+    # nextafter walks the representable grid, frexp normalizes
+    # subnormals.
+    torch.manual_seed(0)
+    xf = torch.tensor([-2.0, -0.0, 0.0, 0.5, 1.0, 2.0,
+                       float("nan"), float("inf"), -float("inf")])
+    yf = torch.tensor([1.0, -1.0, -0.0, -0.0, 3.0, -4.0, 1.0, -1.0, 0.0])
+    hv = torch.tensor([9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0])
+    xn = torch.tensor([1.0, -2.0, -0.0, 0.0, 1e38, -1e-40, -1e-40])
+    yn = torch.tensor([3.0, -3.0, -1.0, 1.0, 1e39, -1.0, 1.0])
+    ie = torch.tensor([-1, 0, 1, 2, 25, -25, 10, -10, 0], dtype=torch.int32)
+    xs = torch.tensor([1e-40, -1e-40, 0.5, 2.0, -3.5, 0.0, -0.0])
+    cases = [
+        (torch.ops.aten.sgn.default, (xf,), {}, "sgn"),
+        (torch.ops.aten.signbit.default, (xf,), {}, "signbit"),
+        (torch.ops.aten.signbit.default, (xf.bfloat16(),), {}, "signbit"),
+        (torch.ops.aten.heaviside.default, (xf, hv), {}, "heaviside"),
+        (torch.ops.aten.heaviside_.default, (xf, hv), {}, "heaviside"),
+        (torch.ops.aten.copysign.Tensor, (xf, yf), {}, "copysign"),
+        (torch.ops.aten.copysign_.Tensor, (xf, yf), {}, "copysign"),
+        (torch.ops.aten.copysign.Tensor, (xn, yn), {}, "copysign"),
+        (torch.ops.aten.ldexp.Tensor, (xf[:5], ie[:5]), {}, "ldexp"),
+        (torch.ops.aten.nextafter.default, (xn, yn), {}, "nextafter"),
+        (torch.ops.aten.nextafter_.default, (xn, yn), {}, "nextafter"),
+        (torch.ops.aten.positive.default, (xf,), {}, "positive"),
+        (torch.ops.aten.fix.default, (xf[:6],), {}, "fix"),
+        (torch.ops.aten.absolute.default, (xf[:6],), {}, "absolute"),
+        (torch.ops.aten.absolute_.default, (xf[:6],), {}, "absolute"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert got.dtype == ref.dtype, (str(target), got.dtype, ref.dtype)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(),
+                           atol=1e-5, equal_nan=True), (str(target), got, ref)
+    # frexp returns a tuple — compare each side
+    refm, refe = torch.ops.aten.frexp.Tensor(xs)
+    g = torch.fx.Graph()
+    p0 = g.placeholder("p0")
+    n = g.call_function(torch.ops.aten.frexp.Tensor, (p0,), {})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(xs)
+    assert stats["cpu"] == [], stats
+    assert any("frexp" in s for s in stats["mlx"]), stats
+    gotm, gote = torch.as_tensor(out[0]), torch.as_tensor(out[1])
+    assert np.allclose(gotm.float().numpy(), refm.float().numpy(),
+                       atol=1e-5), (gotm, refm)
+    assert torch.equal(gote, refe), (gote, refe)
+    print("test_sign_copysign_extras PASS")
+
+
 def test_flip_rot90():
     # PT-Q11: aten.flip(self, int[] dims) reverses along each listed dim;
     # aten.rot90(self, int k=1, int[] dims=[0,1]) is the ATen
@@ -3018,6 +3083,7 @@ if __name__ == "__main__":
     test_softplus_mish()
     test_elu_selu_celu()
     test_log1p_expm1_logaddexp()
+    test_sign_copysign_extras()
     test_logsumexp()
     test_glu()
     test_reciprocal_frac()
