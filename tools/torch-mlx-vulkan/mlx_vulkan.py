@@ -2055,6 +2055,93 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _diag_embed(a, offset=0, dim1=-2, dim2=-1):
+    # aten: the last dim walks the diagonal; dim1/dim2 name the two new
+    # axes in the output's (ndim+1)-space; input's remaining dims fill
+    # the leftover positions in order.
+    a = _mx(a)
+    nd = a.ndim + 1
+    d1, d2 = dim1 % nd, dim2 % nd
+    if d1 == d2:
+        return _raise("diag_embed same dims")
+    n = a.shape[-1] + abs(offset)
+    e = ((mx.arange(n)[None, :] - mx.arange(n)[:, None]) == offset).astype(a.dtype)
+    # entry (i,j) on the offset diagonal reads a[..., i + min(0,offset)]
+    ki = mx.clip(mx.arange(n) + min(0, offset), 0, a.shape[-1] - 1)
+    res = mx.take(a, ki, axis=-1)[..., :, None] * e
+    perm = []
+    ri = iter(range(nd - 2))
+    for p in range(nd):
+        perm.append(nd - 2 if p == d1 else nd - 1 if p == d2 else next(ri))
+    return mx.transpose(res, perm)
+
+
+def _block_diag(ts):
+    # aten: 0-d -> 1x1 cell, 1-d -> a single 1xn row (NOT a diagonal),
+    # 2-d -> the block as-is. Compose as padded blocks summed.
+    mats = []
+    for t in ts:
+        t = _mx(t)
+        if t.ndim == 0:
+            t = mx.reshape(t, (1, 1))
+        elif t.ndim == 1:
+            t = t[None, :]
+        elif t.ndim > 2:
+            return _raise("block_diag ndim>2")
+        mats.append(t)
+    dt = mats[0].dtype
+    mats = [m.astype(dt) for m in mats]
+    R = sum(m.shape[0] for m in mats)
+    C = sum(m.shape[1] for m in mats)
+    acc = mx.zeros((R, C), dtype=dt)
+    ro = co = 0
+    for m in mats:
+        acc = acc + mx.pad(m, [(ro, R - ro - m.shape[0]),
+                               (co, C - co - m.shape[1])])
+        ro += m.shape[0]
+        co += m.shape[1]
+    return acc
+
+
+def _tri_indices(row, col, offset, dtype, lower):
+    # static-shape producer: row/col are python ints at lower time, so
+    # the index grid is computed eagerly.
+    r, c = np.meshgrid(np.arange(row), np.arange(col), indexing="ij")
+    m = (c - r <= offset) if lower else (c - r >= offset)
+    idx = np.stack([r[m], c[m]])
+    mdt = _MX_DT.get(dtype, mx.int64) if dtype is not None else mx.int64
+    return mx.array(idx).astype(mdt)
+
+
+def _pixel_shuffle(a, upscale_factor):
+    # (N, C*r^2, H, W) -> (N, C, H*r, W*r); channels decompose (c, rh, rw).
+    a = _mx(a)
+    r = int(upscale_factor)
+    n, c, h, w = a.shape
+    a = mx.reshape(a, (n, c // (r * r), r, r, h, w))
+    a = mx.transpose(a, (0, 1, 4, 2, 5, 3))
+    return mx.reshape(a, (n, c // (r * r), h * r, w * r))
+
+
+def _pixel_unshuffle(a, downscale_factor):
+    a = _mx(a)
+    r = int(downscale_factor)
+    n, c, h, w = a.shape
+    a = mx.reshape(a, (n, c, h // r, r, w // r, r))
+    a = mx.transpose(a, (0, 1, 3, 5, 2, 4))
+    return mx.reshape(a, (n, c * r * r, h // r, w // r))
+
+
+def _channel_shuffle(a, groups):
+    a = _mx(a)
+    g = int(groups)
+    n, c = a.shape[0], a.shape[1]
+    sh = [n, g, c // g] + list(a.shape[2:])
+    a = mx.reshape(a, sh)
+    a = mx.transpose(a, [0, 2, 1] + list(range(3, a.ndim)))
+    return mx.reshape(a, [n, c] + list(a.shape[3:]))
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2261,6 +2348,16 @@ _FUNC_SPECS = {
     "split_with_sizes": lambda a, ss, dim=0: _split_sizes(a, ss, dim),
     "chunk": _chunk, "unbind": lambda a, dim=0: _unbind(a, dim),
     "meshgrid": _meshgrid,
+    # shape-op extras (piece 10): diag family, block_diag, the two index
+    # producers, and the reshape-only shuffles.
+    "diag": lambda a, diagonal=0: mx.diag(_mx(a), diagonal),
+    "diag_embed": _diag_embed,
+    "block_diag": _block_diag,
+    "tril_indices": lambda row, col, offset=0, dtype=None, **kw: _tri_indices(row, col, offset, dtype, True),
+    "triu_indices": lambda row, col, offset=0, dtype=None, **kw: _tri_indices(row, col, offset, dtype, False),
+    "pixel_shuffle": _pixel_shuffle,
+    "pixel_unshuffle": _pixel_unshuffle,
+    "channel_shuffle": _channel_shuffle,
     # torch's norm=None means "backward", same as mx's default
     "fft_fft": lambda a, n=None, dim=-1, norm=None: mx.fft.fft(_mx(a), n, axis=dim, norm=norm or "backward"),
     "fft_ifft": lambda a, n=None, dim=-1, norm=None: mx.fft.ifft(_mx(a), n, axis=dim, norm=norm or "backward"),
@@ -2587,7 +2684,8 @@ for _fn, _low in FUNC_TABLE.items():
 _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
               "tensor", "zeros_like", "ones_like", "full_like", "empty_like",
               "rand", "randn", "randint", "randperm", "new_zeros", "new_ones",
-              "new_empty", "new_full", "scalar_tensor"}
+              "new_empty", "new_full", "scalar_tensor",
+              "tril_indices", "triu_indices"}
 
 # sampling ops: mx.compile would trace an mx.random draw once and replay
 # it, and mx.random cannot honor torch's RNG contract anyway — the family

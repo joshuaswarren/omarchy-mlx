@@ -3014,6 +3014,73 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_shape_ops_extras():
+    # PT-AL-shp: diag family, block_diag, index producers, shuffles.
+    torch.manual_seed(0)
+    x33 = torch.randn(3, 3)
+    x23 = torch.randn(2, 3)
+    cases = [
+        (torch.ops.aten.diag.default, (x33,), {}, "diag"),
+        (torch.ops.aten.diag.default, (x33,), {"diagonal": 1}, "diag"),
+        (torch.ops.aten.diag.default, (x33,), {"diagonal": -1}, "diag"),
+        (torch.ops.aten.diag.default, (torch.randn(4),), {}, "diag"),
+        (torch.ops.aten.diag.default, (torch.randn(4),), {"diagonal": 2}, "diag"),
+        (torch.ops.aten.diag_embed.default, (x23,), {}, "diag_embed"),
+        (torch.ops.aten.diag_embed.default, (x23,), {"offset": 1}, "diag_embed"),
+        (torch.ops.aten.diag_embed.default, (x23,), {"offset": -2, "dim1": 0, "dim2": 1}, "diag_embed"),
+        (torch.ops.aten.diag_embed.default, (torch.randn(4),), {"offset": -1, "dim1": 1, "dim2": 0}, "diag_embed"),
+        (torch.ops.aten.block_diag.default, ([x23, torch.randn(1, 2)],), {}, "block_diag"),
+        (torch.ops.aten.block_diag.default, ([torch.tensor([1., 2.]), torch.tensor(3.), x33],), {}, "block_diag"),
+        (torch.ops.aten.pixel_shuffle.default, (torch.randn(1, 8, 3, 4),), {"upscale_factor": 2}, "pixel_shuffle"),
+        (torch.ops.aten.pixel_shuffle.default, (torch.randn(2, 9, 2, 2),), {"upscale_factor": 3}, "pixel_shuffle"),
+        (torch.ops.aten.pixel_unshuffle.default, (torch.randn(1, 2, 6, 8),), {"downscale_factor": 2}, "pixel_unshuffle"),
+        (torch.ops.aten.channel_shuffle.default, (torch.randn(1, 12, 2, 2),), {"groups": 4}, "channel_shuffle"),
+        (torch.ops.aten.channel_shuffle.default, (torch.randn(2, 6, 1, 3),), {"groups": 3}, "channel_shuffle"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() if isinstance(a, torch.Tensor) else
+                       [t.clone() for t in a] for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs, args = [], []
+        for a in ins:
+            if isinstance(a, (list, tuple)):
+                args.append(tuple(g.placeholder(f"p{len(phs) + i}")
+                                  for i, _ in enumerate(a)))
+                phs.extend(args[-1])
+            else:
+                phs.append(g.placeholder(f"p{len(phs)}"))
+                args.append(phs[-1])
+        n = g.call_function(target, tuple(args), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        flat = [t for a in ins for t in (a if isinstance(a, (list, tuple)) else (a,))]
+        out = run(*flat)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=1e-5), (
+            str(target), kwargs)
+    # producers: zero tensor inputs
+    for target, kwargs, fam in [
+        (torch.ops.aten.tril_indices.default, {"row": 4, "col": 3}, "tril_indices"),
+        (torch.ops.aten.tril_indices.default, {"row": 3, "col": 5, "offset": -1}, "tril_indices"),
+        (torch.ops.aten.triu_indices.default, {"row": 4, "col": 4, "offset": 1}, "triu_indices"),
+        (torch.ops.aten.triu_indices.default, {"row": 2, "col": 5, "offset": -1}, "triu_indices"),
+    ]:
+        ref = target(**kwargs)
+        g = torch.fx.Graph()
+        n = g.call_function(target, (), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run()
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        assert np.array_equal(np.array(out), ref.numpy()), (str(target), kwargs)
+    print("test_shape_ops_extras PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3141,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_shape_ops_extras()
     print("ALL PASS")
 
 
