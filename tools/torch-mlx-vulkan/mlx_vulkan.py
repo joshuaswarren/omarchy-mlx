@@ -2216,6 +2216,61 @@ def _isin(elements, test_elements, assume_unique=False, invert=False):
                           mx.flatten(_mx(test_elements))), axis=-1)
     return mx.logical_not(hit) if invert else hit
 
+def _is_float_dtype(dt):
+    return dt in (mx.float16, mx.bfloat16, mx.float32, mx.float64)
+
+
+def _searchsorted(s, v, out_int32=False, right=False, side=None, out=None, sorter=None):
+    # aten.searchsorted(seq, v): the insertion rank into a sorted sequence
+    # is a count — elements < v (right=False) or <= v (right=True) in each
+    # row. mx has no searchsorted, so the rank is the count core; mx.take
+    # applies the sorter indirection. NaN comparisons are all False and
+    # would rank NaN at 0, but aten ranks NaN to len(seq), so float
+    # inputs take a NaN correction to n.
+    s = _mx(s)
+    if sorter is not None:
+        s = mx.take(s, _mx(sorter).astype(mx.int32), axis=-1)
+    n = s.shape[-1]
+    if side is not None:
+        right = side == "right"
+    vv = _mx(v)
+    if isinstance(vv, mx.array) and vv.ndim > 0:
+        # each leading index of s ranks every value in the matching row
+        # of vv: compare s[..., :, None] with vv[..., None, :]. aten
+        # requires vv.ndim == s.ndim with equal leading dims for N-D seq.
+        if s.ndim > 1 and (vv.ndim != s.ndim or vv.shape[:-1] != s.shape[:-1]):
+            raise RuntimeError(
+                "aten.searchsorted: N-D sorted_sequence requires input with "
+                "the same rank and matching leading dims")
+        le = s[..., None] <= vv[..., None, :] if right else s[..., None] < vv[..., None, :]
+        count = mx.sum(le, axis=-2)
+        if _is_float_dtype(vv.dtype):
+            count = mx.where(mx.isnan(vv), n, count)
+    else:
+        le = s <= vv if right else s < vv
+        count = mx.sum(le, axis=-1)
+        if isinstance(vv, mx.array):
+            if _is_float_dtype(vv.dtype):
+                count = mx.where(mx.isnan(vv), n, count)
+        elif isinstance(vv, float) and math.isnan(vv):
+            count = mx.zeros_like(count) + n
+    return count.astype(mx.int32 if out_int32 else mx.int64)
+
+
+def _bucketize(v, b, out_int32=False, right=False):
+    # aten.bucketize(v, boundaries): searchsorted against a 1-D boundary
+    # tensor; same count core, boundaries broadcast from the right.
+    b = _mx(b)
+    vv = _mx(v)
+    if not isinstance(vv, mx.array):
+        vv = mx.array(vv)
+    n = b.shape[-1]
+    le = b <= vv[..., None] if right else b < vv[..., None]
+    count = mx.sum(le, axis=-1)
+    if _is_float_dtype(vv.dtype):
+        count = mx.where(mx.isnan(vv), n, count)
+    return count.astype(mx.int32 if out_int32 else mx.int64)
+
 
 _FUNC_SPECS = {
     "linear": _linear,
@@ -2489,6 +2544,9 @@ _FUNC_SPECS = {
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "count_nonzero": lambda a, dim=None: mx.sum((a != 0).astype(mx.int32), axis=dim),
+    # Q-08: rank/bucket ops used by quantizers, loss curves and lookups.
+    "searchsorted": _searchsorted,
+    "bucketize": _bucketize,
     "empty": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
     "empty_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "new_zeros": lambda a, s, **k: mx.zeros(tuple(s), dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
