@@ -3014,6 +3014,84 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_diag_trace_residue():
+    # Q-65 slot: the diag/trace index family + elementwise residue.
+    # diag extract uses closed-form flat indices; diag_embed pads + masks
+    # (no nonzero needed — the output shape is data-independent);
+    # fmod is the C trunc remainder, not Python floor-mod.
+    torch.manual_seed(0)
+    v = torch.randn(4)
+    x23 = torch.randn(2, 3)
+    x34 = torch.randn(3, 4)
+    x44 = torch.randn(4, 4)
+    x235 = torch.randn(2, 3, 5)
+    cases = [
+        (torch.ops.aten.diag.default, (v,), {"diagonal": 0}, "diag"),
+        (torch.ops.aten.diag.default, (v,), {"diagonal": 1}, "diag"),
+        (torch.ops.aten.diag.default, (v,), {"diagonal": -2}, "diag"),
+        (torch.ops.aten.diag.default, (x23,), {"diagonal": 0}, "diag"),
+        (torch.ops.aten.diag.default, (x23,), {"diagonal": 1}, "diag"),
+        (torch.ops.aten.diag.default, (x23,), {"diagonal": -1}, "diag"),
+        (torch.ops.aten.diag.default, (x44.bfloat16(),), {"diagonal": 0}, "diag"),
+        (torch.ops.aten.diag_embed.default, (v,), {"offset": 0}, "diag_embed"),
+        (torch.ops.aten.diag_embed.default, (x235,), {"offset": 1}, "diag_embed"),
+        (torch.ops.aten.diag_embed.default, (x235,), {"offset": -1, "dim1": 0, "dim2": 2}, "diag_embed"),
+        (torch.ops.aten.trace.default, (x44,), {}, "trace"),
+        (torch.ops.aten.trace.default, (x23,), {}, "trace"),
+        (torch.ops.aten.lerp.Tensor, (x23, x44[:2, :3], torch.rand(2, 3)), {}, "lerp"),
+        (torch.ops.aten.lerp.Scalar, (x23, x44[:2, :3], 0.25), {}, "lerp"),
+        (torch.ops.aten.hypot.default, (x23, x44[:2, :3]), {}, "hypot"),
+        (torch.ops.aten.sinc.default, (torch.tensor([0.0, 1.0, -2.5]),), {}, "sinc"),
+        (torch.ops.aten.fmod.Tensor, (x23, x44[:2, :3]), {}, "fmod"),
+        (torch.ops.aten.fmod.Scalar, (x23, -2.0), {}, "fmod"),
+        (torch.ops.aten.fliplr.default, (x23,), {}, "fliplr"),
+        (torch.ops.aten.fliplr.default, (x235,), {}, "fliplr"),
+        (torch.ops.aten.flipud.default, (x23,), {}, "flipud"),
+        (torch.ops.aten.flipud.default, (x235,), {}, "flipud"),
+        (torch.ops.aten.flipud.default, (v,), {}, "flipud"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        if ref.dtype != torch.bfloat16:
+            assert got.dtype == ref.dtype, (str(target), kwargs, got.dtype, ref.dtype)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs, got, ref)
+    # tril_indices/triu_indices produce a (2, K) index tensor — shape is
+    # data-independent, so unlike nonzero they can lower.
+    for target, ins, kwargs, fam in [
+        (torch.ops.aten.tril_indices.default, (3, 4), {}, "tril_indices"),
+        (torch.ops.aten.tril_indices.default, (3, 4), {"offset": 1}, "tril_indices"),
+        (torch.ops.aten.tril_indices.default, (3, 4), {"offset": -2}, "tril_indices"),
+        (torch.ops.aten.triu_indices.default, (3, 4), {}, "triu_indices"),
+        (torch.ops.aten.triu_indices.default, (3, 4), {"offset": -1}, "triu_indices"),
+        (torch.ops.aten.triu_indices.default, (4, 3), {"offset": 2}, "triu_indices"),
+    ]:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert torch.equal(got, ref), (str(target), kwargs, got, ref)
+    print("test_diag_trace_residue PASS")
+
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3152,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_diag_trace_residue()
     print("ALL PASS")
 
 

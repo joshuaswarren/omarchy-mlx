@@ -73,6 +73,73 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     torch.allclose(got, r, atol=1e-5, rtol=1e-5),
                     (ns_shape, tag, float((got - r).abs().max())))
 
+    def test_diag_trace_residue(self):
+        """Q-65 slot: the wheel backend lowers aten.diag/diag_embed/trace,
+        lerp/hypot/sinc/fmod, fliplr/flipud and tril/triu_indices with
+        parity against the aten CPU ops. diag extract is closed-form flat
+        indexing; fmod keeps the C trunc-remainder sign contract."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(0)
+        np = __import__("numpy")
+
+        def ref_of(fn, args, kwargs):
+            return fn(*args, **kwargs).float().numpy()
+
+        def got_of(name, margs, kwargs):
+            return np.array(ATEN_TABLE[name](*margs, **kwargs).astype(mx.float32))
+
+        v = torch.randn(4)
+        x23 = torch.randn(2, 3)
+        x235 = torch.randn(2, 3, 5)
+        mv = mx.array(v.numpy())
+        m23 = mx.array(x23.numpy())
+        m235 = mx.array(x235.numpy())
+        cases = [
+            ("diag", torch.ops.aten.diag.default, (v,), {"diagonal": 0}, (mv,)),
+            ("diag", torch.ops.aten.diag.default, (v,), {"diagonal": 1}, (mv,)),
+            ("diag", torch.ops.aten.diag.default, (v,), {"diagonal": -2}, (mv,)),
+            ("diag", torch.ops.aten.diag.default, (x23,), {"diagonal": 0}, (m23,)),
+            ("diag", torch.ops.aten.diag.default, (x23,), {"diagonal": -1}, (m23,)),
+            ("diag_embed", torch.ops.aten.diag_embed.default, (x235,), {"offset": 1}, (m235,)),
+            ("diag_embed", torch.ops.aten.diag_embed.default, (x235,), {"offset": -1, "dim1": 0, "dim2": 2}, (m235,)),
+            ("trace", torch.ops.aten.trace.default, (x23,), {}, (m23,)),
+            ("lerp", torch.ops.aten.lerp.Tensor, (x23, x23, torch.rand(2, 3)), {}, None),
+            ("lerp", torch.ops.aten.lerp.Scalar, (x23, x23, 0.25), {}, None),
+            ("hypot", torch.ops.aten.hypot.default, (x23, x23), {}, (m23, m23)),
+            ("sinc", torch.ops.aten.sinc.default, (torch.tensor([0.0, 1.0, -2.5]),), {}, (mx.array([0.0, 1.0, -2.5]),)),
+            ("fmod", torch.ops.aten.fmod.Scalar, (x23, -2.0), {}, None),
+            ("fliplr", torch.ops.aten.fliplr.default, (x235,), {}, (m235,)),
+            ("flipud", torch.ops.aten.flipud.default, (x235,), {}, (m235,)),
+            ("flipud", torch.ops.aten.flipud.default, (v,), {}, (mv,)),
+        ]
+        for name, aten_fn, args, kwargs, margs in cases:
+            if margs is None:
+                margs = tuple(
+                    mx.array(a.numpy()) if isinstance(a, torch.Tensor) else a
+                    for a in args)
+            # scalar-weight overloads pass weight positionally; only the
+            # tensor inputs count for the margs map.
+            margs = tuple(
+                m if isinstance(m, mx.array) else m for m in margs)
+            ref = ref_of(aten_fn, args, kwargs)
+            got = got_of(name, margs, kwargs)
+            self.assertTrue(np.allclose(got, ref, atol=1e-5), (name, kwargs))
+        # index factories: (2, K) int tensor, exact equality
+        for name, aten_fn, args, kwargs in [
+            ("tril_indices", torch.ops.aten.tril_indices.default, (3, 4), {}),
+            ("tril_indices", torch.ops.aten.tril_indices.default, (3, 4), {"offset": 1}),
+            ("triu_indices", torch.ops.aten.triu_indices.default, (3, 4), {"offset": -1}),
+            ("triu_indices", torch.ops.aten.triu_indices.default, (4, 3), {"offset": 2}),
+        ]:
+            ref = aten_fn(*args, **kwargs).numpy()
+            got = np.array(ATEN_TABLE[name](*args, **kwargs))
+            self.assertTrue(np.array_equal(got, ref), (name, kwargs, got))
+        torch.manual_seed(1)
+
     def test_log1p_expm1_logaddexp(self):
         """PT-AL-f: the wheel backend lowers aten.log1p, aten.expm1 and
         aten.logaddexp with fp32/bf16 parity against the aten CPU ops,
