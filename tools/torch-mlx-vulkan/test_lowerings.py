@@ -3014,6 +3014,217 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+def test_rsub_tensor():
+    # PT-Q17: aten.rsub.Tensor (tensor - alpha * tensor) through the table.
+    import mlx.core as mx
+
+    a = torch.randn(3, 4)
+    b = torch.randn(3, 4)
+    for alpha in (1.0, 2.5):
+        got = mlx_vulkan.ATEN_TABLE["aten.rsub.Tensor"](
+            mx.array(a), mx.array(b), alpha=alpha)
+        ref = torch.ops.aten.rsub.Tensor(a, b, alpha=alpha)
+        assert np.allclose(_np(got), ref.numpy()), (alpha, _np(got), ref.numpy())
+    print("test_rsub_tensor PASS")
+
+
+def test_index_add():
+    # PT-Q56: aten.index_add - accumulate-add at the matched dim slots;
+    # duplicate indices SUM (not last-write), negative wrap, alpha scales.
+    x = torch.zeros(5, dtype=torch.float32)
+    idx = torch.tensor([1, 3, 1])
+    vals = torch.tensor([1.0, 2.0, 4.0])
+    m = mlx_vulkan.ATEN_TABLE["aten.index_add"](mx.array(x), 0, idx, vals)
+    r = torch.ops.aten.index_add(x, 0, idx, vals)
+    assert np.allclose(_np(m), r.numpy()), (_np(m), r.numpy())
+    assert _np(m)[1] == 5.0 and _np(m)[3] == 2.0, "duplicates must sum"
+    assert _np(m)[0] == 0.0 and _np(m)[2] == 0.0
+    # int64: bit-exact accumulation (order-free for ints)
+    xi = torch.zeros(5, dtype=torch.int64)
+    vi = torch.tensor([10, 20, 40], dtype=torch.int64)
+    mi = mlx_vulkan.ATEN_TABLE["aten.index_add"](mx.array(xi), 0, idx, vi)
+    ri = torch.ops.aten.index_add(xi, 0, idx, vi)
+    assert np.array_equal(_np(mi), ri.numpy()), (_np(mi), ri.numpy())
+    # dim=1 on 2-D, negative wrap, alpha
+    x2 = torch.zeros(2, 3)
+    i2 = torch.tensor([2, 0])
+    s2 = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    m2 = mlx_vulkan.ATEN_TABLE["aten.index_add"](mx.array(x2), 1, i2, s2, alpha=2.0)
+    r2 = torch.ops.aten.index_add(x2, 1, i2, s2, alpha=2.0)
+    assert np.allclose(_np(m2), r2.numpy()), (_np(m2), r2.numpy())
+    assert _np(m2)[0, 2] == 2.0 and _np(m2)[0, 0] == 4.0
+    assert _np(m2)[1, 2] == 6.0 and _np(m2)[1, 0] == 8.0
+    # torch's index_add refuses negative indices (no wrap): defer likewise
+    try:
+        mlx_vulkan.ATEN_TABLE["aten.index_add"](mx.array(x2), 1,
+                                                torch.tensor([-1]),
+                                                torch.tensor([[1.0]]))
+        raise AssertionError("negative index_add must defer")
+    except NotImplementedError:
+        pass
+    # out-of-range refuses (zero CPU fallback on the happy path only)
+    try:
+        mlx_vulkan.ATEN_TABLE["aten.index_add"](mx.array(x), 0,
+                                                torch.tensor([9]), vals[:1])
+        raise AssertionError("out of range must refuse")
+    except NotImplementedError:
+        pass
+    print("test_index_add PASS")
+
+
+def test_index_copy():
+    # PT-Q56: aten.index_copy - the dim-scoped assignment; the last-write
+    # slot rule keeps duplicate indices deterministic (torch leaves them
+    # undefined, so the tests use distinct indices).
+    x = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    idx = torch.tensor([1, 0])
+    src = torch.tensor([[10.0, 11.0, 12.0], [20.0, 21.0, 22.0]])
+    m = mlx_vulkan.ATEN_TABLE["aten.index_copy"](mx.array(x), 0, idx, src)
+    r = torch.ops.aten.index_copy(x, 0, idx, src)
+    assert np.array_equal(_np(m), r.numpy()), (_np(m), r.numpy())
+    assert _np(m)[0, 0] == 20.0 and _np(m)[1, 0] == 10.0
+    # dim=1
+    m2 = mlx_vulkan.ATEN_TABLE["aten.index_copy"](mx.array(x), 1,
+                                                  torch.tensor([2]),
+                                                  torch.tensor([[9.0], [8.0]]))
+    r2 = torch.ops.aten.index_copy(x, 1, torch.tensor([2]),
+                                   torch.tensor([[9.0], [8.0]]))
+    assert np.array_equal(_np(m2), r2.numpy()), (_np(m2), r2.numpy())
+    # shape mismatch refuses
+    try:
+        mlx_vulkan.ATEN_TABLE["aten.index_copy"](mx.array(x), 0, idx,
+                                                 src[:1])
+        raise AssertionError("shape mismatch must refuse")
+    except NotImplementedError:
+        pass
+    print("test_index_copy PASS")
+
+
+def test_index_fill():
+    # PT-Q56: aten.index_fill - broadcast a scalar (or 0-dim tensor) into
+    # the indexed dim slots.
+    x = torch.ones(4, 2)
+    idx = torch.tensor([1, 3])
+    m = mlx_vulkan.ATEN_TABLE["aten.index_fill.int"](mx.array(x), 0, idx, 7.0)
+    r = torch.ops.aten.index_fill(x, 0, idx, 7.0)
+    assert np.array_equal(_np(m), r.numpy()), (_np(m), r.numpy())
+    assert _np(m)[1].tolist() == [7.0, 7.0] and _np(m)[0].tolist() == [1.0, 1.0]
+    # 0-dim tensor value
+    t = torch.tensor(5.0)
+    m2 = mlx_vulkan.ATEN_TABLE["aten.index_fill.int"](mx.array(x), 0, idx, t)
+    r2 = torch.ops.aten.index_fill(x, 0, idx, t)
+    assert np.array_equal(_np(m2), r2.numpy()), (_np(m2), r2.numpy())
+    # dim=1
+    m3 = mlx_vulkan.ATEN_TABLE["aten.index_fill.int"](mx.array(x), 1,
+                                                  torch.tensor([0]), 3.0)
+    r3 = torch.ops.aten.index_fill(x, 1, torch.tensor([0]), 3.0)
+    assert np.array_equal(_np(m3), r3.numpy()), (_np(m3), r3.numpy())
+    # negative wrap
+    m4 = mlx_vulkan.ATEN_TABLE["aten.index_fill.int"](mx.array(x), 0,
+                                                  torch.tensor([-1]), 9.0)
+    r4 = torch.ops.aten.index_fill(x, 0, torch.tensor([3]), 9.0)
+    assert np.array_equal(_np(m4), r4.numpy()), (_np(m4), r4.numpy())
+    print("test_index_fill PASS")
+
+
+def test_index_put():
+    # PT-Q17: aten.index_put accumulate=False; accumulate=True defers to the
+    # executor's torch fallback (no atomic scatter primitive in the backend).
+    import mlx.core as mx
+
+    x = torch.arange(6, dtype=torch.float32)
+    idx = torch.tensor([1, 4])
+    vals = torch.tensor([10.0, 20.0])
+    m1 = mlx_vulkan.ATEN_TABLE["aten.index_put"](mx.array(x), (idx,), vals)
+    r1 = torch.ops.aten.index_put(x, (idx,), vals)
+    assert np.array_equal(_np(m1), r1.numpy()), (_np(m1), r1.numpy())
+    x2 = torch.zeros(3, 5)
+    i0 = torch.tensor([0, 2])
+    i1 = torch.tensor([1, 4])
+    m2 = mlx_vulkan.ATEN_TABLE["aten.index_put"](mx.array(x2), (i0, i1), torch.tensor([9.0, 8.0]))
+    r2 = torch.ops.aten.index_put(x2, (i0, i1), torch.tensor([9.0, 8.0]))
+    assert np.array_equal(_np(m2), r2.numpy()), (_np(m2), r2.numpy())
+    m3 = mlx_vulkan.ATEN_TABLE["aten.index_put"](mx.array(x), (idx,), torch.tensor(7.0))
+    r3 = torch.ops.aten.index_put(x, (idx,), torch.tensor(7.0))
+    assert np.array_equal(_np(m3), r3.numpy()), (_np(m3), r3.numpy())
+    # int64 self with int64 values: exact dtype match, matching torch
+    xi = torch.arange(6, dtype=torch.int64)
+    mi = mlx_vulkan.ATEN_TABLE["aten.index_put"](mx.array(xi), (idx,), torch.tensor([10, 20]))
+    ri = torch.ops.aten.index_put(xi, (torch.tensor([1, 4]),), torch.tensor([10, 20]))
+    assert np.array_equal(_np(mi), ri.numpy()), (_np(mi), ri.numpy())
+    # accumulate=True defers: NotImplementedError -> the executor's torch fallback
+    try:
+        mlx_vulkan.ATEN_TABLE["aten.index_put"](mx.array(x), (idx,), vals, True)
+        raise AssertionError("accumulate=True must defer, not compute")
+    except NotImplementedError:
+        pass
+
+    # duplicate indices keep the last write, not the sum
+    dup = torch.tensor([2, 2, 2])
+    md = mlx_vulkan.ATEN_TABLE["aten.index_put"](
+        mx.array(torch.arange(5, dtype=torch.float32)), (dup,),
+        torch.tensor([1.0, 2.0, 7.0]))
+    rd = torch.ops.aten.index_put(
+        torch.arange(5, dtype=torch.float32), (dup,),
+        torch.tensor([1.0, 2.0, 7.0]))
+    assert np.array_equal(_np(md), rd.numpy()), (_np(md), rd.numpy())
+    # negative indices wrap like torch
+    neg = torch.tensor([-1])
+    mn = mlx_vulkan.ATEN_TABLE["aten.index_put"](
+        mx.array(torch.arange(5, dtype=torch.float32)), (neg,),
+        torch.tensor([9.0]))
+    rn = torch.ops.aten.index_put(
+        torch.arange(5, dtype=torch.float32), (neg,), torch.tensor([9.0]))
+    assert np.array_equal(_np(mn), rn.numpy()), (_np(mn), rn.numpy())
+    # fewer index tensors than dims: every trailing slice updates, and
+    # values broadcast to bshape + the trailing shape
+    i0 = torch.tensor([0, 2])
+    mp = mlx_vulkan.ATEN_TABLE["aten.index_put"](
+        mx.array(torch.zeros(3, 4)), (i0,),
+        torch.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]))
+    rp = torch.ops.aten.index_put(
+        torch.zeros(3, 4), (i0,),
+        torch.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]))
+    assert np.array_equal(_np(mp), rp.numpy()), (_np(mp), rp.numpy())
+    ms = mlx_vulkan.ATEN_TABLE["aten.index_put"](
+        mx.array(torch.zeros(3, 4)), (i0,), torch.tensor(9.0))
+    rs = torch.ops.aten.index_put(
+        torch.zeros(3, 4), (i0,), torch.tensor(9.0))
+    assert np.array_equal(_np(ms), rs.numpy()), (_np(ms), rs.numpy())
+    # out of range defers like accumulate (torch raises IndexError on
+    # the fallback path; a silent drop would be wrong)
+    try:
+        mlx_vulkan.ATEN_TABLE["aten.index_put"](
+            mx.array(torch.arange(5, dtype=torch.float32)),
+            (torch.tensor([9]),), torch.tensor([1.0]))
+        raise AssertionError("out-of-range must defer, not silently drop")
+    except NotImplementedError:
+        pass
+    # bool index tensors are masks in aten, not 0/1 integers - defer
+    try:
+        mlx_vulkan.ATEN_TABLE["aten.index_put"](
+            mx.array(torch.arange(5, dtype=torch.float32)),
+            (torch.tensor([True, False, True, False, False]),),
+            torch.tensor([1.0, 1.0]))
+        raise AssertionError("bool mask indices must defer")
+    except NotImplementedError:
+        pass
+    # index_put_ through the executor writes the mutation back
+    g = torch.fx.Graph()
+    pa = g.placeholder("a")
+    n = g.call_function(torch.ops.aten.index_put_.default,
+                        (pa, (torch.tensor([0, 2]),),
+                         torch.tensor([5.0, 6.0])), {})
+    g.output(n)
+    run = mlx_vulkan.make_compiled_executor(
+        torch.fx.GraphModule(torch.nn.Module(), g), dt=mx.float32)
+    o = run(torch.zeros(4))[0]
+    rw = torch.zeros(4)
+    rw.index_put_((torch.tensor([0, 2]),), torch.tensor([5.0, 6.0]))
+    assert np.allclose(_np(o), rw.numpy()), (_np(o), rw.numpy())
+    print("test_index_put PASS")
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3285,12 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_rsub_tensor()
+    test_index_put()
+    test_index_add()
+    test_index_copy()
+    test_index_fill()
     print("ALL PASS")
+
 
 
