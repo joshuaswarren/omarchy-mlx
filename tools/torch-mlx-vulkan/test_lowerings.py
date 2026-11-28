@@ -3014,6 +3014,59 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+def _run_fx(target, args, kwargs, *feed):
+    g = torch.fx.Graph()
+    tensors = [f for f in feed if isinstance(f, torch.Tensor)]
+    phs = [g.placeholder(f"p{i}") for i in range(len(tensors))]
+    it = iter(phs)
+
+    def _w(v):
+        return next(it) if isinstance(v, torch.Tensor) else v
+
+    wargs = tuple(_w(v) for v in args)
+    wkwargs = {k: _w(v) for k, v in kwargs.items()}
+    node = g.call_function(target, wargs, wkwargs)
+    g.output(node)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(*tensors)
+    assert stats["cpu"] == [], (stats, [str(n.target) for n in gm.graph.nodes])
+    return out
+
+
+def test_segment_reduce_unique_dim():
+    rng = np.random.RandomState(0)
+    d = torch.tensor(rng.randn(6, 2).astype(np.float32))
+    le = torch.tensor([2, 0, 4])
+    for red in ("sum", "prod", "min", "max", "mean"):
+        out = _run_fx(torch.ops.aten.segment_reduce.default, (d, red),
+                      {"lengths": le}, d, le)
+        ref = torch.segment_reduce(d, red, lengths=le)
+        assert np.allclose(_np(out), ref.numpy(), atol=1e-5, equal_nan=True), red
+    out = _run_fx(torch.ops.aten.segment_reduce.default, (d, "sum"),
+                  {"lengths": le, "initial": 7.0}, d, le)
+    assert np.allclose(_np(out), torch.segment_reduce(d, "sum", lengths=le, initial=7.0).numpy())
+    out = _run_fx(torch.ops.aten.segment_reduce.default, (d, "mean"),
+                  {"lengths": le, "initial": 7.0}, d, le)
+    assert np.allclose(_np(out), torch.segment_reduce(d, "mean", lengths=le, initial=7.0).numpy())
+    off = torch.tensor([0, 2, 6])
+    out = _run_fx(torch.ops.aten.segment_reduce.default, (d, "sum"),
+                  {"offsets": off}, d, off)
+    assert np.allclose(_np(out), torch.segment_reduce(d, "sum", offsets=off).numpy())
+
+    u = torch.tensor([[2., 1.], [0., 5.], [2., 1.], [1., 1.]])
+    out = _run_fx(torch.ops.aten.unique_dim.default, (u, 0),
+                  {"return_inverse": True, "return_counts": True}, u)
+    ru, ri, rc = torch.unique(u, dim=0, sorted=True, return_inverse=True, return_counts=True)
+    assert np.allclose(_np(out[0]), ru.numpy())
+    assert np.array_equal(_np(out[1]), ri.numpy())
+    assert np.array_equal(_np(out[2]), rc.numpy())
+    out = _run_fx(torch.ops.aten.unique_dim.default, (u, 1), {}, u)
+    assert np.allclose(_np(out[0]), torch.unique(u, dim=1).numpy())
+    print("test_segment_reduce_unique_dim PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3127,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_segment_reduce_unique_dim()
     print("ALL PASS")
 
 
