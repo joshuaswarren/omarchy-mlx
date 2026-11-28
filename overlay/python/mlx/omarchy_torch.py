@@ -511,6 +511,76 @@ def _rot90(a, k=1, dims=(0, 1)):
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
 
+
+def _heaviside(a, values):
+    # aten.heaviside: 0 where a<0, 1 where a>0, values where a==0.
+    a, v = _mx(a), _mx(values)
+    return mx.where(a > 0, mx.ones_like(a),
+                    mx.where(a < 0, mx.zeros_like(a), v))
+
+
+def _signbit(a):
+    # no mx.signbit in the wheel: negative, or zero with 1/x == -inf.
+    a = _mx(a)
+    if not mx.issubdtype(a.dtype, mx.floating):
+        return a < 0
+    return (a < 0) | ((a == 0) & (1.0 / a < 0))
+
+
+def _copysign(a, b):
+    # aten.copysign: |a| with the sign bit of b (so -0.0 flips too).
+    a = _mx(a)
+    b = _mx(b)
+    b = b if isinstance(b, mx.array) else mx.array(b)
+    return mx.where(_signbit(b), -mx.abs(a), mx.abs(a))
+
+
+def _isreal(a):
+    # no complex dtypes reach the backend, so every element is real.
+    a = _mx(a)
+    return mx.ones(a.shape, dtype=mx.bool_)
+
+
+def _isin(elements, test_elements, assume_unique=False, invert=False):
+    # mask shape is data-independent; assume_unique only affects internals.
+    e, t = _mx(elements), _mx(test_elements)
+    if not isinstance(t, mx.array) or t.ndim == 0:
+        mask = e == t
+    else:
+        mask = mx.any(
+            e.reshape((-1, 1)) == t.reshape((1, -1)), axis=1).reshape(e.shape)
+    return mx.logical_not(mask) if invert else mask
+
+
+def _isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
+    a, b = _mx(a), _mx(b)
+    res = mx.abs(a - b) <= atol + rtol * mx.abs(b)
+    if equal_nan:
+        res = res | (mx.isnan(a) & mx.isnan(b))
+    return res
+
+
+def _allclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
+    return mx.all(_isclose(a, b, rtol, atol, equal_nan))
+
+
+_FINF_MAX = {mx.float16: 65504.0, mx.bfloat16: 3.3895313892515355e38,
+             mx.float32: 3.4028234663852886e38, mx.float64: 1.7976931348623157e308}
+
+
+def _nan_to_num(a, nan=None, posinf=None, neginf=None):
+    # aten defaults: nan=0, posinf/neginf=+-largest finite of the dtype.
+    a = _mx(a)
+    if not mx.issubdtype(a.dtype, mx.floating):
+        return a
+    fmax = _FINF_MAX[a.dtype]
+    r = mx.where(mx.isnan(a), 0.0 if nan is None else float(nan), a)
+    r = mx.where(r == float("inf"),
+                 fmax if posinf is None else float(posinf), r)
+    r = mx.where(r == float("-inf"),
+                 -fmax if neginf is None else float(neginf), r)
+    return r
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -549,6 +619,17 @@ _FUNC_SPECS = {
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
+    "heaviside": _heaviside,
+    "heaviside_": _heaviside,
+    "copysign": _copysign,
+    "copysign_": _copysign,
+    "signbit": _signbit,
+    "isreal": _isreal,
+    "isin": _isin,
+    "isclose": _isclose,
+    "allclose": _allclose,
+    "nan_to_num": _nan_to_num,
+    "nan_to_num_": _nan_to_num,
     "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
     "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
