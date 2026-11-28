@@ -3014,6 +3014,62 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_forward_losses():
+    # w7W pt-26: forward-loss extras. nll_loss2d_forward is the N-d
+    # (N,C,...) form of nll_loss and returns (loss, total_weight);
+    # log_sigmoid_forward returns (log_sigmoid(x), exp(-|x|) buffer);
+    # multilabel_margin_loss_forward returns (loss, is_target) where
+    # loss[n] = (1/C) * sum over target slots t and non-target classes i
+    # of relu(1 - (x[t] - x[i])).
+    torch.manual_seed(0)
+    S = torch.ops.aten
+    x4 = torch.randn(2, 3, 4, 4)
+    t4 = torch.randint(0, 3, (2, 4, 4))
+    t4[0, 0, 0] = -100
+    xl = torch.randn(6)
+    xm = torch.randn(3, 5)
+    tm = torch.tensor([[0, 2, -1, -1, -1], [1, 3, 4, -1, -1],
+                       [2, -1, -1, -1, -1]])
+    x2 = torch.randn(4, 3)
+    t2 = torch.randint(0, 3, (4,))
+    cases = [
+        (S.nll_loss2d_forward.default, (x4, t4),
+         {"weight": None, "reduction": 1, "ignore_index": -100}, "nll_loss2d"),
+        (S.nll_loss2d_forward.default, (x4, t4),
+         {"weight": None, "reduction": 2, "ignore_index": -100}, "nll_loss2d"),
+        (S.nll_loss2d_forward.default, (x4, t4),
+         {"weight": None, "reduction": 0, "ignore_index": -100}, "nll_loss2d"),
+        (S.log_sigmoid_forward.default, (xl,), {}, "log_sigmoid_forward"),
+        (S.multilabel_margin_loss_forward.default, (xm, tm),
+         {"reduction": 0}, "multilabel_margin"),
+        (S.multilabel_margin_loss_forward.default, (xm, tm),
+         {"reduction": 1}, "multilabel_margin"),
+        (S.multilabel_margin_loss_forward.default, (xm, tm),
+         {"reduction": 2}, "multilabel_margin"),
+        # the 2-D form still routes through the same shared helper
+        (S.nll_loss_forward.default, (x2, t2),
+         {"weight": None, "reduction": 1, "ignore_index": -100}, "nll_loss"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target))
+        outs = out if isinstance(out, (tuple, list)) else (out,)
+        refs = ref if isinstance(ref, (tuple, list)) else (ref,)
+        for got_t, ref_t in zip(outs, refs):
+            got = torch.as_tensor(got_t)
+            assert np.allclose(got.float().numpy(), ref_t.float().numpy(),
+                               atol=1e-5), (str(target), kwargs, got, ref_t)
+    print("test_forward_losses PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3069,6 +3125,7 @@ if __name__ == "__main__":
     test_cosine_similarity()
     test_pdist_cdist()
     test_flip_rot90()
+    test_forward_losses()
     test_mode()
     test_kthvalue()
     test_squeeze_inplace()
