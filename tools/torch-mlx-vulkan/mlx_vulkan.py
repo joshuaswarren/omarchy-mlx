@@ -1760,6 +1760,213 @@ def _adaptive_avg_pool2d_backward(grad_output, a):
     return acc
 
 
+# N-d pooling machinery: per-axis window index + valid-mask arrays, one
+# gather per axis, then a reduction over the interleaved window axes.
+
+def _pool_gather(x, idx_axes, mask_axes):
+    # x (N,C,*sp); idx_axes[ax] (o,k) -> (N,C,o0,k0,o1,k1,...) + mask
+    y = x
+    nd = len(idx_axes)
+    for a, idx in enumerate(idx_axes):
+        y = mx.take(y, idx.reshape(-1), axis=2 + 2 * a)
+        y = y.reshape(y.shape[:2 + 2 * a] + idx.shape + y.shape[3 + 2 * a:])
+    mask = None
+    for a, m in enumerate(mask_axes):
+        shp = [1] * y.ndim
+        shp[2 + 2 * a], shp[3 + 2 * a] = m.shape
+        mm = m.reshape(tuple(shp))
+        mask = mm if mask is None else mask & mm
+    return y, mask
+
+
+def _pool_out_nd(in_sz, k, s, p, ceil_mode):
+    o = (in_sz + 2 * p - k + (s - 1 if ceil_mode else 0)) // s + 1
+    if (o - 1) * s >= in_sz + p:
+        o -= 1
+    return max(int(o), 0)
+
+
+def _pool_window_axes(sp, kernel, stride, padding, dilation, ceil_mode):
+    # fixed-kernel windows: per-axis (o,k) index + valid mask (into the
+    # padded coordinate frame, offset back to input coords)
+    idxs, masks = [], []
+    for n_, k_, s_, p_, d_ in zip(sp, kernel, stride, padding, dilation):
+        o_ = _pool_out_nd(n_, (k_ - 1) * d_ + 1, s_, p_, ceil_mode)
+        pos = np.arange(o_)[:, None] * s_ + np.arange(k_)[None, :] * d_ - p_
+        idxs.append(mx.array(np.clip(pos, 0, n_ - 1)))
+        masks.append(mx.array((pos >= 0) & (pos < n_)))
+    return idxs, masks
+
+
+def _max_pool_nd(a, kernel_size, stride=None, padding=0, dilation=1,
+                 ceil_mode=False, return_indices=False):
+    x = _mx(a)
+    sp = x.shape[2:]
+    nd = len(sp)
+    kernel = tuple(kernel_size) if isinstance(kernel_size, (list, tuple)) else (kernel_size,) * nd
+    stride = tuple(stride) if isinstance(stride, (list, tuple)) and stride else (stride,) * nd if stride else kernel
+    padding = tuple(padding) if isinstance(padding, (list, tuple)) else (padding,) * nd
+    dilation = tuple(dilation) if isinstance(dilation, (list, tuple)) else (dilation,) * nd
+    if nd != len(kernel):
+        return _raise(f"max_pool nd={nd} kernel={kernel_size}")
+    idxs, masks = _pool_window_axes(sp, kernel, stride, padding, dilation, ceil_mode)
+    win, mask = _pool_gather(x, idxs, masks)
+    kax = tuple(3 + 2 * ax for ax in range(nd))
+    wv = mx.where(mask, win, mx.array(-mx.inf, dtype=x.dtype))
+    out = wv.max(axis=kax)
+    if not return_indices:
+        return out
+    kf = [m.shape[1] for m in masks]
+    K = int(np.prod(kf))
+    perm = [0, 1] + [2 + 2 * a for a in range(nd)] + [3 + 2 * a for a in range(nd)]
+    flat_idx = mx.transpose(wv, perm).reshape(wv.shape[0], wv.shape[1],
+                                            -1, K)
+    am = flat_idx.argmax(axis=-1).reshape((wv.shape[0], wv.shape[1]) +
+                                          tuple(m.shape[0] for m in masks))
+    # window start per axis: pos = o*s - p + k*d
+    out_idx = None
+    rem = am
+    for a in range(nd - 1, -1, -1):
+        ka = rem % kf[a]
+        rem = rem // kf[a]
+        oa = mx.arange(masks[a].shape[0])
+        shp = [1] * (am.ndim - 2)
+        shp[a] = -1
+        p_a = oa.reshape(tuple(shp)) * stride[a] - padding[a] + ka * dilation[a]
+        stride_f = int(np.prod(sp[a + 1:]))
+        out_idx = p_a * stride_f if out_idx is None else out_idx + p_a * stride_f
+    return out, out_idx.astype(mx.int64)
+
+
+def _avg_pool_nd(a, kernel_size, stride=None, padding=0, ceil_mode=False,
+                 count_include_pad=True, divisor_override=None):
+    x = _mx(a)
+    sp = x.shape[2:]
+    nd = len(sp)
+    kernel = tuple(kernel_size) if isinstance(kernel_size, (list, tuple)) else (kernel_size,) * nd
+    stride = tuple(stride) if isinstance(stride, (list, tuple)) and stride else (stride,) * nd if stride else kernel
+    padding = tuple(padding) if isinstance(padding, (list, tuple)) else (padding,) * nd
+    idxs, masks = _pool_window_axes(sp, kernel, stride, padding, (1,) * nd, ceil_mode)
+    win, mask = _pool_gather(x, idxs, masks)
+    kax = tuple(3 + 2 * ax for ax in range(nd))
+    s = mx.where(mask, win, mx.array(0.0, dtype=x.dtype)).sum(axis=kax)
+    if divisor_override is not None:
+        return s / float(divisor_override)
+    denom = float(np.prod(kernel)) if count_include_pad else mask.sum(axis=kax).astype(x.dtype)
+    if count_include_pad:
+        # windows fully outside still divide by K — but torch also excludes
+        # positions that fall wholly past the end; matches its divisor
+        return s / denom
+    return s / mx.maximum(denom, 1)
+
+
+def _adaptive_bounds(n_, o_):
+    st = np.arange(o_) * n_ // o_
+    en = -(-((np.arange(o_) + 1) * n_) // o_)
+    return st, en
+
+
+def _adaptive_max_pool(a, output_size):
+    x = _mx(a)
+    sp = x.shape[2:]
+    o_sz = tuple(output_size) if isinstance(output_size, (list, tuple)) else (output_size,) * len(sp)
+    if len(o_sz) != len(sp):
+        return _raise("adaptive_max_pool output_size")
+    idxs, masks, starts = [], [], []
+    for n_, o_ in zip(sp, o_sz):
+        st, en = _adaptive_bounds(n_, o_)
+        kmax = max(int((en - st).max()), 1)
+        k = np.arange(kmax)[None, :]
+        idxs.append(mx.array(np.clip(st[:, None] + k, 0, n_ - 1)))
+        masks.append(mx.array(st[:, None] + k < en[:, None]))
+        starts.append(mx.array(st))
+    win, mask = _pool_gather(x, idxs, masks)
+    nd = len(sp)
+    kax = tuple(3 + 2 * ax for ax in range(nd))
+    wv = mx.where(mask, win, mx.array(-mx.inf, dtype=x.dtype))
+    out = wv.max(axis=kax)
+    kf = [m.shape[1] for m in masks]
+    K = int(np.prod(kf))
+    perm = [0, 1] + [2 + 2 * a for a in range(nd)] + [3 + 2 * a for a in range(nd)]
+    am = mx.transpose(wv, perm).reshape(wv.shape[0], wv.shape[1], -1, K).argmax(axis=-1)
+    am = am.reshape((wv.shape[0], wv.shape[1]) + tuple(m.shape[0] for m in masks))
+    out_idx = None
+    rem = am
+    for ax in range(nd - 1, -1, -1):
+        ka = rem % kf[ax]
+        rem = rem // kf[ax]
+        oa = mx.arange(masks[ax].shape[0])
+        shp = [1] * (am.ndim - 2)
+        shp[ax] = -1
+        pos = starts[ax].reshape(tuple(shp)) + ka
+        stride_f = int(np.prod(sp[ax + 1:]))
+        out_idx = pos * stride_f if out_idx is None else out_idx + pos * stride_f
+    return out, out_idx.astype(mx.int64)
+
+
+def _fractional_starts(n_, o_, k_, u):
+    if o_ == 1:
+        return np.zeros(1, dtype=np.int64)
+    alpha = (n_ - k_) / (o_ - 1)
+    off = (alpha * float(u)) % 1.0
+    return np.minimum(np.floor(np.arange(o_) * alpha + off).astype(np.int64), n_ - k_)
+
+
+def _fractional_max_pool2d(a, kernel_size, output_size, random_samples):
+    x = _mx(a)
+    rs = _mx(random_samples)
+    sp = x.shape[2:]
+    if len(sp) != 2:
+        return _raise("fractional_max_pool2d ndim")
+    kh, kw = _pool_hw(kernel_size)
+    oh, ow = _pool_hw(output_size)
+    u_h = float(np.array(rs[..., 0].reshape(-1)[0]))
+    u_w = float(np.array(rs[..., 1].reshape(-1)[0]))
+    st_h = _fractional_starts(sp[0], oh, kh, u_h)
+    st_w = _fractional_starts(sp[1], ow, kw, u_w)
+    idxs, masks = [], []
+    for n_, st, k_ in ((sp[0], st_h, kh), (sp[1], st_w, kw)):
+        I = np.clip(st[:, None] + np.arange(k_)[None, :], 0, n_ - 1)
+        M = st[:, None] + np.arange(k_)[None, :] < n_
+        idxs.append(mx.array(I))
+        masks.append(mx.array(M))
+    win, mask = _pool_gather(x, idxs, masks)
+    wv = mx.where(mask, win, mx.array(-mx.inf, dtype=x.dtype))
+    kax = (3, 5)
+    out = wv.max(axis=kax)
+    K = kh * kw
+    am = mx.transpose(wv, (0, 1, 2, 4, 3, 5)).reshape(
+        x.shape[0], x.shape[1], oh * ow, K).argmax(axis=-1).reshape(
+        x.shape[0], x.shape[1], oh, ow)
+    hi = mx.array(st_h).reshape(1, 1, oh, 1) + (am // kw)
+    wi = mx.array(st_w).reshape(1, 1, 1, ow) + (am % kw)
+    return out, (hi * sp[1] + wi).astype(mx.int64)
+
+
+def _max_unpool(a, indices, output_size, stride=None, padding=None):
+    v, idx = _mx(a), _mx(indices).astype(mx.int64)
+    n, c = v.shape[0], v.shape[1]
+    osz = tuple(int(s) for s in output_size)
+    if len(osz) == v.ndim:
+        osz = osz[2:]
+    S = int(np.prod(osz))
+    lin = ((mx.arange(n)[:, None, None] * c + mx.arange(c)[None, :, None]) * S +
+           idx.reshape(n, c, -1)).reshape(-1)
+    vals = v.reshape(-1)
+    # torch's sequential scatter is last-write-wins on duplicate indices;
+    # stable-sort by index and take each group's last write.
+    order = mx.argsort(lin)
+    slin = mx.take(lin, order)
+    ends = mx.concatenate([slin[1:] != slin[:-1], mx.array([True])])
+    nend = int(np.array(mx.sum(ends.astype(mx.int32))))
+    epos = mx.take(mx.argsort(~ends), mx.arange(nend))
+    lin_u = mx.take(slin, epos)
+    val_u = mx.take(mx.take(vals, order), epos)
+    out = mx.zeros((n * c * S,), dtype=v.dtype)
+    out = out.at[lin_u].add(val_u)
+    return out.reshape((n, c) + osz)
+
+
 def _bn3(x, w, b, rm, rv, training, momentum, eps):
     """batch-norm forward, channel dim 1 (N,C,... layout). Training
     normalizes with the biased batch variance (torch semantics); eval
@@ -2457,6 +2664,13 @@ _FUNC_SPECS = {
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
+    "adaptive_max_pool2d": _adaptive_max_pool,
+    "adaptive_max_pool3d": _adaptive_max_pool,
+    "max_pool3d_with_indices": lambda a, *ar, **kw: _max_pool_nd(a, *ar, return_indices=True, **kw),
+    "avg_pool3d": _avg_pool_nd,
+    "fractional_max_pool2d": _fractional_max_pool2d,
+    "max_unpool2d": _max_unpool,
+    "max_unpool3d": _max_unpool,
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": _roll,
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
