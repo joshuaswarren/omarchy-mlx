@@ -503,6 +503,45 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 torch.allclose(got, ref.float(), atol=1e-5, rtol=1e-5),
                 (name, kw, float((got - ref.float()).abs().max())))
 
+    def test_flip_rot90_parity(self):
+        """PT-Q11: aten.flip + aten.rot90 lower in the wheel backend —
+        parity vs torch across dims lists, negative dims, k mod 4
+        (including negative k), non-default dims planes, and bf16."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(0)
+        x2 = torch.randn(3, 5)
+        x3 = torch.randn(2, 3, 4)
+        cases = [
+            ("flip", (x2, [0]), {}, torch.flip(x2, [0])),
+            ("flip", (x2, [0, 1]), {}, torch.flip(x2, [0, 1])),
+            ("flip", (x3, [-1]), {}, torch.flip(x3, [-1])),
+            ("flip", (x2.bfloat16(), [1]), {}, torch.flip(x2.bfloat16(), [1])),
+            ("rot90", (x2,), {"k": 1}, torch.rot90(x2, 1)),
+            ("rot90", (x2,), {"k": 2}, torch.rot90(x2, 2)),
+            ("rot90", (x2,), {"k": 3}, torch.rot90(x2, 3)),
+            ("rot90", (x2,), {"k": 4}, torch.rot90(x2, 4)),
+            ("rot90", (x2,), {"k": -1}, torch.rot90(x2, -1)),
+            ("rot90", (x3,), {"k": 1, "dims": [1, 2]}, torch.rot90(x3, 1, [1, 2])),
+            ("rot90", (x3,), {"k": 3, "dims": [-1, -2]}, torch.rot90(x3, 3, [-1, -2])),
+            ("rot90", (x2.bfloat16(),), {"k": 1}, torch.rot90(x2.bfloat16(), 1)),
+        ]
+        for name, ins, kw, ref in cases:
+            mins = tuple(
+                (mx.array(t.float().numpy()).astype(mx.bfloat16)
+                 if torch.is_tensor(t) and t.dtype == torch.bfloat16
+                 else mx.array(t.numpy()) if torch.is_tensor(t) else t)
+                for t in ins)
+            got = torch.from_numpy(
+                np.array(ATEN_TABLE[name](*mins, **kw).astype(mx.float32)))
+            tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+            self.assertTrue(
+                torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                (name, kw, float((got - ref.float()).abs().max())))
 
 
 if __name__ == "__main__":
