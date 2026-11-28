@@ -2055,6 +2055,89 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _const_pad(a, pad, value=0.0):
+    # aten.constant_pad_nd: pad is (l, r) pairs ordered last-dim-first.
+    # A negative amount crops that edge before the fill — aten allows it.
+    a = _mx(a)
+    if len(pad) % 2 or len(pad) > 2 * a.ndim:
+        return _raise("constant_pad_nd pad length")
+    pairs = list(_pad_width(a, pad))
+    for ax in range(a.ndim):
+        l, r = pairs[ax]
+        if l < 0 or r < 0:
+            lo, hi = max(-l, 0), a.shape[ax] + min(r, 0)
+            if hi <= lo:
+                return _raise("constant_pad_nd empty")
+            a = a[tuple(slice(lo, hi) if i == ax else slice(None)
+                        for i in range(a.ndim))]
+            pairs[ax] = (max(l, 0), max(r, 0))
+    return mx.pad(a, tuple(pairs), mode="constant",
+                  constant_values=mx.array(value).astype(a.dtype))
+
+
+def _edge_pad(a, pad, kind):
+    # reflection (mirror, edge excluded), replication (edge clamp) and
+    # circular (mod wrap) pads as index maps — unlike a plain mx.pad this
+    # keeps aten's negative-pad arms, and reflect's multi-mirror fold is
+    # exact. aten bounds: last npad dims padded, ndim - npad in {1, 2},
+    # reflect side < dim.
+    a = _mx(a)
+    npad = len(pad) // 2
+    if len(pad) % 2 or a.ndim - npad not in (1, 2):
+        return _raise(f"{kind}_pad dims")
+    for i in range(npad):
+        ax = a.ndim - 1 - i
+        l, r = int(pad[2 * i]), int(pad[2 * i + 1])
+        n = a.shape[ax]
+        out = n + l + r
+        if n <= 0 or out <= 0:
+            return _raise(f"{kind}_pad size")
+        if kind == "reflect":
+            if l >= n or r >= n:
+                return _raise("reflect pad >= dim")
+            if n <= 1:
+                if l or r:
+                    return _raise("reflect pad len-1 dim")
+                continue
+            p = 2 * (n - 1)
+            jm = (mx.arange(out) - l) % p
+            idx = mx.where(jm < n, jm, p - jm)
+        elif kind == "edge":
+            idx = mx.clip(mx.arange(out) - l, 0, n - 1)
+        else:  # circular
+            idx = (mx.arange(out) - l) % n
+        a = mx.take(a, idx.astype(mx.int32), axis=ax)
+    return a
+
+
+def _pad(a, pad, mode="constant", value=None):
+    if mode == "constant":
+        return _const_pad(a, pad, 0.0 if value is None else value)
+    kind = {"reflect": "reflect", "replicate": "edge",
+            "circular": "circular"}.get(mode)
+    if kind is None:
+        return _raise(f"pad mode {mode}")
+    return _edge_pad(a, pad, kind)
+
+
+def _pad_sequence(seqs, batch_first=False, padding_value=0.0):
+    # aten.pad_sequence: every seq cast into seqs[0]'s dtype (no promotion),
+    # stacked to (B, T_max, ...) then transposed unless batch_first.
+    xs = [_mx(x) for x in seqs]
+    if not xs:
+        return _raise("pad_sequence empty")
+    rest = xs[0].shape[1:]
+    if xs[0].ndim == 0 or any(x.ndim != xs[0].ndim or x.shape[1:] != rest
+                              for x in xs):
+        return _raise("pad_sequence shape")
+    tmax = max(x.shape[0] for x in xs)
+    v = mx.array(padding_value).astype(xs[0].dtype)
+    out = mx.stack([mx.pad(x.astype(xs[0].dtype),
+                           [(0, tmax - x.shape[0])] + [(0, 0)] * (x.ndim - 1),
+                           constant_values=v) for x in xs])
+    return out if batch_first else mx.swapaxes(out, 0, 1)
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2411,7 +2494,15 @@ _FUNC_SPECS = {
     "index": lambda a, idx: a[tuple(_mx(i) if isinstance(i, (torch.Tensor, list)) else i for i in (idx if isinstance(idx, (list, tuple)) else (idx,)))],
     "bincount": _bincount,
     "tril": lambda a, k=0: mx.tril(a, k), "triu": lambda a, k=0: mx.triu(a, k),
-    "pad": lambda a, p, mode="constant", value=0: mx.pad(a, _pad_width(a, p)),
+    "pad": _pad,
+    "constant_pad_nd": _const_pad,
+    "reflection_pad1d": lambda a, padding: _edge_pad(a, padding, "reflect"),
+    "reflection_pad2d": lambda a, padding: _edge_pad(a, padding, "reflect"),
+    "reflection_pad3d": lambda a, padding: _edge_pad(a, padding, "reflect"),
+    "replication_pad1d": lambda a, padding: _edge_pad(a, padding, "edge"),
+    "replication_pad2d": lambda a, padding: _edge_pad(a, padding, "edge"),
+    "replication_pad3d": lambda a, padding: _edge_pad(a, padding, "edge"),
+    "pad_sequence": _pad_sequence,
     "tile": lambda a, d: mx.tile(a, tuple(d)),
     "repeat": lambda a, *d: mx.tile(a, tuple(d[0]) if len(d) == 1 and isinstance(d[0], (list, tuple)) else tuple(d)),
     # PT-AL-i: aten.repeat_interleave (self_int / self_Tensor / .Tensor
