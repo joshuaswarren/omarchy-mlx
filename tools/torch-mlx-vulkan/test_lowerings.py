@@ -2501,7 +2501,14 @@ def test_write_family_dup_targets():
         ref_in = [a.clone() if torch.is_tensor(a) else a for a in ins]
         ref = target(*ref_in)
         g = torch.fx.Graph()
-        targs = [a for a in ins if torch.is_tensor(a)]
+
+        def _flat(a):
+            if torch.is_tensor(a):
+                yield a
+            elif isinstance(a, (list, tuple)):
+                for x in a:
+                    yield from _flat(x)
+        targs = [t for a in ins for t in _flat(a)]
         phs = [g.placeholder(f"p{i}") for i in range(len(targs))]
         pit = iter(phs)
 
