@@ -2055,6 +2055,48 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _fft_norm_scale(norm, n):
+    return {"forward": 1.0, "ortho": np.sqrt(n)}.get(norm, float(n))
+
+
+def _hfft(a, n=None, dim=-1, norm=None):
+    # hfft(a) = irfft(conj(a)) * scale; aten's backward norm scales by n.
+    a = _mx(a)
+    m = int(n) if n is not None else 2 * (a.shape[dim] - 1)
+    r = mx.fft.irfft(mx.conj(a), m, axis=dim)
+    return r * _fft_norm_scale(norm, m)
+
+
+def _ihfft(a, n=None, dim=-1, norm=None):
+    # ihfft(a) = conj(rfft(a)) / scale.
+    a = _mx(a)
+    m = int(n) if n is not None else a.shape[dim]
+    r = mx.conj(mx.fft.rfft(a, m, axis=dim))
+    return r / _fft_norm_scale(norm, m)
+
+
+def _hann(L, periodic, dtype):
+    den = L if periodic else L - 1
+    w = 0.5 - 0.5 * mx.cos(2 * np.pi * mx.arange(L) / max(den, 1))
+    mdt = _MX_DT.get(dtype, mx.float32) if dtype is not None else mx.float32
+    return w.astype(mdt)
+
+
+def _stft(a, n_fft, hop_length, win_length, window, normalized, onesided,
+          return_complex, align_to_window):
+    # aten::stft never pads: the python wrapper's center=True lands here
+    # as a separate pad node, so center=False is the right mx mapping.
+    if align_to_window is not None:
+        return _raise("stft align_to_window")
+    w = _mx(window) if window is not None else None
+    r = mx.fft.stft(_mx(a), int(n_fft), hop_length, win_length, w,
+                    center=False, norm="ortho" if normalized else "backward",
+                    onesided=onesided)
+    if return_complex is False:
+        r = mx.stack([mx.real(r), mx.imag(r)], axis=-1)
+    return r
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2266,6 +2308,15 @@ _FUNC_SPECS = {
     "fft_ifft": lambda a, n=None, dim=-1, norm=None: mx.fft.ifft(_mx(a), n, axis=dim, norm=norm or "backward"),
     # PT-AU-b: real<->complex transforms (Parakeet mel-spectrogram)
     "fft_rfft": lambda a, n=None, dim=-1, norm=None: mx.fft.rfft(_mx(a), n, axis=dim, norm=norm or "backward"),
+    # fft extras (piece 12): hermitian transforms compose conj+rfft/irfft;
+    # mx.fft covers the rfft2/irfft2/rfftn/irfftn signatures directly.
+    "fft_hfft": _hfft, "fft_ihfft": _ihfft,
+    "fft_rfft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.rfft2(_mx(a), s, axes=dim, norm=norm or "backward"),
+    "fft_irfft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.irfft2(_mx(a), s, axes=dim, norm=norm or "backward"),
+    "fft_rfftn": lambda a, s=None, dim=None, norm=None: mx.fft.rfftn(_mx(a), s, axes=dim, norm=norm or "backward"),
+    "fft_irfftn": lambda a, s=None, dim=None, norm=None: mx.fft.irfftn(_mx(a), s, axes=dim, norm=norm or "backward"),
+    "hann_window": lambda window_length, periodic=True, dtype=None, **kw: _hann(int(window_length), periodic, dtype),
+    "stft": lambda a, n_fft, hop_length=None, win_length=None, window=None, normalized=False, onesided=None, return_complex=None, align_to_window=None: _stft(a, n_fft, hop_length, win_length, window, normalized, onesided, return_complex, align_to_window),
     "fft_irfft": lambda a, n=None, dim=-1, norm=None: mx.fft.irfft(_mx(a), n, axis=dim, norm=norm or "backward"),
     # PT-AU-c: 2-D transforms (vision, spectrogram models)
     "fft_fft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.fft2(_mx(a), s, axes=dim, norm=norm or "backward"),
@@ -2587,7 +2638,7 @@ for _fn, _low in FUNC_TABLE.items():
 _PRODUCERS = {"arange", "zeros", "ones", "full", "empty", "eye", "linspace",
               "tensor", "zeros_like", "ones_like", "full_like", "empty_like",
               "rand", "randn", "randint", "randperm", "new_zeros", "new_ones",
-              "new_empty", "new_full", "scalar_tensor"}
+              "new_empty", "new_full", "scalar_tensor", "hann_window"}
 
 # sampling ops: mx.compile would trace an mx.random draw once and replay
 # it, and mx.random cannot honor torch's RNG contract anyway — the family

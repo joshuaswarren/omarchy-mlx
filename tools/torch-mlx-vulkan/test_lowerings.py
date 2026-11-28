@@ -3014,6 +3014,73 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_fft_extras():
+    # PT-AL-fft: hermitian transforms compose conj+rfft/irfft with the
+    # {n, 1, sqrt(n)} norm scale; rfft2/irfft2/rfftn/irfftn map direct;
+    # aten::stft never pads (center lives upstream in the wrapper).
+    torch.manual_seed(0)
+    xc = torch.randn(2, 8).to(torch.complex64)
+    xr = torch.randn(2, 8)
+    x33 = torch.randn(2, 6, 5)
+    w = torch.hann_window(8)
+    cases = [
+        (torch.ops.aten.fft_hfft.default, (xc,), {"n": 14}, "fft_hfft"),
+        (torch.ops.aten.fft_hfft.default, (xc,), {}, "fft_hfft"),
+        (torch.ops.aten.fft_hfft.default, (xc,), {"n": 14, "norm": "ortho"}, "fft_hfft"),
+        (torch.ops.aten.fft_hfft.default, (xc,), {"n": 14, "norm": "forward"}, "fft_hfft"),
+        (torch.ops.aten.fft_ihfft.default, (xr,), {}, "fft_ihfft"),
+        (torch.ops.aten.fft_ihfft.default, (xr,), {"norm": "ortho"}, "fft_ihfft"),
+        (torch.ops.aten.fft_ihfft.default, (xr,), {"norm": "forward"}, "fft_ihfft"),
+        (torch.ops.aten.fft_rfft2.default, (x33,), {}, "fft_rfft2"),
+        (torch.ops.aten.fft_rfft2.default, (x33,), {"s": [8, 8]}, "fft_rfft2"),
+        (torch.ops.aten.fft_rfft2.default, (x33,), {"s": [8, 8], "norm": "ortho"}, "fft_rfft2"),
+        (torch.ops.aten.fft_irfft2.default, (torch.randn(2, 6, 4).to(torch.complex64),), {}, "fft_irfft2"),
+        (torch.ops.aten.fft_irfft2.default, (torch.randn(2, 6, 4).to(torch.complex64),), {"s": [6, 6]}, "fft_irfft2"),
+        (torch.ops.aten.fft_rfftn.default, (x33,), {}, "fft_rfftn"),
+        (torch.ops.aten.fft_rfftn.default, (x33,), {"s": [8, 8], "dim": [0, 2]}, "fft_rfftn"),
+        (torch.ops.aten.fft_irfftn.default, (torch.randn(2, 6, 4).to(torch.complex64),), {"s": [6, 6, 6], "dim": [0, 1, 2]}, "fft_irfftn"),
+        (torch.ops.aten.stft.default, (torch.randn(64),), {"n_fft": 16, "hop_length": 4, "win_length": 8, "window": w, "return_complex": True}, "stft"),
+        (torch.ops.aten.stft.default, (torch.randn(64),), {"n_fft": 16, "hop_length": 4, "win_length": 16, "window": torch.hann_window(16), "normalized": True, "return_complex": True}, "stft"),
+        (torch.ops.aten.stft.default, (torch.randn(64),), {"n_fft": 16, "return_complex": False}, "stft"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        wargs = dict(kwargs)
+        extra = [k for k, v in wargs.items() if isinstance(v, torch.Tensor)]
+        for k in extra:
+            wargs[k] = g.placeholder(f"w{k}")
+        n = g.call_function(target, tuple(phs), dict(wargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins, *[kwargs[k] for k in extra])
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = np.array(out)
+        rref = ref.resolve_conj().numpy() if ref.is_conj() else ref.numpy()
+        assert np.allclose(got.astype(np.complex128), rref.astype(np.complex128), atol=1e-4), (
+            str(target), kwargs, np.abs(got.astype(np.complex128) - rref.astype(np.complex128)).max())
+    # producer: hann_window (default periodic=True and the .periodic overload)
+    for target, kwargs, fam in [
+        (torch.ops.aten.hann_window.default, {"window_length": 8}, "hann_window"),
+        (torch.ops.aten.hann_window.periodic, {"window_length": 8, "periodic": False}, "hann_window"),
+        (torch.ops.aten.hann_window.periodic, {"window_length": 5, "periodic": True}, "hann_window"),
+    ]:
+        ref = target(**kwargs)
+        g = torch.fx.Graph()
+        n = g.call_function(target, (), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run()
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        assert np.allclose(np.array(out), ref.numpy(), atol=1e-6), (str(target), kwargs)
+    print("test_fft_extras PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3141,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_fft_extras()
     print("ALL PASS")
 
 
