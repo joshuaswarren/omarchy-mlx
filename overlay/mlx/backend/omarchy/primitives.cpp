@@ -11204,15 +11204,16 @@ bool dispatch_quantized_gemv_group(
       encoder.device().compute().binding_limit() >= 13u &&
       encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
       encoder.device().capabilities().max_compute_work_group_size[0] >= 512u) {
+    const uint32_t rn_width = static_cast<uint32_t>(res_norm->out.shape(-1));
     const char* rn_vec4_env = omarchy::env_str("MLX_OMARCHY_RESNORM_VEC4");
     const bool rn_vec4_on = (rn_vec4_env != nullptr && rn_vec4_env[0] != '\0')
         ? (std::strcmp(rn_vec4_env, "0") != 0)
-        : omarchy::qmm_resnorm_vec4_default(qmm_dev_name);
+        : omarchy::qmm_resnorm_vec4_default(qmm_dev_name, rn_width);
     if (rn_vec4_on) {
       const char* rn_s32_env = omarchy::env_str("MLX_OMARCHY_RESNORM_R2S32");
       const bool rn_s32_want = (rn_s32_env != nullptr && rn_s32_env[0] != '\0')
           ? (std::strcmp(rn_s32_env, "0") != 0)
-          : omarchy::qmm_resnorm_r2s32_default(qmm_dev_name);
+          : omarchy::qmm_resnorm_r2s32_default(qmm_dev_name, rn_width);
       // The R2S32W2 build runs a 1024-lane workgroup, over the 512-lane
       // bound the 32-pin admission was derived at — it stays native-32
       // only even where a requiredSubgroupSize = 32 pin is legal.
@@ -11905,6 +11906,27 @@ bool dispatch_quantized_gemv_group(
         }
         if (res_norm->dead_qmm_out) {
           params.flags |= 0x1000000u;
+        }
+      } else if (
+          resnorm_kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2 &&
+          params.matrix_k % 512u == 0u && params.shape[0] == 4096u &&
+          params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u &&
+          (members[0].node.offset() & 3u) == 0u &&
+          (members[0].addend->offset() & 3u) == 0u &&
+          (members[0].epilogue->offset() & 15u) == 0u &&
+          (res_norm->out.offset() & 15u) == 0u &&
+          omarchy::qmm_resnorm_d4096_midsb_default_part(
+              encoder.device().capabilities().device_name)) {
+        const char* spec_env = omarchy::env_str("MLX_OMARCHY_RESNORM_SPEC");
+        const bool spec_allow =
+            (spec_env == nullptr || spec_env[0] == '\0' ||
+             std::strcmp(spec_env, "0") != 0);
+        if (spec_allow) {
+          resnorm_kernel =
+              ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD4096Midsb;
+          if (res_norm->dead_qmm_out) {
+            params.flags |= 0x1000000u;
+          }
         }
       }
       encoder.dispatch_compute(

@@ -946,6 +946,16 @@ inline bool qmm_resnorm_vec4_default(const std::string& device_name) {
       device_name.find("G13G") != std::string::npos;
 }
 
+// Width-aware overload: G13C enables ResNormVec4 R2S32W2 strictly at
+// row_length == 4096 (64 WGs = 2.00 full waves on 32 cores), keeping
+// D=2560 (Qwen3-4B) and D=2048 on R2S8W2VecFast. Pure.
+inline bool qmm_resnorm_vec4_default(
+    const std::string& device_name,
+    uint32_t row_length) {
+  return qmm_resnorm_vec4_default(device_name) ||
+      (device_name.find("G13C") != std::string::npos && row_length == 4096u);
+}
+
 // 1024-thread (32 subgroups, 64 cols/WG) coalesced uvec4 ResNormVec4
 // (QmmVecQ4ResNormVec4BF16R2S32W2). Cuts N=2048 from 64 WGs (2 waves on 38
 // cores) to 32 WGs (1 wave) and halves ticket.done atomic contention again.
@@ -953,6 +963,28 @@ inline bool qmm_resnorm_vec4_default(const std::string& device_name) {
 // MLX_OMARCHY_RESNORM_VEC4=0 disables Vec4. Pure.
 inline bool qmm_resnorm_r2s32_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos;
+}
+
+// Width-aware overload: G13C pairs R2S32W2 strictly with row_length == 4096
+// (64 WGs = 2.00 full waves on 32 cores). Pure.
+inline bool qmm_resnorm_r2s32_default(
+    const std::string& device_name,
+    uint32_t row_length) {
+  return qmm_resnorm_r2s32_default(device_name) ||
+      (device_name.find("G13C") != std::string::npos && row_length == 4096u);
+}
+
+// G13C-gated D=4096 ResNormVec4 R2S32W2 fast-only mid-loop scale/bias variant
+// (QmmVecQ4ResNormVec4BF16R2S32W2FastD4096Midsb): uses QMM_Q4_MIDSB instead of
+// QMM_W2_UPFRONT so 64-WG D=4096 wins on both qualified Mesa (53ad9af1) and
+// stock shipped Mesa (1650fc1a33) without FIFO stalls. 0-ULP bit-identical.
+// Default on G13C; MLX_OMARCHY_RESNORM_D4096_MIDSB=0/1 overrides. Pure.
+inline bool qmm_resnorm_d4096_midsb_default_part(
+    const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_RESNORM_D4096_MIDSB")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G13C") != std::string::npos;
 }
 
 // 1024-thread (32 subgroups, 64 cols/WG) Q4 word decode GEMV for large
