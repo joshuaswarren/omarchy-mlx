@@ -3014,6 +3014,66 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+def _run_fx(target, args, kwargs, *feed):
+    g = torch.fx.Graph()
+    tensors = [f for f in feed if isinstance(f, torch.Tensor)]
+    phs = [g.placeholder(f"p{i}") for i in range(len(tensors))]
+    it = iter(phs)
+
+    def _w(v):
+        return next(it) if isinstance(v, torch.Tensor) else v
+
+    wargs = tuple(_w(v) for v in args)
+    wkwargs = {k: _w(v) for k, v in kwargs.items()}
+    node = g.call_function(target, wargs, wkwargs)
+    g.output(node)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(*tensors)
+    assert stats["cpu"] == [], (stats, [str(n.target) for n in gm.graph.nodes])
+    return out
+
+
+def test_grid_sampler():
+    rng = np.random.RandomState(0)
+    x = torch.tensor(rng.randn(2, 3, 5, 6).astype(np.float32))
+    g = torch.tensor(rng.uniform(-1.5, 1.5, (2, 4, 7, 2)).astype(np.float32))
+    for mode in (0, 1, 2):
+        for pad in (0, 1, 2):
+            for ac in (True, False):
+                out = _run_fx(torch.ops.aten.grid_sampler_2d.default,
+                              (x, g, mode, pad, ac), {}, x, g)
+                ref = torch.nn.functional.grid_sample(
+                    x, g, mode={0: "bilinear", 1: "nearest", 2: "bicubic"}[mode],
+                    padding_mode={0: "zeros", 1: "border", 2: "reflection"}[pad],
+                    align_corners=ac)
+                assert np.allclose(_np(out), ref.numpy(), atol=1e-4), (mode, pad, ac)
+    x3 = torch.tensor(rng.randn(1, 2, 4, 5, 6).astype(np.float32))
+    g3 = torch.tensor(rng.uniform(-1.2, 1.2, (1, 3, 4, 5, 3)).astype(np.float32))
+    for mode in (0, 1):
+        for pad in (0, 1, 2):
+            out = _run_fx(torch.ops.aten.grid_sampler_3d.default,
+                          (x3, g3, mode, pad, True), {}, x3, g3)
+            ref = torch.nn.functional.grid_sample(
+                x3, g3, mode={0: "bilinear", 1: "nearest"}[mode],
+                padding_mode={0: "zeros", 1: "border", 2: "reflection"}[pad],
+                align_corners=True)
+            assert np.allclose(_np(out), ref.numpy(), atol=1e-4), (mode, pad)
+    th = torch.tensor(rng.randn(2, 2, 3).astype(np.float32))
+    for ac in (True, False):
+        out = _run_fx(torch.ops.aten.affine_grid_generator.default,
+                      (th, [2, 3, 4, 5], ac), {}, th)
+        ref = torch.nn.functional.affine_grid(th, [2, 3, 4, 5], align_corners=ac)
+        assert np.allclose(_np(out), ref.numpy(), atol=1e-5)
+    th3 = torch.tensor(rng.randn(1, 3, 4).astype(np.float32))
+    out = _run_fx(torch.ops.aten.affine_grid_generator.default,
+                  (th3, [1, 2, 3, 4, 5], False), {}, th3)
+    ref = torch.nn.functional.affine_grid(th3, [1, 2, 3, 4, 5], align_corners=False)
+    assert np.allclose(_np(out), ref.numpy(), atol=1e-5)
+    print("test_grid_sampler PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3134,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_grid_sampler()
     print("ALL PASS")
 
 

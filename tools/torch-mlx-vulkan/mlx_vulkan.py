@@ -2055,6 +2055,95 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _gs_base(n, align):
+    if align:
+        return mx.linspace(-1.0, 1.0, n) if n > 1 else mx.zeros((n,))
+    return mx.arange(n, dtype=mx.float32) * (2.0 / n) - 1.0 + 1.0 / n
+
+
+def _affine_grid(theta, size, align_corners=False):
+    th = _mx(theta)
+    dims = [int(d) for d in size[2:]]
+    grids = mx.meshgrid(*[_gs_base(d, align_corners) for d in dims], indexing="ij")
+    nd = len(dims)
+    # coordinate k of the base grid varies along spatial axis nd-1-k
+    base = mx.stack([grids[nd - 1 - k] for k in range(nd)] +
+                    [mx.ones(tuple(dims), dtype=th.dtype)], axis=-1)
+    return mx.einsum("...k,ndk->n...d", base, th)
+
+
+def _gs_unnorm(u, n, align):
+    return (u + 1) * ((n - 1) / 2) if align else ((u + 1) * n - 1) / 2
+
+
+def _gs_idx(i, n, pad, align):
+    # -> (gather index, keep mask); pad: 0 zeros, 1 border, 2 reflection
+    if pad == 0:
+        return mx.clip(i, 0, n - 1), (i >= 0) & (i < n)
+    if pad == 2:
+        # align_corners reflects about edge pixel centers (period 2n-2);
+        # otherwise about the image edges (period 2n)
+        period = 2 * n - 2 if align else 2 * n
+        m = i - (i // period) * period
+        return mx.where(m >= n, period - m - (0 if align else 1), m), None
+    return mx.clip(i, 0, n - 1), None
+
+
+def _gs_cubic_w(d, a=-0.75):
+    d = mx.abs(d)
+    d2, d3 = d * d, d * d * d
+    w1 = (a + 2) * d3 - (a + 3) * d2 + 1
+    w2 = a * d3 - 5 * a * d2 + 8 * a * d - 4 * a
+    return mx.where(d <= 1, w1, mx.where(d < 2, w2, 0))
+
+
+def _grid_sampler(input, grid, interpolation_mode, padding_mode, align_corners):
+    t, g = _mx(input), _mx(grid)
+    sp = t.shape[2:]
+    nd = len(sp)
+    if nd not in (2, 3) or interpolation_mode not in (0, 1, 2):
+        return _raise(f"grid_sampler nd={nd} mode={interpolation_mode}")
+    if nd == 3 and interpolation_mode == 2:
+        return _raise("grid_sampler_3d bicubic")
+    n, c = t.shape[0], t.shape[1]
+    outs = g.shape[1:-1]
+    # unnormalized pixel coords per spatial axis (grid last dim is x[,y,z])
+    pxs = [_gs_unnorm(g[..., k], sp[nd - 1 - k], align_corners) for k in range(nd)]
+    flat = t.reshape(n * c * int(np.prod(sp)))
+    nb = mx.arange(n).reshape((n,) + (1,) * (nd + 1))
+    cb = mx.arange(c).reshape((1, c) + (1,) * nd)
+    base = nb * c + cb  # (n, c, 1...)
+    out = mx.zeros((n, c) + outs, dtype=t.dtype)
+    ncorner = 1 if interpolation_mode == 1 else (4 ** nd if interpolation_mode == 2 else 2 ** nd)
+    for corner in range(ncorner):
+        w = mx.ones((n,) + outs, dtype=t.dtype)
+        lin = base * int(np.prod(sp))
+        ok = mx.ones((n, 1) + outs, dtype=mx.bool_) if padding_mode == 0 else None
+        for k in range(nd):
+            n_k = sp[nd - 1 - k]
+            p = pxs[k]
+            if interpolation_mode == 1:
+                ii = mx.floor(p + 0.5).astype(mx.int64)
+                idx, keep = _gs_idx(ii, n_k, padding_mode, align_corners)
+            else:
+                taps = 4 if interpolation_mode == 2 else 2
+                t0 = (mx.floor(p) - (1 if interpolation_mode == 2 else 0)).astype(mx.int64)
+                tk = t0 + (corner >> (k * 2 if interpolation_mode == 2 else k)) % taps
+                frac = p - mx.floor(p)
+                idx, keep = _gs_idx(tk, n_k, padding_mode, align_corners)
+                if interpolation_mode == 2:
+                    w = w * _gs_cubic_w(p - tk)
+                else:
+                    w = w * mx.where((corner >> k) % 2 == 0, 1 - (p - t0), p - t0)
+            stride_k = int(np.prod(sp[nd - k:]))
+            lin = lin + mx.expand_dims(idx, 1) * stride_k
+            if keep is not None:
+                ok = ok & mx.expand_dims(keep, 1)
+        vals = mx.take(flat, lin.reshape(n, c, -1)).reshape((n, c) + outs)
+        out = out + vals * mx.expand_dims(w, 1) * (ok if ok is not None else 1)
+    return out
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2457,6 +2546,9 @@ _FUNC_SPECS = {
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
+    "affine_grid_generator": _affine_grid,
+    "grid_sampler_2d": _grid_sampler,
+    "grid_sampler_3d": _grid_sampler,
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": _roll,
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
