@@ -252,6 +252,15 @@ def _is_pinned_samples(samples, fixture_samples_sha: str | None) -> bool:
 # constants uploaded to the device; all sample arithmetic is MLX.
 # ------------------------------------------------------------------
 
+# Telephone-band sources carry nothing above half their sample rate, so
+# upsampled clips reach the encoder with an empty top octave. The pinned
+# fp16 encoder loses fricative margins there; regenerating harmonics of
+# the voiced band recovers them. Wideband input is untouched.
+_NARROWBAND_MAX_RATE = 12_000
+_NARROWBAND_EXTEND_CUTOFF_HZ = 1_000.0
+_NARROWBAND_EXTEND_GAIN = 0.4
+
+
 def _kaiser_lowpass(up: int, down: int, half_len: int = 16) -> "object":
     """Unity-DC-gain FIR taps in up-sampled-sample units."""
     import numpy as np
@@ -296,7 +305,33 @@ def resample_to_16k(waveform, sample_rate: int):
         device_taps, (offsets[None, :] * up + phase[:, None]).reshape(-1)
     ).reshape(n_out, rows)
     resampled = (gather_signal * gather_taps).sum(axis=1)
-    return np.asarray(resampled, dtype=np.float32)
+    out = np.asarray(resampled, dtype=np.float32)
+    if int(sample_rate) <= _NARROWBAND_MAX_RATE:
+        out = _extend_narrowband_octave(out)
+    return out
+
+
+def _extend_narrowband_octave(signal):
+    """Fill the empty top octave of band-limited input on the MLX device.
+
+    A signed square of the voiced band (above
+    _NARROWBAND_EXTEND_CUTOFF_HZ) regenerates harmonics in the 4-8 kHz
+    octave a narrowband source cannot carry. Fundamental components are
+    unperturbed, so wideband content reaching this path is unaffected.
+    """
+    import mlx.core as mx
+    import numpy as np
+
+    x = mx.array(signal)
+    spectrum = mx.fft.rfft(x)
+    keep = mx.fft.rfftfreq(x.shape[0], 1.0 / SAMPLE_RATE) >= (
+        _NARROWBAND_EXTEND_CUTOFF_HZ
+    )
+    voiced = mx.fft.irfft(spectrum * keep.astype(spectrum.dtype), n=x.shape[0])
+    extended = mx.clip(
+        x + _NARROWBAND_EXTEND_GAIN * voiced * mx.abs(voiced), -1.0, 1.0
+    )
+    return np.asarray(extended, dtype=np.float32)
 
 
 # ------------------------------------------------------------------
