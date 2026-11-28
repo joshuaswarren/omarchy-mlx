@@ -18,6 +18,7 @@
 #include "mlx/backend/omarchy/step_timeline.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/gpu_profiler.h"
+#include "kernel_names.h"
 #include "mlx/backend/omarchy/vulkan.h"
 #include "mlx/scheduler.h"
 #include "mlx/utils.h"
@@ -1006,6 +1007,20 @@ void CommandEncoder::dispatch_compute_pipeline(
       group_count_y * group_count_z;
   batch_work_ =
       UINT64_MAX - batch_work_ > groups ? batch_work_ + groups : UINT64_MAX;
+  if (!batch_has_prefill_) {
+    static const auto kPrefillKernel = []() {
+      std::array<bool, static_cast<size_t>(ComputeKernel::Count)> table{};
+      for (size_t i = 0; i < table.size(); ++i) {
+        table[i] = is_prefill_work_kernel_name(
+            compute_kernel_name(static_cast<ComputeKernel>(i)));
+      }
+      return table;
+    }();
+    const auto idx = static_cast<size_t>(profile_kernel);
+    if (idx < kPrefillKernel.size() && kPrefillKernel[idx]) {
+      batch_has_prefill_ = true;
+    }
+  }
 
   auto& dt = vk::device_table();
   // Push mode allocates no set: the layout carries PUSH_DESCRIPTOR_BIT,
@@ -1915,6 +1930,7 @@ void CommandEncoder::submit() {
       resnorm_ticket_slot_ = -1;
       node_count_ = 0;
       batch_work_ = 0;
+  batch_has_prefill_ = false;
       wait_semaphores_.clear();
       signal_semaphores_.clear();
       completed_handlers_.clear();
@@ -1984,6 +2000,7 @@ void CommandEncoder::submit() {
   recording_ = false;
   node_count_ = 0;
   batch_work_ = 0;
+  batch_has_prefill_ = false;
   pending_.clear();
   // Phase-1 records have no consumer yet; bound the vector at the batch
   // boundary like every other per-batch list.

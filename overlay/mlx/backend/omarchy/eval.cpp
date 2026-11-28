@@ -200,7 +200,8 @@ void eval(array& arr) {
             encoder.batch_work(),
             budget,
             omarchy::batch_work_budget(
-                encoder.device().hardware_capabilities().device_name)) ||
+                encoder.device().hardware_capabilities().device_name,
+                encoder.batch_has_prefill())) ||
         alloc.pending_quarantine_bytes() >=
             alloc.batch_limit() / omarchy::kBatchByteBudgetDivisor) {
       EvalPhaseTimer commit_timer(3, fold_timing);
