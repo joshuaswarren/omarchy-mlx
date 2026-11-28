@@ -544,12 +544,10 @@ def _mode(a, dim=-1, keepdim=False):
     inv = [perm.index(i) for i in range(a.ndim)]
     vals = mx.transpose(vals, axes=inv)
     index = mx.transpose(index, axes=inv)
+    # keepdim is the natural shape: the size-1 axis already sits at dim
     if not keepdim:
         vals = mx.squeeze(vals, dim)
         index = mx.squeeze(index, dim)
-    if keepdim and a.ndim > 1:
-        vals = mx.expand_dims(vals, dim)
-        index = mx.expand_dims(index, dim)
     return (vals.astype(a.dtype), index.astype(mx.int64))
 
 
@@ -579,12 +577,10 @@ def _kthvalue(a, k, dim=-1, keepdim=False):
     inv = [perm.index(i) for i in range(a.ndim)]
     vals = mx.transpose(vals, axes=inv)
     sel_idx = mx.transpose(sel_idx, axes=inv)
+    # keepdim is the natural shape: the size-1 axis already sits at dim
     if not keepdim:
         vals = mx.squeeze(vals, dim)
         sel_idx = mx.squeeze(sel_idx, dim)
-    if keepdim and a.ndim > 1:
-        vals = mx.expand_dims(vals, dim)
-        sel_idx = mx.expand_dims(sel_idx, dim)
     return (vals.astype(a.dtype), sel_idx.astype(mx.int64))
 
 

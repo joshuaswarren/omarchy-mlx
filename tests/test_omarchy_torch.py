@@ -584,6 +584,14 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         tv1, ti1 = torch.mode(torch.tensor(x1), keepdim=True)
         self.assertEqual(np.array(v1).shape, tuple(tv1.shape))
         self.assertTrue(np.array_equal(np.array(v1), tv1.numpy()))
+        # mode 2-D keepdim=True: shape (4,1), values + index contract
+        vk, ik = ATEN_TABLE["mode"](mx.array(x), 1, keepdim=True)
+        tvk, tik = torch.mode(torch.tensor(x), 1, keepdim=True)
+        self.assertEqual(np.array(vk).shape, tuple(tvk.shape))
+        self.assertEqual(tuple(np.array(vk).shape), (4, 1))
+        self.assertTrue(np.array_equal(np.array(vk), tvk.numpy()))
+        held_k = np.take_along_axis(x, np.array(ik), axis=1)
+        self.assertTrue(np.array_equal(held_k, tvk.numpy()))
 
         # --- kthvalue: fp32 distinct + int64 duplicates
         for dt in (np.float32, np.int64):
@@ -612,6 +620,15 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         self.assertTrue(np.array_equal(np.array(vk1), tvk1.numpy()))
         self.assertEqual(int(xk1[int(np.array(ik1)[0])]),
                          int(np.array(vk1)[0]))
+        # kthvalue 2-D keepdim=True: shape (4,1), values + index contract
+        xk2 = np.random.RandomState(4).randint(0, 4, size=(4, 9)).astype(np.int64)
+        vk2, ik2 = ATEN_TABLE["kthvalue"](mx.array(xk2), 3, 1, keepdim=True)
+        tvk2, tik2 = torch.kthvalue(torch.tensor(xk2), 3, 1, keepdim=True)
+        self.assertEqual(np.array(vk2).shape, tuple(tvk2.shape))
+        self.assertEqual(tuple(np.array(vk2).shape), (4, 1))
+        self.assertTrue(np.array_equal(np.array(vk2), tvk2.numpy()))
+        held_k2 = np.take_along_axis(xk2, np.array(ik2), axis=1)
+        self.assertTrue(np.array_equal(held_k2, tvk2.numpy()))
 
 
 
