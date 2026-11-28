@@ -1232,6 +1232,17 @@ enum class ComputeKernel : uint16_t {
   // dequantized B stored fp16, fp32 accumulator (shaders/qmm_coopmat.comp
   // -DCMAT16). Appended to keep profile kernel ids stable.
   QmmPrefillCoopmat16BF16,
+  // DEC-20 (5060 Ti): wider CMAT16 row tiles and K staging, same
+  // fp16-operand shape and per-output ascending-k chain - 64-row
+  // (2 subgroups x 2 row blocks) at STEP_K 16/32/64 and 128-row
+  // (SG8, 8 subgroups x 1 row block) at STEP_K 64. Env-selected
+  // (MLX_OMARCHY_CMAT16_TILES / MLX_OMARCHY_CMAT16_STEP); the shipped
+  // 32-row default is unchanged. Appended to keep profile kernel ids
+  // stable.
+  QmmPrefillCoopmat16BF16Rows64,
+  QmmPrefillCoopmat16BF16Rows64K32,
+  QmmPrefillCoopmat16BF16Rows64K64,
+  QmmPrefillCoopmat16BF16Rows128K64,
   // Unified 2x8w2 decode QMV builds (2 rows/slot x 8 slots = 256 threads/WG,
   // 16 cols/WG, hoisted uvec2 loads, dedicated 1-pass interleaved SwiGLU,
   // 1-pass ResNorm/OutgateResNorm). Appended to keep profile kernel ids stable.

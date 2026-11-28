@@ -122,32 +122,25 @@
 #endif
 #elif TILE_ROWS == 16
 #ifdef CMAT16
-#error "CMAT16 ships the 32-row tile only"
+#error "CMAT16 ships the 32/64/128-row tiles"
 #endif
 #define SUBGROUP_ROW_BLOCKS 1u
 #elif TILE_ROWS == 64
-#ifdef CMAT16
-#error "CMAT16 ships the 32-row tile only"
+#ifdef SG4
+#define SUBGROUP_ROW_BLOCKS 1u
+#else
+#define SUBGROUP_ROW_BLOCKS 2u
 #endif
-// Two subgroups each own 32 rows (4 blocks), or SG4: four subgroups
-// (128 threads) each own 16 rows (2 blocks) so the 64-row tile keeps
-// the shipped 32-row per-thread accumulator footprint. W is dequantized
-// once and reused across twice the rows; every output keeps its
-// ascending-k chain.
+#elif TILE_ROWS == 128
+#ifdef SG8
+#define SUBGROUP_ROW_BLOCKS 1u
+#else
 #ifdef SG4
 #define SUBGROUP_ROW_BLOCKS 2u
 #else
 #define SUBGROUP_ROW_BLOCKS 4u
 #endif
-#elif TILE_ROWS == 128
-// SG8: eight subgroups (256 threads) each own 16 rows (2 blocks),
-// reusing one 64x32 weight tile across 128 output rows (1 packed word
-// per lane per 64-K group, 2 barriers per group) while keeping the
-// shipped 32-row per-thread accumulator footprint.
-#ifndef SG8
-#error "TILE_ROWS == 128 requires SG8"
 #endif
-#define SUBGROUP_ROW_BLOCKS 2u
 #else
 #error "TILE_ROWS must be 128, 64, 32 or 16"
 #endif
@@ -165,9 +158,11 @@
 #endif
 #if defined(FULL_N) || defined(LDS_PAD) || defined(CHUNK_DEQ) || \
     defined(TWO_N) || defined(SG4) || defined(RASTER_SWAP) || \
-    defined(RASTER_GM) || defined(STEP_K_VAL) || defined(FULL_M) || \
-    defined(SUBGROUP_DRAIN)
-#error "CMAT16 is the plain 32-row route only"
+    defined(RASTER_GM) || defined(FULL_M) || defined(SUBGROUP_DRAIN)
+#error "CMAT16 keeps the plain route: no raster, no drain, no SG4"
+#endif
+#if TILE_ROWS != 32 && TILE_ROWS != 64 && TILE_ROWS != 128
+#error "CMAT16 ships the 32/64/128-row tiles"
 #endif
 #if QBITS != 4 || QGROUP != 64
 #error "CMAT16 is a 4-bit group-64 build"
@@ -184,8 +179,11 @@ const uint CHUNK_K = 64u;
 // feeds more 8-wide matmads. The per-output k chain is unchanged
 // (same 8-wide mma order). Direct-load q4g64 FullN twins only.
 #ifdef STEP_K_VAL
-#if defined(X_BF16) || defined(CHUNK_DEQ) || defined(TWO_N)
+#if defined(CHUNK_DEQ) || defined(TWO_N)
 #error "STEP_K_VAL applies to the direct-load q4g64 FullN route only"
+#endif
+#if (defined(X_BF16) && !defined(CMAT16))
+#error "STEP_K_VAL under X_BF16 staging is the CMAT16 build only"
 #endif
 #if QBITS != 4 || QGROUP != 64
 #error "STEP_K_VAL is a 4-bit group-64 experiment"
@@ -197,7 +195,10 @@ const uint CHUNK_K = 64u;
 #else
 #define STEP_K 16
 #endif
-#ifdef CMAT16
+#if defined(SG8) && defined(CMAT16) && STEP_K != 64
+#error "CMAT16 SG8 ships the STEP_K 64 dequant ladder only"
+#endif
+#if defined(SG8) && defined(CMAT16)
 const uint MAT = 16u;
 #else
 const uint MAT = 8u;
@@ -613,21 +614,21 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
         uint packed = column_ok
             ? input_w.values[w_row + k_base / 8u + word] : 0u;
         uint w_base = 8u * word * QMM_W_STRIDE + g_wcol;
-        w_s[w_base + 0u * QMM_W_STRIDE] = scale * NIB_F32(packed & 0xFu) + bias;
+        w_s[w_base + 0u * QMM_W_STRIDE] = W_STORE(scale * NIB_F32(packed & 0xFu) + bias);
         w_s[w_base + 1u * QMM_W_STRIDE] =
-            scale * NIB_F32((packed >> 4u) & 0xFu) + bias;
+            W_STORE(scale * NIB_F32((packed >> 4u) & 0xFu) + bias);
         w_s[w_base + 2u * QMM_W_STRIDE] =
-            scale * NIB_F32((packed >> 8u) & 0xFu) + bias;
+            W_STORE(scale * NIB_F32((packed >> 8u) & 0xFu) + bias);
         w_s[w_base + 3u * QMM_W_STRIDE] =
-            scale * NIB_F32((packed >> 12u) & 0xFu) + bias;
+            W_STORE(scale * NIB_F32((packed >> 12u) & 0xFu) + bias);
         w_s[w_base + 4u * QMM_W_STRIDE] =
-            scale * NIB_F32((packed >> 16u) & 0xFu) + bias;
+            W_STORE(scale * NIB_F32((packed >> 16u) & 0xFu) + bias);
         w_s[w_base + 5u * QMM_W_STRIDE] =
-            scale * NIB_F32((packed >> 20u) & 0xFu) + bias;
+            W_STORE(scale * NIB_F32((packed >> 20u) & 0xFu) + bias);
         w_s[w_base + 6u * QMM_W_STRIDE] =
-            scale * NIB_F32((packed >> 24u) & 0xFu) + bias;
+            W_STORE(scale * NIB_F32((packed >> 24u) & 0xFu) + bias);
         w_s[w_base + 7u * QMM_W_STRIDE] =
-            scale * NIB_F32(packed >> 28u) + bias;
+            W_STORE(scale * NIB_F32(packed >> 28u) + bias);
       }
 #elif defined(SG4)
 #if STEP_K == 16
@@ -693,28 +694,29 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
 #endif
 #endif
 #ifdef X_BF16
-      // X_WORDS half-word loads per lane cover the TILE_ROWS x 16 x tile.
-      uint x_words[TILE_M / 8u];
-      for (uint j = 0u; j < TILE_M / 8u; ++j) {
-        uint i = g_lid + 64u * j;
-        uint local_row = i / 8u;
+      // Stage the TILE_ROWS x STEP_K x tile: each lane covers slots
+      // idx = g_lid, g_lid + WS, ... over TILE_M * (STEP_K / 2) bf16
+      // words (the same slot set the shipped 64-lane STEP_K-16 loop
+      // covered, in a lane-independent order - staging is
+      // order-independent before the barrier). Rows past matrix_m
+      // stage zero.
+      for (uint idx = g_lid; idx < TILE_M * (STEP_K / 2u);
+           idx += gl_WorkGroupSize.x) {
+        uint local_row = idx / (STEP_K / 2u);
+        uint word_col = idx % (STEP_K / 2u);
         uint row = row_base + local_row;
-        x_words[j] = row < params.matrix_m
+        uint word = row < params.matrix_m
             ? input_x.values[
                   x_slice + row * x_words_per_row + k_base / 2u +
-                  (i % 8u)]
+                  word_col]
             : 0u;
-      }
-      for (uint j = 0u; j < TILE_M / 8u; ++j) {
-        uint i = g_lid + 64u * j;
-        uint local_row = i / 8u;
 #ifdef CMAT16
-        f16vec2 pair = X_UNPACK(x_words[j]);
+        f16vec2 pair = X_UNPACK(word);
 #else
-        vec2 pair = X_UNPACK(x_words[j]);
+        vec2 pair = X_UNPACK(word);
 #endif
-        x_s[local_row * STEP_K + 2u * (i % 8u)] = pair.x;
-        x_s[local_row * STEP_K + 2u * (i % 8u) + 1u] = pair.y;
+        x_s[local_row * STEP_K + 2u * word_col] = pair.x;
+        x_s[local_row * STEP_K + 2u * word_col + 1u] = pair.y;
       }
 #endif
       barrier();
@@ -960,26 +962,39 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
       }
     }
     barrier();
+#ifdef CMAT16
+    // The tile drains TILE_N * MAT elements; lanes cover them in
+    // idx steps so any workgroup size maps the same (row, column)
+    // pairs (the 64-lane STEP_K-16 build covered r via two half-lane
+    // groups - the same pairs, once each).
+    if (column_ok) {
+      for (uint idx = g_lid; idx < TILE_N * MAT;
+           idx += gl_WorkGroupSize.x) {
+        uint r = idx / TILE_N;
+        uint c = idx % TILE_N;
+        uint row = row_base + rb * MAT + r;
+        if (row < params.matrix_m) {
+          output_data.values[out_slice + row * params.matrix_n +
+                             tile_col * TILE_N + c] =
+              OUT_STORE(drain_s[(c / MAT) * MAT * MAT +
+                                r * MAT + (c % MAT)]);
+        }
+      }
+    }
+    barrier();
+  }
+#else
     if (column_ok) {
 #ifdef SG4
       for (uint pass = 0u; pass < 2u; ++pass) {
         uint r = 2u * g_wpart + pass;
-#elif defined(CMAT16)
-      // 32 lanes cover 32 columns; each subgroup's two half-lanes drain
-      // the 16 rows of its owned block.
-      for (uint pass = 0u; pass < MAT / 2u; ++pass) {
-        uint r = (MAT / 2u) * g_wpart + pass;
 #else
       for (uint pass = 0u; pass < 4u; ++pass) {
         uint r = 4u * g_wpart + pass;
 #endif
         uint row = row_base + rb * MAT + r;
         if (row < params.matrix_m) {
-#ifdef CMAT16
-          output_data.values[out_slice + row * params.matrix_n + column] =
-              OUT_STORE(drain_s[(g_wcol / MAT) * MAT * MAT +
-                                r * MAT + (g_wcol % MAT)]);
-#elif defined(X_BF16)
+#ifdef X_BF16
           output_data.values[out_slice + row * params.matrix_n + column] =
               OUT_STORE(x_s[(g_wcol / 8u) * MAT * MAT +
                             r * MAT + (g_wcol % 8u)]);
@@ -993,6 +1008,7 @@ void qmm_tile(uint tile_row, uint tile_col, uint b) {
     }
     barrier();
   }
+#endif
 #endif
 }
 
