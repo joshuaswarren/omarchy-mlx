@@ -36,7 +36,8 @@ def cell(mode="decode", ctx=512, repo="SiddhJagani/Qwen3.8-2B-mlx-4Bit",
     d = {
         "repo": repo, "revision": revision, "prompt": prompt, "mode": mode,
         "ctx": ctx, "input_sha256": input_sha, "output_sha256": out_shas,
-        "timed_tok_s": toks, "median_tok_s": toks[2], "warmups_discarded": warmups,
+        "timed_tok_s": toks, "median_tok_s": toks[2] if toks else None,
+        "warmups_discarded": warmups,
         "decode_tokens": decode_tokens,
     }
     return d
@@ -109,10 +110,54 @@ class CompareCardTests(unittest.TestCase):
         self.assertEqual(g.returncode, 0, g.stderr)
         out = (tmp / "BENCHMARKS.md").read_text()
         self.assertIn("50.200 / 49.200 = 102.0%", out)
-        self.assertIn("Qwen3.8-2B", out)
+        self.assertIn("Qwen3.8-2B @512", out)
         self.assertIn("14-inch M2 Max (G14C)", out)
         # filler-on G14C rows belong to BENCHMARKS.md, not the g13c README table
         self.assertIn("\nold\n", (tmp / "README.md").read_text())
+
+    def test_two_ctx_values_emit_separate_rows(self):
+        # w8E review fix: without ctx in the model label, gen_readme_tables
+        # group_by_chip_model+sorted_metrics silently drops every second ctx.
+        tmp = Path(self.tmp)
+        for side, base in (("linux", 40.0), ("macos", 38.0)):
+            for mode in ("decode", "prefill"):
+                c = cell(mode, ctx=2048,
+                         toks=[base * (8 if mode == "prefill" else 1) + i
+                               for i in range(5)])
+                self.files[side].append(write_json(
+                    tmp, f"{side}-{mode}-2048.json", c))
+        r = run_compare("--linux", *self.files["linux"],
+                        "--macos", *self.files["macos"],
+                        "--chip", "14-inch M2 Max (G14C)",
+                        "--date", "2026-11-27")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        lines = [l for l in r.stdout.splitlines() if l.strip()]
+        self.assertEqual(len(lines), 4)
+        (tmp / "rows.tsv").write_text(HEADER + "\n" + r.stdout)
+        (tmp / "README.md").write_text("# x\n")
+        (tmp / "BENCHMARKS.md").write_text("# y\n")
+        g = subprocess.run(
+            [sys.executable, str(GEN), str(tmp / "rows.tsv"),
+             "--readme", str(tmp / "README.md"),
+             "--benchmarks", str(tmp / "BENCHMARKS.md")],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(g.returncode, 0, g.stderr)
+        out = (tmp / "BENCHMARKS.md").read_text()
+        self.assertIn("Qwen3.8-2B @512", out)
+        self.assertIn("Qwen3.8-2B @2048", out)
+
+    def test_refuses_empty_or_mismatched_lists(self):
+        bad = cell("decode", toks=[], out_shas=[])
+        self.files["linux"][0] = write_json(self.tmp, "linux-dec.json", bad)
+        r = run_compare(*self.base_args)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("timed_tok_s empty", r.stderr)
+
+        bad = cell("decode", toks=[1.0] * 5, out_shas=["ab" + "0" * 62] * 4)
+        self.files["linux"][0] = write_json(self.tmp, "linux-dec.json", bad)
+        r = run_compare(*self.base_args)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("length mismatch", r.stderr)
 
     def test_refuses_output_sha_mismatch_across_sides(self):
         self.files["macos"][0] = write_json(

@@ -58,6 +58,13 @@ def load_cell(path):
             refuse(f'{path}: missing field {field!r}')
     if d['mode'] not in ('decode', 'prefill'):
         refuse(f'{path}: unknown mode {d["mode"]!r}')
+    if not isinstance(d['timed_tok_s'], list) or not d['timed_tok_s']:
+        refuse(f'{path}: timed_tok_s empty')
+    if not isinstance(d['output_sha256'], list) or not d['output_sha256']:
+        refuse(f'{path}: output_sha256 empty')
+    if len(d['timed_tok_s']) != len(d['output_sha256']):
+        refuse(f'{path}: timed_tok_s/output_sha256 length mismatch '
+               f'({len(d["timed_tok_s"])} vs {len(d["output_sha256"])})')
     return d
 
 
@@ -132,7 +139,7 @@ def main():
         }
         runs = len(lx['timed_tok_s']) + len(mac['timed_tok_s'])
         rows.append([
-            a.chip, model_name(repo), mode,
+            a.chip, f'{model_name(repo)} @{ctx}', mode,
             f'{med["linux"]:.3f}', f'{med["macos"]:.3f}',
             a.governor, a.driver_name, a.driver_commit, a.wheel_commit,
             str(runs),
