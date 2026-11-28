@@ -2689,21 +2689,25 @@ def test_scatter_family():
     base = torch.tensor(rng.randn(3, 4).astype(np.float32))
     src = torch.tensor(rng.randn(3, 3).astype(np.float32))
     idx = torch.tensor([[0, 2, 1], [3, 0, 2], [1, 1, 3]])
+    # the dim-0 case uses a full-width index: put_along_axis (the mx
+    # primitive) matches input shape off the axis, and rows top out at 2
+    idx0 = torch.tensor([[0, 2, 1, 2], [1, 0, 2, 0], [1, 1, 2, 1]])
+    src0 = torch.tensor(rng.randn(3, 4).astype(np.float32))
 
     for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
         bd, sd = base.to(dtype), src.to(dtype)
+        sd0 = src0.to(dtype)
         cases = [
             (torch.ops.aten.scatter.src, (bd, 1, idx, sd), {},
              torch.scatter(bd, 1, idx, sd), "scatter"),
-            (torch.ops.aten.scatter.src, (bd, 0, idx.t(), sd.t()), {},
-             torch.scatter(bd, 0, idx.t(), sd.t()), "scatter"),
+            (torch.ops.aten.scatter.src, (bd, 0, idx0, sd0), {},
+             torch.scatter(bd, 0, idx0, sd0), "scatter"),
             (torch.ops.aten.scatter.value, (bd, 1, idx, 9.5), {},
              torch.ops.aten.scatter.value(bd, 1, idx, 9.5), "scatter"),
             (torch.ops.aten.scatter_add.default, (bd, 1, idx, sd), {},
              torch.scatter_add(bd, 1, idx, sd), "scatter_add"),
-            (torch.ops.aten.scatter_add_.default, (bd, 1, idx, sd), {},
-             torch.ops.aten.scatter_add_.default(bd, 1, idx, sd),
-             "scatter_add"),
+            (torch.ops.aten.scatter_add_.default, (bd.clone(), 1, idx, sd), {},
+             torch.scatter_add(bd, 1, idx, sd), "scatter_add"),
             (torch.ops.aten.take.default,
              (bd, torch.tensor([0, 5, 11])), {},
              torch.take(bd, torch.tensor([0, 5, 11])), "take"),

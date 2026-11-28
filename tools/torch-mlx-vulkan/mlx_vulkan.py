@@ -2052,21 +2052,41 @@ def _glu(a, dim=-1):
 def _scatter(a, dim, index, src, add=False):
     # aten.scatter(input, dim, index, src) writes src into input at the
     # indexed positions along dim; scatter_add accumulates instead. The
-    # .value overloads pass a Scalar in place of src — broadcast it to
-    # index's shape. mx.put_along_axis is the exact primitive.
+    # .value overloads pass a Scalar in place of src.
+    #
+    # torch walks the index positions in row-major order: a later write to
+    # an already-written position wins (scatter) and scatter_add adds onto
+    # the value the earlier writes left. put_along_axis leaves that order
+    # undefined, so under duplicate indices it diverges from torch — the
+    # writes go one position at a time here, in torch's order. 2-D only;
+    # higher ranks defer to CPU rather than guess.
     a = _mx(a)
+    if a.ndim != 2:
+        return _raise(f"scatter rank {a.ndim}")
     idx = _mx(index).astype(mx.int32)
+    idx_np = np.array(idx)
     dim = dim % a.ndim
-    if hasattr(src, "shape"):
-        src = _mx(src)
-        if tuple(src.shape) != tuple(idx.shape):
-            src = mx.broadcast_to(src, tuple(idx.shape))
+    scalar_src = not hasattr(src, "shape")
+    if scalar_src:
+        src_mx = mx.full(idx.shape, src, dtype=a.dtype)
     else:
-        src = mx.full(idx.shape, src, dtype=a.dtype)
-    if add:
-        src = (mx.take_along_axis(a, idx, axis=dim).astype(src.dtype)
-               + src).astype(a.dtype)
-    return mx.put_along_axis(a, idx, src, axis=dim).astype(a.dtype)
+        src_mx = _mx(src)
+    rows, cols = a.shape
+    row_grid = mx.arange(rows)[:, None]
+    col_grid = mx.arange(cols)[None, :]
+    cur = a
+    for pos in np.ndindex(idx_np.shape):
+        i, j = int(pos[0]), int(pos[1])
+        trow = int(idx_np[i, j]) if dim == 0 else i
+        tcol = j if dim == 0 else int(idx_np[i, j])
+        val = src_mx[i, j]
+        mask = (row_grid == trow) & (col_grid == tcol)
+        if add:
+            held = mx.take(mx.flatten(cur), mx.array(trow * cols + tcol))
+            cur = mx.where(mask, held + val.astype(cur.dtype), cur)
+        else:
+            cur = mx.where(mask, val.astype(cur.dtype), cur)
+    return cur.astype(a.dtype)
 
 
 def _take(a, index):
