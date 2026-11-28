@@ -3349,6 +3349,21 @@ TEST_CASE("G14C AGX_HOIST_LOADS launcher gate matches only apple,t6021 and honor
   CHECK_FALSE(omarchy::should_auto_enable_agx_hoist_loads(prefix_trap, nullptr));
 }
 
+TEST_CASE("G18G HK_PERFTEST=batch launcher gate matches only apple,t8152 and honors overrides") {
+  const std::string m6("apple,j873g\0apple,t8152\0apple,arm-platform\0", 43);
+  const std::string m2max("apple,j414c\0apple,t6021\0apple,arm-platform\0", 43);
+  const std::string m1("apple,j293\0apple,t8103\0apple,arm-platform\0", 42);
+  const std::string prefix_trap("apple,t81520\0apple,arm-platform\0", 32);
+
+  CHECK(omarchy::should_auto_enable_hk_perftest_batch(m6, nullptr));
+  CHECK_FALSE(omarchy::should_auto_enable_hk_perftest_batch(m6, "batch"));
+  CHECK_FALSE(omarchy::should_auto_enable_hk_perftest_batch(m6, ""));
+  CHECK_FALSE(omarchy::should_auto_enable_hk_perftest_batch(m6, "0"));
+  CHECK_FALSE(omarchy::should_auto_enable_hk_perftest_batch(m2max, nullptr));
+  CHECK_FALSE(omarchy::should_auto_enable_hk_perftest_batch(m1, nullptr));
+  CHECK_FALSE(omarchy::should_auto_enable_hk_perftest_batch(prefix_trap, nullptr));
+}
+
 TEST_CASE("unrelated active work does not extend an unsignaled Event wait") {
   if (!gpu::is_available()) {
     skip("no qualifying Vulkan device.");
