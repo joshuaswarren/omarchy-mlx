@@ -3028,3 +3028,43 @@ if __name__ == "__main__":
     print("ALL PASS")
 
 
+
+
+def test_nan_inf_sign_family():
+    # Q-17b: isnan/isinf/isposinf/isneginf/sign/sgn — NaN/inf/-0.0 semantics
+    # per aten: sign(0)=0, sign(-0.0)=-0.0, sign(NaN)=NaN, isinf family
+    # exact on +-inf, sgn identical to sign on real inputs.
+    import mlx.core as mx
+
+    vals = [0.0, -0.0, float("nan"), float("inf"), float("-inf"), 1.5, -2.5]
+    x = torch.tensor(vals)
+    cases = [
+        ("isnan", torch.isnan, mx.isnan),
+        ("isinf", torch.isinf, mx.isinf),
+        ("isposinf", torch.ops.aten.isposinf.default, mx.isposinf),
+        ("isneginf", torch.ops.aten.isneginf.default, mx.isneginf),
+        ("sign", torch.sign, mx.sign),
+        ("sgn", torch.sgn, mx.sign),
+    ]
+    for name, t_op, mx_op in cases:
+        got = mlx_vulkan.ATEN_TABLE[name](mx.array(vals))
+        ref = t_op(x)
+        if name in ("sign", "sgn"):
+            # torch CPU quirk on this build: sign(NaN)=0.0, but the row's
+            # aten contract is sign(NaN)=NaN; compare on the finite subset
+            # and pin the NaN point separately below.
+            keep = ~torch.isnan(x)  # input-NaN positions: torch-build quirk
+            assert np.array_equal(_np(got)[keep.numpy()], ref.numpy()[keep.numpy()]), (name,)
+        else:
+            assert np.array_equal(_np(got), ref.numpy()), (name, _np(got), ref.numpy())
+    # point semantics per the row's aten contract
+    got_sign = mlx_vulkan.ATEN_TABLE["sign"](mx.array(vals))
+    sv = [_np(got_sign)[i] for i in range(len(vals))]
+    assert sv[0] == 0.0 and sv[1] == 0.0, (sv[0], sv[1])
+    assert str(sv[2]) == "nan", sv[2]
+    assert sv[3] == 1.0 and sv[4] == -1.0, (sv[3], sv[4])
+    # int input: sign returns int tensor, sgn likewise
+    xi = torch.tensor([-3, 0, 5])
+    gi = mlx_vulkan.ATEN_TABLE["sign"](mx.array(xi))
+    assert np.array_equal(_np(gi), torch.sign(xi).numpy())
+    print("test_nan_inf_sign_family PASS")

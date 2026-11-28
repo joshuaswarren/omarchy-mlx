@@ -2426,6 +2426,11 @@ _FUNC_SPECS = {
     "maximum": mx.maximum, "minimum": mx.minimum, "fmax": mx.maximum, "fmin": mx.minimum,
     "floor": mx.floor, "ceil": mx.ceil, "round": mx.round, "floor_divide": mx.floor_divide,
     "negative": mx.negative, "isnan": mx.isnan, "isinf": mx.isinf,
+    "isposinf": mx.isposinf, "isneginf": mx.isneginf,
+    # aten.sign/sgn: sign(0)=0, sign(NaN)=NaN. mx.sign alone yields 0.0 on
+    # NaN (sign-bit extraction), so NaN propagates explicitly.
+    "sign": lambda a: _mx_nan_propagating_sign(a),
+    "sgn": lambda a: _mx_nan_propagating_sign(a),
     "isfinite": lambda a: mx.logical_not(mx.isinf(a)),
     "linspace": lambda s, e, n, **k: mx.linspace(s, e, n),
     "arange": lambda *a, **k: _arange(*a, **k),
@@ -2495,6 +2500,13 @@ _FUNC_SPECS = {
 
 def _raise(name):
     raise NotImplementedError(name)
+
+def _mx_nan_propagating_sign(a):
+    """aten.sign/sgn semantics: sign(0)=+-0.0, sign(NaN)=NaN (mx.sign alone
+    loses the NaN, returning 0.0)."""
+    a = _mx(a)
+    return mx.where(mx.isnan(a), a, mx.sign(a))
+
 
 FUNC_TABLE = {}
 _FN_SOURCES = [torch, F, torch.special, operator]
