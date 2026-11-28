@@ -2309,6 +2309,8 @@ _FUNC_SPECS = {
     "softshrink": lambda a, lambd=0.5, *k: mx.where(mx.greater(a, lambd), a - lambd, mx.where(mx.less(a, -lambd), a + lambd, mx.zeros_like(a))),
     "tanhshrink": lambda a: a - mx.tanh(a),
     "softsign": lambda a: a / (1.0 + mx.abs(a)),
+    "expm1": lambda a: mx.expm1(a),
+    "logaddexp": lambda a, b: mx.logaddexp(a, b),
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,

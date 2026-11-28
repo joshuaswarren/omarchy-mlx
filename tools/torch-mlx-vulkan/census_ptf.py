@@ -104,3 +104,28 @@ print("CENSUS:", results)
 assert results["select_backward"], "select_backward did not lower"
 assert results["embedding_dense_backward"], "embedding_dense_backward did not lower"
 print("PT-F CENSUS PASS: both ops lower")
+
+
+# PT-AL-f: the stable log/exp family lowers through the same compiled
+# path; each forward alone exercises the dispatch.
+x_log = torch.rand(16) * 1e-3
+y_log = torch.rand(16) * 1e-3
+
+for name, fn, ops in (
+    ("log1p", lambda t: torch.log1p(t).sum(), ("aten.log1p",)),
+    ("expm1", lambda t: torch.expm1(t).sum(), ("aten.expm1",)),
+    ("logaddexp", lambda t: torch.logaddexp(t, -t).sum(), ("aten.logaddexp",)),
+):
+    _out, text = run_graph(fn, (x_log,))
+    shorts = {op.split(".")[-1] for op in ops}
+    fwd_fallback = [ln for ln in text.splitlines()
+                    if ln.startswith("FALLBACK") and ln.split("\t")[1:2][0] in shorts]
+    assert not fwd_fallback, f"{name} forward fell back:\n" + "\n".join(fwd_fallback)
+    for op in ops:
+        census(text, op, results)
+
+print("CENSUS:", results)
+assert results["aten.log1p"], "log1p did not lower"
+assert results["aten.expm1"], "expm1 did not lower"
+assert results["aten.logaddexp"], "logaddexp did not lower"
+print("PT-AL-f CENSUS PASS: log1p, expm1, logaddexp lower")
