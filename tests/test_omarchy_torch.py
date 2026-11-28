@@ -115,6 +115,61 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     (name, dtype, float((got - ref.float()).abs().max())))
         torch.manual_seed(1)
 
+    def test_parametric_activations(self):
+        """Q-58: the wheel backend lowers the parameterized activation
+        family — aten.leaky_relu, aten.hardtanh, aten.threshold,
+        aten.prelu, aten.rrelu (eval) — with fp32/bf16 parity against the
+        aten CPU ops, and refuses rrelu in training mode."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        x = torch.tensor([[-6.0, -2.0, -0.25, 0.0], [0.5, 1.0, 4.0, -0.001]])
+        w1 = torch.tensor([0.2])
+        wc = torch.tensor([0.1, 0.3])
+        x4 = torch.tensor([[[[-2.0], [-1.0]], [[0.5], [3.0]]]])
+        cases = [
+            ("leaky_relu", torch.ops.aten.leaky_relu.default, (x, 0.2)),
+            ("leaky_relu_", torch.ops.aten.leaky_relu_.default, (x, 0.05)),
+            ("hardtanh", torch.ops.aten.hardtanh.default, (x, -0.5, 0.5)),
+            ("hardtanh_", torch.ops.aten.hardtanh_.default, (x, 0.0, 1.5)),
+            ("threshold", torch.ops.aten.threshold.default, (x, 0.25, 0.0)),
+            ("threshold", torch.ops.aten.threshold.default, (x, 0.0, -1.0)),
+            ("threshold_", torch.ops.aten.threshold_.default, (x, 0.25, -2.0)),
+            ("prelu", torch.ops.aten.prelu.default, (x, w1)),
+            ("prelu", torch.ops.aten.prelu.default, (x, wc)),
+            ("prelu", torch.ops.aten.prelu.default, (x4, wc)),
+            ("rrelu", torch.ops.aten.rrelu.default, (x,)),
+            ("rrelu", torch.ops.aten.rrelu.default, (x, 0.1, 0.5, False)),
+            ("rrelu_", torch.ops.aten.rrelu_.default, (x, 0.1, 0.5, False)),
+        ]
+        np = __import__("numpy")
+        for name, aten_fn, args in cases:
+            lowering = ATEN_TABLE[name]
+            for dtype in (torch.float32, torch.bfloat16):
+                targs = [a.to(dtype) if torch.is_tensor(a) else a
+                         for a in args]
+                margs = [
+                    mx.array(a.float().numpy()).astype(
+                        mx.float32 if dtype == torch.float32 else mx.bfloat16)
+                    if torch.is_tensor(a) else a for a in targs
+                ]
+                ref = aten_fn(*targs)
+                got = torch.from_numpy(
+                    np.array(lowering(*margs).astype(mx.float32)))
+                tol = dict(atol=1e-6, rtol=1e-5) if dtype == torch.float32 \
+                    else dict(atol=1e-2, rtol=1e-2)
+                self.assertTrue(
+                    torch.allclose(got, ref.float(), **tol),
+                    (name, dtype, float((got - ref.float()).abs().max())))
+        # rrelu in training mode samples noise — no deterministic lowering.
+        with self.assertRaises(Exception):
+            ATEN_TABLE["rrelu"](mx.array(x.numpy()), 0.125, 0.3333, True)
+        # threshold at x == threshold yields `value`, not x.
+        got = np.array(ATEN_TABLE["threshold"](mx.zeros((2,)), 0.0, -3.0))
+        self.assertTrue((got == -3.0).all(), got)
+
     def test_unfold_last_dim(self):
         """PT-IM-b: aten.unfold lowers via gather + transpose — fp32 parity
         against the aten CPU op on the last dimension."""
