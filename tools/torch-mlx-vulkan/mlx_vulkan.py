@@ -202,7 +202,8 @@ _STRIDED_OPS = {
     "t", "mT", "transpose", "permute", "movedim", "moveaxis", "swapaxes",
     "swapdims", "expand", "expand_as", "broadcast_to", "unbind", "split",
     "split_with_sizes", "unsafe_split", "chunk", "tensor_split", "hsplit",
-    "vsplit", "dsplit", "diagonal", "unfold", "as_strided",
+    "vsplit", "dsplit", "diagonal", "unfold", "as_strided", "flip",
+    "rot90",
 }
 
 # layout-transparent ops: the result shares storage with the input, so the
@@ -382,11 +383,13 @@ def _meshgrid(*tensors, indexing="ij"):
     # aten signature is Tensor[] so a single list arg can arrive too
     if len(tensors) == 1 and isinstance(tensors[0], (list, tuple)):
         tensors = tuple(tensors[0])
-    # aten requires all inputs same dtype; mx accepts mixed — defer so
-    # the CPU fallback raises torch's own error
-    if any(t.dtype != tensors[0].dtype for t in tensors):
-        return _raise("meshgrid mixed dtypes")
-    return tuple(mx.meshgrid(*tensors, indexing=indexing))
+    ts = [_mx(t) for t in tensors]
+    # aten requires all inputs same dtype and 0D/1D rank; mx accepts
+    # mixed dtypes and silently flattens >1-D input — defer so the CPU
+    # fallback raises torch's own error
+    if any(t.dtype != ts[0].dtype for t in ts) or any(t.ndim > 1 for t in ts):
+        return _raise("meshgrid mixed dtypes or >1-D input")
+    return tuple(mx.meshgrid(*ts, indexing=indexing))
 
 def _red(reduction, size_average, reduce):
     # torch legacy kwargs: reduce=False -> "none"; else size_average picks mean/sum.
@@ -1142,12 +1145,10 @@ def _mode(a, dim=-1, keepdim=False):
     inv = [perm.index(i) for i in range(a.ndim)]
     vals = mx.transpose(vals, axes=inv)
     index = mx.transpose(index, axes=inv)
+    # keepdim is the natural shape: the size-1 axis already sits at dim
     if not keepdim:
         vals = mx.squeeze(vals, dim)
         index = mx.squeeze(index, dim)
-    if keepdim and a.ndim > 1:
-        vals = mx.expand_dims(vals, dim)
-        index = mx.expand_dims(index, dim)
     return (vals.astype(a.dtype), index.astype(mx.int64))
 
 
@@ -1177,12 +1178,10 @@ def _kthvalue(a, k, dim=-1, keepdim=False):
     inv = [perm.index(i) for i in range(a.ndim)]
     vals = mx.transpose(vals, axes=inv)
     sel_idx = mx.transpose(sel_idx, axes=inv)
+    # keepdim is the natural shape: the size-1 axis already sits at dim
     if not keepdim:
         vals = mx.squeeze(vals, dim)
         sel_idx = mx.squeeze(sel_idx, dim)
-    if keepdim and a.ndim > 1:
-        vals = mx.expand_dims(vals, dim)
-        sel_idx = mx.expand_dims(sel_idx, dim)
     return (vals.astype(a.dtype), sel_idx.astype(mx.int64))
 
 
@@ -1492,6 +1491,48 @@ def _multinomial(probs, num_samples, replacement=False, **kw):
     if replacement:
         return mx.random.categorical(lp, num_samples=num_samples).astype(mx.int64)
     return mx.argsort(-(lp + mx.random.gumbel(p.shape)), axis=-1)[..., :num_samples].astype(mx.int64)
+
+def _bincount(a, weights=None, minlength=0):
+    """aten.bincount: out[i] = count (or sum of weights) of positions where
+    a == i. Output length = max(minlength, max(a) + 1); int64 out unless
+    weights is given, then the weights dtype.
+    The backend's Scatter::Sum has no 64-bit accumulator, so counts
+    accumulate in int32 (exact: counts are bounded by the input length)
+    and cast to the torch output dtype."""
+    a = _mx(a)
+    if a.ndim != 1:
+        return _raise("bincount ndim>1")
+    n = int(minlength)
+    if a.size:
+        if int(np.array(mx.min(a)).item()) < 0:
+            raise ValueError("bincount only supports 1-d non-negative integral inputs")
+        n = max(n, int(np.array(mx.max(a)).item()) + 1)
+    if weights is None:
+        w, dt = mx.ones(a.shape, dtype=mx.int32), mx.int64
+    else:
+        w, dt = _mx(weights), _mx(weights).dtype
+        if w.dtype == mx.float64:
+            # the GPU wheel has no float64: mx silently casts an f64 array
+            # to float32, so the only torch-exact route is the fallback
+            # (torch accumulates in true f64 and returns f64)
+            return _raise("bincount float64 weights fall back to torch for exact f64 sums")
+        elif w.dtype not in (mx.float32, mx.float16, mx.bfloat16):
+            # every integer weight dtype accumulates through the int32
+            # Scatter::Sum: refuse when the SUM can leave int32
+            # (max|w| * a.size >= 2**31) — the old catch-all cast truncated
+            # uint64 to 0 and wrapped int8 sums, and the int64-only guard
+            # missed the same overflow on int32/uint32 weights. _raise
+            # falls back to torch, which returns exact sums for any width.
+            if w.size:
+                lo = int(np.array(mx.min(w)).item())
+                hi = int(np.array(mx.max(w)).item())
+                if max(abs(lo), abs(hi)) * a.size >= 2 ** 31:
+                    return _raise("bincount integral weights exceed the int32 scatter sum range")
+            w = w.astype(mx.int32)
+    out = mx.zeros((n,), dtype=w.dtype)
+    if a.size:
+        out = out.at[a.astype(mx.int32)].add(w)
+    return out.astype(dt)
 
 def _bitwise_or_logical(a, b, bitop, logop):
     a, b = _mx(a), _mx(b)
@@ -2101,6 +2142,81 @@ def _pdist(a, p=2.0):
     return mx.flatten(d)[mx.argsort(key)[:m]]
 
 
+def _repeat_interleave(*args, dim=None, output_size=None):
+    # aten.repeat_interleave comes in three overloads: .Tensor (repeats
+    # only — returns arange indices repeated), .self_int (scalar repeats)
+    # and .self_Tensor (per-element repeats). The overloads share the
+    # opname, so arg count picks the form; output_size is kwarg-only in
+    # every schema. mx has no repeat_interleave, so the gather indices
+    # are built arithmetically: out[j] = a[i] for the i whose inclusive
+    # cumsum is first greater than j.
+    if len(args) == 1:
+        repeats = _mx(args[0]).reshape(-1)
+        a, dim = mx.arange(repeats.shape[0]), 0
+    else:
+        a = _mx(args[0])
+        repeats = args[1]
+        if len(args) > 2:
+            dim = args[2]
+        if dim is None:
+            a = a.reshape(-1)
+            dim = 0
+        elif dim < 0:
+            dim += a.ndim
+        if isinstance(repeats, int):
+            repeats = mx.full((a.shape[dim],), repeats, dtype=mx.int32)
+        else:
+            repeats = _mx(repeats).reshape(-1)
+    total = int(output_size) if output_size is not None else int(mx.sum(repeats))
+    cums = mx.cumsum(repeats)
+    idx = mx.sum(mx.arange(total)[None, :] >= cums[:, None], axis=0)
+    return mx.take(a, idx, axis=dim)
+
+
+def _roll(a, shifts, dims=None):
+    # aten.roll spells the flatten form dims=[] (its schema default);
+    # torch.roll spells it dims=None. mx.roll flattens on axis=None, so
+    # both collapse to that; list/shift pairs go through as tuples.
+    if dims is None or (isinstance(dims, (list, tuple)) and len(dims) == 0):
+        dims = None
+    if isinstance(shifts, (list, tuple)) and len(shifts) == 1:
+        shifts = shifts[0]
+    if isinstance(dims, (list, tuple)) and len(dims) == 1:
+        dims = dims[0]
+    return mx.roll(_mx(a), shifts, axis=dims)
+def _flip(a, dims):
+    """aten.flip(self, int[] dims): reverse along each listed dim. A
+    negative-step slice is the same view torch returns (PT-Q11)."""
+    m = _mx(a)
+    for d in dims:
+        m = _slice(m, int(d) % m.ndim, None, None, -1)
+    return m
+
+
+def _rot90(a, k=1, dims=(0, 1)):
+    """aten.rot90(self, int k=1, int[] dims=[0,1]): k quarter-turns in the
+    dims plane — the ATen decompositions flip(dims[1])+transpose / flip
+    both / flip(dims[0])+transpose (PT-Q11)."""
+    m = _mx(a)
+    d0, d1 = int(dims[0]) % m.ndim, int(dims[1]) % m.ndim
+    kk = int(k) % 4
+    if kk == 0:
+        return m
+    if kk == 1:
+        return mx.swapaxes(_flip(m, (d1,)), d0, d1)
+    if kk == 2:
+        return _flip(m, (d0, d1))
+    return mx.swapaxes(_flip(m, (d0,)), d0, d1)
+def _isin(elements, test_elements, assume_unique=False, invert=False):
+    """aten.isin(elements, test_elements, *, assume_unique, invert): membership
+    by broadcast compare — elements[..., None] vs the flattened test set,
+    any() over the last axis. assume_unique is a perf hint only; membership
+    is the same set either way. bool out, same shape as elements."""
+    hit = mx.any(mx.equal(mx.expand_dims(_mx(elements), -1),
+                          mx.flatten(_mx(test_elements))), axis=-1)
+    return mx.logical_not(hit) if invert else hit
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2265,6 +2381,9 @@ _FUNC_SPECS = {
     "softshrink": lambda a, lambd=0.5, *k: mx.where(mx.greater(a, lambd), a - lambd, mx.where(mx.less(a, -lambd), a + lambd, mx.zeros_like(a))),
     "tanhshrink": lambda a: a - mx.tanh(a),
     "softsign": lambda a: a / (1.0 + mx.abs(a)),
+    "elu": lambda a, alpha=1.0, scale=1.0, input_scale=1.0, inplace=False: scale * mx.where(mx.greater(a, 0), a, alpha * mx.expm1(input_scale * a)),
+    "selu": lambda a, inplace=False: 1.0507009873554805 * mx.where(mx.greater(a, 0), a, 1.6732632423543772 * mx.expm1(a)),
+    "celu": lambda a, alpha=1.0, inplace=False: mx.where(mx.greater(a, 0), a, alpha * mx.expm1(a / alpha)),
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,
@@ -2298,13 +2417,21 @@ _FUNC_SPECS = {
     "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
     "take_along_dim": lambda a, i, dim: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
     "index": lambda a, idx: a[tuple(_mx(i) if isinstance(i, (torch.Tensor, list)) else i for i in (idx if isinstance(idx, (list, tuple)) else (idx,)))],
+    # PT-AL-i: membership (aten.isin; in1d is its legacy alias in old graphs)
+    "isin": _isin,
+    "in1d": _isin,
+    "bincount": _bincount,
     "tril": lambda a, k=0: mx.tril(a, k), "triu": lambda a, k=0: mx.triu(a, k),
     "pad": lambda a, p, mode="constant", value=0: mx.pad(a, _pad_width(a, p)),
     "tile": lambda a, d: mx.tile(a, tuple(d)),
     "repeat": lambda a, *d: mx.tile(a, tuple(d[0]) if len(d) == 1 and isinstance(d[0], (list, tuple)) else tuple(d)),
+    # PT-AL-i: aten.repeat_interleave (self_int / self_Tensor / .Tensor
+    # overloads) and aten.roll's dims=[] schema default.
+    "repeat_interleave": _repeat_interleave,
     "movedim": lambda a, src, dst: mx.moveaxis(a, src, dst),
     "moveaxis": lambda a, src, dst: mx.moveaxis(a, src, dst),
     "swapaxes": lambda a, d0, d1: mx.swapaxes(a, d0, d1),
+    "flip": _flip, "rot90": _rot90,
     "abs": mx.abs, "sign": mx.sign,
     "maximum": mx.maximum, "minimum": mx.minimum, "fmax": mx.maximum, "fmin": mx.minimum,
     "floor": mx.floor, "ceil": mx.ceil, "round": mx.round, "floor_divide": mx.floor_divide,
@@ -2342,7 +2469,7 @@ _FUNC_SPECS = {
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
-    "roll": lambda a, shifts, dims=None: mx.roll(a, shifts, axis=dims),
+    "roll": _roll,
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
     "_log_softmax": _log_softmax_fwd,
     "_log_softmax_backward_data": _log_softmax_bwd,

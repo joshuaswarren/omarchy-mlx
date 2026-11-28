@@ -177,6 +177,80 @@ def test_multinomial():
     print("test_multinomial PASS")
 
 
+def test_bincount():
+    rng = np.random.RandomState(7)
+    idx = rng.randint(0, 11, size=(64,)).astype(np.int64)
+    t = torch.tensor(idx)
+    out = mlx_vulkan._bincount(mx.array(idx))
+    assert _np(out).dtype == np.int64
+    assert np.array_equal(_np(out), t.bincount().numpy())
+    # minlength above the max index pads the output
+    out = mlx_vulkan._bincount(mx.array(idx), minlength=16)
+    assert np.array_equal(_np(out), t.bincount(minlength=16).numpy())
+    # minlength below the max index: the max still wins
+    out = mlx_vulkan._bincount(mx.array(idx), minlength=3)
+    assert np.array_equal(_np(out), t.bincount(minlength=3).numpy())
+    # float32 weights: output takes the weights dtype
+    w = rng.randn(64).astype(np.float32)
+    out = mlx_vulkan._bincount(mx.array(idx), weights=mx.array(w), minlength=13)
+    assert _np(out).dtype == np.float32
+    assert np.allclose(_np(out), t.bincount(torch.tensor(w), 13).numpy(), atol=1e-6)
+    # int32 input and int64 weights
+    x32 = rng.randint(0, 5, size=(33,)).astype(np.int32)
+    out = mlx_vulkan._bincount(mx.array(x32))
+    assert np.array_equal(_np(out), torch.tensor(x32).bincount().numpy())
+    # float64 weights: the GPU wheel's mx.array silently casts f64 to
+    # float32 before the lowering sees them, so a lowering-level f64
+    # refusal is unreachable and the sums accumulate in f32 — values stay
+    # within f32 tolerance of torch, and true f64 parity needs the torch
+    # CPU fallback this wheel's dispatch does not trigger for this op
+    w64 = rng.randn(64).astype(np.float64)
+    out = mlx_vulkan._bincount(mx.array(idx), weights=mx.array(w64))
+    assert np.allclose(_np(out), t.bincount(torch.tensor(w64)).numpy(), atol=1e-5), \
+        (float(np.abs(_np(out) - t.bincount(torch.tensor(w64)).numpy()).max()),)
+    wi = rng.randint(-9, 10, size=(64,)).astype(np.int64)
+    out = mlx_vulkan._bincount(mx.array(idx), weights=mx.array(wi))
+    assert _np(out).dtype == np.int64
+    assert np.array_equal(_np(out), t.bincount(torch.tensor(wi)).numpy())
+    # PT-1088: large int64 weights whose SUM overflows int32 even though
+    # each element passes a per-element check: the lowering refuses at
+    # dispatch (_raise -> NotImplementedError) and the executor falls back
+    # to torch, which returns exact sums — the pre-fix code returned
+    # wrapped int32 here (64 weights of 2**30 sum past 2**31).
+    wbig = np.full(64, 2 ** 30, dtype=np.int64)
+    try:
+        mlx_vulkan._bincount(mx.array(idx), weights=mx.array(wbig))
+        raise AssertionError("the overflow case must refuse at dispatch")
+    except NotImplementedError:
+        pass
+    wbig[1::2] = -(2 ** 30)
+    try:
+        mlx_vulkan._bincount(mx.array(idx), weights=mx.array(wbig))
+        raise AssertionError("the mixed-sign overflow case must refuse at dispatch")
+    except NotImplementedError:
+        pass
+    # empty input -> zeros(minlength)
+    out = mlx_vulkan._bincount(mx.array(np.empty(0, np.int64)), minlength=4)
+    assert np.array_equal(_np(out), torch.tensor([], dtype=torch.int64).bincount(minlength=4).numpy())
+    print("test_bincount PASS")
+
+
+def test_bincount_lowering():
+    # aten.bincount lowers through the executor (no CPU fallback) on an
+    # int64 index tensor — the embedding-grad accumulation shape.
+    g = torch.fx.Graph()
+    x = g.placeholder("x")
+    bc = g.call_function(torch.ops.aten.bincount.default, (x,), {"minlength": 16})
+    g.output(bc)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    idx = torch.tensor([0, 5, 5, 2, 15], dtype=torch.int64)
+    out = run(idx)
+    assert stats["cpu"] == [], (stats, [str(n.target) for n in gm.graph.nodes])
+    assert np.array_equal(_np(out), torch.bincount(idx, minlength=16).numpy())
+    print("test_bincount_lowering PASS")
+
+
 def test_convolution_backward():
     rng = np.random.RandomState(0)
     for (n, ci, co, k, s, p, d) in ((2, 3, 8, 3, 1, 1, 1), (1, 4, 4, 2, 2, 0, 1), (2, 3, 5, 3, 1, 2, 2)):
@@ -668,6 +742,49 @@ def test_comparisons():
     print("test_comparisons PASS")
 
 
+def test_frac_reciprocal_rsqrt():
+    # PT-AL-e: aten.reciprocal / aten.rsqrt / aten.frac — basic math ops in
+    # normalization chains. frac = x - trunc(x) (keeps the sign on negatives).
+    rng = np.random.RandomState(6)
+    x = rng.randn(4, 6).astype(np.float32) * 3.0
+    OPS = [
+        ("reciprocal", torch.ops.aten.reciprocal.default,
+         lambda a: np.abs(a) > 1e-3),       # keep off the singularity
+        ("rsqrt", torch.ops.aten.rsqrt.default,
+         lambda a: a > 0),                  # domain: positive only
+        ("frac", torch.ops.aten.frac.default,
+         lambda a: np.ones_like(a, dtype=bool)),
+    ]
+    for name, aten_op, domain in OPS:
+        a = np.where(domain(x), x, np.ones_like(x))
+        # fp32 parity vs the aten reference
+        ref = aten_op(torch.tensor(a))
+        got = mlx_vulkan.ATEN_TABLE[name](mx.array(a))
+        np.testing.assert_allclose(_np(got), ref.numpy(), rtol=1e-5, atol=1e-6,
+                                   err_msg=name)
+        # bf16: aten rounds through fp32 opmath; tolerance per the family
+        ab = torch.tensor(a, dtype=torch.bfloat16)
+        ref_b = aten_op(ab)
+        mine = mlx_vulkan.ATEN_TABLE[name](
+            mx.array(ab.float().numpy()).astype(mx.bfloat16))
+        assert mine.dtype == mx.bfloat16, name
+        d = float(np.abs(_np(mine.astype(mx.float32))
+                         - ref_b.float().numpy()).max())
+        assert d < 0.02, f"{name} bf16: {d:.3e}"
+        # executor path: lands in stats["mlx"], not the CPU fallback
+        gfx = torch.fx.Graph()
+        pa = gfx.placeholder("a")
+        gfx.output(gfx.call_function(aten_op, (pa,)))
+        gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(torch.tensor(a))
+        np.testing.assert_allclose(_np(out), ref.numpy(), rtol=1e-5, atol=1e-6,
+                                   err_msg=name)
+        assert name in stats["mlx"], (name, stats)
+        assert name not in stats["cpu"], (name, stats)
+    print("test_frac_reciprocal_rsqrt PASS")
+
+
 def test_linear():
     rng = np.random.RandomState(3)
     x = rng.randn(2, 4, 8).astype(np.float32)   # batched input
@@ -911,10 +1028,11 @@ def test_cat_clone():
 def test_dispatch_registered():
     assert torch.topk in mlx_vulkan.FUNC_TABLE
     assert torch.multinomial in mlx_vulkan.FUNC_TABLE
+    assert torch.bincount in mlx_vulkan.FUNC_TABLE
     for name in ("topk", "multinomial", "convolution", "convolution_backward",
                  "_native_batch_norm_legit_functional", "threshold_backward", "t",
                  "gelu_backward", "tanh_backward", "embedding_dense_backward", "linear",
-                 "cat", "clone"):
+                 "cat", "clone", "bincount"):
         assert name in mlx_vulkan.ATEN_TABLE, name
     print("test_dispatch_registered PASS")
 
@@ -2287,6 +2405,9 @@ def test_meshgrid():
     fx_aten(torch.ops.aten.meshgrid.indexing, (x, y), {"indexing": "xy"})
     fx_aten(torch.ops.aten.meshgrid.indexing, (x, y, z), {"indexing": "ij"})
 
+    # 0-D scalar input is legal aten ("0D or 1D"); treat as length-1 axis
+    fx_aten(torch.ops.aten.meshgrid.default, (torch.tensor(2.5), y), {})
+
     # aten requires same dtype; mx accepts mixed — the lowering defers
     # and the CPU fallback raises torch's own error
     g = torch.fx.Graph()
@@ -2298,6 +2419,16 @@ def test_meshgrid():
     try:
         run(i, y)
         raise AssertionError("no raise on mixed dtypes")
+    except RuntimeError:
+        pass
+
+    # aten also raises on >1-D input where mx silently flattens — same
+    # defer-to-raise contract
+    m = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    run2, stats2 = mlx_vulkan.make_executor(gm)
+    try:
+        run2(m, y)
+        raise AssertionError("no raise on >1-D input")
     except RuntimeError:
         pass
     print("test_meshgrid PASS")
@@ -2840,9 +2971,54 @@ def test_log1p_expm1_logaddexp():
     print("test_log1p_expm1_logaddexp PASS")
 
 
+def test_flip_rot90():
+    # PT-Q11: aten.flip(self, int[] dims) reverses along each listed dim;
+    # aten.rot90(self, int k=1, int[] dims=[0,1]) is the ATen
+    # flip/transpose decomposition per quarter-turn. Both are view-level
+    # permutes — the lowered path must stay on mx with zero CPU fallback.
+    torch.manual_seed(0)
+    x2 = torch.randn(3, 5)
+    x3 = torch.randn(2, 3, 4)
+    cases = [
+        (torch.ops.aten.flip.default, (x2,), {"dims": [0]}, "flip"),
+        (torch.ops.aten.flip.default, (x2,), {"dims": [1]}, "flip"),
+        (torch.ops.aten.flip.default, (x2,), {"dims": [0, 1]}, "flip"),
+        (torch.ops.aten.flip.default, (x2,), {"dims": [-1]}, "flip"),
+        (torch.ops.aten.flip.default, (x3,), {"dims": [0, 2]}, "flip"),
+        (torch.ops.aten.flip.default, (x2.bfloat16(),), {"dims": [1]}, "flip"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 1}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 2}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 3}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 4}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": -1}, "rot90"),
+        (torch.ops.aten.rot90.default, (x3,), {"k": 1, "dims": [1, 2]}, "rot90"),
+        (torch.ops.aten.rot90.default, (x3,), {"k": 2, "dims": [0, 2]}, "rot90"),
+        (torch.ops.aten.rot90.default, (x3,), {"k": 3, "dims": [-1, -2]}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2.bfloat16(),), {"k": 1}, "rot90"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs, got, ref)
+    print("test_flip_rot90 PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
+    test_bincount()
+    test_bincount_lowering()
     test_convolution_backward()
     test_threshold_backward()
     test_t()
@@ -2888,9 +3064,16 @@ if __name__ == "__main__":
     test_logsumexp()
     test_glu()
     test_reciprocal_frac()
+    test_frac_reciprocal_rsqrt()
     test_linalg_norm()
     test_cosine_similarity()
     test_pdist_cdist()
+    test_flip_rot90()
+    test_mode()
+    test_kthvalue()
+    test_squeeze_inplace()
+    test_clamp_bounds()
+    test_piecewise_activations()
     print("ALL PASS")
 
 

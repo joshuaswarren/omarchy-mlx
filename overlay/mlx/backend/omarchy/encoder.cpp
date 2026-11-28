@@ -18,6 +18,7 @@
 #include "mlx/backend/omarchy/step_timeline.h"
 #include "mlx/backend/omarchy/trace.h"
 #include "mlx/backend/omarchy/gpu_profiler.h"
+#include "kernel_names.h"
 #include "mlx/backend/omarchy/vulkan.h"
 #include "mlx/scheduler.h"
 #include "mlx/utils.h"
@@ -35,6 +36,16 @@ inline VkDeviceSize tracked_range_end(VkDeviceSize offset, VkDeviceSize size) {
   }
   VkDeviceSize end = offset + size;
   return end < offset ? UINT64_MAX : end;
+}
+
+// The byte window a binding contributes to the dependency tracker: the
+// view's own span when binding(array) narrowed it, else the bound
+// descriptor range.
+inline TrackedRange binding_tracked_range(const ComputeBinding& b) {
+  if (b.tracked_end != 0) {
+    return {b.buffer, b.tracked_offset, b.tracked_end};
+  }
+  return {b.buffer, b.offset, tracked_range_end(b.offset, b.range)};
 }
 
 } // namespace
@@ -1006,6 +1017,20 @@ void CommandEncoder::dispatch_compute_pipeline(
       group_count_y * group_count_z;
   batch_work_ =
       UINT64_MAX - batch_work_ > groups ? batch_work_ + groups : UINT64_MAX;
+  if (!batch_has_prefill_) {
+    static const auto kPrefillKernel = []() {
+      std::array<bool, static_cast<size_t>(ComputeKernel::Count)> table{};
+      for (size_t i = 0; i < table.size(); ++i) {
+        table[i] = is_prefill_work_kernel_name(
+            compute_kernel_name(static_cast<ComputeKernel>(i)));
+      }
+      return table;
+    }();
+    const auto idx = static_cast<size_t>(profile_kernel);
+    if (idx < kPrefillKernel.size() && kPrefillKernel[idx]) {
+      batch_has_prefill_ = true;
+    }
+  }
 
   auto& dt = vk::device_table();
   // Push mode allocates no set: the layout carries PUSH_DESCRIPTOR_BIT,
@@ -1070,9 +1095,7 @@ void CommandEncoder::dispatch_compute_pipeline(
     node.descriptor_set = descriptor_set;
     const auto access = compute.binding_access(pipeline);
     for (size_t i = 0; i < bindings.size(); ++i) {
-      TrackedRange range{bindings[i].buffer,
-                         bindings[i].offset,
-                         tracked_range_end(bindings[i].offset, bindings[i].range)};
+      TrackedRange range = binding_tracked_range(bindings[i]);
       if (((access.read_mask >> i) & 1u) != 0u) {
         node.rd[node.nr++] = range;
       }
@@ -1114,9 +1137,7 @@ void CommandEncoder::dispatch_compute_pipeline(
   if (gated_barriers()) {
     std::array<TrackedRange, kComputeBindingBudget> ranges{};
     for (size_t i = 0; i < bindings.size(); ++i) {
-      ranges[i] = {bindings[i].buffer,
-                   bindings[i].offset,
-                   tracked_range_end(bindings[i].offset, bindings[i].range)};
+      ranges[i] = binding_tracked_range(bindings[i]);
     }
     // Per-binding access reflected from the pipeline's SPIR-V (readonly /
     // writeonly block qualifiers): read-only bindings no longer count as
@@ -1915,6 +1936,7 @@ void CommandEncoder::submit() {
       resnorm_ticket_slot_ = -1;
       node_count_ = 0;
       batch_work_ = 0;
+  batch_has_prefill_ = false;
       wait_semaphores_.clear();
       signal_semaphores_.clear();
       completed_handlers_.clear();
@@ -1984,6 +2006,7 @@ void CommandEncoder::submit() {
   recording_ = false;
   node_count_ = 0;
   batch_work_ = 0;
+  batch_has_prefill_ = false;
   pending_.clear();
   // Phase-1 records have no consumer yet; bound the vector at the batch
   // boundary like every other per-batch list.

@@ -39,6 +39,41 @@ struct TrackedRange {
   VkDeviceSize end;
 };
 
+// The byte window [lo, hi) of one allocation that a view can name: the
+// view's storage offset plus the element span its shape and strides
+// describe. data_size is the logical item count and understates a strided
+// footprint (a concat column slice over a wider parent), so the span
+// derives from strides: first = sum(min(0, (shape-1)*stride)), last =
+// sum(max(0, (shape-1)*stride)) items. Returns {0, 0} for a degenerate or
+// empty view; the caller keeps the bound descriptor range as the
+// conservative tracked window then.
+inline std::pair<VkDeviceSize, VkDeviceSize> view_hazard_window(
+    int64_t offset_bytes,
+    int ndim,
+    const int32_t* shape,
+    const int64_t* strides,
+    int64_t itemsize,
+    VkDeviceSize allocation_bytes) {
+  int64_t first = 0;
+  int64_t last = 0;
+  for (int ax = 0; ax < ndim; ++ax) {
+    if (shape[ax] <= 0) {
+      return {0, 0};
+    }
+    const int64_t span = static_cast<int64_t>(shape[ax] - 1) * strides[ax];
+    first += std::min<int64_t>(0, span);
+    last += std::max<int64_t>(0, span);
+  }
+  const int64_t lo = offset_bytes + first * itemsize;
+  const int64_t hi = offset_bytes + (last + 1) * itemsize;
+  const VkDeviceSize begin =
+      static_cast<VkDeviceSize>(std::max<int64_t>(0, lo));
+  const VkDeviceSize end = static_cast<VkDeviceSize>(
+      std::min<int64_t>(static_cast<int64_t>(allocation_bytes), hi));
+  return end > begin ? std::pair{begin, end}
+                     : std::pair<VkDeviceSize, VkDeviceSize>{0, 0};
+}
+
 // Open-addressed buffer -> dense slot index. Insert-only, linear probe,
 // bulk clear: the table is a flat array of entries (no per-entry node, no
 // bucket walk through pointers), so find() costs one cache line walk. Slot

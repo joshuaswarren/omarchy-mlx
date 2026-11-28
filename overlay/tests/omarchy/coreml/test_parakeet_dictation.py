@@ -296,6 +296,41 @@ class ResamplerTest(unittest.TestCase):
         out = self.resample(samples, 16_000)
         np.testing.assert_array_equal(out, samples)
 
+    def test_narrowband_source_regenerates_top_octave(self):
+        """Sources at or below 12 kHz carry no content above half their
+        rate; the resampler regenerates voiced-band harmonics into the
+        empty 4-8 kHz octave the fp16 encoder needs fricative margin in."""
+        t = np.arange(8_000, dtype=np.float64) / 8_000
+        sine = (0.5 * np.sin(2 * math.pi * 3_000.0 * t)).astype(np.float32)
+        resampled = self.resample(sine, 8_000)
+        self.assertEqual(resampled.size, 16_000)
+        spectrum = np.abs(np.fft.rfft(resampled.astype(np.float64)))
+        freqs = np.fft.rfftfreq(resampled.size, d=1.0 / 16_000)
+        top_band_peak = float(spectrum[freqs > 5_000.0].max())
+        self.assertGreater(top_band_peak, 0.01 * float(spectrum.max()))
+        self.assertAlmostEqual(
+            self.peak_frequency_hz(resampled[100:-100], 16_000),
+            3_000.0,
+            delta=5.0,
+        )
+
+    def test_above_narrowband_rate_gets_no_extension(self):
+        """The extension gate stays closed above the narrowband bound."""
+        t = np.arange(12_800, dtype=np.float64) / 12_800
+        sine = (0.5 * np.sin(2 * math.pi * 3_000.0 * t)).astype(np.float32)
+        resampled = self.resample(sine, 12_800)
+        self.assertEqual(resampled.size, 16_000)
+        spectrum = np.abs(np.fft.rfft(resampled.astype(np.float64)))
+        freqs = np.fft.rfftfreq(resampled.size, d=1.0 / 16_000)
+        top_band_peak = float(spectrum[freqs > 5_000.0].max())
+        self.assertLess(top_band_peak, 0.01 * float(spectrum.max()))
+
+    def test_narrowband_silence_stays_silent(self):
+        out = self.resample(np.zeros(8_000, dtype=np.float32), 8_000)
+        np.testing.assert_array_equal(
+            out, np.zeros(16_000, dtype=np.float32)
+        )
+
     def test_48k_sine_keeps_frequency_and_gain(self):
         import math
 

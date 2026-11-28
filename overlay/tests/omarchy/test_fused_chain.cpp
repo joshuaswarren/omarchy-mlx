@@ -2141,6 +2141,14 @@ TEST_CASE("qmm residual norm default: shape, device capabilities and overrides")
   limited.device_name = "Apple M2 Max (G14C B1)";
   limited.subgroup_size = 16;
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, false));
+  // A subgroup-64 device admits the same 32-lane kernels only through the
+  // requiredSubgroupSize = 32 pin (DEC-18).
+  auto sg64 = caps;
+  sg64.device_name = "AMD Radeon RX 9070";
+  sg64.subgroup_size = 64;
+  CHECK_FALSE(omarchy::qmm_residual_norm_enabled(sg64, 2048, false));
+  sg64.subgroup_size_32_wide_admitted = true;
+  CHECK(omarchy::qmm_residual_norm_enabled(sg64, 2048, false));
   limited.subgroup_size = 32;
   limited.subgroup_operations = 0;
   CHECK_FALSE(omarchy::qmm_residual_norm_enabled(limited, 4096, false));
@@ -2211,7 +2219,7 @@ TEST_CASE("greedy prune default: the part rule and overrides") {
 TEST_CASE("greedy word over staged default: the part rule and overrides") {
   CHECK(omarchy::greedy_word_over_staged_part("Apple M2 Max (G14C B1)"));
   CHECK(omarchy::greedy_word_over_staged_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::greedy_word_over_staged_part("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M4 (G16G B1)"));
   CHECK_FALSE(omarchy::greedy_word_over_staged_part(""));
 
@@ -2222,16 +2230,20 @@ TEST_CASE("greedy word over staged default: the part rule and overrides") {
 
   const std::string g14c = "Apple M2 Max (G14C B1)";
   const std::string g13c = "Apple M1 Max (G13C C0)";
+  const std::string g16g = "Apple M4 (G16G B1)";
   CHECK(omarchy::greedy_word_preferred(g14c));
-  CHECK_FALSE(omarchy::greedy_word_preferred(g13c));
+  CHECK(omarchy::greedy_word_preferred(g13c));
+  CHECK_FALSE(omarchy::greedy_word_preferred(g16g));
 
   setenv("MLX_OMARCHY_GREEDY_WORD", "0", 1);
   CHECK_FALSE(omarchy::greedy_word_preferred(g14c));
   CHECK_FALSE(omarchy::greedy_word_preferred(g13c));
+  CHECK_FALSE(omarchy::greedy_word_preferred(g16g));
 
   setenv("MLX_OMARCHY_GREEDY_WORD", "1", 1);
   CHECK(omarchy::greedy_word_preferred(g14c));
   CHECK(omarchy::greedy_word_preferred(g13c));
+  CHECK(omarchy::greedy_word_preferred(g16g));
 
   if (saved) {
     setenv("MLX_OMARCHY_GREEDY_WORD", saved->c_str(), 1);
