@@ -1185,6 +1185,105 @@ def _kthvalue(a, k, dim=-1, keepdim=False):
     return (vals.astype(a.dtype), sel_idx.astype(mx.int64))
 
 
+def _amin(a, dim=(), keepdim=False, *a_, **k_):
+    # aten.amin(self, int[] dim=[], keepdim) — multi-dim tuple min; an empty
+    # dim list reduces every dim, and torch tolerates dim 0/-1 on a 0-d
+    # tensor and reduces nothing (same pattern as _sum).
+    a = _mx(a)
+    if a.ndim == 0:
+        return a
+    if dim is None:
+        return mx.min(a, keepdims=keepdim)
+    axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    return mx.min(a, axis=None if axis == () else axis, keepdims=keepdim)
+
+
+def _amax(a, dim=(), keepdim=False, *a_, **k_):
+    a = _mx(a)
+    if a.ndim == 0:
+        return a
+    if dim is None:
+        return mx.max(a, keepdims=keepdim)
+    axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    return mx.max(a, axis=None if axis == () else axis, keepdims=keepdim)
+
+
+def _aminmax(a, dim=None, keepdim=False):
+    # aten.aminmax(self, *, int? dim=None, keepdim) — a single optional dim:
+    # None reduces every dim to two scalars, an int reduces that axis.
+    a = _mx(a)
+    if a.ndim == 0 and dim is not None:
+        return (a, a)
+    return (mx.min(a, axis=dim, keepdims=keepdim),
+            mx.max(a, axis=dim, keepdims=keepdim))
+
+
+def _prod(a, dim=None, keepdim=False, dtype=None, **k):
+    # aten.prod(self, dtype) and aten.prod.dim_int(self, dim, keepdim, dtype)
+    # share the opname: dim arrives positionally as an int or is absent.
+    a = _mx(a)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise(f"prod dtype {dtype}")
+        a = a.astype(_MX_DT[dtype])  # aten casts the INPUT before reducing
+    if a.ndim == 0:
+        return a
+    axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    return mx.prod(a, axis=None if axis == () else axis, keepdims=keepdim)
+
+
+def _nanmedian(a, dim=None, keepdim=False):
+    """aten.nanmedian parity: the lower middle of the non-NaN elements.
+    NaNs sort to the end of an ascending order by replacing them with +inf
+    before the argsort (the sorted values still carry the original NaN).
+    dim variant returns (values, indices); the index points at a position
+    holding the returned value. keepdim needs no extra axis: the gathered
+    size-1 axis already sits at dim (the 40149b27e5 rule)."""
+    a = _mx(a)
+    isnan = (mx.isnan(a) if mx.issubdtype(a.dtype, mx.floating)
+             else mx.zeros(a.shape, mx.bool_))
+    af = mx.where(isnan, mx.array(float("inf"), a.dtype), a)
+    if dim is None:
+        # scalar reduce over the whole tensor
+        flat = af.reshape(-1)
+        flat_nan = isnan.reshape(-1)
+        if mx.issubdtype(flat.dtype, mx.integer):
+            with mx.stream(mx.cpu):
+                idx = mx.argsort(flat, axis=-1)
+        else:
+            idx = mx.argsort(flat, axis=-1)
+        v = mx.take_along_axis(a.reshape(-1), idx, axis=-1)
+        m = mx.sum(mx.logical_not(flat_nan).astype(mx.int32))
+        # all-NaN input: sel clamps to 0 and every position holds NaN anyway
+        sel = mx.maximum((m - 1) // 2, 0)
+        return mx.take(v, sel).astype(a.dtype)
+    dim = dim % a.ndim
+    perm = [i for i in range(a.ndim) if i != dim] + [dim]
+    at = mx.transpose(a, axes=perm)
+    aft = mx.transpose(af, axes=perm)
+    # integral sorts run on an explicit CPU stream (no int64 argsort kernel
+    # in the omarchy backend); see _mode
+    if mx.issubdtype(at.dtype, mx.integer):
+        with mx.stream(mx.cpu):
+            idx = mx.argsort(aft, axis=-1)
+    else:
+        idx = mx.argsort(aft, axis=-1)
+    v = mx.take_along_axis(at, idx, axis=-1)
+    isnant = mx.transpose(isnan, axes=perm)
+    m = mx.sum(mx.logical_not(isnant).astype(mx.int32), axis=-1, keepdims=True)
+    # all-NaN rows clamp to slot 0 (still a NaN position -> NaN, like torch)
+    sel = mx.maximum((m - 1) // 2, 0)
+    vals = mx.take_along_axis(v, sel, axis=-1)
+    index = mx.take_along_axis(idx, sel, axis=-1)
+    inv = [perm.index(i) for i in range(a.ndim)]
+    vals = mx.transpose(vals, axes=inv)
+    index = mx.transpose(index, axes=inv)
+    if not keepdim:
+        vals = mx.squeeze(vals, dim)
+        index = mx.squeeze(index, dim)
+    return (vals.astype(a.dtype), index.astype(mx.int64))
+
+
 def _is_integral_dtype(dt):
     return mx.issubdtype(dt, mx.integer) or mx.issubdtype(dt, mx.bool_)
 
@@ -2273,6 +2372,8 @@ _FUNC_SPECS = {
     "select": lambda a, dim, i: _slice(a, dim, i % a.shape[dim % a.ndim], i % a.shape[dim % a.ndim] + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
     "slice": _slice, "narrow": lambda a, dim, s, n: _slice(a, dim, s, s + n, 1),
     "mean": _mean, "sum": _sum,
+    "amin": _amin, "amax": _amax, "aminmax": _aminmax,
+    "prod": _prod, "nanmedian": _nanmedian,
     # PT-AL-g: aten.logsumexp(self, int[1] dim, keepdim) — the dim list
     # becomes the axis tuple; mx.logsumexp is the same stable reduction.
     "logsumexp": lambda a, dim, keepdim=False: mx.logsumexp(_mx(a), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
