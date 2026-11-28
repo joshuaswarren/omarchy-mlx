@@ -3014,6 +3014,63 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_special_gamma_family():
+    # w7W pt-27: composed special functions. lgamma uses the Lanczos g=7
+    # approximation + reflection; digamma reflects negative args, recurs
+    # to w>=6 and applies the asymptotic series; erfcx switches to its
+    # asymptotic series where f32 erf saturates. Edge cases match aten:
+    # lgamma/digamma poles at nonpositive integers, entr's -inf/zero/pos
+    # split, and erfc/ndtr are thin erf compositions.
+    torch.manual_seed(0)
+    S = torch.ops.aten
+    x = torch.randn(4, 6) * 2
+    xneg = -torch.rand(5) * 8 - 0.3  # negative non-integers
+    cases = [
+        (S.erfc.default, (x,), {}, "erfc", 1e-5),
+        (S.erfc.default, (x * 3,), {}, "erfc", 1e-5),
+        (S.erfinv.default, (torch.rand(8) * 1.8 - 0.9,), {}, "erfinv", 1e-5),
+        (S.lgamma.default, (torch.rand(8) * 20 + 0.6,), {}, "lgamma", 1e-4),
+        (S.lgamma.default, (xneg,), {}, "lgamma", 1e-4),
+        (S.lgamma.default, (torch.tensor([-2., -1., 0., 1., 5.]),), {},
+         "lgamma", 1e-4),
+        (S.digamma.default, (torch.rand(8) * 20 + 0.05,), {}, "digamma", 5e-4),
+        (S.digamma.default, (xneg,), {}, "digamma", 5e-3),
+        (S.digamma.default, (torch.tensor([0., 1., 2.]),), {}, "digamma", 5e-4),
+        (S.mvlgamma.default, (torch.rand(6) * 10 + 3,), {"p": 2},
+         "mvlgamma", 1e-4),
+        (S.mvlgamma.default, (torch.rand(6) * 10 + 4,), {"p": 4},
+         "mvlgamma", 1e-4),
+        (S.special_entr.default,
+         (torch.tensor([-1., 0., 0.5, 1., 2.]),), {}, "special_entr", 1e-5),
+        (S.special_ndtr.default, (x,), {}, "special_ndtr", 1e-5),
+        (S.special_ndtr.default, (x * 4,), {}, "special_ndtr", 1e-5),
+        (S.special_erfcx.default, (torch.randn(8) * 2,), {},
+         "special_erfcx", 1e-4),
+        (S.special_erfcx.default, (torch.rand(8) * 10 + 4,), {},
+         "special_erfcx", 1e-4),
+    ]
+    for target, ins, kwargs, fam, tol in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target))
+        got = torch.as_tensor(out)
+        refn = ref.float().numpy()
+        gotn = got.float().numpy()
+        ok = np.isclose(gotn, refn, atol=tol, rtol=tol)
+        both_inf = np.isinf(gotn) & np.isinf(refn) & (np.sign(gotn) == np.sign(refn))
+        both_nan = np.isnan(gotn) & np.isnan(refn)
+        assert np.all(ok | both_inf | both_nan), (
+            str(target), kwargs, got, ref)
+    print("test_special_gamma_family PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3069,6 +3126,7 @@ if __name__ == "__main__":
     test_cosine_similarity()
     test_pdist_cdist()
     test_flip_rot90()
+    test_special_gamma_family()
     test_mode()
     test_kthvalue()
     test_squeeze_inplace()

@@ -929,6 +929,77 @@ def _nchw(a):
     return a.transpose(0, a.ndim - 1, *range(1, a.ndim - 1))
 
 
+_LANCZOS = (0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+            771.32342877765313, -176.61502916214059, 12.507343278686905,
+            -0.13857109526572012, 9.9843695780195716e-6,
+            1.5056327351493116e-7)
+
+
+def _lgamma_pos(z):
+    # log-gamma for z >= 0.5 via the g=7 Lanczos approximation.
+    z = z - 1.0
+    s = mx.array(_LANCZOS[0])
+    for i, ci in enumerate(_LANCZOS[1:], 1):
+        s = s + ci / (z + i)
+    t = z + 7.5
+    return 0.5 * math.log(2 * math.pi) + (z + 0.5) * mx.log(t) - t + mx.log(s)
+
+
+def _lgamma(a):
+    a = _mx(a).astype(mx.float32)
+    lg = mx.where(a < 0.5,
+                  math.log(math.pi)
+                  - mx.log(mx.abs(mx.sin(math.pi * a)))
+                  - _lgamma_pos(1.0 - a),
+                  _lgamma_pos(a))
+    return mx.where((a <= 0) & (a == mx.floor(a)),
+                    mx.array(math.inf), lg)
+
+
+def _mvlgamma(a, p):
+    # log multivariate gamma: p(p-1)/4*log(pi) + sum_j lgamma(a - j/2).
+    a = _mx(a)
+    out = p * (p - 1) * 0.25 * math.log(math.pi)
+    for j in range(p):
+        out = out + _lgamma(a - j * 0.5)
+    return out
+
+
+def _digamma(a):
+    a = _mx(a).astype(mx.float32)
+    # psi(x) = psi(1-x) - pi*cot(pi*x) for x < 0; recur to w >= 6 and use
+    # the asymptotic expansion log(w) - 1/(2w) - 1/(12w^2) + ...
+    refl = mx.where(a < 0, -math.pi / mx.tan(math.pi * a), 0.0)
+    w = mx.where(a < 0, 1.0 - a, a)
+    r = mx.zeros_like(w)
+    for _ in range(8):
+        m = w < 6
+        r = r + mx.where(m, 1.0 / w, 0.0)
+        w = mx.where(m, w + 1.0, w)
+    i2 = 1.0 / (w * w)
+    out = (mx.log(w) - 0.5 / w
+           - i2 * (1.0 / 12 - i2 * (1.0 / 120 - i2 * (1.0 / 252)))
+           - r + refl)
+    out = mx.where(a == 0, mx.array(-math.inf), out)
+    return mx.where((a < 0) & (a == mx.floor(a)), mx.array(math.nan), out)
+
+
+def _erfcx(a):
+    # exp(x^2)*erfc(x): direct form underflows once f32 erf saturates
+    # (x ~ 3.9), so large x uses the asymptotic series.
+    a = _mx(a).astype(mx.float32)
+    t2 = 1.0 / (a * a)
+    asymp = (1.0 / (a * math.sqrt(math.pi))) * (
+        1 - t2 * (0.5 - t2 * (0.75 - t2 * (1.875 - t2 * 6.5625))))
+    return mx.where(a >= 3.5, asymp, mx.exp(a * a) * (1.0 - mx.erf(a)))
+
+
+def _entr(a):
+    a = _mx(a)
+    return mx.where(a > 0, -a * mx.log(a),
+                    mx.where(a == 0, mx.zeros_like(a), mx.array(-math.inf)))
+
+
 def _nll_loss_forward(a, target, weight=None, reduction=1, ignore_index=-100):
     if weight is not None:
         return _raise("nll_loss weight")
@@ -2400,6 +2471,14 @@ _FUNC_SPECS = {
     "xlogy": _xlogy, "xlog1py": _xlog1py,
     # aten registers torch.special.xlog1py as special_xlog1py
     "special_xlog1py": _xlog1py,
+    "erfc": lambda a: 1.0 - mx.erf(_mx(a)),
+    "erfinv": lambda a: mx.erfinv(_mx(a)),
+    "lgamma": _lgamma,
+    "mvlgamma": _mvlgamma,
+    "digamma": _digamma,
+    "special_entr": _entr,
+    "special_ndtr": lambda a: 0.5 * (1.0 + mx.erf(_mx(a) / math.sqrt(2.0))),
+    "special_erfcx": _erfcx,
     "sinh": _sinh, "cosh": _cosh,
     "asinh": _asinh, "acosh": _acosh, "atanh": mx.atanh,
     "acos": mx.acos, "asin": mx.asin, "atan": mx.atan, "atan2": _atan2,
