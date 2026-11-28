@@ -53,6 +53,7 @@ constexpr const char* kG13Legacy = "m1-g13-legacy";
 constexpr const char* kWorkgroup256 = "workgroup-256";
 constexpr const char* kWorkgroup128 = "workgroup-128";
 constexpr const char* kNvidiaC16 = "nvidia-c16-coopmat";
+constexpr const char* kRadvPin32 = "radv-rdna-subgroup64-pin32";
 
 std::string g_profile;
 
@@ -323,6 +324,8 @@ TEST_CASE("capability report is stamped with the active profile") {
     CHECK(c.device_name == std::string("Apple M1 (G13G B1)"));
   } else if (profile_is(kNvidiaC16)) {
     CHECK(c.device_name == std::string("NVIDIA GeForce RTX 5060 Ti"));
+  } else if (profile_is(kRadvPin32)) {
+    CHECK(c.device_name == std::string("AMD Radeon RX 9070"));
   } else {
     CHECK(h.device_name == c.device_name);
   }
@@ -391,6 +394,25 @@ TEST_CASE("capability report is stamped with the active profile") {
     // it inherits hardware truth, and require_backed refuses a claimed
     // dispatch the runtime device cannot back.
     CHECK(c.cooperative_matrix_bf16 == h.cooperative_matrix_bf16);
+  } else if (profile_is(kRadvPin32)) {
+    // RADV/RDNA-class part: native subgroup size 64, full op mask, the
+    // 16x16x16 fp16 coopmat shape, and a legal requiredSubgroupSize=32
+    // pin for workgroups up to 1024 lanes (DEC-45).
+    CHECK_EQ(c.subgroup_size, 64u);
+    CHECK_FALSE(c.cooperative_matrix_f32_8);
+    CHECK_EQ(c.subgroup_size_32_admitted_max_wg, 1024u);
+    CHECK_EQ(c.device_name, "AMD Radeon RX 9070");
+    CHECK((c.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0);
+    CHECK(omarchy::cooperative_matrix_advertises(
+        c.cooperative_matrix_shapes,
+        omarchy::qmm_prefill_coopmat_shape_f16x16()));
+    // The widened DEC-45 gates: 256-lane word/multi kernels, 128-lane
+    // batch/rows kernels, and the 64-lane CMAT16 prefill all open on
+    // the pin; the bare == 32 arm stays closed.
+    CHECK(c.subgroup_size_32_admitted_max_wg >= 256u);
+    CHECK(c.subgroup_size_32_admitted_max_wg >= 128u);
+    CHECK(c.subgroup_size_32_admitted_max_wg >= 64u);
+    CHECK_FALSE(c.subgroup_size == 32u);
   } else {
     FAIL("unhandled profile ", g_profile);
   }
@@ -1517,7 +1539,7 @@ int main(int argc, char** argv) {
     // Registry sanity: the documented profiles exist.
     for (const char* name : {kM1Fork, kM1Stock, kSubgroup64, kSmallSmem,
                              kNoCoopmat, kG13Legacy, kWorkgroup256,
-                             kWorkgroup128}) {
+                             kWorkgroup128, kNvidiaC16, kRadvPin32}) {
       if (omarchy::capsim::find(name) == nullptr) {
         std::cerr << "unit: profile missing from registry: " << name
                   << "\n";
@@ -1612,6 +1634,22 @@ int main(int argc, char** argv) {
         std::cerr << "unit: " << name << " delta wrong\n";
         return 1;
       }
+    }
+    auto radv = omarchy::capsim::apply(
+        hw_report, *omarchy::capsim::find(kRadvPin32));
+    if (radv.subgroup_size != 64 || radv.subgroup_size_32_admitted_max_wg != 1024 ||
+        radv.device_name != "AMD Radeon RX 9070" || !radv.simulated) {
+      std::cerr << "unit: radv-rdna-subgroup64-pin32 delta wrong\n";
+      return 1;
+    }
+    // Inherit sentinel: a profile leaving the axis unset keeps hardware
+    // truth instead of zeroing the admission bound.
+    auto inherit = omarchy::capsim::apply(
+        hw_report, *omarchy::capsim::find(kSubgroup64));
+    if (inherit.subgroup_size_32_admitted_max_wg !=
+        hw_report.subgroup_size_32_admitted_max_wg) {
+      std::cerr << "unit: subgroup_pin32_max_wg inherit sentinel wrong\n";
+      return 1;
     }
     std::cout << "unit: profile registry + apply() deltas OK\n";
   }

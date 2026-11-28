@@ -2747,6 +2747,269 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
   throw std::invalid_argument("[omarchy] invalid compute kernel.");
 }
 
+// The workgroup lane count of every built-in kernel whose shader source
+// assumes subgroupSize == 32 (DEC-45): qmm_vec.comp USE_SUBGROUP builds
+// (LANES = QMM_LANES = 32, workgroup = SLOTS_PER_GROUP * 32), the
+// qmm_vec6.comp/bonsai subgroup builds (LANES = 32), the
+// APPLE_REDUCTION and fast_rope_norm(_pair) 32-lane reduction trees
+// (ROPE_NORM_THREADS / 32 subgroups), and the two-subgroup CMAT16
+// prefill build. 0 = the kernel does not assume a 32-lane subgroup, so
+// its pipeline keeps the device default. A kernel in this table reached
+// on a device reporting subgroup_size != 32 is only legal under a
+// requiredSubgroupSize = 32 pin, and only when the hardware report
+// admitted that pin for the workgroup's lane count
+// (caps.subgroup_size_32_admitted_max_wg); create_pipeline fails closed
+// otherwise rather than silently running at the wrong subgroup width.
+uint32_t kernel_subgroup32_workgroup(ComputeKernel kernel) {
+  switch (kernel) {
+    // 32-lane workgroups: a single subgroup per workgroup.
+    case ComputeKernel::MatmulVecBF16:
+    case ComputeKernel::MatmulVecMultiBF16:
+    case ComputeKernel::SdpaDecodeNativeTwoPassP1F16:
+    case ComputeKernel::SdpaDecodeNativeTwoPassP1F16Hd128:
+      return 32u;
+
+    // 64-lane workgroup (qmm_coopmat16_bf16.comp).
+    case ComputeKernel::QmmPrefillCoopmat16BF16:
+      return 64u;
+
+    // 128-lane workgroups (SLOTS_PER_GROUP=4 or ROPE_NORM_THREADS=128).
+    case ComputeKernel::QmmVecQ4WordSubgroupF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16G128:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2Fast:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2FastB1:
+    case ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupRows8BF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16:
+    case ComputeKernel::QmmVecWordSubgroupF16Q4G32:
+    case ComputeKernel::QmmVecWordSubgroupBF16Q4G32:
+    case ComputeKernel::QmmVecWordSubgroupF16Q8G32:
+    case ComputeKernel::QmmVecWordSubgroupBF16Q8G32:
+    case ComputeKernel::QmmVecWordSubgroupF16Q8G64:
+    case ComputeKernel::QmmVecWordSubgroupBF16Q8G64:
+    case ComputeKernel::QmmVecQ4MultiSubgroupF16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4W2:
+    case ComputeKernel::QmmVecQ4MultiOutgateBF16:
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S4W2:
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S4W2Fast:
+    case ComputeKernel::QmmVecQ4MultiToken4SubgroupBF16:
+    case ComputeKernel::QmmVecQ4MultiToken8SubgroupBF16:
+    case ComputeKernel::QmmVecQ4MultiToken16SubgroupBF16:
+    case ComputeKernel::QmmVecQ4MultiToken4ResNormSubgroupBF16:
+    case ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16:
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R2:
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R3:
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R4:
+    case ComputeKernel::BonsaiQmvWideSubgroupBF16R5:
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R2:
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R3:
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R4:
+    case ComputeKernel::BonsaiQmvWideSubgroupF16R5:
+    case ComputeKernel::FastRopeNormBF16W128:
+    case ComputeKernel::FastRopeNormAppleBF16W128:
+    // Decode-split SDPA phase kernels (sdpa_decode_split_p*.comp): a
+    // 128-lane workgroup whose merge math hardcodes four subgroups
+    // (s_part[sg], s_part[sg + 4u], i < 4 reduction loops). DEC-45 does
+    // not open their == 32 gates; the table entry keeps the kernel ->
+    // width map complete so a future widening needs no plumbing here.
+    case ComputeKernel::SdpaDecodeSplitP1R1BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1R2BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1R4BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1R8BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1VR1BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1VR2BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1VR8BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1VBk64R4BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1MR4BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1R1BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP1R2BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP1R8BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP1VR4BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256Qrope:
+    case ComputeKernel::SdpaDecodeSplitP1R4BF16Hd256QropeApple:
+    case ComputeKernel::SdpaDecodeSplitP1KVBk32R4BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1KVBk64R4BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1KVBk128R4BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP1KVBk32R4BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP1KVBk64R4BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP1KVBk128R4BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP2BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP2BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP2Bk32BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP2Bk64BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBF16Hd128:
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBk32BF16Hd256:
+    case ComputeKernel::SdpaDecodeSplitP2OutgateBk64BF16Hd256:
+    // MoE word-per-lane gather kernels (gather_qmm_word.comp): one
+    // 32-lane slot per output element, 128-lane workgroup.
+    case ComputeKernel::GatherQmmWordBF16:
+    case ComputeKernel::GatherQmmWord2BF16:
+    // Per-token recurrent GDN prefill scan
+    // (gated_delta_prefill_recur32.comp): one 128-lane workgroup per
+    // four (hv, dv) rows.
+    case ComputeKernel::GatedDeltaPrefillRecur32BF16:
+    case ComputeKernel::GatedDeltaPrefillRecur32MaskedBF16:
+    // Dense 16x16x16 coopmat direct matmul (matmul_coopmat_direct.comp
+    // -DCMAT16): a 128-lane workgroup of four 32-lane subgroups; the
+    // shader already documents the requiredSubgroupSize pin.
+    case ComputeKernel::MatmulDirectF16C16Nn:
+    case ComputeKernel::MatmulDirectF16C16Nt:
+    case ComputeKernel::MatmulDirectF16C16Tn:
+    case ComputeKernel::MatmulDirectF16C16Tt:
+    case ComputeKernel::MatmulDirectBF16C16Nn:
+    case ComputeKernel::MatmulDirectBF16C16Nt:
+    case ComputeKernel::MatmulDirectBF16C16Tn:
+    case ComputeKernel::MatmulDirectBF16C16Tt:
+      return 128u;
+
+    // 256-lane workgroups (SLOTS_PER_GROUP=8, the APPLE_REDUCTION and
+    // fast_rope_norm 256-thread trees, qmm_vec6.comp).
+    case ComputeKernel::QmmVecSubgroupF32:
+    case ComputeKernel::QmmVecSubgroupF16:
+    case ComputeKernel::QmmVecSubgroupBF16:
+    case ComputeKernel::QmmVecQ4WordSubgroupF32:
+    case ComputeKernel::QmmVecSubgroupFpF32:
+    case ComputeKernel::QmmVecSubgroupFpF16:
+    case ComputeKernel::QmmVecSubgroupFpBF16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupF32:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2Fast:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast3w:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Upfront:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast3M:
+    case ComputeKernel::QmmVecQ4SwigluBF16R2S8W2:
+    case ComputeKernel::QmmVecQ4SwigluBF16R2S8W2Fast:
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S8W2:
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S8W2Fast:
+    case ComputeKernel::QmmVecQ4ResNormBF16R2S8W2:
+    case ComputeKernel::QmmVecQ4ResNormBF16R2S8W2Vec:
+    case ComputeKernel::QmmVecQ4ResNormBF16R2S8W2VecFast:
+    case ComputeKernel::QmmVecQ4OutgateResNormBF16:
+    case ComputeKernel::QmmVecQ4OutgateResNormBF16R2S8W2:
+    case ComputeKernel::QmmVec6C4R1F16:
+    case ComputeKernel::QmmVec6C4R1BF16:
+    case ComputeKernel::QmmVec6C1R8F16:
+    case ComputeKernel::QmmVec6C1R8BF16:
+    case ComputeKernel::BonsaiQ1QmvSubgroupF32:
+    case ComputeKernel::BonsaiQ1QmvSubgroupF16:
+    case ComputeKernel::BonsaiQ1QmvSubgroupBF16:
+    case ComputeKernel::FastRopeNormBF16:
+    case ComputeKernel::FastRopeNormAppleBF16:
+    case ComputeKernel::FastRopeNormPairBF16:
+    case ComputeKernel::FastRopeNormPairAppleBF16:
+    case ComputeKernel::FastRmsNormAppleBF16:
+    case ComputeKernel::FastAddRmsNormAppleBF16:
+    case ComputeKernel::FastNormGatedAppleBF16:
+    case ComputeKernel::FastNormGatedOnlyAppleBF16:
+    case ComputeKernel::GdnConvDecodeAppleBF16:
+    case ComputeKernel::QmmVecGreedyBF16:
+    // Decode-native SDPA bf16/composition-exact arms
+    // (sdpa_decode_native.comp BF16_IO builds, 256-lane workgroups).
+    case ComputeKernel::SdpaDecodeNativeBF16:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd32:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd96:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd128:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd160:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd192:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd224:
+    case ComputeKernel::SdpaDecodeNativeBF16Hd256:
+    case ComputeKernel::SdpaDecodeMaskedBF16Hd128:
+    case ComputeKernel::SdpaDecodeRowsBF16Hd128:
+    // MoE subgroup gather kernels (gather_qmm_sub.comp): the cross-slot
+    // merge indexes subgroup_totals[r * 8 + gl_SubgroupID], a hardcoded
+    // eight subgroups in the 256-lane workgroup.
+    case ComputeKernel::GatherQmmSubF32:
+    case ComputeKernel::GatherQmmSubF16:
+    case ComputeKernel::GatherQmmSubBF16:
+    case ComputeKernel::GatherQmmNbSubF32:
+    case ComputeKernel::GatherQmmNbSubF16:
+    case ComputeKernel::GatherQmmNbSubBF16:
+    case ComputeKernel::GatherQmmSubDirectF16:
+    case ComputeKernel::GatherQmmSubDirectBF16:
+    case ComputeKernel::GatherQmmSubDirectR4F16:
+    case ComputeKernel::GatherQmmSubDirectR4BF16:
+    case ComputeKernel::GatherQmmSubDirectR8F16:
+    case ComputeKernel::GatherQmmSubDirectR8BF16:
+    case ComputeKernel::GatherQmmSubDirectR8Q3F16:
+    case ComputeKernel::GatherQmmNbSubFpF32:
+    case ComputeKernel::GatherQmmNbSubFpF16:
+    case ComputeKernel::GatherQmmNbSubFpBF16:
+    // Fused gather+dequant+norm (gather_dequant_norm.comp): 32-lane
+    // subgroupAdd plus an eight-subgroup combine, 256-lane workgroup.
+    case ComputeKernel::GatherDequantNormBF16:
+      return 256u;
+
+    // 512-lane workgroups (SLOTS_PER_GROUP=16).
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16KCONT:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast:
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast3M:
+    case ComputeKernel::QmmVecQ4ResNormBF16:
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2:
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2Fast:
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2FastD2048:
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2FastD4096:
+    // Online-decode SDPA 16-subgroup builds (SUBGROUPS=16, 512 lanes).
+    case ComputeKernel::SdpaDecodeOnlineSg16BF16Hd256:
+    case ComputeKernel::SdpaDecodeOnlineOutgateSg16BF16Hd256:
+      return 512u;
+
+    // 1024-lane workgroups (SLOTS_PER_GROUP=32).
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2Fast:
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2FastB1:
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2:
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2Fast:
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD2048:
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD4096:
+    // Decode-native f16 and two-pass P2 builds (1024-lane workgroups)
+    // plus the online-decode SDPA 32-subgroup family (SUBGROUPS=32).
+    case ComputeKernel::SdpaDecodeNativeF16:
+    case ComputeKernel::SdpaDecodeNativeF16Hd128:
+    case ComputeKernel::SdpaDecodeNativeTwoPassP2F16:
+    case ComputeKernel::SdpaDecodeNativeTwoPassP2F16Hd128:
+    case ComputeKernel::SdpaDecodeOnlineSg32BF16Hd128:
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128:
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128G13C:
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128G13CB4:
+    case ComputeKernel::SdpaDecodeOnlineSg32BF16Hd256:
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256:
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256Fast:
+    case ComputeKernel::SdpaDecodeOnlineOutgateSg32BF16Hd128:
+    case ComputeKernel::SdpaDecodeOnlineOutgateSg32BF16Hd256:
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd128:
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd128G13C:
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256:
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Split:
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast:
+    // Coalesced-state GDN decode family
+    // (gated_delta_decode_*_sg32.comp): 32 subgroups in a 1024-lane
+    // workgroup, subgroupAdd reductions across 32 lanes.
+    case ComputeKernel::GatedDeltaDecodeBF16Sg32:
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32:
+    case ComputeKernel::GatedDeltaDecodeConvNormBF16Sg32Fast:
+    case ComputeKernel::GatedDeltaDecodeConvNormBaBF16Sg32:
+      return 1024u;
+
+    default:
+      return 0u;
+  }
+}
+
 } // namespace
 
 ComputeRuntime::ComputeRuntime(
@@ -2757,7 +3020,8 @@ ComputeRuntime::ComputeRuntime(
     bool subgroup_size_16_admitted,
     bool subgroup_size_32_admitted,
     bool subgroup_size_64_admitted,
-    bool subgroup_size_32_wide_admitted)
+    bool subgroup_size_32_wide_admitted,
+    uint32_t subgroup_size_32_admitted_max_wg)
     : device_(device),
       binding_limit_(binding_limit),
       subgroup_size_(subgroup_size),
@@ -2765,7 +3029,9 @@ ComputeRuntime::ComputeRuntime(
       subgroup_size_16_admitted_(subgroup_size_16_admitted),
       subgroup_size_32_admitted_(subgroup_size_32_admitted),
       subgroup_size_64_admitted_(subgroup_size_64_admitted),
-      subgroup_size_32_wide_admitted_(subgroup_size_32_wide_admitted) {
+      subgroup_size_32_wide_admitted_(subgroup_size_32_wide_admitted),
+      subgroup_size_32_admitted_max_wg_(
+          subgroup_size_32_admitted_max_wg) {
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -2938,126 +3204,16 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
         nullptr,
         16u);
   }
-  // The CMAT16 dense direct builds assume 32-lane subgroups: a device
-  // reporting a different native size (16 on ANV, 64 on RADV) reaches
-  // them only through a requiredSubgroupSize pin, and only when the
-  // hardware report admitted the pin. A native-32 device takes the
-  // default (required_subgroup_size_ is 0 or already 32). Same
-  // fail-closed rule as the KCONTS16 pin.
-  if (kernel == ComputeKernel::MatmulDirectF16C16Nn ||
-      kernel == ComputeKernel::MatmulDirectF16C16Nt ||
-      kernel == ComputeKernel::MatmulDirectF16C16Tn ||
-      kernel == ComputeKernel::MatmulDirectF16C16Tt ||
-      kernel == ComputeKernel::MatmulDirectBF16C16Nn ||
-      kernel == ComputeKernel::MatmulDirectBF16C16Nt ||
-      kernel == ComputeKernel::MatmulDirectBF16C16Tn ||
-      kernel == ComputeKernel::MatmulDirectBF16C16Tt) {
-    if (required_subgroup_size_ != 0u &&
-        required_subgroup_size_ != 32u &&
-        !subgroup_size_32_admitted_) {
-      throw std::runtime_error(
-          "[omarchy] CMAT16 dense matmul requires 32-lane subgroups, "
-          "which this device cannot legally pin.");
-    }
-    const uint32_t pin =
-        required_subgroup_size_ != 0u && required_subgroup_size_ != 32u
-        ? 32u
-        : required_subgroup_size_;
-    return create_pipeline(
-        std::span<const uint32_t>{
-            reinterpret_cast<const uint32_t*>(bytes),
-            size / sizeof(uint32_t)},
-        "main",
-        nullptr,
-        pin);
-  }
-  // The QMV decode and Apple-norm kernel family assumes 32-lane
-  // subgroups: a device reporting a different native size (64 on RADV
-  // wave64) reaches them only through a requiredSubgroupSize = 32 pin,
-  // and only when the hardware report admitted the pin. Same fail-closed
-  // rule as the CMAT16 arm; a native-32 device takes the default.
-  if (kernel == ComputeKernel::QmmVecQ4WordSubgroupF32 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupF16 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16 ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupF32 ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupF16 ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16 ||
-      kernel == ComputeKernel::QmmVecQ4MultiOutgateBF16 ||
-      kernel == ComputeKernel::QmmVecQ4MultiToken4SubgroupBF16 ||
-      kernel == ComputeKernel::QmmVecQ4MultiToken8SubgroupBF16 ||
-      kernel == ComputeKernel::QmmVecQ4MultiToken16SubgroupBF16 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupBatch4BF16 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupBatch8BF16 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupRows8BF16 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupRows8RopeEpiBF16 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16G128 ||
-      kernel == ComputeKernel::QmmVecQ4MultiToken4ResNormSubgroupBF16 ||
-      kernel == ComputeKernel::QmmVecQ4MultiToken4RopeEpiSubgroupBF16 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2 ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 ||
-      kernel == ComputeKernel::QmmVecQ4SwigluBF16R2S8W2 ||
-      kernel == ComputeKernel::QmmVecQ4ResNormBF16R2S8W2 ||
-      kernel == ComputeKernel::QmmVecQ4OutgateResNormBF16R2S8W2 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2Fast ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast ||
-      kernel == ComputeKernel::QmmVecQ4SwigluBF16R2S8W2Fast ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Upfront ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast3w ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast3M ||
-      kernel == ComputeKernel::QmmVecQ4ResNormBF16R2S8W2Vec ||
-      kernel == ComputeKernel::QmmVecQ4ResNormBF16R2S8W2VecFast ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16 ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16 ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2 ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16KCONT ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast3M ||
-      kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2 ||
-      kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2Fast ||
-      kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2FastD2048 ||
-      kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2FastD4096 ||
-      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4W2 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2 ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2Fast ||
-      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2FastB1 ||
-      kernel == ComputeKernel::QmmVecQ4SwigluBF16R1S4W2 ||
-      kernel == ComputeKernel::QmmVecQ4SwigluBF16R1S4W2Fast ||
-      kernel == ComputeKernel::QmmVecQ4SwigluBF16R1S8W2 ||
-      kernel == ComputeKernel::QmmVecQ4SwigluBF16R1S8W2Fast ||
-      kernel == ComputeKernel::QmmVecQ4ResNormBF16 ||
-      kernel == ComputeKernel::QmmVecQ4OutgateResNormBF16 ||
-      kernel == ComputeKernel::GatedDeltaPrefillRecur32BF16 ||
-      kernel == ComputeKernel::GatedDeltaPrefillRecur32MaskedBF16 ||
-      kernel == ComputeKernel::FastRmsNormAppleBF16 ||
-      kernel == ComputeKernel::FastNormGatedAppleBF16 ||
-      kernel == ComputeKernel::FastNormGatedOnlyAppleBF16 ||
-      kernel == ComputeKernel::FastRopeNormAppleBF16 ||
-      kernel == ComputeKernel::FastRopeNormAppleBF16W128 ||
-      kernel == ComputeKernel::FastRopeNormPairAppleBF16 ||
-      kernel == ComputeKernel::FastAddRmsNormAppleBF16 ||
-      kernel == ComputeKernel::GdnConvDecodeAppleBF16 ||
-      kernel == ComputeKernel::GatherDequantNormBF16) {
-    // Fail closed on the native size too: required_subgroup_size_ is 0 on
-    // a device without subgroupSizeControl, so checking it alone would
-    // compile a 32-lane kernel unpinned on native-64 hardware. The
-    // R2S32W2 family (1024-lane workgroups, over the 512-lane admission
-    // bound) is deliberately absent: primitives.cpp keeps those variants
-    // native-32-only at selection time.
-    if (subgroup_size_ != 32u && !subgroup_size_32_wide_admitted_) {
-      throw std::runtime_error(
-          "[omarchy] this QMV/norm kernel requires 32-lane subgroups, "
-          "which this device cannot legally pin.");
-    }
-    const uint32_t pin = subgroup_size_ != 32u ? 32u : required_subgroup_size_;
-    return create_pipeline(
-        std::span<const uint32_t>{
-            reinterpret_cast<const uint32_t*>(bytes),
-            size / sizeof(uint32_t)},
-        "main",
-        nullptr,
-        pin);
-  }
+  // The CMAT16 dense direct builds (MatmulDirect*C16*) and the DEC-18
+  // QMV decode / Apple-norm kernel family (QmmVecQ4*Subgroup*,
+  // *R2SxW2*, *NormApple*, GatherDequantNormBF16, GdnCon/Recur32) all
+  // assume 32-lane subgroups: they are covered by the
+  // kernel_subgroup32_workgroup table below, which applies the same
+  // requiredSubgroupSize = 32 pin under each kernel's own workgroup
+  // admission bound (subgroup_size_32_admitted_max_wg_). The R2S32W2
+  // kernels sit in the table at 1024 lanes — selection still keeps
+  // them native-32-only, and the pin fails closed at the exact
+  // VUID-02757 bound if they are ever reached.
   if (kernel == ComputeKernel::QmmPrefillCoopmatBF16x16 ||
       kernel == ComputeKernel::SdpaCausalFlashCoopmat16BF16) {
     // Same fail-closed rule as the 16-lane build, one wave up: the kernel
@@ -3084,6 +3240,32 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
           " neither run that unpinned nor legally pin"
           " requiredSubgroupSize = 64.");
     }
+  }
+  // DEC-45: the 32-lane kernel family (qmm_vec/qmm_vec6/bonsai subgroup
+  // builds, the APPLE_REDUCTION norm/rope trees, the CMAT16 prefill
+  // build) assumes subgroupSize == 32. A device reporting a different
+  // native size (64 on RADV, 16 on ANV) reaches them only through a
+  // requiredSubgroupSize = 32 pin, and only when the hardware report
+  // admitted that pin for the kernel's workgroup lane count. A
+  // native-32 device takes the default below; anything else fails
+  // closed rather than running the workgroup at the wrong width.
+  const uint32_t subgroup32_wg = kernel_subgroup32_workgroup(kernel);
+  if (subgroup32_wg != 0u && subgroup_size_ != 32u) {
+    if (subgroup32_wg > subgroup_size_32_admitted_max_wg_) {
+      throw std::runtime_error(
+          "[omarchy] kernel assumes subgroupSize = 32 in a " +
+          std::to_string(subgroup32_wg) +
+          "-lane workgroup; this device reports subgroup_size " +
+          std::to_string(subgroup_size_) +
+          " and cannot legally pin requiredSubgroupSize = 32 for it.");
+    }
+    return create_pipeline(
+        std::span<const uint32_t>{
+            reinterpret_cast<const uint32_t*>(bytes),
+            size / sizeof(uint32_t)},
+        "main",
+        nullptr,
+        32u);
   }
   return create_pipeline(
       std::span<const uint32_t>{

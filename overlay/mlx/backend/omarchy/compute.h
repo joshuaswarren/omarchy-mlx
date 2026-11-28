@@ -1545,7 +1545,8 @@ class ComputeRuntime {
       bool subgroup_size_16_admitted,
       bool subgroup_size_32_admitted,
       bool subgroup_size_64_admitted,
-      bool subgroup_size_32_wide_admitted);
+      bool subgroup_size_32_wide_admitted,
+      uint32_t subgroup_size_32_admitted_max_wg);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -1620,6 +1621,7 @@ class ComputeRuntime {
   bool subgroup_size_32_admitted_{false};
   bool subgroup_size_64_admitted_{false};
   bool subgroup_size_32_wide_admitted_{false};
+  uint32_t subgroup_size_32_admitted_max_wg_{0};
   bool push_descriptors_{false};
 
   VkDevice device_;
