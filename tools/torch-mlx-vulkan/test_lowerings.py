@@ -2467,6 +2467,88 @@ def test_where_masked_fill():
     print("test_where_masked_fill PASS")
 
 
+def test_write_family_dup_targets():
+    # Q-73 write-family audit: duplicated target positions must resolve
+    # last-write-wins (aten slot semantics) — never sum or max — unless the
+    # op is explicitly accumulate. masked_fill is mask-indexed so positions
+    # can't duplicate; every other family member gets a dup leg. Each
+    # in-place leg also returns the input placeholder: a write invisible to
+    # the graph's own view of the input is a stale-env bug, not a semantics
+    # choice.
+    t32 = torch.zeros(5)
+    legs = [
+        # (target, args, inplace) — refs computed by torch below.
+        (torch.ops.aten.index_copy_.default,
+         (t32, 0, torch.tensor([1, 3, 1, 2]), torch.tensor([10., 20., 30., 40.])), True),
+        (torch.ops.aten.index_copy_.default,
+         (torch.zeros(3, 4), 1, torch.tensor([0, 2, 0]), torch.ones(3, 3)), True),
+        (torch.ops.aten.index_copy.default,
+         (t32, 0, torch.tensor([1, 3, 1, 2]), torch.tensor([10., 20., 30., 40.])), False),
+        (torch.ops.aten.scatter_.src,
+         (torch.zeros(4), 0, torch.tensor([0, 0, 1]), torch.tensor([5., 7., 9.])), True),
+        (torch.ops.aten.index_put_.default,
+         (torch.zeros(4), [torch.tensor([0, 0])], torch.tensor([5., 7.]), False), True),
+        (torch.ops.aten.index_fill_.int_Scalar,
+         (torch.zeros(4), 0, torch.tensor([0, 0, 2]), 9.0), True),
+        (torch.ops.aten.put_.default,
+         (torch.zeros(4), torch.tensor([0, 0, 1]), torch.tensor([5., 7., 9.]), False), True),
+        # the one legal exception: put_ asked to accumulate sums the dup
+        # positions instead of last-write-wins.
+        (torch.ops.aten.put_.default,
+         (torch.zeros(4), torch.tensor([0, 0, 1]), torch.tensor([5., 7., 9.]), True), True),
+    ]
+    for target, ins, inplace in legs:
+        ref_in = [a.clone() if torch.is_tensor(a) else a for a in ins]
+        ref = target(*ref_in)
+        g = torch.fx.Graph()
+        targs = [a for a in ins if torch.is_tensor(a)]
+        phs = [g.placeholder(f"p{i}") for i in range(len(targs))]
+        pit = iter(phs)
+
+        def _lift(a):
+            if torch.is_tensor(a):
+                return next(pit)
+            if isinstance(a, (list, tuple)):
+                return type(a)(_lift(x) for x in a)
+            return a
+        n = g.call_function(target, tuple(_lift(a) for a in ins), {})
+        g.output((phs[0], n) if inplace else n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*[a.clone() for a in targs])
+        if inplace:
+            seen, got = out
+            # the placeholder must carry the mutation too: the deferred path
+            # used to leave env[args[0]] at the pre-mutation array, so a graph
+            # reading the input after the write saw stale data.
+            assert torch.equal(torch.as_tensor(seen).float(), ref.float()), (
+                str(target), "placeholder not mutated", torch.as_tensor(seen), ref)
+        else:
+            got = out
+        assert torch.equal(torch.as_tensor(got).float(), ref.float()), (
+            str(target), torch.as_tensor(got), ref)
+
+    # compiled executor: index_copy_ has a dedicated lowering
+    # (mx.put_along_axis -> the two-phase scatter kernel whose phase 0
+    # atomicMax makes the highest update index the deterministic winner),
+    # so the same dup leg must hold on the compiled path, not just eager.
+    g = torch.fx.Graph()
+    p0 = g.placeholder("p0")
+    p1 = g.placeholder("p1")
+    p2 = g.placeholder("p2")
+    n = g.call_function(torch.ops.aten.index_copy_.default, (p0, 0, p1, p2), {})
+    g.output((p0, n))
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run = mlx_vulkan.make_compiled_executor(gm, dt=mx.float32)
+    ref = torch.zeros(5).index_copy_(0, torch.tensor([1, 3, 1, 2]),
+                                     torch.tensor([10., 20., 30., 40.]))
+    seen, got = run(torch.zeros(5), torch.tensor([1, 3, 1, 2]),
+                    torch.tensor([10., 20., 30., 40.]))
+    assert np.allclose(_np(seen), ref.numpy()), (_np(seen), ref)
+    assert np.allclose(_np(got), ref.numpy()), (_np(got), ref)
+    print("test_write_family_dup_targets PASS")
+
+
 def test_mv_addmv():
     # PT-U9: aten.mv.default and aten.addmv.default are the matvec census
     # rows. #825's glue block added the _FUNC_SPECS entries; this pins that
@@ -3013,6 +3095,7 @@ if __name__ == "__main__":
     test_meshgrid()
     test_group_norm()
     test_where_masked_fill()
+    test_write_family_dup_targets()
     test_mv_addmv()
     test_xlogy_xlog1py()
     test_softplus_mish()
