@@ -2209,6 +2209,89 @@ def _rot90(a, k=1, dims=(0, 1)):
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
 
+def _isin(e, t, assume_unique=False, invert=False):
+    # aten.isin: elementwise membership; test_elements flattens, the
+    # result keeps elements' shape. assume_unique doesn't change it.
+    e, t = _mx(e), _mx(t)
+    if not isinstance(e, mx.array):
+        e = mx.array(e)
+    if not isinstance(t, mx.array):
+        t = mx.array(t)
+    h = mx.any(e.reshape(-1, 1) == t.reshape(1, -1), axis=-1).reshape(e.shape)
+    return mx.logical_not(h) if invert else h
+
+
+def _index_reduce(self, dim, index, src, reduce, include_self=True):
+    # aten.index_reduce: reduce src columns into the positions index[j]
+    # along dim. Same flat-position scatter machinery as scatter_reduce;
+    # include_self=False keeps untouched positions at self and starts
+    # touched ones from the identity (sum/prod needs the dup-count mask).
+    t, idx, s = _mx(self), _mx(index).astype(mx.int64), _mx(src)
+    d = dim % t.ndim
+    tm = mx.moveaxis(t, d, -1)
+    sm = mx.moveaxis(s, d, -1)
+    n_d = tm.shape[-1]
+    rows = int(np.prod(tm.shape[:-1])) if tm.ndim > 1 else 1
+    tf = tm.reshape(rows, n_d)
+    sf = sm.reshape(rows, -1)
+    lin = (mx.arange(rows)[:, None] * n_d + idx[None, :]).reshape(-1)
+    vals = sf.reshape(-1)
+    out = tf.reshape(-1)
+    if reduce == "sum":
+        if not include_self:
+            out = out.at[lin].multiply(mx.zeros(lin.shape[0], dtype=out.dtype))
+        out = out.at[lin].add(vals)
+    elif reduce == "prod":
+        if not include_self:
+            cnt = mx.zeros(out.shape, dtype=out.dtype).at[lin].add(mx.ones(lin.shape[0]))
+            out = mx.where(cnt > 0, mx.ones_like(out), out)
+        out = out.at[lin].multiply(vals)
+    elif reduce in ("amax", "amin"):
+        if not include_self:
+            bound = -float("inf") if reduce == "amax" else float("inf")
+            out = out.at[lin].multiply(mx.zeros(lin.shape[0], dtype=out.dtype))
+            out = out.at[lin].add(mx.full(lin.shape[0], bound, dtype=out.dtype))
+        out = out.at[lin].maximum(vals) if reduce == "amax" else out.at[lin].minimum(vals)
+    elif reduce == "mean":
+        cnt = mx.zeros(out.shape, dtype=out.dtype).at[lin].add(mx.ones(lin.shape[0]))
+        if include_self:
+            out = out.at[lin].add(vals) / mx.maximum(cnt + 1, 1)
+        else:
+            sm = mx.zeros(out.shape, dtype=out.dtype).at[lin].add(vals)
+            out = mx.where(cnt > 0, sm / mx.maximum(cnt, 1), out)
+    else:
+        return _raise(f"index_reduce {reduce}")
+    return mx.moveaxis(out.reshape(rows, n_d).reshape(tm.shape), -1, d)
+
+
+def _dist(a, b, p=2.0):
+    d = mx.abs(_mx(a) - _mx(b))
+    p = float(p)
+    if p == float("inf"):
+        return mx.max(d)
+    if p == float("-inf"):
+        return mx.min(d)
+    if p == 0:
+        return mx.sum((d != 0).astype(mx.int32)).astype(d.dtype)
+    return mx.power(mx.sum(mx.power(d, p)), 1.0 / p)
+
+
+def _nansum(a, dim=None, keepdim=False, dtype=None):
+    a = _mx(a)
+    return _sum(mx.where(mx.isnan(a), mx.zeros_like(a), a), dim, keepdim, dtype)
+
+
+def _fillv(a, v):
+    a = _mx(a)
+    v = _mx(v)
+    return mx.broadcast_to(v, a.shape).astype(a.dtype)
+
+
+# in-place ops first lowered here: the build loop writes the result back
+# into env[args[0]] so later consumers of the placeholder see the mutation.
+_IP_OWN = ("zero_", "fill_", "trunc_", "fix_", "index_reduce_")
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2490,6 +2573,20 @@ _FUNC_SPECS = {
     "einsum_fn": mx.einsum,
     "_local_scalar_dense": _local_scalar_dense,
     "Float": _float_scalar,
+    "isin": _isin,
+    "index_reduce": _index_reduce,
+    "index_reduce_": lambda a, *r, **k: _inplace_result(_index_reduce(a, *r, **k), a),
+    "nansum": _nansum,
+    "dist": _dist,
+    "to_dense": lambda a, dtype=None, **k: _mx(a).astype(_MX_DT[dtype]) if dtype is not None and dtype in _MX_DT else _mx(a),
+    "zero": lambda a: mx.zeros_like(_mx(a)),
+    "zero_": lambda a: mx.zeros_like(_mx(a)),
+    "fill": _fillv,
+    "fill_": lambda a, v: _inplace_result(_fillv(a, v), a),
+    "trunc": lambda a: mx.trunc(_mx(a)),
+    "trunc_": lambda a: _inplace_result(mx.trunc(_mx(a)), a),
+    "fix": lambda a: mx.trunc(_mx(a)),
+    "fix_": lambda a: _inplace_result(mx.trunc(_mx(a)), a),
 }
 
 def _raise(name):
@@ -3296,6 +3393,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     # mutates them in place; HF concat-style cache (cat -> new outputs) must not
     # replay step-1 state on later calls.
     _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_", "bitwise_and_")
+    _mutfns = _mutfns + _IP_OWN
     if not any(
             n.op == "call_method" and _opname(n) in _mutfns
             and getattr(n.args[0], "op", None)
@@ -3474,6 +3572,14 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 upd = _inplace_result(
                     _bitwise_or_logical(env[n.args[0]], args[1], mx.bitwise_and, mx.logical_and),
                     env[n.args[0]])
+                env[n.args[0]] = upd
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name in _IP_OWN and isinstance(n.args[0], torch.fx.Node):
+                upd = _FUNC_SPECS[name](*args, **kwargs)
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:
