@@ -2647,6 +2647,15 @@ _MX_DT = {torch.float32: mx.float32, torch.float64: mx.float32, torch.float16: m
           torch.int16: mx.int16, torch.uint8: mx.uint8, torch.int8: mx.int8,
           torch.bool: getattr(mx, "bool_", mx.uint8)}
 
+# In-place dunder math methods (x += y comes through as call_method
+# "__iadd__"): the trailing-underscore rule misses them, the leading "__"
+# guard drops them, but they mutate args[0] and return the tensor itself.
+_INPLACE_DUNDERS = frozenset((
+    "__iadd__", "__isub__", "__imul__", "__itruediv__", "__ifloordiv__",
+    "__imod__", "__ipow__", "__ilshift__", "__irshift__", "__iand__",
+    "__ior__", "__ixor__", "__imatmul__",
+))
+
 _METHODS_ON_MX = set(_FUNC_SPECS) | {"size", "dim", "ndim", "shape", "dtype",
                                    "cpu", "to", "cuda", "numpy", "numel",
                                    "type", "item", "tolist"}
@@ -2842,8 +2851,17 @@ def make_executor(gm):
                 stats["mlx"].append(name)
                 log.info("LOWERED\t%s\t%s", name, node.target)
             env[node] = val
-            if (name in ("mul_", "bitwise_and_", "sub_") and node.op in ("call_function", "call_method")
-                    and isinstance(node.args[0], torch.fx.Node)):
+            # In-place ATen ops mutate args[0] on the CPU path too: the torch
+            # call writes the tensor in place, but env[args[0]] still holds
+            # the pre-mutation array without this writeback, so a later node
+            # (or an output returning the placeholder) reads stale data.
+            # Same predicate as the lowered branch; dunder indexing ops are
+            # out (getitem does not mutate; setitem returns None, not the
+            # tensor). In-place dunder math ops return the mutated tensor.
+            if (node.op in ("call_function", "call_method")
+                    and node.args and isinstance(node.args[0], torch.fx.Node)
+                    and (name.endswith("_") and not name.startswith("__")
+                         or name in _INPLACE_DUNDERS)):
                 env[node.args[0]] = val
             if _DBG_ENV is not None:
                 _DBG_ENV[node] = val
@@ -3295,7 +3313,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     # cache placeholders only count as mutated state when the graph actually
     # mutates them in place; HF concat-style cache (cat -> new outputs) must not
     # replay step-1 state on later calls.
-    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_", "bitwise_and_")
+    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_", "bitwise_and_", "masked_fill_")
     if not any(
             n.op == "call_method" and _opname(n) in _mutfns
             and getattr(n.args[0], "op", None)
@@ -3424,7 +3442,7 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                     dim += src.ndim
                 sh = [1] * src.ndim
                 sh[dim] = idx.shape[0] if idx.ndim else 1
-                ib = mx.broadcast_to(idx.reshape(sh), src.shape)
+                ib = mx.broadcast_to(idx.astype(mx.int32).reshape(sh), src.shape)
                 upd = mx.put_along_axis(t, ib, src.astype(t.dtype), axis=dim)
                 env[n.args[0]] = upd      # model in-place mutation
                 _ph = _ph_of(n.args[0])
@@ -3577,7 +3595,12 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                        or ATEN_TABLE.get(name))
                 if low is not None:
                     kw2 = {k: v for k, v in kwargs.items() if k != "device"}
-                    env[n] = low(*args, **kw2)
+                    val = low(*args, **kw2)
+                    env[n] = val
+                    if (n.args and isinstance(n.args[0], torch.fx.Node)
+                            and (name.endswith("_") and not name.startswith("__")
+                                 or name in _INPLACE_DUNDERS)):
+                        env[n.args[0]] = val
                     continue
                 if n.target in GLUE_FNS:
                     env[n] = n.target(*args, **kwargs)
