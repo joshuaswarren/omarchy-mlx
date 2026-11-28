@@ -216,7 +216,8 @@ const QmmGeometry& qmm_geometry() {
           caps.subgroup_size,
           caps.subgroup_operations,
           caps.max_compute_work_group_invocations,
-          caps.max_compute_work_group_size[0]};
+          caps.max_compute_work_group_size[0],
+          caps.subgroup_size_32_wide_admitted};
       const std::string_view chosen = omarchy::select_default_qmm_geometry_name(
           caps.device_name,
           dev.physical_type(),
@@ -329,15 +330,17 @@ bool apple_norm_subgroup_ready(const omarchy::Device& device) {
     return false;
   }
   const auto& caps = device.capabilities();
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  bool subgroup_ready =
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   omarchy::capsim::require_backed(
       device,
       caps,
       subgroup_ready,
       "*NormApple*",
-      "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-      (device.hardware_capabilities().subgroup_size == 32u &&
+      "subgroup_size==32||32-wide-pin + subgroup_ops_mask[ARITHMETIC]",
+      ((device.hardware_capabilities().subgroup_size == 32u ||
+        device.hardware_capabilities().subgroup_size_32_wide_admitted) &&
        (device.hardware_capabilities().subgroup_operations &
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
   return subgroup_ready;
@@ -356,7 +359,7 @@ bool apple_norm_128_allowed(const omarchy::Device& device) {
     return omarchy::env_flag("MLX_OMARCHY_NORM_APPLE_128");
   }
   return omarchy::norm_apple_128_default_part(
-      device.capabilities().device_name);
+      device.capabilities().device_name, device.physical_type());
 }
 
 bool apple_norm_enabled(

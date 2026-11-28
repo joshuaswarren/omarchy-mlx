@@ -259,6 +259,11 @@ struct CapabilityReport {
   // 64-lane subgroup (ANV, RADV) run the same route NVIDIA runs
   // natively. Derived from the hardware report only.
   bool subgroup_size_32_admitted{false};
+  // True: this hardware can pin requiredSubgroupSize = 32 for a 512-lane
+  // compute workgroup — the largest workgroup in the QMV decode and
+  // Apple-norm kernel family (DEC-18). Same derivation rule as
+  // subgroup_size_32_admitted, at the wider VUID-02757 bound.
+  bool subgroup_size_32_wide_admitted{false};
   // True: this hardware can pin requiredSubgroupSize = 64 for a 64-lane
   // compute workgroup (the one-subgroup 16x16x16 coopmat builds). Same
   // derivation rule as subgroup_size_16_admitted.
@@ -1686,11 +1691,17 @@ inline bool gemv_balanced_qkv_part(const std::string& device_name) {
 // apple_norm_shape_selected), so this predicate is consulted only where
 // RoPE::eval_gpu fuses the norm. G13C (16-inch M1 Max): measured for
 // receipts/20261125T-w7T-m1md5. G13G (13-inch M1): +0.30% on 4B ctx512 and
-// stacks in +8.19%/+8.23% 5/5 ABBA on 2B. MLX_OMARCHY_NORM_APPLE_128=1/0
-// overrides on any part. Pure.
-inline bool norm_apple_128_default_part(const std::string& device_name) {
+// stacks in +8.19%/+8.23% 5/5 ABBA on 2B. Discrete GPUs admit it by
+// capability (DEC-18): the subgroup probe at the call site still gates,
+// and on a subgroup-64 part the pipeline pins requiredSubgroupSize = 32.
+// MLX_OMARCHY_NORM_APPLE_128=1/0 overrides on any part. Pure.
+inline bool norm_apple_128_default_part(
+    const std::string& device_name,
+    VkPhysicalDeviceType physical_type =
+        VK_PHYSICAL_DEVICE_TYPE_OTHER) {
   return device_name.find("G13C") != std::string::npos ||
-      device_name.find("G13G") != std::string::npos;
+      device_name.find("G13G") != std::string::npos ||
+      physical_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
 }
 
 inline bool gemv_balanced_qkv_widths_ok(const std::vector<int64_t>& widths) {

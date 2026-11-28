@@ -122,10 +122,15 @@ struct QmmWideCaps {
   uint32_t subgroup_operations{0};
   uint32_t max_workgroup_invocations{0};
   uint32_t max_workgroup_size_x{0};
+  // True when the device can legally pin requiredSubgroupSize = 32 on a
+  // 512-lane workgroup (the family's widest): a subgroup-64 part (RADV
+  // wave64) then runs the same 32-lane kernels through the pin in
+  // ComputeRuntime::create_pipeline.
+  bool subgroup_size_32_wide_admitted{false};
 };
 
 inline bool supports_qmm_2x16(const QmmWideCaps& caps) {
-  return caps.subgroup_size == 32u &&
+  return (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
       caps.max_workgroup_invocations >= 512u &&
       caps.max_workgroup_size_x >= 512u;
@@ -158,13 +163,12 @@ inline bool select_qmm_wide_2x16(
 
 // Pure capability check for the 2x8w2 Qmm decode workgroup geometry
 // (SLOTS_PER_GROUP=8, 32-lane subgroups -> 256 threads along local_size_x).
-// The kernels assume subgroupSize == 32 (see shaders/qmm_vec.comp), so a
-// device reporting subgroup_size == 64 can never take this path today: it
-// would need a kernel variant that pins requiredSubgroupSize = 32, which
-// does not exist yet. The probe keeps such parts safely on the wider/2x4
-// checks instead of compiling a wrong-sum kernel.
+// The kernels assume subgroupSize == 32 (see shaders/qmm_vec.comp): a
+// device reporting subgroup_size == 64 takes this path only when the
+// hardware report admitted a requiredSubgroupSize = 32 pin, which
+// ComputeRuntime::create_pipeline then sets on every QMV/norm pipeline.
 inline bool supports_qmm_2x8w2(const QmmWideCaps& caps) {
-  return caps.subgroup_size == 32u &&
+  return (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
       caps.max_workgroup_invocations >= 256u &&
       caps.max_workgroup_size_x >= 256u;

@@ -3636,7 +3636,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     // same-stream tape ordering.
     auto& encoder = get_command_encoder(member_stream);
     const auto& caps = encoder.device().capabilities();
-    bool subgroup_ready = caps.subgroup_size == 32u &&
+    bool subgroup_ready =
+        (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     // The group dispatch refuses every group while the Q4 word path is off
     // (MLX_OMARCHY_QMM_VEC_Q4_WORD=0); adopting the fold then would leave the
@@ -5418,7 +5419,8 @@ bool qmm_residual_norm_enabled(
     const CapabilityReport& caps, int norm_cols, bool outgate) {
   // The plain and out-gate kernels use 16 and 8 32-lane slots respectively.
   const uint32_t threads = outgate ? 256u : 512u;
-  if (!fused_chain_enabled() || caps.subgroup_size != 32 ||
+  if (!fused_chain_enabled() ||
+      (caps.subgroup_size != 32 && !caps.subgroup_size_32_wide_admitted) ||
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0 ||
       caps.max_compute_work_group_invocations < threads ||
       caps.max_compute_work_group_size[0] < threads) {
@@ -6191,7 +6193,7 @@ bool dispatch_prologue_fold(
     const auto& caps = encoder.device().capabilities();
     constexpr VkSubgroupFeatureFlags kPnSgOps =
         VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
-    if (caps.subgroup_size == 32u &&
+    if ((caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
         (caps.subgroup_operations & kPnSgOps) == kPnSgOps &&
         caps.max_compute_work_group_invocations >= 256u &&
         caps.max_compute_work_group_size[0] >= 256u) {

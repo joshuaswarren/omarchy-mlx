@@ -4315,6 +4315,19 @@ TEST_CASE("norm apple 128 part rule") {
   CHECK(!omarchy::norm_apple_128_default_part("Apple M5 Max (G17C B1)"));
   CHECK(!omarchy::norm_apple_128_default_part("Apple M6 (G18G B1)"));
   CHECK(!omarchy::norm_apple_128_default_part(""));
+  // DEC-18: discrete GPUs admit the 128-wide rope+norm build by
+  // capability; non-discrete parts outside the measured list still
+  // refuse.
+  CHECK(omarchy::norm_apple_128_default_part(
+      "NVIDIA GeForce RTX 5060 Ti", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU));
+  CHECK(omarchy::norm_apple_128_default_part(
+      "Intel Arc B60 (BMG)", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU));
+  CHECK(omarchy::norm_apple_128_default_part(
+      "AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU));
+  CHECK(!omarchy::norm_apple_128_default_part(
+      "AMD Radeon RX 9070", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU));
+  CHECK(!omarchy::norm_apple_128_default_part(
+      "NVIDIA GeForce RTX 5060 Ti"));
 }
 
 TEST_CASE("fused rope half-split form runs the half-split builds") {

@@ -2756,14 +2756,16 @@ ComputeRuntime::ComputeRuntime(
     uint32_t required_subgroup_size,
     bool subgroup_size_16_admitted,
     bool subgroup_size_32_admitted,
-    bool subgroup_size_64_admitted)
+    bool subgroup_size_64_admitted,
+    bool subgroup_size_32_wide_admitted)
     : device_(device),
       binding_limit_(binding_limit),
       subgroup_size_(subgroup_size),
       required_subgroup_size_(required_subgroup_size),
       subgroup_size_16_admitted_(subgroup_size_16_admitted),
       subgroup_size_32_admitted_(subgroup_size_32_admitted),
-      subgroup_size_64_admitted_(subgroup_size_64_admitted) {
+      subgroup_size_64_admitted_(subgroup_size_64_admitted),
+      subgroup_size_32_wide_admitted_(subgroup_size_32_wide_admitted) {
   auto& dt = vk::device_table();
   if (binding_limit_ == 0 || binding_limit_ > kComputeBindingBudget) {
     throw std::invalid_argument("[omarchy] invalid compute binding budget.");
@@ -2955,6 +2957,51 @@ VkPipeline ComputeRuntime::create_pipeline(ComputeKernel kernel) {
         !subgroup_size_32_admitted_) {
       throw std::runtime_error(
           "[omarchy] CMAT16 dense matmul requires 32-lane subgroups, "
+          "which this device cannot legally pin.");
+    }
+    const uint32_t pin =
+        required_subgroup_size_ != 0u && required_subgroup_size_ != 32u
+        ? 32u
+        : required_subgroup_size_;
+    return create_pipeline(
+        std::span<const uint32_t>{
+            reinterpret_cast<const uint32_t*>(bytes),
+            size / sizeof(uint32_t)},
+        "main",
+        nullptr,
+        pin);
+  }
+  // The QMV decode and Apple-norm kernel family assumes 32-lane
+  // subgroups: a device reporting a different native size (64 on RADV
+  // wave64) reaches them only through a requiredSubgroupSize = 32 pin,
+  // and only when the hardware report admitted the pin. Same fail-closed
+  // rule as the CMAT16 arm; a native-32 device takes the default.
+  if (kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16 ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S8W2 ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 ||
+      kernel == ComputeKernel::QmmVecQ4SwigluBF16R2S8W2 ||
+      kernel == ComputeKernel::QmmVecQ4ResNormBF16R2S8W2 ||
+      kernel == ComputeKernel::QmmVecQ4OutgateResNormBF16R2S8W2 ||
+      kernel == ComputeKernel::QmmVecQ4WordSubgroupBF16R2S16 ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16 ||
+      kernel == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2 ||
+      kernel == ComputeKernel::QmmVecQ4ResNormBF16 ||
+      kernel == ComputeKernel::QmmVecQ4OutgateResNormBF16 ||
+      kernel == ComputeKernel::FastRmsNormAppleBF16 ||
+      kernel == ComputeKernel::FastNormGatedAppleBF16 ||
+      kernel == ComputeKernel::FastNormGatedOnlyAppleBF16 ||
+      kernel == ComputeKernel::FastRopeNormAppleBF16 ||
+      kernel == ComputeKernel::FastRopeNormAppleBF16W128 ||
+      kernel == ComputeKernel::FastRopeNormPairAppleBF16 ||
+      kernel == ComputeKernel::FastAddRmsNormAppleBF16 ||
+      kernel == ComputeKernel::GdnConvDecodeAppleBF16 ||
+      kernel == ComputeKernel::GatherDequantNormBF16) {
+    if (required_subgroup_size_ != 0u &&
+        required_subgroup_size_ != 32u &&
+        !subgroup_size_32_wide_admitted_) {
+      throw std::runtime_error(
+          "[omarchy] this QMV/norm kernel requires 32-lane subgroups, "
           "which this device cannot legally pin.");
     }
     const uint32_t pin =
