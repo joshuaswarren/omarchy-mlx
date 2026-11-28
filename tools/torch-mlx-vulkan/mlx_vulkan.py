@@ -2213,6 +2213,16 @@ def _rot90(a, k=1, dims=(0, 1)):
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
 
+def _fft_roll(a, dim, direction):
+    """torch.fft.fftshift rolls each listed dim by +n//2, ifftshift by
+    -(n//2); the pair composes back to the input at every length, even
+    and odd. dim=None rolls every dim, like torch."""
+    dims = range(a.ndim) if dim is None else [d % a.ndim for d in (dim if isinstance(dim, (list, tuple)) else [dim])]
+    for d in dims:
+        a = mx.roll(a, direction * (a.shape[d] // 2), axis=d)
+    return a
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2274,6 +2284,14 @@ _FUNC_SPECS = {
     # PT-AU-c: 2-D transforms (vision, spectrogram models)
     "fft_fft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.fft2(_mx(a), s, axes=dim, norm=norm or "backward"),
     "fft_ifft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.ifft2(_mx(a), s, axes=dim, norm=norm or "backward"),
+    # PT-Q61: N-D transforms over an axes tuple with torch's norm modes
+    # (torch norm=None means "backward", the same vocabulary mx.fft takes);
+    # s is the numpy-style pad/crop both libraries share. The shifts are
+    # axis rolls: +n//2 for fftshift, -(n//2) for ifftshift, per dim.
+    "fft_fftn": lambda a, s=None, axes=None, norm=None: mx.fft.fftn(_mx(a), s, axes=axes, norm=norm or "backward"),
+    "fft_ifftn": lambda a, s=None, axes=None, norm=None: mx.fft.ifftn(_mx(a), s, axes=axes, norm=norm or "backward"),
+    "fft_fftshift": lambda a, dim=None: _fft_roll(_mx(a), dim, +1),
+    "fft_ifftshift": lambda a, dim=None: _fft_roll(_mx(a), dim, -1),
     "select": lambda a, dim, i: _slice(a, dim, i % a.shape[dim % a.ndim], i % a.shape[dim % a.ndim] + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
     "slice": _slice, "narrow": lambda a, dim, s, n: _slice(a, dim, s, s + n, 1),
     "mean": _mean, "sum": _sum,
