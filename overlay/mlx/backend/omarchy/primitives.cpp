@@ -18031,7 +18031,10 @@ void RMSNorm::eval_gpu(
     if (out.dtype() == bfloat16 &&
         apple_norm_enabled(
             encoder.device(), row_length, x.size() / row_length)) {
-      kernel = omarchy::ComputeKernel::FastRmsNormAppleBF16;
+      const char* norm_wg = omarchy::env_str("MLX_OMARCHY_NORM_WG");
+      kernel = (norm_wg != nullptr && std::strcmp(norm_wg, "128") == 0)
+          ? omarchy::ComputeKernel::FastRmsNormAppleBF16W128
+          : omarchy::ComputeKernel::FastRmsNormAppleBF16;
     }
   }
   encoder.dispatch_compute(

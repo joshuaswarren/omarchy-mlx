@@ -820,6 +820,9 @@ enum class ComputeKernel : uint16_t {
   // second-level shared + subgroupSum, 3 barriers; reduction ORDER differs
   // from the deployed tree; admissible under the w76 numerics policy).
   FastRmsNormAppleBF16,
+  // 128-thread variant of FastRmsNormAppleBF16 (-DNORM_WG=128) for the
+  // workgroup-size screen; selected by MLX_OMARCHY_NORM_WG=128.
+  FastRmsNormAppleBF16W128,
   // Apple-tree reductions for the fused decode RMSNorm epilogues. Same
   // 32-lane subgroup + shared partial structure as FastRmsNormAppleBF16.
   FastNormGatedAppleBF16,

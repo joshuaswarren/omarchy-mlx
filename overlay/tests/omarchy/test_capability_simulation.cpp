@@ -1343,9 +1343,28 @@ TEST_CASE("apple norm width 2560 selection and fused-vs-composed bits") {
       dispatched(gated), id(omarchy::ComputeKernel::FastNormGatedOnlyAppleBF16));
   CHECK_EQ(worst_diff(gated, gated_ref), 0.0);
 
+  // MLX_OMARCHY_NORM_WG=128 selects the 128-thread variant
+  // (FastRmsNormAppleBF16W128, twenty values per lane at 2560). The
+  // packed-IO kernel reads every value in the same order as the
+  // 256-thread build, so the bits must match it exactly.
+  setenv("MLX_OMARCHY_NORM_WG", "128", 1);
+  {
+    auto x128_data = lattice(size_t(9) * width, 95);
+    array x128 = bf16_of(x128_data, Shape{9, width});
+    array y128 = fast::rms_norm(x128, w, 1e-6f, stream);
+    CHECK_EQ(
+        dispatched(y128),
+        id(omarchy::ComputeKernel::FastRmsNormAppleBF16W128));
+    unsetenv("MLX_OMARCHY_NORM_WG");
+    array y256 = fast::rms_norm(x128, w, 1e-6f, stream);
+    CHECK_EQ(
+        dispatched(y256), id(omarchy::ComputeKernel::FastRmsNormAppleBF16));
+    CHECK_EQ(worst_diff(y128, y256), 0.0);
+  }
+
   // The width-2560 kill switch restores the deployed kernel everywhere.
   setenv("MLX_OMARCHY_NORM_APPLE_2560", "0", 1);
-  array off = fast::rms_norm(x, w, 1e-6f, stream);
+  array off = fast::rms_norm(x128, w, 1e-6f, stream);
   CHECK_EQ(dispatched(off), id(omarchy::ComputeKernel::FastRmsNormBF16));
 }
 

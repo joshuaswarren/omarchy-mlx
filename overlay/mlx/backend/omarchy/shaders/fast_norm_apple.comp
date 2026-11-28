@@ -5,15 +5,26 @@
 // MLX_OMARCHY_NORM_APPLE=0 to restore the deployed reduction path. Mirrors
 // Apple `rms_single_row` in
 // `mlx/backend/metal/kernels/rms_norm.metal` (commit 9c3d35571).
-//   - one threadgroup per row (256 threads),
-//   - per-thread CONTIGUOUS loads in pass 1 (8 for width 2048, 10 for 2560), held in a register
-//     array, never reloaded in the output pass,
-//   - cross-lane reduction = hardware subgroupSum (32 lanes per subgroup, 8
-//     subgroups per WG) + 1 second-level shared stage of 8 partials +
-//     subgroupSum again = 3 threadgroup barriers,
+//   - one threadgroup per row (256 threads; -DNORM_WG=128 builds the
+//     128-thread screen variant),
+//   - per-thread CONTIGUOUS loads in pass 1 (8 for width 2048, 10 for 2560,
+//     16 for 4096 at 256 threads), held in a register array, never reloaded
+//     in the output pass,
+//   - packed IO: every bf16 buffer is a u16vec4 array (4 bf16 per element).
+//     Widths whose per-thread span is a multiple of 4 bf16 take whole-vector
+//     loads; the 2560-wide 256-thread span (10 bf16) takes five 4-byte pair
+//     loads through .xy/.zw component selects. A buffer whose offset is not
+//     vector-aligned falls back to scalar component reads; every path reads
+//     the same values in the same order, so the reduction is bit-identical
+//     to the scalar build,
+//   - cross-lane reduction = hardware subgroupSum (32 lanes per subgroup),
+//     one second-level shared stage of NORM_WG/32 partials + subgroupSum
+//     again = 3 threadgroup barriers,
 //   - weight loaded once per output element (from registers if scalar),
-//   - width 4096 (G16S, omarchy::apple_norm_4096_allowed) keeps the same 256-thread tree with sixteen contiguous values per thread. That order is this
-//     kernel's own; it is not claimed to equal another backend's reduction order at that width.
+//   - width 4096 (G16S, omarchy::apple_norm_4096_allowed) keeps the same
+//     thread-count tree with sixteen contiguous values per thread. That order
+//     is this kernel's own; it is not claimed to equal another backend's
+//     reduction order at that width.
 //
 // The RMS formula matches the deployed path; reduction order differs. `precise`
 // prevents implicit FMA in sum-of-squares.
@@ -25,7 +36,14 @@
 
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
-#define STORAGE_TYPE uint16_t
+
+#ifndef NORM_WG
+#define NORM_WG 256
+#endif
+
+// Four bf16 per buffer element: packed whole-vector loads where the
+// per-thread span divides them, .xy/.zw pair and component reads where it
+// does not. Scalar LOAD_VALUE is kept for the one-element weight read.
 #define LOAD_VALUE(x) uintBitsToFloat(uint(x) << 16u)
 uint16_t bf16_store(float value) {
   uint bits = floatBitsToUint(value);
@@ -34,23 +52,22 @@ uint16_t bf16_store(float value) {
   }
   return uint16_t((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
-#define STORE_VALUE(f) bf16_store(f)
 
-layout(local_size_x = 256) in;
+layout(local_size_x = NORM_WG) in;
 
 layout(set = 0, binding = 0, std430) readonly buffer Input {
-  STORAGE_TYPE values[];
+  u16vec4 values[];
 } input_data;
 layout(set = 0, binding = 1, std430) readonly buffer Weight {
-  STORAGE_TYPE values[];
+  u16vec4 values[];
 } weight_data;
 #ifdef LAYER_NORM
 layout(set = 0, binding = 2, std430) readonly buffer Bias {
-  STORAGE_TYPE values[];
+  u16vec4 values[];
 } bias_data;
 #endif
 layout(set = 0, binding = 3, std430) writeonly buffer Output {
-  STORAGE_TYPE values[];
+  u16vec4 values[];
 } output_data;
 
 layout(push_constant) uniform Params {
@@ -74,13 +91,161 @@ layout(push_constant) uniform Params {
 } params;
 
 const uint SIMD = 32u;
-const uint MAX_READS = 16u;      // 256 * 8 = 2048, 256 * 10 = 2560 and 256 * 16 = 4096 take the register path
-shared float s_partial[8u];        // 8 subgroups -> 8 partial sums
+const uint NSUB = NORM_WG / 32u;   // subgroups per workgroup
+#if NORM_WG == 128
+const uint MAX_READS = 32u;        // 128 * 16 = 2048, 128 * 20 = 2560, 128 * 32 = 4096
+#else
+const uint MAX_READS = 16u;        // 256 * 8 = 2048, 256 * 10 = 2560 and 256 * 16 = 4096 take the register path
+#endif
+shared float s_partial[NSUB];      // NSUB partial sums
+
+// The bf16 value at element index j of the input row.
+float in_at(uint j) {
+  return LOAD_VALUE(input_data.values[j >> 2][j & 3u]);
+}
+// The two bf16 values at even element index o (o % 2 == 0) of the input row.
+vec2 in_pair_at(uint o) {
+  u16vec4 v = input_data.values[o >> 2];
+  u16vec2 p = (o & 2u) == 0u ? v.xy : v.zw;
+  return vec2(LOAD_VALUE(p.x), LOAD_VALUE(p.y));
+}
+// The four bf16 values at element index o (o % 4 == 0) of the input row.
+vec4 in_vec_at(uint o) {
+  u16vec4 v = input_data.values[o >> 2];
+  return vec4(LOAD_VALUE(v.x), LOAD_VALUE(v.y), LOAD_VALUE(v.z),
+              LOAD_VALUE(v.w));
+}
+float w_at(uint j) {
+  return LOAD_VALUE(weight_data.values[j >> 2][j & 3u]);
+}
+vec2 w_pair_at(uint o) {
+  u16vec4 v = weight_data.values[o >> 2];
+  u16vec2 p = (o & 2u) == 0u ? v.xy : v.zw;
+  return vec2(LOAD_VALUE(p.x), LOAD_VALUE(p.y));
+}
+vec4 w_vec_at(uint o) {
+  u16vec4 v = weight_data.values[o >> 2];
+  return vec4(LOAD_VALUE(v.x), LOAD_VALUE(v.y), LOAD_VALUE(v.z),
+              LOAD_VALUE(v.w));
+}
+void out_at(uint j, float f) {
+  output_data.values[j >> 2][j & 3u] = bf16_store(f);
+}
+void out_pair_at(uint o, vec2 f) {
+  u16vec2 p = u16vec2(bf16_store(f.x), bf16_store(f.y));
+  if ((o & 2u) == 0u) {
+    output_data.values[o >> 2].xy = p;
+  } else {
+    output_data.values[o >> 2].zw = p;
+  }
+}
+void out_vec_at(uint o, vec4 f) {
+  output_data.values[o >> 2] = u16vec4(bf16_store(f.x), bf16_store(f.y),
+                                      bf16_store(f.z), bf16_store(f.w));
+}
+
+#define VEC_LOAD(g)                                                    \
+    {                                                                  \
+      vec4 v = in_vec_at(base + 4u * (g));                             \
+      reg_x[4u * (g)] = v.x;                                           \
+      reg_x[4u * (g) + 1u] = v.y;                                      \
+      reg_x[4u * (g) + 2u] = v.z;                                      \
+      reg_x[4u * (g) + 3u] = v.w;                                      \
+      reg_sq += v.x * v.x;                                             \
+      reg_sq += v.y * v.y;                                             \
+      reg_sq += v.z * v.z;                                             \
+      reg_sq += v.w * v.w;                                             \
+    }
+#define PAIR_LOAD(k)                                                   \
+    {                                                                  \
+      vec2 p = in_pair_at(base + 2u * (k));                            \
+      reg_x[2u * (k)] = p.x;                                           \
+      reg_x[2u * (k) + 1u] = p.y;                                      \
+      reg_sq += p.x * p.x;                                             \
+      reg_sq += p.y * p.y;                                             \
+    }
+#define SCALAR_LOAD(i)                                                 \
+    {                                                                  \
+      reg_x[i] = in_at(start + base + (i));                            \
+      reg_sq += reg_x[i] * reg_x[i];                                   \
+    }
+#define VEC4_LOAD_AT(i)                                                \
+    {                                                                  \
+      vec4 v = in_vec_at(base + (i));                                  \
+      reg_x[i] = v.x;                                                  \
+      reg_x[(i) + 1u] = v.y;                                           \
+      reg_x[(i) + 2u] = v.z;                                           \
+      reg_x[(i) + 3u] = v.w;                                           \
+      reg_sq += v.x * v.x;                                             \
+      reg_sq += v.y * v.y;                                             \
+      reg_sq += v.z * v.z;                                             \
+      reg_sq += v.w * v.w;                                             \
+    }
+#define VEC4_STORE_AT(i)                                               \
+    {                                                                  \
+      uint index = base + (i);                                         \
+      vec4 weight = (params.lhs_size == 1u)                            \
+          ? vec4(norm_weight(index))                                   \
+          : vec4(w_at(params.rhs_offset + index),                      \
+                 w_at(params.rhs_offset + index + 1u),                 \
+                 w_at(params.rhs_offset + index + 2u),                 \
+                 w_at(params.rhs_offset + index + 3u));                \
+      precise vec4 norm_w = norm * weight;                             \
+      precise vec4 result = vec4(reg_x[i] * norm_w.x,                  \
+                                 reg_x[(i) + 1u] * norm_w.y,           \
+                                 reg_x[(i) + 2u] * norm_w.z,           \
+                                 reg_x[(i) + 3u] * norm_w.w);          \
+      out_vec_at(out_row + index, result);                             \
+    }
+#define VEC_STORE(g)                                                   \
+    {                                                                  \
+      uint index = base + 4u * (g);                                    \
+      vec4 weight = (params.lhs_size == 1u)                            \
+          ? vec4(norm_weight(index))                                   \
+          : (vec_w ? w_vec_at(params.rhs_offset + index)               \
+                   : vec4(w_at(params.rhs_offset + index),             \
+                          w_at(params.rhs_offset + index + 1u),        \
+                          w_at(params.rhs_offset + index + 2u),        \
+                          w_at(params.rhs_offset + index + 3u)));      \
+      precise vec4 norm_w = norm * weight;                             \
+      precise vec4 result = vec4(reg_x[4u * (g)] * norm_w.x,           \
+                                 reg_x[4u * (g) + 1u] * norm_w.y,      \
+                                 reg_x[4u * (g) + 2u] * norm_w.z,      \
+                                 reg_x[4u * (g) + 3u] * norm_w.w);     \
+      out_vec_at(out_row + index, result);                             \
+    }
+#define PAIR_STORE(k)                                                  \
+    {                                                                  \
+      uint index = base + 2u * (k);                                    \
+      vec2 weight = (params.lhs_size == 1u)                            \
+          ? vec2(norm_weight(index))                                   \
+          : (pair_w ? w_pair_at(params.rhs_offset + index)             \
+                    : vec2(w_at(params.rhs_offset + index),            \
+                           w_at(params.rhs_offset + index + 1u)));     \
+      precise vec2 norm_w = norm * weight;                             \
+      precise vec2 result = vec2(reg_x[2u * (k)] * norm_w.x,           \
+                                 reg_x[2u * (k) + 1u] * norm_w.y);     \
+      out_pair_at(out_row + index, result);                            \
+    }
+#define SCALAR_STORE(i)                                                \
+    {                                                                  \
+      uint index = base + (i);                                         \
+      float weight = norm_weight(index);                               \
+      precise float norm_w = norm * weight;                            \
+      precise float result = reg_x[i] * norm_w;                        \
+      out_at(out_row + index, result);                                 \
+    }
+
+// The output weight for element index i: broadcast when lhs_size == 1.
+float norm_weight(uint i) {
+  return (params.lhs_size == 1u) ? w_at(params.rhs_offset)
+                               : w_at(params.rhs_offset + i);
+}
 
 void main() {
   uint thread = gl_LocalInvocationID.x;
-  uint sub_id = thread / SIMD;     // 0..7
-  uint lane = thread % SIMD;       // 0..31
+  uint sub_id = thread / SIMD;
+  uint lane = thread % SIMD;
   uint row_length = params.reduce_size;
   float eps = params.alpha;
 
@@ -90,29 +255,72 @@ void main() {
 
     float reg_x[MAX_READS];
     precise float reg_sq = 0.0;
-    uint n_reads = row_length / 256u;
-    bool reg_path = (row_length == 2048u || row_length == 2560u || row_length == 4096u);
-    if (reg_path) {
-      uint base = thread * n_reads;
-      for (uint i = 0u; i < 8u; ++i) {
-        reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
-        reg_sq += reg_x[i] * reg_x[i];
+    uint n_reads = row_length / NORM_WG;
+    bool reg_path = (row_length == 2048u || row_length == 2560u ||
+                     row_length == 4096u);
+    // Packed paths: the whole-vector path needs every thread's span on a
+    // u16vec4 boundary (span % 4 == 0 and the row start aligned, i.e.
+    // lhs_offset % 4 == 0 since row_length % 4 == 0 here); the pair path
+    // needs even offsets. Either is uniform across the workgroup.
+    bool vec_path = reg_path && (n_reads % 4u == 0u) &&
+        ((params.lhs_offset & 3u) == 0u);
+    bool pair_path = reg_path && !vec_path &&
+        ((params.lhs_offset & 1u) == 0u);
+    if (vec_path) {
+      uint base = start + thread * n_reads;   // multiple of 4
+      if (n_reads == 8u) {
+        for (uint g = 0u; g < 2u; ++g) VEC_LOAD(g);
+      } else if (n_reads == 16u) {
+        for (uint g = 0u; g < 4u; ++g) VEC_LOAD(g);
+#if NORM_WG == 128
+      } else if (n_reads == 20u) {
+        for (uint g = 0u; g < 5u; ++g) VEC_LOAD(g);
+      } else {
+        for (uint g = 0u; g < 8u; ++g) VEC_LOAD(g);
       }
-      if (n_reads == 10u) {
-        for (uint i = 8u; i < 10u; ++i) {
-          reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
-          reg_sq += reg_x[i] * reg_x[i];
+#else
+      }
+#endif
+    } else if (pair_path) {
+      uint base = start + thread * n_reads;   // even
+      if (n_reads == 8u) {
+        for (uint k = 0u; k < 4u; ++k) PAIR_LOAD(k);
+      } else if (n_reads == 10u) {
+        if ((base & 3u) == 0u) {
+          VEC4_LOAD_AT(0u); VEC4_LOAD_AT(4u); PAIR_LOAD(4u);
+        } else {
+          PAIR_LOAD(0u); VEC4_LOAD_AT(2u); VEC4_LOAD_AT(6u);
         }
       } else if (n_reads == 16u) {
-        for (uint i = 8u; i < 16u; ++i) {
-          reg_x[i] = LOAD_VALUE(input_data.values[start + base + i]);
-          reg_sq += reg_x[i] * reg_x[i];
-        }
+        for (uint k = 0u; k < 8u; ++k) PAIR_LOAD(k);
+#if NORM_WG == 128
+      } else if (n_reads == 20u) {
+        for (uint k = 0u; k < 10u; ++k) PAIR_LOAD(k);
+      } else {
+        for (uint k = 0u; k < 16u; ++k) PAIR_LOAD(k);
+      }
+#else
+      }
+#endif
+    } else if (reg_path) {
+      uint base = thread * n_reads;
+      if (n_reads == 8u) {
+        for (uint i = 0u; i < 8u; ++i) SCALAR_LOAD(i);
+      } else if (n_reads == 10u) {
+        for (uint i = 0u; i < 10u; ++i) SCALAR_LOAD(i);
+      } else if (n_reads == 16u) {
+        for (uint i = 0u; i < 16u; ++i) SCALAR_LOAD(i);
+#if NORM_WG == 128
+      } else if (n_reads == 20u) {
+        for (uint i = 0u; i < 20u; ++i) SCALAR_LOAD(i);
+      } else {
+        for (uint i = 0u; i < 32u; ++i) SCALAR_LOAD(i);
+#endif
       }
     } else {
-      for (uint index = thread; index < row_length; index += 256u) {
-        reg_sq += LOAD_VALUE(input_data.values[start + index]) *
-                  LOAD_VALUE(input_data.values[start + index]);
+      for (uint index = thread; index < row_length; index += NORM_WG) {
+        float v = in_at(start + index);
+        reg_sq += v * v;
       }
     }
 
@@ -123,7 +331,7 @@ void main() {
     barrier();
     float total;
     if (sub_id == 0u) {
-      float v = (lane < 8u) ? s_partial[lane] : 0.0;
+      float v = (lane < NSUB) ? s_partial[lane] : 0.0;
       total = subgroupAdd(v);
       if (lane == 0u) {
         s_partial[0] = total;
@@ -133,57 +341,78 @@ void main() {
     float mean_square = s_partial[0] / float(row_length);
     float norm = inversesqrt(mean_square + eps);
 
-    if (reg_path) {
+    uint out_row = params.output_offset + row * row_length;
+    bool vec_out = vec_path && ((params.output_offset & 3u) == 0u);
+    bool pair_out = !vec_out && pair_path &&
+        ((params.output_offset & 1u) == 0u);
+    bool vec_w = vec_path && ((params.rhs_offset & 3u) == 0u);
+    bool pair_w = !vec_w && pair_path &&
+        ((params.rhs_offset & 1u) == 0u);
+    if (vec_out) {
       uint base = thread * n_reads;
-      for (uint i = 0u; i < 8u; ++i) {
-        uint index = base + i;
-        float weight =
-            (params.lhs_size == 1u)
-                ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-        precise float norm_weight = norm * weight;
-        precise float result = reg_x[i] * norm_weight;
-        output_data.values[params.output_offset + row * row_length + index] =
-            STORE_VALUE(result);
+      if (n_reads == 8u) {
+        for (uint g = 0u; g < 2u; ++g) VEC_STORE(g);
+      } else if (n_reads == 16u) {
+        for (uint g = 0u; g < 4u; ++g) VEC_STORE(g);
+#if NORM_WG == 128
+      } else if (n_reads == 20u) {
+        for (uint g = 0u; g < 5u; ++g) VEC_STORE(g);
+      } else {
+        for (uint g = 0u; g < 8u; ++g) VEC_STORE(g);
       }
-      if (n_reads == 10u) {
-        for (uint i = 8u; i < 10u; ++i) {
-          uint index = base + i;
-          float weight =
-              (params.lhs_size == 1u)
-                  ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                  : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-          precise float norm_weight = norm * weight;
-          precise float result = reg_x[i] * norm_weight;
-          output_data.values[params.output_offset + row * row_length + index] =
-              STORE_VALUE(result);
+#else
+      }
+#endif
+    } else if (pair_out) {
+      uint base = thread * n_reads;
+      if (n_reads == 8u) {
+        for (uint k = 0u; k < 4u; ++k) PAIR_STORE(k);
+      } else if (n_reads == 10u) {
+        if (((out_row + base) & 3u) == 0u) {
+          VEC4_STORE_AT(0u); VEC4_STORE_AT(4u); PAIR_STORE(4u);
+        } else {
+          PAIR_STORE(0u); VEC4_STORE_AT(2u); VEC4_STORE_AT(6u);
         }
       } else if (n_reads == 16u) {
-        for (uint i = 8u; i < 16u; ++i) {
-          uint index = base + i;
-          float weight =
-              (params.lhs_size == 1u)
-                  ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                  : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-          precise float norm_weight = norm * weight;
-          precise float result = reg_x[i] * norm_weight;
-          output_data.values[params.output_offset + row * row_length + index] =
-              STORE_VALUE(result);
-        }
+        for (uint k = 0u; k < 8u; ++k) PAIR_STORE(k);
+#if NORM_WG == 128
+      } else if (n_reads == 20u) {
+        for (uint k = 0u; k < 10u; ++k) PAIR_STORE(k);
+      } else {
+        for (uint k = 0u; k < 16u; ++k) PAIR_STORE(k);
+      }
+#else
+      }
+#endif
+    } else if (reg_path) {
+      uint base = thread * n_reads;
+      if (n_reads == 8u) {
+        for (uint i = 0u; i < 8u; ++i) SCALAR_STORE(i);
+      } else if (n_reads == 10u) {
+        for (uint i = 0u; i < 10u; ++i) SCALAR_STORE(i);
+      } else if (n_reads == 16u) {
+        for (uint i = 0u; i < 16u; ++i) SCALAR_STORE(i);
+#if NORM_WG == 128
+      } else if (n_reads == 20u) {
+        for (uint i = 0u; i < 20u; ++i) SCALAR_STORE(i);
+      } else {
+        for (uint i = 0u; i < 32u; ++i) SCALAR_STORE(i);
+#endif
       }
     } else {
-      for (uint index = thread; index < row_length; index += 256u) {
-        float value = LOAD_VALUE(input_data.values[start + index]);
-        float weight =
-            (params.lhs_size == 1u)
-                ? LOAD_VALUE(weight_data.values[params.rhs_offset])
-                : LOAD_VALUE(weight_data.values[params.rhs_offset + index]);
-        precise float norm_weight = norm * weight;
-        precise float result = value * norm_weight;
-        output_data.values[params.output_offset + row * row_length + index] =
-            STORE_VALUE(result);
+      for (uint index = thread; index < row_length; index += NORM_WG) {
+        float value = in_at(start + index);
+        float weight = norm_weight(index);
+        precise float norm_w = norm * weight;
+        precise float result = value * norm_w;
+        out_at(out_row + index, result);
       }
     }
-    barrier();
+    // The partials stage is reused next row; the last iteration of a
+    // single-row dispatch (output_size == 1 is the decode case) has no
+    // reuse and skips the barrier.
+    if (row + gl_NumWorkGroups.x < params.output_size) {
+      barrier();
+    }
   }
 }
