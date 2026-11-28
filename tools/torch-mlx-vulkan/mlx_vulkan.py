@@ -2209,6 +2209,65 @@ def _rot90(a, k=1, dims=(0, 1)):
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
 
+def _poly_rec(x, n, p1, step):
+    # aten special_* polynomial family: P_0 = 1, P_1 = p1(x),
+    # P_k = step(x, P_{k-1}, P_{k-2}, k). The degree n is a broadcast
+    # per-element tensor: elements hold at their own k (non-integer n
+    # floors, negative n returns 0).
+    x, n = mx.broadcast_arrays(_mx(x), _mx(n))
+    n = mx.where(n < 0, mx.ceil(n), mx.floor(n))  # torch truncs the degree
+    kmax = int(np.array(mx.max(n)))
+    p0 = mx.ones_like(x)
+    p1v = p1(x)
+    ans = mx.where(n == 0, p0, mx.where(n < 0, mx.zeros_like(x), p1v))
+    for k in range(2, kmax + 1):
+        pk = step(x, p1v, p0, k)
+        ans = mx.where(n >= k, pk, ans)
+        p0, p1v = p1v, pk
+    return ans
+
+
+def _cheb_t(x, n):
+    return _poly_rec(x, n, lambda v: v, lambda v, a, b, k: 2 * v * a - b)
+
+
+def _cheb_u(x, n):
+    return _poly_rec(x, n, lambda v: 2 * v, lambda v, a, b, k: 2 * v * a - b)
+
+
+def _cheb_v(x, n):
+    return _poly_rec(x, n, lambda v: 2 * v - 1, lambda v, a, b, k: 2 * v * a - b)
+
+
+def _cheb_w(x, n):
+    return _poly_rec(x, n, lambda v: 2 * v + 1, lambda v, a, b, k: 2 * v * a - b)
+
+
+def _hermite_h(x, n):
+    return _poly_rec(x, n, lambda v: 2 * v,
+                     lambda v, a, b, k: 2 * v * a - 2 * (k - 1) * b)
+
+
+def _hermite_he(x, n):
+    return _poly_rec(x, n, lambda v: v,
+                     lambda v, a, b, k: v * a - (k - 1) * b)
+
+
+def _laguerre(x, n):
+    return _poly_rec(x, n, lambda v: 1 - v,
+                     lambda v, a, b, k: ((2 * k - 1 - v) * a - (k - 1) * b) / k)
+
+
+def _legendre(x, n):
+    return _poly_rec(x, n, lambda v: v,
+                     lambda v, a, b, k: ((2 * k - 1) * v * a - (k - 1) * b) / k)
+
+
+def _sph_j0(x):
+    x = _mx(x)
+    return mx.where(x == 0, mx.ones_like(x), mx.sin(x) / x)
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2392,6 +2451,19 @@ _FUNC_SPECS = {
     "xlogy": _xlogy, "xlog1py": _xlog1py,
     # aten registers torch.special.xlog1py as special_xlog1py
     "special_xlog1py": _xlog1py,
+    "special_chebyshev_polynomial_t": _cheb_t,
+    "special_chebyshev_polynomial_u": _cheb_u,
+    "special_chebyshev_polynomial_v": _cheb_v,
+    "special_chebyshev_polynomial_w": _cheb_w,
+    "special_shifted_chebyshev_polynomial_t": lambda x, n: _cheb_t(2 * _mx(x) - 1, n),
+    "special_shifted_chebyshev_polynomial_u": lambda x, n: _cheb_u(2 * _mx(x) - 1, n),
+    "special_shifted_chebyshev_polynomial_v": lambda x, n: _cheb_v(2 * _mx(x) - 1, n),
+    "special_shifted_chebyshev_polynomial_w": lambda x, n: _cheb_w(2 * _mx(x) - 1, n),
+    "special_hermite_polynomial_h": _hermite_h,
+    "special_hermite_polynomial_he": _hermite_he,
+    "special_laguerre_polynomial_l": _laguerre,
+    "special_legendre_polynomial_p": _legendre,
+    "special_spherical_bessel_j0": _sph_j0,
     "sinh": _sinh, "cosh": _cosh,
     "asinh": _asinh, "acosh": _acosh, "atanh": mx.atanh,
     "acos": mx.acos, "asin": mx.asin, "atan": mx.atan, "atan2": _atan2,
