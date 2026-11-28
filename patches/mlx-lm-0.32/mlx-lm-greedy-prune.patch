@@ -1,6 +1,6 @@
 --- a/mlx_lm/generate.py
 +++ b/mlx_lm/generate.py
-@@ -301,6 +301,75 @@
+@@ -301,6 +301,87 @@
              prompt_cache[e] = c.to_quantized(group_size=kv_group_size, bits=kv_bits)
  
  
@@ -88,7 +88,7 @@
  def generate_step(
      prompt: mx.array,
      model: nn.Module,
-@@ -381,6 +450,7 @@
+@@ -381,6 +388,7 @@
          kv_bits=kv_bits,
      )
  
@@ -96,7 +96,7 @@
      sampler = sampler or greedy_sampler
  
      def _model_call(input_tokens: mx.array, input_embeddings: Optional[mx.array]):
-@@ -395,6 +465,11 @@
+@@ -395,6 +395,11 @@
          nonlocal tokens
  
          with mx.stream(stream):
@@ -108,7 +108,7 @@
              logits = _model_call(
                  input_tokens=input_tokens[None],
                  input_embeddings=(
-@@ -454,13 +529,19 @@
+@@ -454,13 +406,19 @@
              mx.clear_cache()
  
          y, logprobs = _step(input_tokens=prompt, input_embeddings=input_embeddings)
