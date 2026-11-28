@@ -2217,6 +2217,84 @@ def _isin(elements, test_elements, assume_unique=False, invert=False):
     return mx.logical_not(hit) if invert else hit
 
 
+def _lu_perm_rows(b, piv, inverse=False):
+    # torch LU pivots are 1-based and applied in order: row i swaps with
+    # piv[i]-1. Composing the swaps into one row-gather permutation; the
+    # composed gather applies P^T, so solving for P z needs the inverse.
+    piv_np = np.array(piv)
+    n = b.shape[-2]
+    k = piv_np.shape[-1]
+    perm = np.broadcast_to(np.arange(n), piv_np.shape[:-1] + (n,)).reshape(-1, n).copy()
+    for r, rp in enumerate(piv_np.reshape(-1, k)):
+        for i in range(k):
+            j = int(rp[i]) - 1
+            perm[r, i], perm[r, j] = perm[r, j], perm[r, i]
+    if inverse:
+        inv = np.empty_like(perm)
+        np.put_along_axis(inv, perm,
+                          np.broadcast_to(np.arange(n), perm.shape), axis=-1)
+        perm = inv
+    perm = perm.reshape(piv_np.shape[:-1] + (n,))
+    idx = mx.broadcast_to(mx.array(perm)[..., None], perm.shape + (b.shape[-1],))
+    return mx.take_along_axis(b, idx, axis=-2)
+
+
+def _lu_solve_ex(lu, pivots, b, left=True, adjoint=False):
+    # aten.linalg_lu_solve: A = P L U. left solves A X = B (or A^H X = B
+    # with adjoint); left=False solves X A = B (or X A^H = B).
+    lu, b, piv = _mx(lu), _mx(b), _mx(pivots)
+    L = mx.tril(lu, -1) + mx.eye(lu.shape[-1], dtype=lu.dtype)
+    U = mx.triu(lu)
+    cj = mx.conj if mx.issubdtype(lu.dtype, mx.complexfloating) else (lambda v: v)
+    if left and not adjoint:
+        return mx.linalg.solve_triangular(
+            U, mx.linalg.solve_triangular(L, _lu_perm_rows(b, piv), upper=False),
+            upper=True)
+    if left and adjoint:
+        uh = mx.swapaxes(cj(U), -1, -2)   # lower
+        lh = mx.swapaxes(cj(L), -1, -2)   # upper
+        return _lu_perm_rows(
+            mx.linalg.solve_triangular(
+                lh, mx.linalg.solve_triangular(uh, b, upper=False),
+                upper=True), piv, inverse=True)
+    if not left and not adjoint:
+        # X A = B -> A^T X^T = B^T and A^T = U^T L^T P^T
+        ut = mx.swapaxes(U, -1, -2)
+        lt = mx.swapaxes(L, -1, -2)
+        y = _lu_perm_rows(
+            mx.linalg.solve_triangular(
+                lt, mx.linalg.solve_triangular(ut, mx.swapaxes(b, -1, -2),
+                                               upper=False),
+                upper=True), piv, inverse=True)
+        return mx.swapaxes(y, -1, -2)
+    # X A^H = B -> A X^H = B^H: normal LU solve, conjugate-transpose back
+    pb = _lu_perm_rows(mx.swapaxes(cj(b), -1, -2), piv)
+    y = mx.linalg.solve_triangular(
+        U, mx.linalg.solve_triangular(L, pb, upper=False), upper=True)
+    return mx.swapaxes(cj(y), -1, -2)
+
+
+def _polar(a):
+    # aten.linalg_polar requires m >= n: A = U H with thin-SVD
+    # U = Us Vh, H = V S V^H.
+    a = _mx(a)
+    if a.shape[-2] < a.shape[-1]:
+        return _raise("linalg_polar needs m >= n")
+    u, s, vh = mx.linalg.svd(a)
+    u = u[..., : vh.shape[-2]]          # mx returns the full U; polar needs thin
+    return u @ vh, mx.swapaxes(vh, -1, -2) @ (s[..., None] * vh)
+
+
+def _matrix_sqrth(a):
+    # aten.linalg_matrix_sqrth reads the lower triangle only (LAPACK
+    # convention): eigh -> Q sqrt(w) Q^H. Negative eigenvalues give nan
+    # through mx.sqrt, matching torch.
+    a = _mx(a)
+    w, q = mx.linalg.eigh(a)
+    cj = mx.conj if mx.issubdtype(a.dtype, mx.complexfloating) else (lambda v: v)
+    return (q * mx.sqrt(w)[..., None, :]) @ mx.swapaxes(cj(q), -1, -2)
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2501,6 +2579,9 @@ _FUNC_SPECS = {
     "einsum_fn": mx.einsum,
     "_local_scalar_dense": _local_scalar_dense,
     "Float": _float_scalar,
+    "linalg_lu_solve": _lu_solve_ex,
+    "linalg_polar": _polar,
+    "linalg_matrix_sqrth": _matrix_sqrth,
 }
 
 def _raise(name):
