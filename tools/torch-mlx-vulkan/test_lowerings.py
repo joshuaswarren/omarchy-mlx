@@ -636,6 +636,97 @@ def test_gelu_backward():
     print("test_gelu_backward PASS")
 
 
+def test_activation_backwards():
+    # Q-63: the backward nodes aot_autograd emits for the covered activation
+    # forwards — aten.elu_backward, hardswish_backward, sigmoid_backward,
+    # hardsigmoid_backward, softplus_backward. mean.dim/sum backwards
+    # decompose to unsqueeze/expand/div (already lowered); leaky_relu and
+    # hardtanh forwards are not lowered, so their backwards are out of scope.
+    rng = np.random.RandomState(7)
+    # wide spread crossing every piecewise boundary (+-3, 0, threshold 20)
+    x = rng.randn(4, 12).astype(np.float32) * 8.0
+    x[0, :4] = [-3.0, -2.999, 3.0, 2.999]
+    dy = rng.randn(4, 12).astype(np.float32)
+
+    def autograd_grad(fn, x, dy):
+        tx = torch.tensor(x, requires_grad=True)
+        fn(tx).backward(torch.tensor(dy))
+        return tx.grad.numpy()
+
+    # elu_backward: aot saves the elu result (is_result=True)
+    ref = autograd_grad(torch.nn.functional.elu, x, dy)
+    got = mlx_vulkan.ATEN_TABLE["elu_backward"](
+        mx.array(dy), 1.0, 1.0, 1.0, True, mx.array(torch.nn.functional.elu(torch.tensor(x)).numpy()))
+    assert np.abs(_np(got) - ref).max() < 1e-5
+    # is_result=False: self_or_result is the input (non-default scales too)
+    ref = torch.ops.aten.elu_backward.default(
+        torch.tensor(dy), 1.7, 1.3, 1.1, False, torch.tensor(x)).numpy()
+    got = mlx_vulkan.ATEN_TABLE["elu_backward"](
+        mx.array(dy), 1.7, 1.3, 1.1, False, mx.array(x))
+    assert np.abs(_np(got) - ref).max() < 1e-5
+    # celu routes through the same node with input_scale=1/alpha (aot emits
+    # alpha=0.5, input_scale=2.0, is_result=False, primal input)
+    ref = autograd_grad(lambda t: torch.nn.functional.celu(t, alpha=0.5), x, dy)
+    got = mlx_vulkan.ATEN_TABLE["elu_backward"](
+        mx.array(dy), 0.5, 1, 2.0, False, mx.array(x))
+    assert np.abs(_np(got) - ref).max() < 1e-4
+
+    # hardswish_backward: inclusive boundaries at +-3
+    ref = autograd_grad(torch.nn.functional.hardswish, x, dy)
+    got = mlx_vulkan.ATEN_TABLE["hardswish_backward"](mx.array(dy), mx.array(x))
+    assert np.abs(_np(got) - ref).max() < 1e-5
+
+    # sigmoid_backward: takes the saved forward output
+    ref = autograd_grad(torch.sigmoid, x, dy)
+    got = mlx_vulkan.ATEN_TABLE["sigmoid_backward"](
+        mx.array(dy), mx.array(torch.sigmoid(torch.tensor(x)).numpy()))
+    assert np.abs(_np(got) - ref).max() < 1e-6
+
+    # hardsigmoid_backward: strict bounds (grad 0 exactly at +-3)
+    ref = autograd_grad(torch.nn.functional.hardsigmoid, x, dy)
+    got = mlx_vulkan.ATEN_TABLE["hardsigmoid_backward"](mx.array(dy), mx.array(x))
+    assert np.abs(_np(got) - ref).max() < 1e-6
+
+    # softplus_backward: default beta/threshold plus a non-default beta
+    ref = autograd_grad(torch.nn.functional.softplus, x, dy)
+    got = mlx_vulkan.ATEN_TABLE["softplus_backward"](mx.array(dy), mx.array(x), 1, 20)
+    assert np.abs(_np(got) - ref).max() < 1e-5
+    ref = autograd_grad(lambda t: torch.nn.functional.softplus(t, beta=4.0), x, dy)
+    got = mlx_vulkan.ATEN_TABLE["softplus_backward"](mx.array(dy), mx.array(x), 4.0, 20)
+    assert np.abs(_np(got) - ref).max() < 1e-4
+
+    # bf16 opmath: sigmoid_backward must round once after fp32 math
+    xb = torch.tensor(x, dtype=torch.bfloat16)
+    ob = torch.sigmoid(xb)
+    gb = torch.tensor(dy, dtype=torch.bfloat16)
+    ref = torch.ops.aten.sigmoid_backward.default(gb, ob)
+    mine = mlx_vulkan.ATEN_TABLE["sigmoid_backward"](
+        mx.array(gb.float().numpy()).astype(mx.bfloat16),
+        mx.array(ob.float().numpy()).astype(mx.bfloat16))
+    assert mine.dtype == mx.bfloat16
+    d = float((torch.from_numpy(np.array(mine.astype(mx.float32))) - ref.float()).abs().max())
+    assert d < 0.02, f"bf16 sigmoid_backward: {d:.3e}"
+
+    # executor dispatch: each node lands in stats["mlx"], never stats["cpu"]
+    cases = [
+        (torch.ops.aten.elu_backward.default, (dy, 1.0, 1.0, 1.0, True, torch.nn.functional.elu(torch.tensor(x)).numpy()), "elu_backward"),
+        (torch.ops.aten.hardswish_backward.default, (dy, x), "hardswish_backward"),
+        (torch.ops.aten.sigmoid_backward.default, (dy, torch.sigmoid(torch.tensor(x)).numpy()), "sigmoid_backward"),
+        (torch.ops.aten.hardsigmoid_backward.default, (dy, x), "hardsigmoid_backward"),
+        (torch.ops.aten.softplus_backward.default, (dy, x, 1, 20), "softplus_backward"),
+    ]
+    for op, args_np, name in cases:
+        gfx = torch.fx.Graph()
+        phs = [gfx.placeholder(f"a{i}") for i in range(len(args_np))]
+        gfx.output(gfx.call_function(op, tuple(phs)))
+        gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+        run, stats = mlx_vulkan.make_executor(gm)
+        run(*[torch.tensor(a) for a in args_np])
+        assert name in stats["mlx"], (name, stats)
+        assert name not in stats["cpu"], (name, stats)
+    print("test_activation_backwards PASS")
+
+
 def test_tanh_backward():
     # PT-U4: aten.tanh_backward.default (PAR-41 census rank 29, 275 receipts).
     # The aten signature is tanh_backward(grad_output, OUTPUT) — the forward
@@ -2988,6 +3079,7 @@ if __name__ == "__main__":
     test_pcache_skips_static_weights()
     test_compiled_executor_nonarray_outputs()
     test_gelu_backward()
+    test_activation_backwards()
     test_tanh_backward()
     test_comparisons()
     test_linear()

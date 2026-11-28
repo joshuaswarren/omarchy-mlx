@@ -2036,6 +2036,53 @@ def _celu(a, alpha=1.0):
     return out.astype(a.dtype)
 
 
+def _elu_backward(g, alpha, scale, input_scale, is_result, sor):
+    # aten.elu_backward(g, alpha, scale, input_scale, is_result, self_or_result)
+    a, f = _opmath_f32(g)
+    s = _mx(sor).astype(f.dtype)
+    if is_result:
+        out = mx.where(s <= 0.0, f * input_scale * (s + alpha * scale), f * scale)
+    else:
+        out = mx.where(s <= 0.0, f * input_scale * alpha * scale * mx.exp(s * input_scale), f * scale)
+    return out.astype(a.dtype)
+
+
+def _hardswish_backward(g, a):
+    # aten.hardswish_backward(g, x): 0 for x < -3, g*(x/3 + 0.5) for -3 <= x <= 3, g for x > 3
+    g_o, g_f = _opmath_f32(g)
+    x = _mx(a).astype(g_f.dtype)
+    out = mx.where(
+        x < -3.0,
+        mx.zeros_like(g_f),
+        mx.where(x <= 3.0, g_f * (x / 3.0 + 0.5), g_f),
+    )
+    return out.astype(g_o.dtype)
+
+
+def _sigmoid_backward(g, out):
+    # aten.sigmoid_backward(g, output): g * output * (1 - output)
+    g_o, g_f = _opmath_f32(g)
+    o = _mx(out).astype(g_f.dtype)
+    return (g_f * o * (1.0 - o)).astype(g_o.dtype)
+
+
+def _hardsigmoid_backward(g, a):
+    # aten.hardsigmoid_backward(g, x): g/6 for -3 < x < 3, else 0
+    g_o, g_f = _opmath_f32(g)
+    x = _mx(a).astype(g_f.dtype)
+    out = mx.where((x > -3.0) & (x < 3.0), g_f / 6.0, mx.zeros_like(g_f))
+    return out.astype(g_o.dtype)
+
+
+def _softplus_backward(g, a, beta=1, threshold=20):
+    # aten.softplus_backward(g, x, beta, threshold):
+    # g when x*beta > threshold, else g * sigmoid(x*beta)
+    g_o, g_f = _opmath_f32(g)
+    z = _mx(a).astype(g_f.dtype) * beta
+    out = mx.where(z > threshold, g_f, g_f * mx.sigmoid(z))
+    return out.astype(g_o.dtype)
+
+
 def _mish(a, inplace=False):
     # aten.mish(input): x * tanh(softplus(x)) under softplus' defaults
     # (beta=1, threshold=20).
@@ -2354,6 +2401,11 @@ _FUNC_SPECS = {
     "embedding_dense_backward": _embedding_dense_backward,
     "slice_backward": _slice_backward,
     "silu_backward": _silu_backward,
+    "sigmoid_backward": _sigmoid_backward,
+    "elu_backward": _elu_backward,
+    "hardswish_backward": _hardswish_backward,
+    "hardsigmoid_backward": _hardsigmoid_backward,
+    "softplus_backward": _softplus_backward,
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
     "softplus": _softplus,
