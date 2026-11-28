@@ -11220,11 +11220,34 @@ bool dispatch_quantized_gemv_group(
   bool multi_r2s16_active = false;
   bool multi_r2s16_trim3_active = false;
   bool multi_r2s8_trim3_active = false;
+  int smalln_mode = 0;
+  if (!res_norm_active && !dedicated_swiglu_active && !swiglu_out &&
+      !token_route && outgate == nullptr && dtype == bfloat16 &&
+      subgroup_ready &&
+      geom.multi == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2) {
+    // M1MD-1: an all-small member group (every n <= 4096) swaps the
+    // 16-column tile for an 8-column one, doubling workgroup count on the
+    // N=2560 shapes that underfill 32 cores. Per-column arithmetic is
+    // unchanged, so either variant stays bit-identical to R2S8W2.
+    bool all_small_n = !members.empty();
+    for (const auto& m : members) {
+      if (m.node.inputs().size() != 4 || m.node.inputs()[1].ndim() != 2 ||
+          m.node.inputs()[1].shape(0) <= 0 ||
+          m.node.inputs()[1].shape(0) > 4096) {
+        all_small_n = false;
+        break;
+      }
+    }
+    if (all_small_n) {
+      smalln_mode =
+          omarchy::qmm_smalln_geom_part(qmm_dev_name);
+    }
+  }
   if (!res_norm_active && !dedicated_swiglu_active && !swiglu_out &&
       !token_route && outgate == nullptr && dtype == bfloat16 &&
       subgroup_ready &&
       geom.multi == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 &&
-      k % 512 == 0) {
+      smalln_mode == 0 && k % 512 == 0) {
     bool all_n8 = true;
     bool any_epi_or_view = false;
     for (const auto& m : members) {
@@ -11269,7 +11292,8 @@ bool dispatch_quantized_gemv_group(
       ? swiglu_cols
       : ((!token_route && outgate == nullptr && dtype == bfloat16 &&
           subgroup_ready)
-             ? (multi_r2s16_active ? 32u : geom.columns)
+             ? (multi_r2s16_active ? 32u
+                                   : (smalln_mode != 0 ? 8u : geom.columns))
              : 8u);
   for (size_t i = 0; i < members.size(); ++i) {
     const array& node = members[i].node;
@@ -12092,6 +12116,12 @@ bool dispatch_quantized_gemv_group(
                 return ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast;
               }
               auto mk = qmm_geometry().multi;
+              if (mk == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2 &&
+                  smalln_mode != 0) {
+                return smalln_mode == 2
+                    ? ComputeKernel::QmmVecQ4MultiSubgroupBF16R1S8W2
+                    : ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4W2;
+              }
               if (mk == ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2) {
                 const char* up_env = omarchy::env_str("MLX_OMARCHY_Q4_UPFRONT");
                 const bool up_want =

@@ -929,6 +929,28 @@ inline bool qmm_word_r2s4_default(const std::string& device_name) {
       device_name.find("G13G") != std::string::npos;
 }
 
+// Small-N Multi GEMV tile (M1MD-1): a decode multi dispatch whose members all
+// have output width n <= 4096 underfills 32 cores on the 16-column R2S8W2 tile
+// (N=2560 o_proj/down_proj -> 160 workgroups), so an 8-column tile doubles the
+// resident workgroup count. Returns 0 = off, 1 = R2S4W2 (128-thread groups),
+// 2 = R1S8W2 (256-thread groups). MLX_OMARCHY_QMM_SMALLN = "2x4w2" or "1x8w2"
+// overrides on any part; the default stays off everywhere until the G13C
+// per-shape isolation ABBA lands. Per-column arithmetic is unchanged, so both
+// variants stay bit-identical to R2S8W2. Pure.
+inline int qmm_smalln_geom_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_QMM_SMALLN")) {
+    if (std::strcmp(env, "2x4w2") == 0) {
+      return 1;
+    }
+    if (std::strcmp(env, "1x8w2") == 0) {
+      return 2;
+    }
+    return 0;
+  }
+  (void)device_name;
+  return 0;
+}
+
 // Coalesced 128-bit uvec4 ResNorm epilogue with 512-thread workgroups
 // (QmmVecQ4ResNormVec4BF16R2S16W2: 32 cols/WG halving ticket.done atomic
 // contention + single-pass coherent sum0_v4 load held in registers across the

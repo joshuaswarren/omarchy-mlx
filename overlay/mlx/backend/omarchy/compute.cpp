@@ -327,6 +327,7 @@
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16kconts16.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s4w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r1s8w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast_3w.h"
 #include "qmm_vec_q4_swiglu_bf16_r2s8w2.h"
@@ -1513,6 +1514,9 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128G13CB4:
       return {sdpa_decode_online_rope_sg32_bf16_hd128_g13c_b4,
               sdpa_decode_online_rope_sg32_bf16_hd128_g13c_b4_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R1S8W2:
+      return {qmm_vec_q4_multi_subgroup_bf16_r1s8w2,
+              qmm_vec_q4_multi_subgroup_bf16_r1s8w2_size};
     case ComputeKernel::SdpaDecodeOnlineSg32BF16Hd256:
       return {sdpa_decode_online_sg32_bf16_hd256,
               sdpa_decode_online_sg32_bf16_hd256_size};

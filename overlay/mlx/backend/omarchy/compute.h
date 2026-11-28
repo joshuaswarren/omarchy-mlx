@@ -1465,6 +1465,12 @@ enum class ComputeKernel : uint16_t {
   // blocked path in SdpaDecodeOnlineRopeSg32BF16Hd128G13C). Appended to keep
   // profile kernel ids stable.
   SdpaDecodeOnlineRopeSg32BF16Hd128G13CB4,
+  // Small-N Multi GEMV tile (M1MD-1): 8 columns per 256-thread workgroup for
+  // member groups whose output widths all sit at or below 4096 (the N=2560
+  // o_proj/down_proj shapes that underfill 32 cores at 160 workgroups on the
+  // 16-column R2S8W2 tile). Per-column arithmetic unchanged, so outputs stay
+  // bit-identical. Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiSubgroupBF16R1S8W2,
   Count,
 };
 

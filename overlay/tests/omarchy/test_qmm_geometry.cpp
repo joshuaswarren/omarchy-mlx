@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "mlx/backend/omarchy/allocator.h"
+#include "mlx/backend/omarchy/compute.h"
 #include "mlx/backend/omarchy/device.h"
 #include "mlx/backend/omarchy/device_local_activations.h"
 #include "mlx/backend/omarchy/fused_chain.h"
@@ -174,6 +175,35 @@ int scenario(const std::string& name, const std::string& out) {
     }
     outs.push_back(sum);
     outs.push_back(normed);
+  } else if (name == "group_ids") {
+    // Same graph as "group"; writes the dispatched compute kernel ids
+    // (MLX_OMARCHY_TRACE_DISPATCH) to `out` instead of the outputs.
+    int saved = ::dup(::fileno(stderr));
+    FILE* cap = std::fopen("/tmp/w7p-group-ids.cap", "w");
+    if (cap == nullptr) {
+      return 4;
+    }
+    ::dup2(::fileno(cap), ::fileno(stderr));
+    setenv("MLX_OMARCHY_TRACE_DISPATCH", "1", 1);
+    auto x = make_x(2048, rng);
+    auto a = make_lin(4096, 2048, rng);
+    auto b = make_lin(512, 2048, rng);
+    auto c = make_lin(512, 2048, rng);
+    eval(x, a.w, a.s, a.b, b.w, b.s, b.b, c.w, c.s, c.b);
+    auto resid = astype(array(0.25f), bfloat16);
+    auto oa = add(qmm(x, a), resid);
+    auto ob = qmm(x, b);
+    auto oc = qmm(x, c);
+    eval(oa, ob, oc);
+    std::fflush(stderr);
+    ::dup2(saved, ::fileno(stderr));
+    ::close(saved);
+    std::fclose(cap);
+    unsetenv("MLX_OMARCHY_TRACE_DISPATCH");
+    std::ifstream in("/tmp/w7p-group-ids.cap");
+    std::ofstream f(out);
+    f << in.rdbuf();
+    return 0;
   } else if (name == "name") {
     std::ofstream f(out);
     f << mlx::core::omarchy::qmm_geometry_name();
@@ -601,6 +631,70 @@ int main(int argc, char** argv) {
       ++failures;
     } else {
       std::cout << "ok: multi R2S8W2Upfront identical\n";
+    }
+  }
+  // M1MD-1 small-N Multi tiles: a member group whose output widths are all
+  // <= 4096 routes the 8-column R2S4W2 or R1S8W2 build instead of R2S8W2.
+  // Outputs must stay bit-identical to the 2x4 base, the routed kernel id
+  // must be the small-N build when set, and must not be when unset.
+  for (const char* smalln : {"2x4w2", "1x8w2"}) {
+    std::string base = "/tmp/w7p-geom-base.bin";
+    std::string other = "/tmp/w7p-geom-other.bin";
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x4", 1);
+    int rc = run_child("group", base.c_str());
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+    setenv("MLX_OMARCHY_QMM_SMALLN", smalln, 1);
+    int rc2 = run_child("group", other.c_str());
+    unsetenv("MLX_OMARCHY_QMM_SMALLN");
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    if (rc != 0 || rc2 != 0 || fnv(base) != fnv(other)) {
+      std::cout << "FAIL: multi small-N " << smalln
+                << " differed from 2x4 (rc " << rc << "/" << rc2 << ")\n";
+      ++failures;
+    } else {
+      std::cout << "ok: multi small-N " << smalln << " identical\n";
+    }
+  }
+  if (caps.subgroup_size == 32u &&
+      (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u) {
+    auto ids_have = [](const std::string& path,
+                       omarchy::ComputeKernel kernel) {
+      std::ifstream in(path);
+      std::string text((std::istreambuf_iterator<char>(in)),
+                       std::istreambuf_iterator<char>());
+      return text.find("kernel=" +
+                       std::to_string(static_cast<uint32_t>(kernel))) !=
+          std::string::npos;
+    };
+    const omarchy::ComputeKernel s4 = omarchy::ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S4W2;
+    const omarchy::ComputeKernel r1 = omarchy::ComputeKernel::QmmVecQ4MultiSubgroupBF16R1S8W2;
+    setenv("MLX_OMARCHY_QMM_GEOM", "2x8w2", 1);
+    setenv("MLX_OMARCHY_QMM_SMALLN", "2x4w2", 1);
+    int rc_a = run_child("group_ids", "/tmp/w7p-ids-s4.txt");
+    setenv("MLX_OMARCHY_QMM_SMALLN", "1x8w2", 1);
+    int rc_b = run_child("group_ids", "/tmp/w7p-ids-r1.txt");
+    setenv("MLX_OMARCHY_QMM_SMALLN", "0", 1);
+    int rc_c = run_child("group_ids", "/tmp/w7p-ids-off.txt");
+    unsetenv("MLX_OMARCHY_QMM_SMALLN");
+    unsetenv("MLX_OMARCHY_QMM_GEOM");
+    if (rc_a != 0 || rc_b != 0 || rc_c != 0) {
+      std::cout << "FAIL: group_ids child rc " << rc_a << "/" << rc_b << "/"
+                << rc_c << "\n";
+      ++failures;
+    } else {
+      if (!ids_have("/tmp/w7p-ids-s4.txt", s4)) {
+        std::cout << "FAIL: QMM_SMALLN=2x4w2 did not dispatch the R2S4W2 multi\n";
+        ++failures;
+      }
+      if (!ids_have("/tmp/w7p-ids-r1.txt", r1)) {
+        std::cout << "FAIL: QMM_SMALLN=1x8w2 did not dispatch the R1S8W2 multi\n";
+        ++failures;
+      }
+      if (ids_have("/tmp/w7p-ids-off.txt", s4) ||
+          ids_have("/tmp/w7p-ids-off.txt", r1)) {
+        std::cout << "FAIL: small-N multi dispatched with QMM_SMALLN unset\n";
+        ++failures;
+      }
     }
   }
   // Coalesced uvec4 ResNorm (R2S16W2) must be bit-identical to unfused and
