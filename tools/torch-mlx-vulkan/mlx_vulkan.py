@@ -2217,6 +2217,60 @@ def _isin(elements, test_elements, assume_unique=False, invert=False):
     return mx.logical_not(hit) if invert else hit
 
 
+
+def _gradient_dim(a, d, h, edge_order):
+    # Uniform-spacing gradient along dim d: central differences in the
+    # interior, first-order one-sided ends at edge_order 1, second-order
+    # three-point ends at edge_order 2 (aten.gradient semantics).
+    n = a.shape[d]
+    if n <= edge_order:
+        return _raise("gradient dim size")
+    interior = (mx.take(a, mx.arange(2, n), axis=d)
+                - mx.take(a, mx.arange(0, n - 2), axis=d)) / (2.0 * h)
+    if edge_order == 1:
+        lo = (mx.take(a, mx.array([1]), axis=d)
+              - mx.take(a, mx.array([0]), axis=d)) / h
+        hi = (mx.take(a, mx.array([n - 1]), axis=d)
+              - mx.take(a, mx.array([n - 2]), axis=d)) / h
+    else:
+        f0 = mx.take(a, mx.array([0]), axis=d)
+        f1 = mx.take(a, mx.array([1]), axis=d)
+        f2 = mx.take(a, mx.array([2]), axis=d)
+        lo = (-3.0 * f0 + 4.0 * f1 - f2) / (2.0 * h)
+        f0 = mx.take(a, mx.array([n - 3]), axis=d)
+        f1 = mx.take(a, mx.array([n - 2]), axis=d)
+        f2 = mx.take(a, mx.array([n - 1]), axis=d)
+        hi = (3.0 * f2 - 4.0 * f1 + f0) / (2.0 * h)
+    return mx.concatenate([lo, interior, hi], axis=d)
+
+
+def _gradient(a, spacing=None, dim=None, edge_order=1):
+    # Covers gradient.array/.scalarint/.scalararray/.scalarrayint:
+    # spacing may be a single Scalar (all dims), a per-dim Scalar list,
+    # or None (=1); dim is an int, int list, or None (=all dims).
+    a = _mx(a)
+    edge_order = int(edge_order)
+    if edge_order not in (1, 2):
+        return _raise("gradient edge_order")
+    nd = a.ndim
+    if dim is None:
+        dims = list(range(nd))
+    elif isinstance(dim, int):
+        dims = [dim]
+    else:
+        dims = list(dim)
+    dims = [d % nd for d in dims]
+    if spacing is None:
+        hs = [1.0] * len(dims)
+    elif isinstance(spacing, (list, tuple)):
+        hs = [float(h) for h in spacing]
+    else:
+        hs = [float(spacing)] * len(dims)
+    if len(hs) != len(dims):
+        return _raise("gradient spacing/dim length")
+    return tuple(
+        _gradient_dim(a, d, h, edge_order) for d, h in zip(dims, hs))
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -2287,6 +2341,7 @@ _FUNC_SPECS = {
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
+    "gradient": _gradient,
     "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
     "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),

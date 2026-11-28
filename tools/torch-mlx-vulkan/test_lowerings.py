@@ -3014,6 +3014,55 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_gradient():
+    # Q-71: aten.gradient returns Tensor[] -- uniform scalar spacing or a
+    # per-dim spacing list, dim=int/list/None (=all dims), edge_order 1
+    # (one-sided ends) and 2 (three-point ends). All dims must stay on
+    # mlx with zero CPU fallback.
+    torch.manual_seed(0)
+    x2 = torch.randn(4, 6)
+    x3 = torch.randn(3, 5, 7)
+    cases = [
+        (torch.ops.aten.gradient.array, (x2,), {"dim": [0]}, "gradient"),
+        (torch.ops.aten.gradient.array, (x2,), {"dim": [0, 1]}, "gradient"),
+        (torch.ops.aten.gradient.array, (x2,), {"dim": [0, 1],
+         "edge_order": 2}, "gradient"),
+        (torch.ops.aten.gradient.array, (x3,), {"dim": [0, 1, 2]}, "gradient"),
+        (torch.ops.aten.gradient.scalarint, (x2,),
+         {"spacing": 2.0, "dim": 1}, "gradient"),
+        (torch.ops.aten.gradient.scalarint, (x3,),
+         {"spacing": 0.5, "dim": -1, "edge_order": 2}, "gradient"),
+        (torch.ops.aten.gradient.scalararray, (x2,),
+         {"spacing": 0.25, "dim": [0, 1]}, "gradient"),
+        (torch.ops.aten.gradient.scalarrayint, (x2,),
+         {"spacing": [2.0, 0.5]}, "gradient"),
+        (torch.ops.aten.gradient.scalararray, (x3,),
+         {"spacing": 4.0, "dim": [2, 0], "edge_order": 2}, "gradient"),
+        (torch.ops.aten.gradient.array,
+         (torch.randn(2, 8),), {"dim": [1]}, "gradient"),
+        (torch.ops.aten.gradient.array,
+         (torch.randn(3, 8),), {"dim": [1], "edge_order": 2}, "gradient"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        outs = list(out) if isinstance(out, (list, tuple)) else [out]
+        assert len(outs) == len(ref), (str(target), kwargs, len(ref))
+        for got, want in zip(outs, ref):
+            got = torch.as_tensor(got)
+            assert np.allclose(got.float().numpy(), want.float().numpy(),
+                               atol=1e-5, rtol=1e-5), (
+                str(target), kwargs, got, want)
+    print("test_gradient PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3123,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_gradient()
     print("ALL PASS")
 
 
