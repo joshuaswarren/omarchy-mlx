@@ -2674,7 +2674,30 @@ def make_executor(gm):
                     lowering = None
                 if lowering is not None and (has_mx(args) or is_producer):
                     try:
-                        val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in kwargs.items()})
+                        # aten.<op>.out: the out kwarg is write-only for the
+                        # lowering - strip it, then rebind the out arg's env
+                        # entry to the computed value (the in-place convention
+                        # the "_" ops use on node.args[0]).
+                        out_node = None
+                        lkw = kwargs
+                        # overload spellings: aten.mul.out, aten.sum.IntList_out
+                        if str(node.target).rsplit(".", 1)[-1].endswith("out"):
+                            out_node = node.kwargs.get("out")
+                            lkw = {k: v for k, v in kwargs.items() if k != "out"}
+                        val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in lkw.items()})
+                        if isinstance(out_node, torch.fx.Node):
+                            env[out_node] = val
+                        elif torch.is_tensor(out_node):
+                            # aten *.out resizes the out buffer before copying;
+                            # a baked `out=torch.empty(0)` reaches here with no
+                            # elements, so copy_ alone would raise. resize_
+                            # first - and keep on_mlx False until the write-back
+                            # lands so a raise here falls back to torch instead
+                            # of recording LOWERED with out left unwritten.
+                            tv = _torch(val)
+                            if tuple(out_node.shape) != tuple(tv.shape):
+                                out_node.resize_(tv.shape)
+                            out_node.copy_(tv)
                         on_mlx = True
                         # d-review: an in-place ATen op (masked_fill_, add_, ...)
                         # must mutate the graph's input placeholder, so later
