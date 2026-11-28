@@ -120,6 +120,9 @@ class GreedyPruneDefaultTests(unittest.TestCase):
         def g16g():
             return {"device_name": "Apple M4 (G16G B0)"}
 
+        def g13g():
+            return {"device_name": "Apple M1 (G13G B1)"}
+
         def raises():
             raise RuntimeError("no device info")
 
@@ -137,6 +140,12 @@ class GreedyPruneDefaultTests(unittest.TestCase):
 
                 self.assertIsNotNone(self._eval_greedy_head(src, g16g, None))
                 self.assertIsNone(self._eval_greedy_head(src, g16g, "1"))
+
+                # M1D-2: G13G defaults off (the greedy head measured a net
+                # loss on 2B and 4B decode on the 13-inch); =0 forces on.
+                self.assertIsNone(self._eval_greedy_head(src, g13g, None))
+                self.assertIsNone(self._eval_greedy_head(src, g13g, "1"))
+                self.assertIsNotNone(self._eval_greedy_head(src, g13g, "0"))
 
                 # Missing or failing device_info fails open to enabled behavior.
                 self.assertIsNotNone(self._eval_greedy_head(src, None, None))
@@ -186,12 +195,15 @@ class GreedyPruneDefaultTests(unittest.TestCase):
             args = types.SimpleNamespace(tie_word_embeddings=True)
             model = types.SimpleNamespace(embed_tokens=FakeEmb())
 
-        def run_case(dev_name, gw_env):
+        def run_case(dev_name, gw_env, ngp_env=None):
             sentinel_syncs.clear()
             prev_np = os.environ.get("MLX_OMARCHY_NO_GREEDY_PRUNE")
             prev_gw = os.environ.get("MLX_OMARCHY_GREEDY_WORD")
             try:
-                os.environ.pop("MLX_OMARCHY_NO_GREEDY_PRUNE", None)
+                if ngp_env is None:
+                    os.environ.pop("MLX_OMARCHY_NO_GREEDY_PRUNE", None)
+                else:
+                    os.environ["MLX_OMARCHY_NO_GREEDY_PRUNE"] = ngp_env
                 if gw_env is None:
                     os.environ.pop("MLX_OMARCHY_GREEDY_WORD", None)
                 else:
@@ -237,10 +249,10 @@ class GreedyPruneDefaultTests(unittest.TestCase):
         self.assertEqual(run_case("Apple M2 Max (G14C B1)", None), 0)
         # Explicit MLX_OMARCHY_GREEDY_WORD=0 restores the staged route and its sync.
         self.assertEqual(run_case("Apple M2 Max (G14C B1)", "0"), 1)
-        # G13G default uses the 3-dispatch word route: no per-token int(token) sync.
-        self.assertEqual(run_case("Apple M1 (G13G B1)", None), 0)
-        # Explicit MLX_OMARCHY_GREEDY_WORD=0 restores the staged route and its sync.
-        self.assertEqual(run_case("Apple M1 (G13G B1)", "0"), 1)
+        # G13G word route: with M1D-2 the part defaults the head off, so the
+        # word-route cases force it on with MLX_OMARCHY_NO_GREEDY_PRUNE=0.
+        self.assertEqual(run_case("Apple M1 (G13G B1)", None, "0"), 0)
+        self.assertEqual(run_case("Apple M1 (G13G B1)", "0", "0"), 1)
         # G13C default uses the 3-dispatch word route: no per-token int(token) sync.
         self.assertEqual(run_case("Apple M1 Max (G13C C0)", None), 0)
         # Explicit MLX_OMARCHY_GREEDY_WORD=0 restores the staged route and its sync.
@@ -264,8 +276,11 @@ class GreedyPruneDefaultTests(unittest.TestCase):
         self.assertTrue(cpp_chips, "no chip names parsed from greedy_word_over_staged_part")
         for chip in cpp_chips:
             with self.subTest(cpp_chip=chip):
-                self.assertEqual(run_case(f"Apple Silicon ({chip} B1)", None), 0)
-                self.assertEqual(run_case(f"Apple Silicon ({chip} B1)", "0"), 1)
+                # the drift cases force the head on (=0) where the part
+                # defaults it off (G13G per M1D-2); the default-off behavior
+                # is pinned separately in test_g14c_default_and_overrides.
+                self.assertEqual(run_case(f"Apple Silicon ({chip} B1)", None, "0"), 0)
+                self.assertEqual(run_case(f"Apple Silicon ({chip} B1)", "0", "0"), 1)
 
 
 if __name__ == "__main__":
