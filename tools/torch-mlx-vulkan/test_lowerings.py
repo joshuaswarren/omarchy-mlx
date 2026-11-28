@@ -2746,6 +2746,213 @@ def test_glu():
     print("test_glu PASS")
 
 
+def test_reciprocal_frac():
+    # PT-AL-e: aten.reciprocal + aten.frac (rsqrt was already lowered).
+    # frac is x - trunc(x), sign-kept: frac(-2.3) == -0.3, NOT x - floor(x)
+    # (+0.7) — the negative inputs below pin that contract.
+    x = torch.tensor([[-2.3, -0.7, -0.5, 0.0], [0.25, 1.9, 8.0, -4.0]])
+    F = torch.nn.functional
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        xd = x.to(dtype)
+        cases = [
+            (torch.ops.aten.reciprocal.default, (xd,), {},
+             torch.ops.aten.reciprocal.default(xd), "reciprocal"),
+            (torch.ops.aten.frac.default, (xd,), {},
+             torch.ops.aten.frac.default(xd), "frac"),
+            (torch.ops.aten.reciprocal_.default, (xd,), {},
+             torch.ops.aten.reciprocal.default(xd), "reciprocal"),
+            (torch.ops.aten.frac_.default, (xd,), {},
+             torch.ops.aten.frac.default(xd), "frac"),
+            (torch.frac, (xd,), {}, torch.frac(xd), "frac"),
+            (torch.reciprocal, (xd,), {},
+             torch.reciprocal(xd), "reciprocal"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert any(name in s for s in stats["mlx"]), (stats, str(target))
+            got = out.float().numpy()
+            assert np.allclose(got, ref.float().numpy(), atol=tol), \
+                (str(target), kw, dtype, got, ref.float().numpy())
+    # sign pin: frac of a negative keeps the negative part.
+    m = mx.array([-2.3, -0.7, 1.9])
+    got = np.array(mlx_vulkan.ATEN_TABLE["frac"](m))
+    assert np.allclose(got, [-0.3, -0.7, 0.9], atol=1e-6), got
+    print("test_reciprocal_frac PASS")
+
+
+def test_linalg_norm():
+    # PT-NORM-b: aten.linalg_vector_norm + aten.linalg_norm (normalization,
+    # grad clipping). Also pins aten.norm's inf/-inf contract: the prior
+    # lowering silently computed a 2-norm for both.
+    x = torch.randn(3, 4)
+    x3 = torch.randn(2, 3, 4)
+    cases = [
+        (torch.ops.aten.linalg_vector_norm.default, (x,), {},
+         torch.linalg.vector_norm(x), "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x,), {"ord": 1.0},
+         torch.linalg.vector_norm(x, ord=1.0), "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x,),
+         {"ord": float("inf"), "dim": [1]},
+         torch.linalg.vector_norm(x, ord=float("inf"), dim=[1]),
+         "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x3,),
+         {"ord": 0.5, "dim": [1, 2], "keepdim": True},
+         torch.linalg.vector_norm(x3, ord=0.5, dim=[1, 2], keepdim=True),
+         "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x,),
+         {"dtype": torch.float64},
+         torch.linalg.vector_norm(x, dtype=torch.float64),
+         "linalg_vector_norm"),
+        (torch.ops.aten.linalg_norm.default, (x,), {},
+         torch.linalg.norm(x), "linalg_norm"),
+        (torch.ops.aten.linalg_norm.default, (x,),
+         {"ord": float("-inf"), "dim": [0]},
+         torch.linalg.norm(x, ord=float("-inf"), dim=[0]), "linalg_norm"),
+        (torch.ops.aten.linalg_norm.default, (x3,), {"ord": 2.0, "dim": [2]},
+         torch.linalg.norm(x3, ord=2.0, dim=[2]), "linalg_norm"),
+    ]
+    for target, ins, kw, ref, name in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kw)
+        assert any(name in s for s in stats["mlx"]), (stats, str(target))
+        got = out.float().numpy()
+        assert np.allclose(got, ref.float().numpy(), atol=1e-5), \
+            (str(target), kw, got, ref.float().numpy())
+    # the aten.norm inf/-inf fix at table level.
+    m = mx.array(x.numpy())
+    for p, ref in (("inf", torch.norm(x, float("inf"))),
+                   ("-inf", torch.norm(x, float("-inf"))),
+                   (1.0, torch.norm(x, 1.0)),
+                   (2.0, torch.norm(x, 2.0))):
+        got = torch.from_numpy(np.array(
+            mlx_vulkan.ATEN_TABLE["norm"](m, p)))
+        assert torch.allclose(got, ref.float(), atol=1e-5), \
+            (p, float(got), float(ref))
+    print("test_linalg_norm PASS")
+
+
+def test_logsumexp():
+    # PT-AL-g: aten.logsumexp(self, int[1] dim, keepdim) — used in
+    # contrastive learning. mx.logsumexp is the same stable reduction;
+    # the dim list becomes the axis tuple.
+    x2 = torch.randn(3, 4)
+    x3 = torch.randn(2, 3, 4)
+    cases = [
+        (torch.ops.aten.logsumexp.default, (x2,), {"dim": [0]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x2,), {"dim": [0, 1]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x3,), {"dim": [2]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x3,),
+         {"dim": [0, 2], "keepdim": True}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x2,), {"dim": [-1]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x2.bfloat16(),), {"dim": [1]},
+         "logsumexp"),
+        # numerically hostile: large logits would overflow a naive
+        # log(sum(exp)) — the stable path must match torch.
+        (torch.ops.aten.logsumexp.default, (x2 + 1e4,), {"dim": [1]},
+         "logsumexp"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert fam in stats["mlx"], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs, got, ref)
+    print("test_logsumexp PASS")
+
+
+def test_pdist_cdist():
+    # PT-PAIR-a: aten.pdist + aten.cdist (pairwise distance, metric
+    # learning). Composed from broadcast-difference norms; the pdist
+    # condense order is built arithmetically (mx has no compress).
+    a = torch.randn(5, 3)
+    b = torch.randn(4, 3)
+    ab = torch.randn(2, 5, 3)
+    bb = torch.randn(2, 4, 3)
+    cases = [
+        (torch.ops.aten.cdist.default, (a, b), {}, "cdist"),
+        (torch.ops.aten.cdist.default, (a, b), {"p": 1.0}, "cdist"),
+        (torch.ops.aten.cdist.default, (a, b), {"p": 0.5}, "cdist"),
+        (torch.ops.aten.cdist.default, (a, b), {"p": float("inf")}, "cdist"),
+        (torch.ops.aten.cdist.default, (ab, bb), {}, "cdist"),
+        (torch.ops.aten.pdist.default, (a,), {}, "pdist"),
+        (torch.ops.aten.pdist.default, (a,), {"p": 1.0}, "pdist"),
+        (torch.ops.aten.pdist.default, (a,), {"p": float("inf")}, "pdist"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=1e-5), (
+            str(target), kwargs, got, ref)
+    print("test_pdist_cdist PASS")
+
+
+def test_log1p_expm1_logaddexp():
+    # PT-AL-f: the dev table must match the wheel table — aten.expm1,
+    # aten.logaddexp lower with fp32/bf16 parity including near-zero
+    # inputs where the naive forms lose precision.
+    torch.manual_seed(0)
+    x = torch.tensor([0.0, 1e-9, -1e-9, 1e-7, -1e-7, 1e-4, -1e-4,
+                      1e-2, -1e-2, -0.5, 0.5, 1.0, -0.9999, 2.0])
+    y = torch.tensor([0.0, 1e-9, -1e-9, -20.0, 20.0, 1e-4, -1.0,
+                      0.5, -0.5, 3.0, -3.0, 10.0, -10.0, 0.001])
+    cases = [
+        (torch.ops.aten.log1p.default, (x,), {}, "log1p"),
+        (torch.ops.aten.expm1.default, (x,), {}, "expm1"),
+        (torch.ops.aten.expm1_.default, (x,), {}, "expm1"),
+        (torch.ops.aten.logaddexp.default, (x, y), {}, "logaddexp"),
+        (torch.ops.aten.expm1.default, (x.bfloat16(),), {}, "expm1"),
+        (torch.ops.aten.logaddexp.default,
+         (x.bfloat16(), y.bfloat16()), {}, "logaddexp"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), got, ref)
+    print("test_log1p_expm1_logaddexp PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2791,8 +2998,13 @@ if __name__ == "__main__":
     test_softplus_mish()
     test_elu_selu_celu()
     test_out_variants()
+    test_log1p_expm1_logaddexp()
+    test_logsumexp()
     test_glu()
+    test_reciprocal_frac()
+    test_linalg_norm()
     test_cosine_similarity()
+    test_pdist_cdist()
     print("ALL PASS")
 
 

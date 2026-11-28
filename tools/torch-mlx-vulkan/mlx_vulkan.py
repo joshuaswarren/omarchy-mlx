@@ -2007,10 +2007,98 @@ def _glu(a, dim=-1):
         return _raise("glu")
     lo, hi = mx.split(f, 2, axis=dim % a.ndim)
     return (lo * mx.sigmoid(hi)).astype(a.dtype)
+def _frac(a):
+    # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
+    # NOT x - floor(x) which would give +0.7).
+    a = _mx(a)
+    return a - mx.trunc(a)
 
 
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
+
+
+def _linalg_norm(a, ord=None, dim=None, keepdim=False, dtype=None):
+    # aten.linalg_norm: mx.linalg.norm shares the vector/matrix
+    # ord/axis/keepdims contract (ord=None + axis=None flattens, a
+    # 2-axis dim is a matrix norm); dtype is an output cast.
+    a = _mx(a)
+    out = mx.linalg.norm(a, ord=ord, axis=dim, keepdims=keepdim)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("linalg_norm dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
+
+
+def _linalg_vector_norm(a, ord=2, dim=None, keepdim=False, dtype=None):
+    # aten.linalg_vector_norm always means a VECTOR norm — flattening
+    # when dim is None and reducing every listed dim. mx.linalg.norm
+    # reads ord+axis=None or a 2-axis dim as a MATRIX norm, so compose
+    # from power/sum instead.
+    a = _mx(a)
+    ax = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    if ax is None:
+        ax = tuple(range(a.ndim))
+    o = float(ord)
+    if o == float("inf"):
+        out = mx.max(mx.abs(a), axis=ax, keepdims=keepdim)
+    elif o == float("-inf"):
+        out = mx.min(mx.abs(a), axis=ax, keepdims=keepdim)
+    elif o == 0:
+        out = mx.sum((a != 0).astype(mx.int32), axis=ax,
+                     keepdims=keepdim).astype(a.dtype)
+    else:
+        out = mx.power(
+            mx.sum(mx.power(mx.abs(a), o), axis=ax, keepdims=keepdim),
+            1.0 / o)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("linalg_vector_norm dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
+
+
+def _pnorm(a, p=2, dim=None, keepdim=False):
+    # aten.norm: sum(|x|^p)^(1/p); inf/-inf take the max/min magnitude,
+    # not the 2-norm.
+    a = _mx(a)
+    ax = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    if str(p) in ("inf", "-inf"):
+        m = mx.max if str(p) == "inf" else mx.min
+        return m(mx.abs(a), axis=ax, keepdims=keepdim)
+    return mx.power(mx.sum(mx.power(mx.abs(a), float(p)), axis=ax,
+                                  keepdims=keepdim), 1.0 / float(p))
+
+
+def _cdist(a, b, p=2.0, compute_mode=None):
+    # aten.cdist(x1, x2, p, compute_mode): pairwise p-norm distances
+    # between the rows of [.., N, D] and [.., M, D]. Broadcast-
+    # difference covers every p; compute_mode only picks a numerics
+    # strategy in aten, the values are unchanged.
+    a, b = _mx(a), _mx(b)
+    d = a[..., :, None, :] - b[..., None, :, :]
+    fp = float(p)
+    if fp == float("inf"):
+        return mx.max(mx.abs(d), axis=-1)
+    if fp == 0:
+        return mx.sum((d != 0).astype(mx.int32), axis=-1).astype(a.dtype)
+    return mx.power(mx.sum(mx.power(mx.abs(d), fp), axis=-1), 1.0 / fp)
+
+
+def _pdist(a, p=2.0):
+    # aten.pdist(self, p): condensed i<j pairwise distances of the N
+    # row vectors. mx has no compress/nonzero, so the condense order is
+    # built arithmetically: flat positions with jj>ii key below n*n and
+    # sort first; the keys are unique so the order is exact.
+    a = _mx(a)
+    n = a.shape[-2]
+    d = _cdist(a, a, p)
+    flat = mx.arange(n * n)
+    sel = flat % n > flat // n
+    key = mx.logical_not(sel).astype(mx.int32) * (n * n) + flat
+    m = n * (n - 1) // 2
+    return mx.flatten(d)[mx.argsort(key)[:m]]
 
 
 _FUNC_SPECS = {
@@ -2048,6 +2136,9 @@ _FUNC_SPECS = {
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
+    # PT-AL-e: basic math ops used in normalization chains
+    "reciprocal": mx.reciprocal, "frac": _frac,
+    "reciprocal_": mx.reciprocal, "frac_": _frac,
     "sigmoid": mx.sigmoid, "tanh": mx.tanh, "erf": mx.erf,
     "transpose": lambda a, d0, d1: mx.transpose(a, axes=_perm_swap(a, d0, d1)),
     "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
@@ -2074,6 +2165,9 @@ _FUNC_SPECS = {
     "select": lambda a, dim, i: _slice(a, dim, i % a.shape[dim % a.ndim], i % a.shape[dim % a.ndim] + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
     "slice": _slice, "narrow": lambda a, dim, s, n: _slice(a, dim, s, s + n, 1),
     "mean": _mean, "sum": _sum,
+    # PT-AL-g: aten.logsumexp(self, int[1] dim, keepdim) — the dim list
+    # becomes the axis tuple; mx.logsumexp is the same stable reduction.
+    "logsumexp": lambda a, dim, keepdim=False: mx.logsumexp(_mx(a), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
@@ -2180,6 +2274,10 @@ _FUNC_SPECS = {
     "gt": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "lt": lambda a, b: mx.less(_mx(a), _mx(b)),
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
+    # PT-AL-f: the wheel table already carries these; the dev table
+    # must match so traced graphs lower them too.
+    "expm1": mx.expm1, "expm1_": mx.expm1,
+    "logaddexp": lambda a, b: mx.logaddexp(_mx(a), _mx(b)),
     "xlogy": _xlogy, "xlog1py": _xlog1py,
     # aten registers torch.special.xlog1py as special_xlog1py
     "special_xlog1py": _xlog1py,
@@ -2249,7 +2347,13 @@ _FUNC_SPECS = {
     "_log_softmax": _log_softmax_fwd,
     "_log_softmax_backward_data": _log_softmax_bwd,
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
-    "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
+    "norm": _pnorm,
+    # PT-NORM-b: the linalg norm family (normalization, grad clipping)
+    "linalg_vector_norm": lambda a, ord=2, dim=None, keepdim=False, *, dtype=None: _linalg_vector_norm(a, ord, dim, keepdim, dtype),
+    "linalg_norm": lambda a, ord=None, dim=None, keepdim=False, *, dtype=None: _linalg_norm(a, ord, dim, keepdim, dtype),
+    # PT-PAIR-a: pairwise distances used in metric learning.
+    "cdist": lambda a, b, p=2.0, compute_mode=None: _cdist(a, b, p, compute_mode),
+    "pdist": lambda a, p=2.0: _pdist(a, p),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
     # aten.cosine_similarity clamps each l2 norm at eps separately, not
     # their product (device-checked against torch 2.15 CPU).
