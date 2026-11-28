@@ -543,6 +543,67 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 torch.allclose(got, ref.float(), atol=tol, rtol=tol),
                 (name, kw, float((got - ref.float()).abs().max())))
 
+    def test_specials_hard_parity(self):
+        """Q-70: iterative specials lower in the wheel backend -- erfinv
+        (Newton), ndtri, Bessel I0/I1 + scaled variants, digamma/lgamma
+        (incl. negative non-integers), mvlgamma, polygamma n in {0,1},
+        and the regularized igamma/igammac series/CF split."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        pos = torch.linspace(0.3, 12.0, 8)
+        neg = torch.tensor([-2.3, -0.4, -1.7])
+        cases = [
+            ("erfinv", (torch.linspace(-0.9, 0.9, 9),), {},
+             torch.erfinv(torch.linspace(-0.9, 0.9, 9))),
+            ("special_ndtri", (torch.linspace(0.02, 0.98, 9),), {},
+             torch.special.ndtri(torch.linspace(0.02, 0.98, 9))),
+            ("i0", (torch.linspace(-20.0, 20.0, 9),), {},
+             torch.i0(torch.linspace(-20.0, 20.0, 9))),
+            ("i1", (torch.linspace(-20.0, 20.0, 9),), {},
+             torch.i1(torch.linspace(-20.0, 20.0, 9))),
+            ("special_i0e", (torch.linspace(-50.0, 50.0, 9),), {},
+             torch.special.i0e(torch.linspace(-50.0, 50.0, 9))),
+            ("special_i1e", (torch.linspace(-50.0, 50.0, 9),), {},
+             torch.special.i1e(torch.linspace(-50.0, 50.0, 9))),
+            ("digamma", (pos,), {}, torch.digamma(pos)),
+            ("digamma", (neg,), {}, torch.digamma(neg)),
+            ("special_digamma", (pos,), {}, torch.special.digamma(pos)),
+            ("lgamma", (pos,), {}, torch.lgamma(pos)),
+            ("lgamma", (neg,), {}, torch.lgamma(neg)),
+            ("special_gammaln", (pos,), {}, torch.special.gammaln(pos)),
+            ("special_expm1", (torch.linspace(-2.0, 2.0, 7),), {},
+             torch.special.expm1(torch.linspace(-2.0, 2.0, 7))),
+            ("special_exp2", (torch.linspace(-3.0, 3.0, 7),), {},
+             torch.special.exp2(torch.linspace(-3.0, 3.0, 7))),
+            ("mvlgamma", (torch.tensor([2.0, 3.0, 4.0]),), {"p": 2},
+             torch.mvlgamma(torch.tensor([2.0, 3.0, 4.0]), 2)),
+            ("polygamma", (0, pos), {}, torch.polygamma(0, pos)),
+            ("polygamma", (1, pos), {}, torch.polygamma(1, pos)),
+            ("igamma",
+             (torch.tensor([0.5, 1.0, 2.5]), torch.tensor([0.5, 3.0, 8.0])),
+             {}, torch.igamma(
+                 torch.tensor([0.5, 1.0, 2.5]),
+                 torch.tensor([0.5, 3.0, 8.0]))),
+            ("igammac",
+             (torch.tensor([0.5, 1.0, 2.5]), torch.tensor([0.5, 3.0, 8.0])),
+             {}, torch.igammac(
+                 torch.tensor([0.5, 1.0, 2.5]),
+                 torch.tensor([0.5, 3.0, 8.0]))),
+        ]
+        for name, ins, kw, ref in cases:
+            mins = tuple(
+                mx.array(t.numpy()) if torch.is_tensor(t) else t
+                for t in ins)
+            got = torch.from_numpy(
+                np.array(ATEN_TABLE[name](*mins, **kw).astype(mx.float32)))
+            self.assertTrue(
+                torch.allclose(got, ref.float(), atol=2e-4, rtol=2e-4),
+                (name, kw, float((got - ref.float()).abs().max())))
+
 
 if __name__ == "__main__":
     unittest.main()

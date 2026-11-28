@@ -3014,6 +3014,85 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_specials_hard():
+    # Q-70: iterative/series specials -- erfinv (Winitzki seed + Newton),
+    # ndtri via the erfinv relation, Bessel I0/I1 series with asymptotic
+    # tails (and the e^-|x|-scaled variants), digamma/lgamma by
+    # recurrence + Stirling (lgamma also through the reflection formula
+    # on negative non-integers), mvlgamma, polygamma n in {0,1}, and
+    # regularized igamma/igammac by the NR series/continued-fraction
+    # split. All must lower with zero CPU fallback.
+    torch.manual_seed(0)
+    pos = torch.linspace(0.3, 12.0, 8)
+    neg = torch.tensor([-2.3, -0.4, -1.7])
+    cases = [
+        (torch.ops.aten.erfinv.default,
+         (torch.linspace(-0.9, 0.9, 9),), {}, "erfinv"),
+        (torch.ops.aten.special_ndtri.default,
+         (torch.linspace(0.02, 0.98, 9),), {}, "ndtri"),
+        (torch.ops.aten.i0.default,
+         (torch.linspace(-20.0, 20.0, 9),), {}, "i0"),
+        (torch.ops.aten.i1.default,
+         (torch.linspace(-20.0, 20.0, 9),), {}, "i1"),
+        (torch.ops.aten.special_i0e.default,
+         (torch.linspace(-50.0, 50.0, 9),), {}, "i0e"),
+        (torch.ops.aten.special_i1e.default,
+         (torch.linspace(-50.0, 50.0, 9),), {}, "i1e"),
+        (torch.ops.aten.digamma.default, (pos,), {}, "digamma"),
+        (torch.ops.aten.digamma.default, (neg,), {}, "digamma"),
+        (torch.ops.aten.special_digamma.default, (pos,), {}, "digamma"),
+        (torch.ops.aten.lgamma.default, (pos,), {}, "lgamma"),
+        (torch.ops.aten.lgamma.default, (neg,), {}, "lgamma"),
+        (torch.ops.aten.special_gammaln.default, (pos,), {}, "gammaln"),
+        (torch.ops.aten.special_expm1.default,
+         (torch.linspace(-2.0, 2.0, 7),), {}, "expm1"),
+        (torch.ops.aten.special_exp2.default,
+         (torch.linspace(-3.0, 3.0, 7),), {}, "exp2"),
+        (torch.ops.aten.igamma.default,
+         (torch.tensor([0.5, 1.0, 2.5]), torch.tensor([0.5, 3.0, 8.0])),
+         {}, "igamma"),
+        (torch.ops.aten.igammac.default,
+         (torch.tensor([0.5, 1.0, 2.5]), torch.tensor([0.5, 3.0, 8.0])),
+         {}, "igammac"),
+    ]
+    # const-arg ops cannot ride the all-placeholder loop above.
+    const_cases = [
+        (torch.ops.aten.polygamma.default, (0,), (pos,), {}, "polygamma"),
+        (torch.ops.aten.polygamma.default, (1,), (pos,), {}, "polygamma"),
+        (torch.ops.aten.mvlgamma.default, (),
+         (torch.tensor([2.0, 3.0, 4.0]),), {"p": 2}, "mvlgamma"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(),
+                           atol=2e-4, rtol=2e-4), (
+            str(target), kwargs, got, ref)
+    for target, pre, ins, kwargs, fam in const_cases:
+        ref = target(*pre, *[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(pre) + tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(),
+                           atol=2e-4, rtol=2e-4), (
+            str(target), kwargs, got, ref)
+    print("test_specials_hard PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3153,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_specials_hard()
     print("ALL PASS")
 
 
