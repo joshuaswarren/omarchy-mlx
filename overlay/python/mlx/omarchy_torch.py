@@ -511,6 +511,138 @@ def _rot90(a, k=1, dims=(0, 1)):
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
 
+
+def _ger(a, vec2):
+    a, v = _mx(a), _mx(vec2)
+    return a.reshape((-1, 1)) * v.reshape((1, -1))
+
+
+def _inner(a, b):
+    # aten.inner: contract the last dim of each; out shape is
+    # a.shape[:-1] + b.shape[:-1].
+    a, b = _mx(a), _mx(b)
+    m, n = a.shape[-1], b.shape[-1]
+    a2 = a.reshape((-1, m))
+    b2 = b.reshape((-1, n))
+    r = a2 @ mx.transpose(b2)
+    return r.reshape(a.shape[:-1] + b.shape[:-1])
+
+
+def _vander(x, N=None, increasing=False):
+    x = _mx(x)
+    n = x.shape[-1] if N is None else int(N)
+    p = mx.arange(n)
+    if not increasing:
+        p = n - 1 - p
+    return mx.power(x.reshape((-1, 1)), p.reshape((1, -1)))
+
+
+def _kron(a, b):
+    # Kronecker product: pad the smaller operand with leading 1-dims,
+    # interleave, broadcast-multiply, merge each dim pair.
+    a, b = _mx(a), _mx(b)
+    if a.ndim < b.ndim:
+        a = a.reshape((1,) * (b.ndim - a.ndim) + a.shape)
+    elif b.ndim < a.ndim:
+        b = b.reshape((1,) * (a.ndim - b.ndim) + b.shape)
+    ra, rb, out = [], [], []
+    for i, (sa, sb) in enumerate(zip(a.shape, b.shape)):
+        ra += [sa, 1]
+        rb += [1, sb]
+        out.append(sa * sb)
+    return (a.reshape(ra) * b.reshape(rb)).reshape(out)
+
+
+def _cartesian_prod(tensors):
+    ts = [_mx(t) for t in tensors]
+    sizes = [t.shape[0] for t in ts]
+    cols = []
+    for i, t in enumerate(ts):
+        bshape = [1] * len(ts)
+        bshape[i] = sizes[i]
+        cols.append(mx.broadcast_to(t.reshape(bshape), sizes).reshape(-1))
+    return mx.stack(cols, axis=1)
+
+
+def _renorm(a, p, dim, maxnorm):
+    a = _mx(a)
+    d = int(dim) % a.ndim
+    others = tuple(i for i in range(a.ndim) if i != d)
+    if float(p) == float("inf"):
+        n = mx.max(mx.abs(a), axis=others, keepdims=True)
+    else:
+        n = mx.power(mx.sum(mx.power(mx.abs(a), float(p)),
+                            axis=others, keepdims=True), 1.0 / float(p))
+    mn = float(maxnorm)
+    factor = mx.where(n > mn, mn / n, 1.0)
+    return a * factor
+
+
+def _trap_segs(y, x, dx, dim, cumulative):
+    # shared trapezoid machinery: segment means scaled by segment widths.
+    y = _mx(y)
+    d = int(dim) % y.ndim
+    n = y.shape[d]
+    if n < 2:
+        if cumulative:
+            return mx.zeros(y.shape, dtype=y.dtype)
+        return mx.array(0.0)
+    lo = mx.take(y, mx.arange(n - 1), axis=d)
+    hi = mx.take(y, mx.arange(1, n), axis=d)
+    if x is not None:
+        xt = _mx(x)
+        w = (mx.take(xt, mx.arange(1, n), axis=d)
+             - mx.take(xt, mx.arange(n - 1), axis=d))
+    else:
+        w = dx
+    seg = (lo + hi) * 0.5 * w
+    if cumulative:
+        c = mx.cumsum(seg, axis=d)
+        z = mx.zeros(y.shape[:d] + (1,) + y.shape[d + 1:], dtype=c.dtype)
+        return mx.concatenate([z, c], axis=d)
+    return mx.sum(seg, axis=d)
+
+
+def _trapz(y, x=None, dx=1, dim=-1):
+    return _trap_segs(y, x, dx, dim, False)
+
+
+def _cumulative_trapezoid(y, x=None, dx=1, dim=-1):
+    return _trap_segs(y, x, dx, dim, True)
+
+
+def _tensordot(a, b, dims_self, dims_other):
+    a, b = _mx(a), _mx(b)
+    ds = [int(i) % a.ndim for i in dims_self]
+    do = [int(i) % b.ndim for i in dims_other]
+    ka = [i for i in range(a.ndim) if i not in ds]
+    kb = [i for i in range(b.ndim) if i not in do]
+    ap = mx.transpose(a, ka + ds)
+    bp = mx.transpose(b, do + kb)
+    ca = math.prod(ap.shape[len(ka):])
+    a2 = ap.reshape((math.prod(ap.shape[:len(ka)]), ca))
+    cb = math.prod(bp.shape[:len(do)])
+    b2 = bp.reshape((cb, math.prod(bp.shape[len(do):])))
+    return (a2 @ b2).reshape(ap.shape[:len(ka)] + bp.shape[len(do):])
+
+
+def _nextafter(a, b):
+    # ordered-int trick on the float32 bit pattern: a's bits are mapped
+    # monotonically (negatives invert), stepped one ulp toward b, unmapped.
+    a, b = _mx(a), _mx(b)
+    if a.dtype not in (mx.float32,):
+        return _raise("nextafter dtype")
+    if isinstance(b, mx.array) and b.dtype != a.dtype:
+        b = b.astype(a.dtype)
+    u = a.view(mx.uint32)
+    top = mx.array(0x80000000, dtype=mx.uint32)
+    full = mx.array(0xFFFFFFFF, dtype=mx.uint32)
+    key = mx.where(u >= top, full - u, u + top)
+    d = mx.where(b > a, 1, mx.where(b < a, -1, 0))
+    k2 = (key.astype(mx.int64) + d).astype(mx.uint32)
+    u2 = mx.where(k2 >= top, k2 - top, full - k2)
+    return u2.view(mx.float32)
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -549,6 +681,24 @@ _FUNC_SPECS = {
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
+    "ger": _ger,
+    "inner": _inner,
+    "vander": _vander,
+    "kron": _kron,
+    "deg2rad": lambda a: _mx(a) * (math.pi / 180.0),
+    "deg2rad_": lambda a: _mx(a) * (math.pi / 180.0),
+    "rad2deg": lambda a: _mx(a) * (180.0 / math.pi),
+    "rad2deg_": lambda a: _mx(a) * (180.0 / math.pi),
+    "ldexp": lambda a, b: (_mx(a) * mx.power(2.0, _mx(b))).astype(_mx(a).dtype),
+    "ldexp_": lambda a, b: (_mx(a) * mx.power(2.0, _mx(b))).astype(_mx(a).dtype),
+    "cartesian_prod": _cartesian_prod,
+    "renorm": _renorm,
+    "renorm_": _renorm,
+    "trapz": _trapz,
+    "cumulative_trapezoid": _cumulative_trapezoid,
+    "tensordot": _tensordot,
+    "nextafter": _nextafter,
+    "nextafter_": _nextafter,
     "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
     "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),

@@ -3014,6 +3014,66 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_math_extras():
+    # Math-extras family: ger/inner contract the last dims via reshape +
+    # matmul, kron/tensordot/cartesian_prod are pure broadcast products,
+    # trapz/cumulative_trapezoid share the take-based segment kernel, and
+    # nextafter walks one ulp via the ordered-int float32 bit trick.
+    torch.manual_seed(0)
+    x23 = torch.randn(2, 3)
+    x34 = torch.randn(3, 4)
+    x234 = torch.randn(2, 3, 4)
+    v4 = torch.randn(4)
+    v5 = torch.randn(5)
+    cases = [
+        (torch.ops.aten.ger.default, (v4, v5), {}, "ger"),
+        (torch.ops.aten.inner.default, (x23, x34[:, :3]), {}, "inner"),
+        (torch.ops.aten.inner.default, (x234, torch.randn(2, 5, 4)), {}, "inner"),
+        (torch.ops.aten.vander.default, (v4,), {}, "vander"),
+        (torch.ops.aten.vander.default, (v4,), {"N": 3, "increasing": True}, "vander"),
+        (torch.ops.aten.kron.default, (x23, x34[:2, :2]), {}, "kron"),
+        (torch.ops.aten.kron.default, (v4, x23), {}, "kron"),
+        (torch.ops.aten.deg2rad.default, (x23,), {}, "deg2rad"),
+        (torch.ops.aten.rad2deg.default, (x23,), {}, "rad2deg"),
+        (torch.ops.aten.ldexp.Tensor, (x23, torch.randint(-3, 4, (2, 3))), {}, "ldexp"),
+        (torch.ops.aten.cartesian_prod.default, ([v4[:3], v5[:2], v4[:4]],), {}, "cartesian_prod"),
+        (torch.ops.aten.renorm.default, (x23,), {"p": 2.0, "dim": 0, "maxnorm": 1.0}, "renorm"),
+        (torch.ops.aten.renorm.default, (x234,), {"p": 1.0, "dim": 1, "maxnorm": 2.0}, "renorm"),
+        (torch.ops.aten.trapz.dx, (x23,), {"dx": 0.5, "dim": 1}, "trapz"),
+        (torch.ops.aten.trapz.x, (x23, v4[:3]), {"dim": 1}, "trapz"),
+        (torch.ops.aten.cumulative_trapezoid.dx, (x23,), {"dx": 2.0, "dim": 1}, "cumulative_trapezoid"),
+        (torch.ops.aten.tensordot.default, (x234, x34), {"dims_self": [1, 2], "dims_other": [0, 1]}, "tensordot"),
+        (torch.ops.aten.tensordot.default, (x23, x34), {"dims_self": [1], "dims_other": [0]}, "tensordot"),
+        (torch.ops.aten.nextafter.default, (x23, x23 + 1.0), {}, "nextafter"),
+        (torch.ops.aten.nextafter.default, (x23, x23 - 1.0), {}, "nextafter"),
+        (torch.ops.aten.nextafter.default, (zpm4 := torch.tensor([0.0, -0.0, 1.0, -1.0]), torch.tensor([1.0, -1.0, 0.0, 0.0])), {}, "nextafter"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() if isinstance(a, torch.Tensor) else a for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s_ for s_ in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        if ref.dtype == torch.bool:
+            assert torch.equal(got, ref), (str(target), kwargs, got, ref)
+            continue
+        if fam == "nextafter":
+            assert torch.equal(got.view(torch.int32), ref.view(torch.int32)), (
+                str(target), kwargs, got.view(torch.int32), ref.view(torch.int32))
+            continue
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-4
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs, got, ref)
+    print("test_math_extras PASS")
+
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3134,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_math_extras()
     print("ALL PASS")
 
 
