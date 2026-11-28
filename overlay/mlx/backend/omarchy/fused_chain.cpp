@@ -6570,6 +6570,16 @@ bool try_eval_eager_fusion(array& node, const Stream& stream) {
     auto& pair = eager_state->slice_update_pairs[*update];
     if (pair.direct) {
       if (pair.state == SliceUpdatePair::State::done) {
+        // Producer-direct: both rows already landed in the live caches
+        // through their windows, so the copies the ordinary path makes
+        // are deleted - alias this output to its base (issue 1018: the
+        // missing alias left keys_out on a fresh buffer and
+        // in_place_pair false while every bit-exact check passed). Each
+        // output aliases in its own eval hook; no cross-aliasing of the
+        // sibling, whose eval may not have run yet.
+        const array& base = node.inputs()[0];
+        node.copy_shared_buffer(base, base.strides(), base.flags(),
+                                base.data_size(), 0);
         return true;
       }
       // The producers did not commit (abort or fence): un-plan the
