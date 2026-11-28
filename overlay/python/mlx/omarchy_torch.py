@@ -150,6 +150,86 @@ def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mas
             dw if (weight is not None and mask[1]) else z,
             db if (bias is not None and mask[2]) else z)
 
+
+
+def _unfold(x, dim, size, step):
+    """aten.unfold: gather size-window slices along dim at `step` intervals;
+    the aten view replaces dim d with n_windows and appends size last:
+    (s0..s_{d-1}, n_windows, s_{d+1}.., size)."""
+    d = dim if dim >= 0 else dim + x.ndim
+    length = x.shape[d]
+    if length < size:
+        raise RuntimeError(
+            f"unfold: requested size {size} exceeds dimension {d} length {length}")
+    if step <= 0:
+        raise RuntimeError(
+            f"unfold: step must be positive, got {step}")
+    n_windows = (length - size) // step + 1
+    idx = (mx.arange(n_windows) * step)[:, None] + mx.arange(size)[None, :]
+    idx = mx.asarray(idx, mx.int32)
+    gathered = mx.take(x, mx.reshape(idx, (-1,)), axis=d)
+    shape = list(x.shape)
+    gathered = mx.reshape(
+        gathered, shape[:d] + [n_windows, size] + shape[d + 1:])
+    # the aten view replaces dim d with n_windows and appends size last
+    nd = gathered.ndim
+    axes = [k for k in range(nd) if k != d + 1] + [d + 1]
+    return mx.transpose(gathered, axes)
+
+
+def _fold(x, output_size, kernel_size, dilation=(1, 1), padding=(0, 0), stride=(1, 1)):
+    """aten.fold (col2im): sum overlapping window elements back into the
+    output. Per kernel offset, zero-stuff the block to the strided layout
+    (concatenate/reshape, dense ops only) and dense read-modify-write the
+    clipped shifted window — exact for any stride/dilation/padding,
+    overlaps sum across kernel offsets."""
+    kh, kw = (kernel_size if isinstance(kernel_size, (list, tuple))
+              else (kernel_size, kernel_size))
+    dh, dw = (dilation if isinstance(dilation, (list, tuple))
+              else (dilation, dilation))
+    ph, pw = (padding if isinstance(padding, (list, tuple))
+              else (padding, padding))
+    sh, sw = (stride if isinstance(stride, (list, tuple))
+              else (stride, stride))
+    oh, ow = (output_size if isinstance(output_size, (list, tuple))
+              else (output_size, output_size))
+    n = x.shape[0]
+    c = x.shape[1] // (kh * kw)
+    irows = (oh + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+    icols = (ow + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+    x = mx.reshape(x, (n, c, kh, kw, irows, icols))
+    canvas = mx.zeros((n, c, oh, ow), x.dtype)
+    for i in range(kh):
+        for j in range(kw):
+            grid = x[:, :, i, j]
+            r = i * dh - ph
+            cl = j * dw - pw
+            # zero-stuff the grid to the strided layout: grid dims are
+            # (irows, icols); the stuffed slice window is in canvas coords
+            gc = mx.reshape(grid, (n, c, irows, icols, 1))
+            if sw > 1:
+                gc = mx.concatenate(
+                    [gc, mx.zeros((n, c, irows, icols, sw - 1), dtype=gc.dtype)],
+                    axis=4)
+            gc = mx.reshape(gc, (n, c, irows, icols * sw))
+            gr = mx.reshape(gc, (n, c, irows, 1, icols * sw))
+            if sh > 1:
+                gr = mx.concatenate(
+                    [gr, mx.zeros((n, c, irows, sh - 1, icols * sw), dtype=gr.dtype)],
+                    axis=3)
+            dense = mx.reshape(gr, (n, c, irows * sh, icols * sw))
+            r0, c0 = max(r, 0), max(cl, 0)
+            r1, c1 = min(r + irows * sh, oh), min(cl + icols * sw, ow)
+            if r1 <= r0 or c1 <= c0:
+                continue
+            cur = canvas[:, :, r0:r1, c0:c1]
+            vals = dense[:, :, r0 - r:r1 - r, c0 - cl:c1 - cl]
+            canvas = mx.slice_update(canvas, cur + vals,
+                                     mx.array((0, 0, r0, c0)),
+                                     mx.array((0, 1, 2, 3)))
+    return canvas
+
+
 def _expand(a, *s, **k):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
         s = tuple(s[0])
@@ -457,6 +537,8 @@ _FUNC_SPECS = {
     "_to_copy": lambda a, **k_: a, "size": lambda a, d=None: a.shape[d] if d is not None else a.shape,
     "native_layer_norm": _ln_native,
     "native_layer_norm_backward": _ln_backward,
+    "unfold": _unfold,
+    "fold": _fold,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     "conv2d": _conv2d,
     "group_norm": _group_norm,

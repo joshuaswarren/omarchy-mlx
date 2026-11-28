@@ -113,6 +113,97 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 self.assertTrue(
                     torch.allclose(got, ref.float(), **tol),
                     (name, dtype, float((got - ref.float()).abs().max())))
+        torch.manual_seed(1)
+
+    def test_unfold_last_dim(self):
+        """PT-IM-b: aten.unfold lowers via gather + transpose — fp32 parity
+        against the aten CPU op on the last dimension."""
+        lowering = ATEN_TABLE["unfold"]
+        for shape, dim, size, step in [((2, 3, 10), 2, 4, 2), ((4, 10), 1, 3, 1),
+                                       ((2, 3, 12), 2, 5, 3)]:
+            x = torch.randn(*shape)
+            ref = x.unfold(dim, size, step)
+            mine = lowering(mx.array(x.numpy()), dim, size, step)
+            got = torch.from_numpy(__import__("numpy").array(mine))
+            self.assertTrue(got.shape == ref.shape, (shape, got.shape, ref.shape))
+            self.assertTrue(torch.allclose(got.float(), ref.float(), atol=0, rtol=0),
+                            (shape, float((got - ref).abs().max())))
+
+    def test_unfold_non_last_dim(self):
+        """PT-IM-b: unfold on a non-last dimension moves the window dim to
+        the end per the aten spec."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(2)
+        lowering = ATEN_TABLE["unfold"]
+        x = torch.randn(2, 4, 6)
+        ref = x.unfold(1, 3, 2)
+        mine = lowering(mx.array(x.numpy()), 1, 3, 2)
+        got = torch.from_numpy(__import__("numpy").array(mine))
+        self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
+        self.assertTrue(torch.allclose(got.float(), ref.float(), atol=0, rtol=0))
+
+    def test_fold_non_overlapping(self):
+        """PT-IM-b: aten.fold with stride == kernel is reshape/transpose —
+        fp32 parity against the aten CPU op, and the fold(unfold(x)) round
+        trip is exact."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(3)
+        fold = ATEN_TABLE["fold"]
+        unfold = ATEN_TABLE["unfold"]
+        x = torch.randn(2, 9, 1)  # [N, C*k, L] for C=3, k=3x3, stride=3x3: L=1
+        ref = torch.nn.functional.fold(
+            x, output_size=(3, 3), kernel_size=(3, 3))
+        mine = fold(mx.array(x.numpy()), (3, 3), (3, 3))
+        got = torch.from_numpy(__import__("numpy").array(mine))
+        self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
+        self.assertTrue(torch.allclose(got.float(), ref.float(), atol=1e-5, rtol=1e-5))
+
+    def test_fold_overlapping_sums(self):
+        """PT-IM-b: aten.fold with stride < kernel SUMS overlapping windows —
+        fp32 parity against the aten CPU op."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(4)
+        fold = ATEN_TABLE["fold"]
+        x = torch.randn(2, 12, 16)  # [N, C*k, L] for C=3, k=2x2, L=16
+        ref = torch.nn.functional.fold(
+            x, output_size=(5, 5), kernel_size=(2, 2), stride=(1, 1))
+        mine = fold(mx.array(x.numpy()), (5, 5), (2, 2), (1, 1), (0, 0))
+        got = torch.from_numpy(__import__("numpy").array(mine))
+        self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
+        self.assertTrue(torch.allclose(got.float(), ref.float(), atol=1e-5, rtol=1e-5),
+                        float((got - ref).abs().max()))
+
+    def test_fold_strided_multi_block(self):
+        """PT-IM-b re-review: the strided-placement path with multiple
+        blocks per axis (stride < output span, L > 1) — fp32 parity vs the
+        aten CPU op. Pins the bug where blocks stacked at stride 1."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(9)
+        fold = ATEN_TABLE["fold"]
+        x = torch.randn(2, 12, 4)  # [N, C*4, L] for C=3, k=2x2, L=4
+        ref = torch.nn.functional.fold(
+            x, output_size=(8, 8), kernel_size=(2, 2), stride=(2, 2))
+        mine = fold(mx.array(x.numpy()), (8, 8), (2, 2), (1, 1), (0, 0), (2, 2))
+        got = torch.from_numpy(__import__("numpy").array(mine))
+        self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
+        self.assertTrue(torch.allclose(got.float(), ref.float(), atol=1e-5, rtol=1e-5),
+                        float((got - ref).abs().max()))
 
 
     def test_searchsorted_bucketize_parity(self):
