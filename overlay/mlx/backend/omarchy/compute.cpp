@@ -809,6 +809,7 @@
 #include "gather_dequant_norm_bf16.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d2048.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096_midsb.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast_b1.h"
 #include "qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast_b1.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
@@ -2712,6 +2713,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096,
           qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD4096Midsb:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096_midsb,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096_midsb_size};
     case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2FastB1:
       return {
           qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast_b1,

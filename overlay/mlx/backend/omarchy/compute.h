@@ -1465,6 +1465,10 @@ enum class ComputeKernel : uint16_t {
   // blocked path in SdpaDecodeOnlineRopeSg32BF16Hd128G13C). Appended to keep
   // profile kernel ids stable.
   SdpaDecodeOnlineRopeSg32BF16Hd128G13CB4,
+  // G13C-gated D=4096 ResNormVec4 R2S32W2 fast-only mid-loop scale/bias
+  // specialization (64 WGs = 2 full waves on 32 cores; 0-ULP bit-identical).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4ResNormVec4BF16R2S32W2FastD4096Midsb,
   Count,
 };
 
