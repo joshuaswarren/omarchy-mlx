@@ -2055,6 +2055,23 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _deg2rad(a):
+    a, f = _opmath_f32(a)
+    return mx.radians(f).astype(a.dtype)
+
+
+def _rad2deg(a):
+    a, f = _opmath_f32(a)
+    return mx.degrees(f).astype(a.dtype)
+
+
+def _sinc(a):
+    # aten.sinc(input): sin(πx)/(πx) with sinc(0)=1.
+    a, f = _opmath_f32(a)
+    px = f * mx.pi
+    return mx.where(f == 0, mx.ones_like(f), mx.sin(px) / px).astype(a.dtype)
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2392,6 +2409,22 @@ _FUNC_SPECS = {
     "sinh": _sinh, "cosh": _cosh,
     "asinh": _asinh, "acosh": _acosh, "atanh": mx.atanh,
     "acos": mx.acos, "asin": mx.asin, "atan": mx.atan, "atan2": _atan2,
+    # PT-AL-i: trig extras — arc* names alias the a* spellings;
+    # deg2rad/rad2deg and sinc run through f32 opmath; sinc(0)=1.
+    "sinh_": _sinh, "cosh_": _cosh,
+    "asinh_": _asinh, "acosh_": _acosh, "atanh_": mx.atanh,
+    "asin_": mx.asin, "acos_": mx.acos, "atan_": mx.atan,
+    "atan2_": _atan2,
+    "arcsinh": _asinh, "arccosh": _acosh, "arctanh": mx.atanh,
+    "arcsin": mx.asin, "arccos": mx.acos, "arctan": mx.atan,
+    "arctan2": _atan2,
+    "arcsinh_": _asinh, "arccosh_": _acosh, "arctanh_": mx.atanh,
+    "arcsin_": mx.asin, "arccos_": mx.acos, "arctan_": mx.atan,
+    "arctan2_": _atan2,
+    "tan": mx.tan, "tan_": mx.tan,
+    "deg2rad": _deg2rad, "deg2rad_": _deg2rad,
+    "rad2deg": _rad2deg, "rad2deg_": _rad2deg,
+    "sinc": _sinc, "sinc_": _sinc,
     "outer": mx.outer, "einsum": lambda *a: mx.einsum(*a),
     "argmax": lambda a, dim=None, keepdim=False: mx.argmax(a, axis=dim, keepdims=keepdim),
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),
