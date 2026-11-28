@@ -2055,6 +2055,101 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+
+def _diag_extract(a, diagonal=0):
+    # aten.diag 2-D extract: elements (r0+i, c0+i), r0 = max(0,-k),
+    # c0 = max(0,k); flat index i*(m+1) + r0*m + c0.
+    a = _mx(a)
+    n, m = a.shape
+    k = int(diagonal)
+    r0, c0 = max(0, -k), max(0, k)
+    cnt = min(n - r0, m - c0)
+    if cnt <= 0:
+        return mx.zeros((0,), dtype=a.dtype)
+    idx = mx.arange(cnt, dtype=mx.int32) * (m + 1) + (r0 * m + c0)
+    return mx.take(mx.reshape(a, (-1,)), idx, axis=0)
+
+
+def _diag_embed(a, offset=0, dim1=-2, dim2=-1):
+    # aten.diag_embed: input (..., n) -> (..., N, N), N = n+|offset|, with
+    # the matrix at dims (dim1, dim2) and the value x[..., k] at position
+    # (i, j) where j - i == offset, i.e. x-index = i + min(0, offset).
+    a = _mx(a)
+    if a.ndim == 0:
+        return _raise("diag_embed scalar")
+    n = a.shape[-1]
+    k = int(offset)
+    N = n + abs(k)
+    xp = mx.pad(a, [(0, 0)] * (a.ndim - 1) + [(0, N - n)])
+    ii = mx.clip(mx.arange(N, dtype=mx.int32) + min(0, k), 0, N - 1)
+    xr = mx.take(xp, ii, axis=-1)
+    mask = (mx.arange(N)[None, :] - mx.arange(N)[:, None]) == k
+    out = xr[..., :, None] * mask.astype(xr.dtype)
+    nd = out.ndim
+    d1, d2 = sorted(d % nd for d in (dim1, dim2))
+    if d1 == d2:
+        return _raise("diag_embed dims")
+    if (d1, d2) != (nd - 2, nd - 1):
+        out = mx.moveaxis(out, (-2, -1), (d1, d2))
+    return out
+
+
+def _diag(a, diagonal=0):
+    a = _mx(a)
+    if a.ndim == 1:
+        return _diag_embed(a, offset=diagonal, dim1=-2, dim2=-1)
+    if a.ndim == 2:
+        return _diag_extract(a, diagonal)
+    return _raise("diag dims")
+
+
+def _trace(a):
+    a = _mx(a)
+    if a.ndim != 2:
+        return _raise("trace dims")
+    return mx.sum(_diag_extract(a, 0))
+
+
+def _fliplr(a):
+    # aten fliplr = self.flip({1}), requires ndim >= 2.
+    a = _mx(a)
+    if a.ndim < 2:
+        return _raise("fliplr dims")
+    return mx.flip(a, axis=1)
+
+
+def _flipud(a):
+    # aten flipud = self.flip({0}), requires ndim >= 1.
+    a = _mx(a)
+    if a.ndim < 1:
+        return _raise("flipud dims")
+    return mx.flip(a, axis=0)
+
+
+def _tri_indices(row, col, offset, upper):
+    # tril_indices/triu_indices: the (2, K) coordinate tensor. K is closed
+    # form (data-independent shape); the qualifying flat indices surface
+    # by sorting masked entries to a sentinel.
+    row, col, off = int(row), int(col), int(offset)
+    flat = mx.arange(row * col, dtype=mx.int32)
+    r = flat // col
+    c = flat % col
+    mask = c - r <= off if not upper else c - r >= off
+    key = mx.where(mask, flat, mx.full(flat.shape, row * col, dtype=mx.int32))
+    if upper:
+        K = sum(max(0, col - max(0, i + off)) for i in range(row))
+    else:
+        K = sum(max(0, min(col, i + off + 1)) for i in range(row))
+    fi = mx.sort(key)[:K]
+    return mx.stack([fi // col, fi % col]).astype(mx.int64)
+
+
+def _fmod(a, b):
+    # torch.fmod is the C trunc remainder (sign follows the dividend),
+    # not Python floor-mod.
+    a, b = _mx(a), _mx(b)
+    return a - mx.trunc(a / b) * b
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2376,6 +2471,18 @@ _FUNC_SPECS = {
     "elu": lambda a, alpha=1.0, scale=1.0, input_scale=1.0, inplace=False: scale * mx.where(mx.greater(a, 0), a, alpha * mx.expm1(input_scale * a)),
     "selu": lambda a, inplace=False: 1.0507009873554805 * mx.where(mx.greater(a, 0), a, 1.6732632423543772 * mx.expm1(a)),
     "celu": lambda a, alpha=1.0, inplace=False: mx.where(mx.greater(a, 0), a, alpha * mx.expm1(a / alpha)),
+    # the diag/trace index family + elementwise residue (Q-65 slot).
+    "diag": _diag,
+    "diag_embed": _diag_embed,
+    "trace": _trace,
+    "lerp": lambda a, b, weight=1.0: _mx(a) + _mx(weight) * (_mx(b) - _mx(a)),
+    "hypot": lambda a, b: mx.sqrt(mx.square(_mx(a)) + mx.square(_mx(b))),
+    "sinc": lambda a: mx.where(mx.equal(_mx(a), 0), mx.ones_like(_mx(a)), mx.sin(_mx(a) * math.pi) / (_mx(a) * math.pi)),
+    "fmod": _fmod,
+    "fliplr": _fliplr,
+    "flipud": _flipud,
+    "tril_indices": lambda row, col, offset=0, dtype=None, **k: _tri_indices(row, col, offset, False),
+    "triu_indices": lambda row, col, offset=0, dtype=None, **k: _tri_indices(row, col, offset, True),
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,
