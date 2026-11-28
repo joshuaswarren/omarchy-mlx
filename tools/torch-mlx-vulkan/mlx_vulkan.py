@@ -2048,6 +2048,68 @@ def _glu(a, dim=-1):
         return _raise("glu")
     lo, hi = mx.split(f, 2, axis=dim % a.ndim)
     return (lo * mx.sigmoid(hi)).astype(a.dtype)
+
+def _dir_stack(t, kind):
+    # aten.hstack/vstack/dstack/column_stack/row_stack take Tensor[] and
+    # concatenate on a fixed axis with promotion: vstack pads 1-D inputs to
+    # (1,N), dstack pads 1-D to (1,N,1) and 2-D to (M,N,1), column_stack
+    # pads 1-D to (N,1), and hstack concatenates on axis 0 for all-1-D
+    # input, else axis 1. row_stack is vstack under a second name.
+    xs = [_mx(x) for x in t]
+    if kind == "hstack":
+        axis = 0 if all(x.ndim <= 1 for x in xs) else 1
+    elif kind == "vstack":
+        xs = [mx.reshape(x, (1, -1)) if x.ndim == 1 else x for x in xs]
+        axis = 0
+    elif kind == "dstack":
+        xs = [mx.reshape(x, (1, x.shape[0], 1)) if x.ndim == 1 else
+              mx.reshape(x, (x.shape[0], x.shape[1], 1)) if x.ndim == 2 else x
+              for x in xs]
+        axis = 2
+    else:  # column_stack
+        xs = [mx.reshape(x, (-1, 1)) if x.ndim == 1 else x for x in xs]
+        axis = 1
+    return _cat_impl(xs, axis)
+
+
+def _dir_split(a, indices_or_sections, kind):
+    # aten.hsplit/vsplit/dsplit split on a fixed axis (hsplit axis 1 for
+    # ndim >= 2, else axis 0; vsplit axis 0 with ndim >= 2; dsplit axis 2
+    # with ndim >= 3) by a section count or a list of split indices — an
+    # int is a section count, a list is split points, not sizes.
+    a = _mx(a)
+    if kind == "hsplit":
+        axis = 1 if a.ndim >= 2 else 0
+    elif kind == "vsplit":
+        if a.ndim < 2:
+            return _raise("vsplit")
+        axis = 0
+    else:
+        if a.ndim < 3:
+            return _raise("dsplit")
+        axis = 2
+    return tuple(mx.split(a, indices_or_sections, axis=axis))
+
+
+def _unflatten(a, dim, sizes):
+    # aten.unflatten(input, dim, sizes): reshape one dim to `sizes`; at most
+    # one -1 entry is allowed and infers from the dim size.
+    a = _mx(a)
+    dim = dim % a.ndim
+    sizes = list(sizes)
+    if sizes.count(-1) > 1:
+        return _raise("unflatten -1")
+    if -1 in sizes:
+        known = 1
+        for s in sizes:
+            if s != -1:
+                known *= s
+        if a.shape[dim] % known:
+            return _raise("unflatten size")
+        sizes[sizes.index(-1)] = a.shape[dim] // known
+    shape = list(a.shape[:dim]) + sizes + list(a.shape[dim + 1:])
+    return mx.reshape(a, shape)
+
 def _frac(a):
     # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
     # NOT x - floor(x) which would give +0.7).
@@ -2376,6 +2438,16 @@ _FUNC_SPECS = {
     "elu": lambda a, alpha=1.0, scale=1.0, input_scale=1.0, inplace=False: scale * mx.where(mx.greater(a, 0), a, alpha * mx.expm1(input_scale * a)),
     "selu": lambda a, inplace=False: 1.0507009873554805 * mx.where(mx.greater(a, 0), a, 1.6732632423543772 * mx.expm1(a)),
     "celu": lambda a, alpha=1.0, inplace=False: mx.where(mx.greater(a, 0), a, alpha * mx.expm1(a / alpha)),
+    # the directional stack/split helpers (Q-60).
+    "hstack": lambda t: _dir_stack(t, "hstack"),
+    "vstack": lambda t: _dir_stack(t, "vstack"),
+    "row_stack": lambda t: _dir_stack(t, "vstack"),
+    "dstack": lambda t: _dir_stack(t, "dstack"),
+    "column_stack": lambda t: _dir_stack(t, "column_stack"),
+    "hsplit": lambda a, ios: _dir_split(a, ios, "hsplit"),
+    "vsplit": lambda a, ios: _dir_split(a, ios, "vsplit"),
+    "dsplit": lambda a, ios: _dir_split(a, ios, "dsplit"),
+    "unflatten": _unflatten,
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,
@@ -2600,7 +2672,12 @@ _SAMPLERS = {"uniform", "normal", "cauchy", "exponential", "geometric",
 # torch tensors (e.g. pool bwd behind an unlowered conv/bn backward), and
 # cheap elementwise binops whose sampled forms can arrive with scalar-only
 # args (aten.mul.default(2, 3) style — no mx input to trip has_mx)
-_ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
+# tensor-rearrangement ops: dtype-exact in mx, so their args convert with
+# the exact bf16 view instead of the arithmetic-op fallback-to-CPU path
+_EXACT_BF16 = {"hstack", "vstack", "dstack", "column_stack", "row_stack"}
+
+_ALWAYS_LOWER = {"hstack", "vstack", "dstack", "column_stack", "row_stack",
+                 "max_pool2d", "max_pool2d_with_indices",
                  "max_pool2d_with_indices_backward", "avg_pool2d",
                  "avg_pool2d_backward", "adaptive_avg_pool2d",
                  "_adaptive_avg_pool2d", "adaptive_avg_pool2d_backward",
@@ -2712,11 +2789,14 @@ def make_executor(gm):
             return type(a)(resolve(x, env) for x in a)
         return a
 
-    def _deep_mx(v):
+    def _deep_mx(v, exact_bf16=False):
         if isinstance(v, torch.Tensor):
+            if exact_bf16:
+                return _mx(v)  # rearrangement ops are dtype-exact: the
+                # uint16 view keeps bf16 exact where mx.array(numpy) fails
             return mx.array(v.detach().cpu().numpy())
         if isinstance(v, (tuple, list)):
-            return type(v)(_deep_mx(x) for x in v)
+            return type(v)(_deep_mx(x, exact_bf16) for x in v)
         return v
 
     def has_mx(v):
@@ -2788,7 +2868,7 @@ def make_executor(gm):
                     lowering = None
                 if lowering is not None and (has_mx(args) or is_producer):
                     try:
-                        val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in kwargs.items()})
+                        val = lowering(*_deep_mx(args, name in _EXACT_BF16), **{k: _deep_mx(v) for k, v in kwargs.items()})
                         on_mlx = True
                         # d-review: an in-place ATen op (masked_fill_, add_, ...)
                         # must mutate the graph's input placeholder, so later

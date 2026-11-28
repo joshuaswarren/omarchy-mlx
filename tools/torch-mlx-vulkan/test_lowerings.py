@@ -2680,6 +2680,95 @@ def test_elu_selu_celu():
     print("test_elu_selu_celu PASS")
 
 
+def test_dir_stack_split():
+    # Q-60: the directional stack/split helpers.
+    # aten.hstack concatenates on axis 0 for all-1-D input else axis 1;
+    # vstack/row_stack pad 1-D to (1,N) and cat on axis 0; dstack pads 1-D
+    # to (1,N,1) and 2-D to (M,N,1) then cats on axis 2; column_stack pads
+    # 1-D to (N,1) and cats on axis 1. hsplit/vsplit/dsplit split on fixed
+    # axes by count or index list. unflatten reshapes one dim to `sizes`
+    # with a single inferring -1.
+    rng = np.random.RandomState(7)
+
+    x1 = [torch.tensor(rng.randn(4).astype(np.float32)) for _ in range(2)]
+    # vstack and hstack over the same list need equal shape off their own
+    # axis, so the multi-dim lists hold same-shaped tensors.
+    x2 = [torch.tensor(rng.randn(2, 3).astype(np.float32)) for _ in range(2)]
+    x3 = [torch.tensor(rng.randn(2, 3, 2).astype(np.float32)) for _ in range(2)]
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        u = torch.tensor(rng.randn(2, 12).astype(np.float32))
+        a1 = [t.to(dtype) for t in x1]
+        a2 = [t.to(dtype) for t in x2]
+        a3 = [t.to(dtype) for t in x3]
+        cases = [
+            (torch.ops.aten.hstack.default, (a1,), torch.hstack(a1), "hstack"),
+            (torch.ops.aten.hstack.default, (a2,), torch.hstack(a2), "hstack"),
+            (torch.ops.aten.vstack.default, (a1,), torch.vstack(a1), "vstack"),
+            (torch.ops.aten.vstack.default, (a2,), torch.vstack(a2), "vstack"),
+            (torch.ops.aten.dstack.default, (a1,), torch.dstack(a1), "dstack"),
+            (torch.ops.aten.dstack.default, (a2,), torch.dstack(a2), "dstack"),
+            (torch.ops.aten.column_stack.default, (a1,),
+             torch.column_stack(a1), "column_stack"),
+            (torch.ops.aten.column_stack.default, (a2,),
+             torch.column_stack(a2), "column_stack"),
+            (torch.ops.aten.row_stack.default, (a1,),
+             torch.row_stack(a1), "row_stack"),
+            (torch.ops.aten.unflatten.int,
+             (u.to(dtype), 1, [3, 4]),
+             torch.unflatten(u.to(dtype), 1, [3, 4]),
+             "unflatten"),
+        ]
+        for target, ins, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            # a list arg (Tensor[] for the stacks) becomes one placeholder.
+            args = tuple(phs)
+            n = g.call_function(target, args, {})
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target))
+            assert any(name.split("_")[0] in s for s in stats["mlx"]), \
+                (stats, str(target))
+            assert np.allclose(out.float().numpy(), ref.float().numpy(),
+                               atol=tol), (name, dtype)
+
+    # table-level parity for the fixed-axis splits: int counts and index
+    # lists, aten output is a list of tensors.
+    a = torch.tensor(rng.randn(4, 8).astype(np.float32))
+    a3 = torch.tensor(rng.randn(4, 8, 6).astype(np.float32))
+    m = mx.array(a.numpy())
+    m3 = mx.array(a3.numpy())
+    T = mlx_vulkan.ATEN_TABLE
+    for name, ref, got in (
+        ("hsplit", torch.hsplit(a, 4), T["hsplit"](m, 4)),
+        ("hsplit", torch.hsplit(a, [3, 5]), T["hsplit"](m, [3, 5])),
+        ("hsplit", torch.hsplit(a[:, 0].reshape(-1), 2),
+         T["hsplit"](mx.array(a[:, 0].numpy()), 2)),
+        ("vsplit", torch.vsplit(a, 2), T["vsplit"](m, 2)),
+        ("vsplit", torch.vsplit(a, [3]), T["vsplit"](m, [3])),
+        ("dsplit", torch.dsplit(a3, 3), T["dsplit"](m3, 3)),
+        ("dsplit", torch.dsplit(a3, [2, 4]), T["dsplit"](m3, [2, 4])),
+    ):
+        assert len(ref) == len(got), (name, len(ref), len(got))
+        for r, gpart in zip(ref, got):
+            assert np.allclose(np.array(gpart), r.numpy(), atol=1e-5), name
+    # fixed-axis rank guards: vsplit refuses 1-D, dsplit refuses <3-D.
+    for name, args in (("vsplit", (mx.array(x1[0].numpy()), 2)),
+                       ("dsplit", (m, 2))):
+        try:
+            T[name](*args)
+            raise AssertionError(name + " accepted a low-rank input")
+        except NotImplementedError:
+            pass
+    # unflatten with an inferring -1, parity at the table.
+    got = np.array(T["unflatten"](m3, 1, [2, -1]))
+    ref = torch.unflatten(a3, 1, (2, -1))
+    assert got.shape == ref.shape and np.allclose(got, ref.numpy()), got.shape
+    print("test_dir_stack_split PASS")
+
+
 def test_cosine_similarity():
     # PT-NORM-a: aten.cosine_similarity.default (embedding-eval family).
     # sum(x1*x2, dim) / (clamp(norm1,eps) * clamp(norm2,eps)) - eps clamps
@@ -3074,6 +3163,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_dir_stack_split()
     print("ALL PASS")
 
 

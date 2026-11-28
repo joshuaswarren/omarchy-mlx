@@ -396,6 +396,68 @@ def _glu(a, dim=-1):
     f = a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a
     lo, hi = mx.split(f, 2, axis=dim % a.ndim)
     return (lo * mx.sigmoid(hi)).astype(a.dtype)
+
+def _dir_stack(t, kind):
+    # aten.hstack/vstack/dstack/column_stack/row_stack take Tensor[] and
+    # concatenate on a fixed axis with promotion: vstack pads 1-D inputs to
+    # (1,N), dstack pads 1-D to (1,N,1) and 2-D to (M,N,1), column_stack
+    # pads 1-D to (N,1), and hstack concatenates on axis 0 for all-1-D
+    # input, else axis 1. row_stack is vstack under a second name.
+    xs = [_mx(x) for x in t]
+    if kind == "hstack":
+        axis = 0 if all(x.ndim <= 1 for x in xs) else 1
+    elif kind == "vstack":
+        xs = [mx.reshape(x, (1, -1)) if x.ndim == 1 else x for x in xs]
+        axis = 0
+    elif kind == "dstack":
+        xs = [mx.reshape(x, (1, x.shape[0], 1)) if x.ndim == 1 else
+              mx.reshape(x, (x.shape[0], x.shape[1], 1)) if x.ndim == 2 else x
+              for x in xs]
+        axis = 2
+    else:  # column_stack
+        xs = [mx.reshape(x, (-1, 1)) if x.ndim == 1 else x for x in xs]
+        axis = 1
+    return _cat_impl(xs, axis)
+
+
+def _dir_split(a, indices_or_sections, kind):
+    # aten.hsplit/vsplit/dsplit split on a fixed axis (hsplit axis 1 for
+    # ndim >= 2, else axis 0; vsplit axis 0 with ndim >= 2; dsplit axis 2
+    # with ndim >= 3) by a section count or a list of split indices — an
+    # int is a section count, a list is split points, not sizes.
+    a = _mx(a)
+    if kind == "hsplit":
+        axis = 1 if a.ndim >= 2 else 0
+    elif kind == "vsplit":
+        if a.ndim < 2:
+            return _raise("vsplit")
+        axis = 0
+    else:
+        if a.ndim < 3:
+            return _raise("dsplit")
+        axis = 2
+    return tuple(mx.split(a, indices_or_sections, axis=axis))
+
+
+def _unflatten(a, dim, sizes):
+    # aten.unflatten(input, dim, sizes): reshape one dim to `sizes`; at most
+    # one -1 entry is allowed and infers from the dim size.
+    a = _mx(a)
+    dim = dim % a.ndim
+    sizes = list(sizes)
+    if sizes.count(-1) > 1:
+        return _raise("unflatten -1")
+    if -1 in sizes:
+        known = 1
+        for s in sizes:
+            if s != -1:
+                known *= s
+        if a.shape[dim] % known:
+            return _raise("unflatten size")
+        sizes[sizes.index(-1)] = a.shape[dim] // known
+    shape = list(a.shape[:dim]) + sizes + list(a.shape[dim + 1:])
+    return mx.reshape(a, shape)
+
 def _frac(a):
     # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
     # NOT x - floor(x) which would give +0.7).
@@ -591,6 +653,16 @@ _FUNC_SPECS = {
     "softshrink": lambda a, lambd=0.5, *k: mx.where(mx.greater(a, lambd), a - lambd, mx.where(mx.less(a, -lambd), a + lambd, mx.zeros_like(a))),
     "tanhshrink": lambda a: a - mx.tanh(a),
     "softsign": lambda a: a / (1.0 + mx.abs(a)),
+    # the directional stack/split helpers.
+    "hstack": lambda t: _dir_stack(t, "hstack"),
+    "vstack": lambda t: _dir_stack(t, "vstack"),
+    "row_stack": lambda t: _dir_stack(t, "vstack"),
+    "dstack": lambda t: _dir_stack(t, "dstack"),
+    "column_stack": lambda t: _dir_stack(t, "column_stack"),
+    "hsplit": lambda a, ios: _dir_split(a, ios, "hsplit"),
+    "vsplit": lambda a, ios: _dir_split(a, ios, "vsplit"),
+    "dsplit": lambda a, ios: _dir_split(a, ios, "dsplit"),
+    "unflatten": _unflatten,
     "scaled_dot_product_attention": _sdpa,
     "eq": lambda a, b: mx.equal(_mx(a), _mx(b)),
     "ne": lambda a, b: mx.not_equal(_mx(a), _mx(b)),
