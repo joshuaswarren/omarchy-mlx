@@ -798,24 +798,165 @@ done
 # Silero VAD model: the voice loop's default speech decision. Pinned
 # commit + sha-256 — the pin's source of truth is
 # serve/mlx_omarchy_assistant/vad.py (a test asserts the two agree).
-# An existing file is re-verified too; a bad fetch or a corrupt file both
-# fall back to the energy gate, which says so once at startup.
+# An existing file is re-verified with O_NOFOLLOW|O_NONBLOCK (refusing
+# symlinks, non-regular files and files over 16 MiB); downloads stage
+# through a private temp file and are accepted only up to 16 MiB. A
+# non-directory VAD path skips staging, and a bad fetch or corrupt file
+# falls back to the energy gate, which says so once at startup.
 VAD_PIN_COMMIT="066409f3d9db45a30d21dfcbf9147826ffdd7052"
 VAD_PIN_SHA="1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
+VAD_MAX_BYTES=16777216
 VAD_MODEL="$PREFIX/vad/silero_vad.onnx"
-vad_model_ok() { [ -f "$1" ] && printf '%s  %s\n' "$VAD_PIN_SHA" "$1" | sha256sum -c - >/dev/null 2>&1; }
-if ! vad_model_ok "$VAD_MODEL"; then
-  mkdir -p "$PREFIX/vad"
-  if curl -fsSL "https://raw.githubusercontent.com/snakers4/silero-vad/$VAD_PIN_COMMIT/src/silero_vad/data/silero_vad.onnx" \
-       -o "$VAD_MODEL.part" \
-    && vad_model_ok "$VAD_MODEL.part"; then
-    mv "$VAD_MODEL.part" "$VAD_MODEL"
+VAD_URL="https://raw.githubusercontent.com/snakers4/silero-vad/$VAD_PIN_COMMIT/src/silero_vad/data/silero_vad.onnx"
+vad_model_ok() {
+  local path="${1:-}"
+  [[ -n "$path" ]] || return 1
+  python3 -I - "$path" "$VAD_PIN_SHA" "$VAD_MAX_BYTES" <<'PY'
+import hashlib, os, stat, sys
+
+path, expected, limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+except (OSError, ValueError):
+    sys.exit(1)
+try:
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
+        sys.exit(1)
+    sha, size, left = hashlib.sha256(), 0, limit + 1
+    while left > 0:
+        chunk = os.read(fd, min(1 << 20, left))
+        if not chunk:
+            break
+        size += len(chunk)
+        left -= len(chunk)
+        sha.update(chunk)
+    sys.exit(0 if size <= limit and sha.hexdigest() == expected else 1)
+except OSError:
+    sys.exit(1)
+finally:
+    os.close(fd)
+PY
+}
+stage_silero_vad() {
+  local vad_dir="$PREFIX/vad"
+  if [[ -L "$vad_dir" || ( -e "$vad_dir" && ! -d "$vad_dir" ) ]]; then
+    say "Silero VAD directory is not a regular directory; skipping VAD model staging."
+    return 0
+  fi
+  if vad_model_ok "$VAD_MODEL"; then
+    return 0
+  fi
+  if [[ -d "$VAD_MODEL" && ! -L "$VAD_MODEL" ]]; then
+    say "Silero VAD model path is a directory; the voice loop falls back to the energy gate."
+    return 0
+  fi
+  local cancelled="" stage_pid="" rc=0 old_int old_term
+  old_int="$(trap -p INT)"
+  old_term="$(trap -p TERM)"
+  cancel_silero_vad() {
+    [[ -z "$cancelled" ]] || return 0
+    cancelled="$1"
+    rc=1
+    if [[ -n "$stage_pid" ]]; then
+      local sp="$stage_pid"
+      stage_pid=""
+      kill -TERM "$sp" 2>/dev/null || true
+      wait "$sp" 2>/dev/null || true
+    fi
+  }
+  trap 'cancel_silero_vad INT' INT
+  trap 'cancel_silero_vad TERM' TERM
+  if [[ -z "$cancelled" ]]; then
+    (
+      [[ -z "$cancelled" ]] || exit 143
+      set -uo pipefail
+      vad_tmp=""
+      vad_fd=""
+      dl_pid=""
+      dl_started=0
+      dl_done=0
+      pre_dl_bang="${!:-}"
+      # Walk descendants bottom-up via procps ps --ppid so cancellation stops
+      # curl and head before reparenting.
+      kill_vad_tree() {
+        local pid="$1" child
+        for child in $(ps -o pid= --ppid "$pid" 2>/dev/null); do
+          kill_vad_tree "$child"
+        done
+        kill -TERM "$pid" 2>/dev/null || true
+      }
+      cleanup_vad_tmp() {
+        trap '' INT TERM
+        local p="$dl_pid" f="$vad_tmp" fd="$vad_fd"
+        if [[ -z "$p" && "$dl_started" -eq 1 && "$dl_done" -eq 0 && -n "${!:-}" && "${!:-}" != "$pre_dl_bang" ]]; then
+          p="$!"
+        fi
+        dl_pid=""
+        dl_done=1
+        vad_tmp=""
+        vad_fd=""
+        if [[ -n "$p" ]]; then
+          kill_vad_tree "$p"
+          wait "$p" 2>/dev/null || true
+        fi
+        if [[ -n "$fd" ]]; then
+          exec {fd}>&-
+        fi
+        if [[ -n "$f" ]]; then
+          rm -f -- "$f"
+        fi
+      }
+      # Non-interactive async subshells ignore SIGINT per POSIX; the parent
+      # cancel_silero_vad trap converts both INT and TERM into SIGTERM here.
+      trap 'cleanup_vad_tmp; exit 143' TERM
+      trap 'cleanup_vad_tmp' EXIT
+      mkdir -p -- "$vad_dir" || exit 1
+      [[ ! -L "$vad_dir" && -d "$vad_dir" ]] || exit 1
+      vad_tmp="$(mktemp -- "$vad_dir/.silero_vad.onnx.part.XXXXXX")" || exit 1
+      exec {vad_fd}>"$vad_tmp" || exit 1
+      pre_dl_bang="${!:-}"
+      dl_started=1
+      (
+        curl -fsSL --max-filesize "$VAD_MAX_BYTES" --max-time 120 -- "$VAD_URL" \
+          | head -c $((VAD_MAX_BYTES + 1)) >&"$vad_fd"
+      ) &
+      dl_pid=$!
+      wait "$dl_pid" || exit 1
+      dl_pid=""
+      dl_done=1
+      exec {vad_fd}>&-
+      vad_fd=""
+      vad_model_ok "$vad_tmp" || exit 1
+      chmod =rw -- "$vad_tmp" || exit 1
+      mv -Tf -- "$vad_tmp" "$VAD_MODEL" || exit 1
+      vad_tmp=""
+    ) &
+    stage_pid=$!
+    if [[ -n "$cancelled" ]]; then
+      if [[ -n "$stage_pid" ]]; then
+        kill -TERM "$stage_pid" 2>/dev/null || true
+        wait "$stage_pid" 2>/dev/null || true
+      fi
+    else
+      wait "$stage_pid" || rc=$?
+    fi
+    stage_pid=""
+  fi
+  eval "${old_int:-trap - INT}"
+  eval "${old_term:-trap - TERM}"
+  unset -f cancel_silero_vad
+  if [[ -n "$cancelled" ]]; then
+    kill -"$cancelled" "$BASHPID"
+    return 0
+  fi
+  if (( rc == 0 )); then
     say "Silero VAD model staged (voice loop default; MIT)."
   else
-    rm -f "$VAD_MODEL.part"
     say "Silero VAD model download failed; the voice loop falls back to the energy gate."
   fi
-fi
+}
+stage_silero_vad
 for assistant_static in index.html css/app.css js/api.js js/app.js js/chat.js js/composer.js js/dom.js js/genui.js js/markdown.js js/setup.js js/theme.js js/transfer.js js/util.js js/voice.js js/worklet/capture-worklet.js; do
   if in_tag_tree "serve/mlx_omarchy_assistant/static/$assistant_static"; then
     curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/serve/mlx_omarchy_assistant/static/$assistant_static" \

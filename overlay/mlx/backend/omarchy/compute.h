@@ -1450,6 +1450,21 @@ enum class ComputeKernel : uint16_t {
   // bit-identical). Appended to keep profile kernel ids stable.
   QmmVecQ4SwigluBF16R1S8W2Fast,
   QmmVecQ4ResNormVec4BF16R2S16W2Fast,
+  // G13C-gated 3-weight fast-tile-only FIFO-upfront Multi GEMV (drops dead
+  // which==3 loop/store when members.size() <= 3 and orders wv -> xa,xb -> s,b
+  // before quads; 0-ULP bit-identical). Appended to keep profile kernel ids stable.
+  QmmVecQ4MultiSubgroupBF16R2S8W2Fast3w,
+  // Compile-time ResNormVec4 R2S16W2 D2048/D4096 specializations and 16-binding
+  // 3-member plain+KV trimmed Multi R2S8W2UpfrontFast (0-ULP bit-identical).
+  // Appended to keep profile kernel ids stable.
+  QmmVecQ4ResNormVec4BF16R2S16W2FastD2048,
+  QmmVecQ4ResNormVec4BF16R2S16W2FastD4096,
+  QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast3M,
+  // G13C-gated HD=128 SdpaOnlineRope with 4-key K-first branchless blocked
+  // online softmax (dispatched for k_len >= 1024; k_len < 1024 uses the 2-key
+  // blocked path in SdpaDecodeOnlineRopeSg32BF16Hd128G13C). Appended to keep
+  // profile kernel ids stable.
+  SdpaDecodeOnlineRopeSg32BF16Hd128G13CB4,
   Count,
 };
 

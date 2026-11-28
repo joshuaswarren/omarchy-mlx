@@ -10,7 +10,9 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets
+import stat
 import threading
 import time
 from dataclasses import asdict
@@ -36,6 +38,35 @@ PREWARM_RETRY_SECONDS = 5.0
 EVENTS_KEEPALIVE_SECONDS = 5.0
 # Matches coordinator._SHUTTING_DOWN (copied; coordinator is imported lazily).
 SHUTTING_DOWN = "The assistant is shutting down"
+# The packaged pages and scripts are tens of KiB; anything larger under
+# static/ is refused rather than read into memory.
+STATIC_MAX_BYTES = 4 * 1024 * 1024
+# O_NONBLOCK: a FIFO opens without a writer and is refused by the type check
+# instead of hanging the request thread. O_NOFOLLOW: the target is already
+# resolved, so a symlink there was swapped in after the containment check.
+_STATIC_OPEN = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_NOFOLLOW | os.O_CLOEXEC
+_DECIMAL = re.compile(r"[0-9]+")
+
+
+def _read_static(target):
+    """target's bytes, or None when it cannot be opened, is not a regular
+    file, or exceeds STATIC_MAX_BYTES. Never reads more than cap + 1 bytes."""
+    try:
+        fd = os.open(target, _STATIC_OPEN)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        content = bytearray()
+        while len(content) <= STATIC_MAX_BYTES:  # a short read is not EOF
+            chunk = os.read(fd, STATIC_MAX_BYTES + 1 - len(content))
+            if not chunk:
+                break
+            content += chunk
+    finally:
+        os.close(fd)
+    return None if len(content) > STATIC_MAX_BYTES else content
 
 
 
@@ -520,9 +551,17 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def _body(self, binary=False):
-        if self.headers.get("Transfer-Encoding"):
+        # get_all: an empty first header must not hide a second one.
+        if self.headers.get_all("Transfer-Encoding"):
             raise ValueError("Chunked uploads are not supported")
-        length = int(self.headers.get("Content-Length", "0"))
+        # Exactly one Content-Length of ASCII digits; int() alone would also
+        # take "+5", "-0", "1_0" and other surrounding whitespace. Only spaces
+        # and tabs around the value (optional whitespace in HTTP) are dropped.
+        lengths = self.headers.get_all("Content-Length") or ["0"]
+        raw_length = lengths[0].strip(" \t")
+        if len(lengths) != 1 or not _DECIMAL.fullmatch(raw_length):
+            raise ValueError("Send one decimal Content-Length")
+        length = int(raw_length)
         maximum = 12 * 1024 * 1024 if binary else 2 * 1024 * 1024
         if not 0 <= length <= maximum:
             raise ValueError("Request exceeds the upload limit")
@@ -842,12 +881,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _static(self, path):
         """Static files under the packaged static/ directory, index.html
-        at the root; anything escaping the tree or missing raises 404."""
+        at the root; anything escaping the tree, missing, not a regular file
+        or over STATIC_MAX_BYTES raises 404."""
         static = Path(__file__).with_name("static").resolve()
         target = (static / ("index.html" if path == "/" else path.lstrip("/"))).resolve()
-        if not target.is_relative_to(static) or not target.is_file():
+        content = _read_static(target) if target.is_relative_to(static) else None
+        if content is None:
             raise KeyError("Page not found")
-        content = target.read_bytes()
         mime = mimetypes.guess_type(target)[0] or "application/octet-stream"
         self._headers(200, mime, len(content))
         self.end_headers()
