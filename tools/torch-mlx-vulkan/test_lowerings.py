@@ -3014,6 +3014,46 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_complex_extras():
+    # PT-AL-cx: conjugates, real/imag parts, angle via atan2, polar
+    # via m*exp(i*phase), and the two view_as bitcasts via mx.view.
+    torch.manual_seed(0)
+    xc = (torch.randn(3, 4) + 1j * torch.randn(3, 4)).to(torch.complex64)
+    xr = torch.randn(3, 4)
+    cases = [
+        (torch.ops.aten.conj.default, (xc,), {}, "conj"),
+        (torch.ops.aten.conj.default, (xr,), {}, "conj"),
+        (torch.ops.aten.conj_physical.default, (xc,), {}, "conj_physical"),
+        (torch.ops.aten.conj_physical.default, (xr,), {}, "conj_physical"),
+        (torch.ops.aten.real.default, (xc,), {}, "real"),
+        (torch.ops.aten.real.default, (xr,), {}, "real"),
+        (torch.ops.aten.imag.default, (xc,), {}, "imag"),
+        (torch.ops.aten.angle.default, (xc,), {}, "angle"),
+        (torch.ops.aten.angle.default, (xr,), {}, "angle"),
+        (torch.ops.aten.polar.default, (torch.rand(4) + 0.5, torch.randn(4)), {}, "polar"),
+        (torch.ops.aten.view_as_complex.default, (torch.randn(3, 2),), {}, "view_as_complex"),
+        (torch.ops.aten.view_as_complex.default, (torch.randn(2, 5, 2),), {}, "view_as_complex"),
+        (torch.ops.aten.view_as_real.default, (xc,), {}, "view_as_real"),
+        (torch.ops.aten.view_as_real.default, (torch.randn(4).to(torch.complex64),), {}, "view_as_real"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = np.array(out)
+        rref = ref.resolve_conj().numpy() if ref.is_conj() else ref.numpy()
+        assert np.allclose(got.astype(np.complex128), rref.astype(np.complex128), atol=1e-5), (
+            str(target), kwargs)
+    print("test_complex_extras PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3069,6 +3109,7 @@ if __name__ == "__main__":
     test_cosine_similarity()
     test_pdist_cdist()
     test_flip_rot90()
+    test_complex_extras()
     test_mode()
     test_kthvalue()
     test_squeeze_inplace()

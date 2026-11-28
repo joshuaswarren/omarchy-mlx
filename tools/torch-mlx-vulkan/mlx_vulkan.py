@@ -2055,6 +2055,28 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _polar(mag, ang):
+    # abs * (cos + i sin); mx builds complex via real+imag parts.
+    m, ph = _mx(mag).astype(mx.complex64), _mx(ang).astype(mx.complex64)
+    return m * mx.exp(mx.array(1j, dtype=mx.complex64) * ph)
+
+
+def _view_as_complex(a):
+    a = _mx(a)
+    if a.shape[-1] != 2:
+        return _raise("view_as_complex last dim")
+    if a.dtype == mx.float64:
+        return _raise("view_as_complex f64")
+    return mx.squeeze(mx.view(a, mx.complex64), axis=-1)
+
+
+def _view_as_real(a):
+    a = _mx(a)
+    if a.dtype != mx.complex64:
+        return _raise("view_as_real non-complex")
+    return mx.reshape(mx.view(a, mx.float32), tuple(a.shape) + (2,))
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2261,6 +2283,15 @@ _FUNC_SPECS = {
     "split_with_sizes": lambda a, ss, dim=0: _split_sizes(a, ss, dim),
     "chunk": _chunk, "unbind": lambda a, dim=0: _unbind(a, dim),
     "meshgrid": _meshgrid,
+    # complex family (piece 13)
+    "conj": lambda a: mx.conj(_mx(a)),
+    "conj_physical": lambda a: mx.conj(_mx(a)),
+    "real": lambda a: mx.real(_mx(a)),
+    "imag": lambda a: mx.imag(_mx(a)),
+    "angle": lambda a: mx.arctan2(mx.imag(_mx(a)), mx.real(_mx(a))),
+    "polar": _polar,
+    "view_as_complex": _view_as_complex,
+    "view_as_real": _view_as_real,
     # torch's norm=None means "backward", same as mx's default
     "fft_fft": lambda a, n=None, dim=-1, norm=None: mx.fft.fft(_mx(a), n, axis=dim, norm=norm or "backward"),
     "fft_ifft": lambda a, n=None, dim=-1, norm=None: mx.fft.ifft(_mx(a), n, axis=dim, norm=norm or "backward"),
