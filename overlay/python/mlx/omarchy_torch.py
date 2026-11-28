@@ -290,6 +290,35 @@ def _conv2d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
         y = y + _mx(b).reshape(1, 1, 1, -1)
     return y.transpose(0, 3, 1, 2)
 
+def _sort(a, dim=-1, descending=False, stable=False, **k):
+    """aten.sort: values + indices along dim. stable=True is DEFERRED: mx
+    gives no stability guarantee we can check, so we refuse rather than
+    guess (the card's defer rule)."""
+    if stable:
+        return _raise("stable sort: mx gives no stability guarantee")
+    x = _mx(a)
+    order = mx.argsort(x, axis=dim)
+    if descending:
+        shape = order.shape
+        rev = [slice(None)] * order.ndim
+        rev[dim if dim >= 0 else dim + order.ndim] = slice(None, None, -1)
+        order = order[tuple(rev)]
+    vals = mx.take_along_axis(x, order, axis=dim)
+    return vals, order
+
+
+def _argsort(a, dim=-1, descending=False, stable=False, **k):
+    """aten.argsort: the index tensor only; same defer on stable."""
+    vals, order = _sort(a, dim, descending, stable)
+    return order
+
+
+def _msort(a, **k):
+    """aten.msort: sort along dim 0."""
+    vals, _ = _sort(a, 0)
+    return vals
+
+
 def _group_norm(a, num_groups, w=None, b=None, eps=1e-5):
     # torch NCHW; mlx 0.32 has no fast.group_norm - normalize per group.
     x = _mx(a)
@@ -566,6 +595,9 @@ _FUNC_SPECS = {
     "fold": _fold,
     "dropout": lambda a, p=0.5, training=False, *k: a,
     "conv2d": _conv2d,
+    "sort": _sort,
+    "argsort": _argsort,
+    "msort": _msort,
     "group_norm": _group_norm,
     "interpolate": _interpolate,
     "softmax": lambda a, dim=-1, dtype=None, **k: mx.softmax(a, axis=dim),
