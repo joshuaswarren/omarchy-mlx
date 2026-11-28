@@ -1867,18 +1867,24 @@ int main(int argc, char** argv) {
     if (bf16_eq && std::string(specs[i].tag) == "loadfirst") continue;
     // The candidate rides the overridden base build (same source, same
     // defines) plus its own delta, so a screen never compares across
-    // builds by accident.
+    // builds by accident. The vendored-base test is shared by the defines
+    // branch and the src swap below: the table hardcodes the vendored path,
+    // so testing g_base_src here could never fire (review on wAN/dec06-bench)
+    // and the base side would compile the override source under
+    // variant_defines — the mismatched-base false pass gap mode already
+    // removes.
+    const bool vendored_base =
+        std::string(specs[i].src) == "tools/q4-bw-bench/shaders/"
+                                    "qmm_vec_base.comp";
     std::string sdefs =
         (std::string(specs[i].tag) == "cand"
                 ? (g_base_defs.empty() ? std::string(variant_defines)
                                        : g_base_defs) + g_cand_defs
-                : (specs[i].src == g_base_src && !g_base_defs.empty()
+                : (vendored_base && !g_base_defs.empty()
                        ? g_base_defs
                        : std::string(variant_defines)));
     if (compile_shader(
-            std::string(specs[i].src) == "tools/q4-bw-bench/shaders/"
-                                        "qmm_vec_base.comp" &&
-                    !g_base_src.empty()
+            vendored_base && !g_base_src.empty()
                 ? g_base_src.c_str()
                 : specs[i].src,
             sdefs.c_str(), specs[i].spv) != 0)
