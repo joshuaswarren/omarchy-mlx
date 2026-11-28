@@ -2055,6 +2055,89 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _segment_reduce(data, reduce, lengths=None, indices=None, offsets=None,
+                    axis=0, unsafe=False, initial=None):
+    d = _mx(data)
+    if indices is not None:
+        return _raise("segment_reduce indices")
+    seg_src = lengths if lengths is not None else offsets
+    if seg_src is None:
+        return _raise("segment_reduce needs lengths or offsets")
+    seg_src = _mx(seg_src).astype(mx.int64)
+    if seg_src.ndim != 1:
+        return _raise("segment_reduce batched lengths")
+    ax = axis % d.ndim
+    if ax != seg_src.ndim - 1:
+        return _raise("segment_reduce axis != lengths.ndim-1")
+    tm = mx.moveaxis(d, ax, 0)
+    n = tm.shape[0]
+    R = int(np.prod(tm.shape[1:])) if tm.ndim > 1 else 1
+    df = tm.reshape(n, R)
+    i = mx.arange(n)[:, None]
+    if lengths is not None:
+        bounds = mx.cumsum(seg_src, axis=0)[:-1]
+        nseg = seg_src.shape[0]
+    else:
+        bounds = seg_src[1:]
+        nseg = seg_src.shape[0] - 1
+    seg = mx.sum((i >= bounds[None, :]).astype(mx.int32), axis=1)
+    lin = (seg[:, None] * R + mx.arange(R)[None, :]).reshape(-1)
+    vals = df.reshape(-1)
+    has_init = initial is not None
+    init = float(initial) if has_init else {"sum": 0.0, "mean": 0.0, "prod": 1.0,
+                                            "amax": -float("inf"), "max": -float("inf"),
+                                            "amin": float("inf"), "min": float("inf")}.get(reduce, 0.0)
+    out = mx.full((nseg * R,), init, dtype=df.dtype)
+    if reduce == "sum":
+        out = out.at[lin].add(vals)
+    elif reduce == "prod":
+        out = out.at[lin].multiply(vals)
+    elif reduce in ("max", "amax"):
+        out = out.at[lin].maximum(vals)
+    elif reduce in ("min", "amin"):
+        out = out.at[lin].minimum(vals)
+    elif reduce == "mean":
+        cnt = mx.zeros(out.shape, dtype=out.dtype).at[lin].add(mx.ones(lin.shape[0]))
+        out = out.at[lin].add(vals)
+        out = mx.where(cnt > 0, out / mx.maximum(cnt, 1),
+                       mx.full_like(out, init if has_init else float("nan")))
+    else:
+        return _raise(f"segment_reduce {reduce}")
+    return mx.moveaxis(out.reshape(nseg, R).reshape((nseg,) + tm.shape[1:]), 0, ax)
+
+
+def _lexsort_cols(flat):
+    order = mx.arange(flat.shape[0])
+    for k in range(flat.shape[1] - 1, -1, -1):
+        order = mx.take(order, mx.argsort(mx.take(flat[:, k], order)))
+    return order
+
+
+def _unique_dim(self, dim, sorted=True, return_inverse=False, return_counts=False):
+    t = _mx(self)
+    ax = dim % t.ndim
+    tm = mx.moveaxis(t, ax, 0)
+    n = tm.shape[0]
+    if n == 0:
+        return _raise("unique_dim empty")
+    R = int(np.prod(tm.shape[1:])) if tm.ndim > 1 else 1
+    flat = tm.reshape(n, R)
+    order = _lexsort_cols(flat) if sorted else mx.arange(n)
+    srt = mx.take(flat, order, axis=0)
+    same = mx.all(srt[1:] == srt[:-1], axis=-1)
+    change = mx.concatenate([mx.array([True]), ~same])
+    nuniq = int(np.array(mx.sum(change.astype(mx.int32))))
+    bpos = mx.take(mx.argsort(~change), mx.arange(nuniq))
+    uniq = mx.take(srt, bpos, axis=0)
+    uniq = mx.moveaxis(uniq.reshape((nuniq,) + tm.shape[1:]), 0, ax)
+    sinv = mx.cumsum(change.astype(mx.int32), axis=0) - 1
+    rev = mx.argsort(order)
+    inv = mx.take(sinv, rev).astype(mx.int64)
+    ext = mx.concatenate([bpos, mx.array([n])])
+    cnt = (ext[1:] - ext[:-1]).astype(mx.int64)
+    return uniq, inv, cnt
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2457,6 +2540,8 @@ _FUNC_SPECS = {
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, axis=dim),
+    "segment_reduce": _segment_reduce,
+    "unique_dim": _unique_dim,
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
     "roll": _roll,
     "log_softmax": lambda a, dim=-1, dtype=None, **k: _log_softmax_fwd(a, dim, dtype=dtype),
