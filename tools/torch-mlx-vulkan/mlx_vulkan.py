@@ -963,17 +963,116 @@ def _tanh_backward(g, out):
 
 
 def _nll_loss_backward(gout, a, target, weight, reduction, ignore_index, tw):
-    if weight is not None:
-        return _raise("nll_loss_backward weight")
+    # nll_loss_backward / nll_loss2d_backward: x (N,C,*), target (N,*).
+    # Per-position grad = -gout*w[target] (/ total_weight for mean),
+    # scattered into the target channel; ignore_index positions are 0.
     a, t = _mx(a), _mx(target).astype(mx.int32)
-    n = a.shape[0]
-    m = (t != ignore_index).astype(a.dtype)
-    if reduction == 1:
-        g = -_mx(gout) * m / mx.maximum(_mx(tw).astype(a.dtype), 1e-12)
+    C = a.shape[1]
+    m = t != ignore_index
+    tc = mx.where(m, t, mx.zeros_like(t))
+    if weight is not None:
+        wsel = _mx(weight)[tc]
     else:
-        g = -_mx(gout).reshape(-1)[:n] * m
-    onehot = mx.equal(t.reshape(n, 1), mx.arange(a.shape[1]).reshape(1, -1))
-    return mx.where(onehot, g.reshape(n, 1), mx.zeros_like(a))
+        wsel = mx.ones_like(tc).astype(a.dtype)
+    g = -_mx(gout) * wsel
+    g = mx.where(m, g, mx.zeros_like(g))
+    if reduction == 1:
+        g = g / mx.maximum(_mx(tw).astype(a.dtype), 1e-12)
+    if g.ndim < a.ndim:
+        g = mx.expand_dims(g, 1)
+    shp = (1, C) + (1,) * (a.ndim - 2)
+    onehot = mx.equal(mx.expand_dims(tc, 1),
+                      mx.arange(C).reshape(shp))
+    return mx.where(onehot & mx.expand_dims(m, 1), g, mx.zeros_like(a))
+
+
+def _glu_backward(g, a, dim):
+    # GLU splits a into (x, y) halves along dim: da = g*σ(y),
+    # db = g*x*σ(y)*(1-σ(y)).
+    g, a = _mx(g), _mx(a)
+    n = a.shape[dim] // 2
+    x = mx.take(a, mx.arange(n), axis=dim)
+    y = mx.take(a, n + mx.arange(n), axis=dim)
+    sy = mx.sigmoid(y)
+    return mx.concatenate([g * sy, g * x * sy * (1 - sy)], axis=dim)
+
+
+def _hardtanh_backward(g, x, min_val, max_val):
+    g, x = _mx(g), _mx(x)
+    ok = (x > min_val) & (x < max_val)
+    return mx.where(ok, g, mx.zeros_like(g))
+
+
+def _leaky_relu_backward(g, x, negative_slope, self_is_result):
+    g, x = _mx(g), _mx(x)
+    return mx.where(x > 0, g, g * negative_slope)
+
+
+def _logit_backward(g, x, eps):
+    xo, x = _opmath_f32(x)
+    d = _mx(g) / (x * (1.0 - x))
+    if eps is not None:
+        lo, hi = eps, 1.0 - eps
+        d = mx.where((x > lo) & (x < hi), d, mx.zeros_like(d))
+    return d.astype(xo.dtype)
+
+
+def _log_sigmoid_backward(g, x, buffer):
+    # grad = g * σ(-x); buffer is e^{-|x|} from the forward.
+    g, x, b = _mx(g), _mx(x), _mx(buffer)
+    sig = mx.where(x >= 0, b / (1 + b), 1 / (1 + b))
+    return g * sig
+
+
+def _mish_backward(g, x):
+    # d/dx x*tanh(softplus(x)) = tanh(sp) + x*σ(x)*(1-tanh(sp)^2).
+    xo, xf = _opmath_f32(x)
+    sp = mx.logaddexp(xf, mx.zeros_like(xf))
+    tsp = mx.tanh(sp)
+    sx = mx.sigmoid(xf)
+    return (_mx(g) * (tsp + xf * sx * (1 - tsp * tsp))).astype(xo.dtype)
+
+
+def _red_scale(g, a, reduction):
+    # elementwise loss backward: mean divides g by numel(a).
+    if reduction == 1:
+        return _mx(g) / float(a.size)
+    return _mx(g)
+
+
+def _mse_loss_backward(g, a, t, reduction):
+    a, t = _mx(a), _mx(t)
+    return _red_scale(g, a, reduction) * 2.0 * (a - t)
+
+
+def _smooth_l1_loss_backward(g, a, t, reduction, beta):
+    a, t = _mx(a), _mx(t)
+    d = a - t
+    ad = mx.abs(d)
+    dl = mx.where(ad < beta, d / beta, mx.sign(d))
+    return _red_scale(g, a, reduction) * dl
+
+
+def _soft_margin_loss_backward(g, a, t, reduction):
+    a, t = _mx(a), _mx(t)
+    dl = -t / (1.0 + mx.exp(t * a))
+    return _red_scale(g, a, reduction) * dl
+
+
+def _huber_loss_backward(g, a, t, reduction, delta):
+    a, t = _mx(a), _mx(t)
+    d = a - t
+    dl = mx.clip(d, -delta, delta)
+    return _red_scale(g, a, reduction) * dl
+
+
+def _bce_backward(g, a, t, weight, reduction):
+    ao, a = _opmath_f32(a)
+    t = _opmath_f32(t)[1]
+    d = (a - t) / (a * (1.0 - a))
+    if weight is not None:
+        d = d * _mx(weight)
+    return (_red_scale(g, a, reduction) * d).astype(ao.dtype)
 
 
 def _convolution(x, w, b=None, stride=1, padding=0, dilation=1,
@@ -2341,6 +2440,19 @@ _FUNC_SPECS = {
     "tanh_backward": _tanh_backward,
     "nll_loss_forward": _nll_loss_forward,
     "nll_loss_backward": _nll_loss_backward,
+    "nll_loss2d_backward": _nll_loss_backward,
+    # PT-AL-bw: elementwise/loss backward family.
+    "glu_backward": _glu_backward,
+    "hardtanh_backward": _hardtanh_backward,
+    "leaky_relu_backward": _leaky_relu_backward,
+    "logit_backward": _logit_backward,
+    "log_sigmoid_backward": _log_sigmoid_backward,
+    "mish_backward": _mish_backward,
+    "mse_loss_backward": _mse_loss_backward,
+    "smooth_l1_loss_backward": _smooth_l1_loss_backward,
+    "soft_margin_loss_backward": _soft_margin_loss_backward,
+    "huber_loss_backward": _huber_loss_backward,
+    "binary_cross_entropy_backward": _bce_backward,
     "gelu_backward": _gelu_backward,
     "group_norm": _group_norm,
     "interpolate": _interpolate,

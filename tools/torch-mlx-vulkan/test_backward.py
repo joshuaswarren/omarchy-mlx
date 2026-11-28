@@ -519,6 +519,105 @@ def test_relu_inplace_and_boolean_dispatch():
     assert np.array_equal(np.array(my_idx), idx.numpy())
 
 
+def test_elementwise_loss_backward_family():
+    """PT-AL-bw: loss/activation backward ops vs CPU aten (allclose 1e-5)."""
+    T = mlx_vulkan.ATEN_TABLE
+    torch.manual_seed(0)
+    a = torch.ops.aten
+
+    g = torch.randn(2, 4)
+    x8 = torch.randn(2, 8)
+    _cmp("glu_backward", T["glu_backward"](_am(g), _am(x8), 1),
+         a.glu_backward(g, x8, 1))
+
+    x = torch.tensor([-2.0, -1.0, -0.5, 0.5, 1.0, 2.0])
+    g1 = torch.ones(6)
+    _cmp("hardtanh_backward", T["hardtanh_backward"](_am(g1), _am(x), -1.0, 1.0),
+         a.hardtanh_backward(g1, x, -1.0, 1.0))
+
+    xl = torch.tensor([-1.0, 0.0, 2.0])
+    g3 = torch.ones(3)
+    _cmp("leaky_relu_backward", T["leaky_relu_backward"](_am(g3), _am(xl), 0.1, False),
+         a.leaky_relu_backward(g3, xl, 0.1, False))
+    _cmp("leaky_relu_backward_res", T["leaky_relu_backward"](_am(g3), _am(xl), 0.1, True),
+         a.leaky_relu_backward(g3, xl, 0.1, True))
+
+    xg = torch.tensor([1e-4, 0.25, 0.5, 0.999999])
+    g4 = torch.ones(4)
+    _cmp("logit_backward_eps", T["logit_backward"](_am(g4), _am(xg), 1e-3),
+         a.logit_backward(g4, xg, 1e-3))
+    _cmp("logit_backward", T["logit_backward"](_am(g4), _am(xg), None),
+         a.logit_backward(g4, xg))
+
+    xs = torch.tensor([-3.0, -0.5, 0.0, 2.0])
+    buf = torch.exp(-xs.abs())
+    _cmp("log_sigmoid_backward",
+         T["log_sigmoid_backward"](_am(g4), _am(xs), _am(buf)),
+         a.log_sigmoid_backward(g4, xs, buf))
+
+    xm = torch.tensor([-5.0, -1.0, 0.0, 1.0, 8.0])
+    g5 = torch.ones(5)
+    _cmp("mish_backward", T["mish_backward"](_am(g5), _am(xm)),
+         a.mish_backward(g5, xm))
+    _cmp("mish_backward_bf16",
+         T["mish_backward"](_am(g5), _am(xm.bfloat16())),
+         a.mish_backward(g5, xm.bfloat16()).float())
+
+    xe = torch.randn(2, 3)
+    te = torch.randn(2, 3)
+    for red in (0, 1, 2):
+        gs = torch.tensor(1.7) if red else torch.randn(2, 3)
+        _cmp(f"mse_loss_backward_r{red}", T["mse_loss_backward"](_am(gs), _am(xe), _am(te), red),
+             a.mse_loss_backward(gs, xe, te, red))
+        _cmp(f"smooth_l1_backward_r{red}", T["smooth_l1_loss_backward"](_am(gs), _am(xe), _am(te), red, 1.0),
+             a.smooth_l1_loss_backward(gs, xe, te, red, 1.0))
+        _cmp(f"soft_margin_backward_r{red}", T["soft_margin_loss_backward"](_am(gs), _am(xe), _am(te), red),
+             a.soft_margin_loss_backward(gs, xe, te, red))
+        _cmp(f"huber_backward_r{red}", T["huber_loss_backward"](_am(gs), _am(xe), _am(te), red, 1.5),
+             a.huber_loss_backward(gs, xe, te, red, 1.5))
+
+    xb = torch.tensor([[0.5, 0.2, 0.9], [0.1, 0.6, 0.4]])
+    tb = torch.tensor([[1.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+    wb = torch.tensor([[1.0, 2.0, 0.5], [1.0, 1.0, 3.0]])
+    for red in (0, 1, 2):
+        gs = torch.tensor(0.9) if red else torch.randn(2, 3)
+        _cmp(f"bce_backward_r{red}", T["binary_cross_entropy_backward"](_am(gs), _am(xb), _am(tb), None, red),
+             a.binary_cross_entropy_backward(gs, xb, tb, None, red))
+    _cmp("bce_backward_weight",
+         T["binary_cross_entropy_backward"](_am(torch.ones(2, 3)), _am(xb), _am(tb), _am(wb), 0),
+         a.binary_cross_entropy_backward(torch.ones(2, 3), xb, tb, wb, 0))
+
+
+def test_nll_loss2d_backward():
+    """PT-AL-bw: N-d nll backward — 4-D input, weight, ignore_index,
+    total_weight — vs CPU aten."""
+    T = mlx_vulkan.ATEN_TABLE
+    torch.manual_seed(0)
+    a = torch.ops.aten
+    x = torch.randn(2, 4, 2, 3)
+    tgt = torch.tensor([[[0, 1, 2], [2, -100, 1]], [[1, 3, 0], [2, 0, 3]]])
+    w = torch.tensor([1.0, 2.0, 3.0, 4.0])
+    tw = torch.tensor(18.0)
+    for red in (0, 1, 2):
+        go = torch.randn(2, 2, 3) if red == 0 else torch.tensor(2.5)
+        _cmp(f"nll2d_bw_r{red}_w",
+             T["nll_loss2d_backward"](_am(go), _am(x), _am(tgt), _am(w), red, -100, _am(tw)),
+             a.nll_loss2d_backward(go, x, tgt, w, red, -100, tw))
+        _cmp(f"nll2d_bw_r{red}",
+             T["nll_loss2d_backward"](_am(go), _am(x), _am(tgt), None, red, -100, _am(tw)),
+             a.nll_loss2d_backward(go, x, tgt, None, red, -100, tw))
+    # 2-D nll_loss_backward stays covered (weight now admitted too)
+    x2 = torch.randn(3, 5)
+    t2 = torch.tensor([0, 2, -100])
+    _cmp("nll_bw_2d_w",
+         T["nll_loss_backward"](_am(torch.tensor(1.5)), _am(x2), _am(t2),
+                                _am(torch.arange(5.0) + 1), 2, -100,
+                                _am(torch.tensor(9.0))),
+         a.nll_loss_backward(torch.tensor(1.5), x2, t2,
+                             torch.arange(5.0) + 1, 2, -100,
+                             torch.tensor(9.0)))
+
+
 if __name__ == "__main__":
     test_native_layer_norm_backward()
     test_embedding_dense_backward()
@@ -539,6 +638,8 @@ if __name__ == "__main__":
     test_relu_inplace_and_boolean_dispatch()
     test_native_layer_norm_backward_bf16_and_fp32()
     test_native_layer_norm_backward_lowered_in_training_graph()
+    test_elementwise_loss_backward_family()
+    test_nll_loss2d_backward()
     print("ALL PASS")
 
 
