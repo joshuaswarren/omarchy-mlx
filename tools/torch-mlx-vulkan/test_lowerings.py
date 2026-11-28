@@ -2971,6 +2971,75 @@ def test_log1p_expm1_logaddexp():
     print("test_log1p_expm1_logaddexp PASS")
 
 
+def test_misc_math_extras():
+    # PT-AL-k: misc math — full-spelling op names (divide/multiply/
+    # subtract), elementwise in-place variants, nan_to_num's nan/inf
+    # replacements, hypot's scaled form (0/0 and inf arms), gcd/lcm
+    # (unrolled euclid), and i0 (unrolled series).
+    torch.manual_seed(0)
+    xf = torch.tensor([-2.0, -0.5, 0.0, 0.5, 1.0, 2.0])
+    yf = torch.tensor([4.0, -1.5, 0.5, 2.0, 3.0, 8.0])
+    xn = torch.tensor([float("nan"), float("inf"), -float("inf"),
+                       1.0, -2.0])
+    xh = torch.tensor([0.0, 3.0, 1e30, float("inf"), float("nan")])
+    yh = torch.tensor([0.0, 4.0, 2e30, 1.0, 1.0])
+    xi = torch.tensor([12, 18, 0, 7, 100], dtype=torch.int64)
+    yi = torch.tensor([4, 9, 5, 0, 30], dtype=torch.int64)
+    xb = torch.tensor([-1.5, 0.0, 1.0, 5.0, 10.0])
+    cases = [
+        (torch.ops.aten.divide.Tensor, (xf, yf), {}, "divide"),
+        (torch.ops.aten.multiply.Tensor, (xf, yf), {}, "multiply"),
+        (torch.ops.aten.subtract.Tensor, (xf, yf), {}, "subtract"),
+        (torch.ops.aten.subtract.Tensor, (xf, yf), {"alpha": 2},
+         "subtract"),
+        (torch.ops.aten.pow_.Tensor, (xf, yf), {}, "pow_"),
+        (torch.ops.aten.sqrt_.default, (yf + 4,), {}, "sqrt_"),
+        (torch.ops.aten.rsqrt_.default, (yf + 4,), {}, "rsqrt_"),
+        (torch.ops.aten.exp_.default, (xf,), {}, "exp_"),
+        (torch.ops.aten.log_.default, (yf + 4,), {}, "log_"),
+        (torch.ops.aten.log1p_.default, (xf,), {}, "log1p_"),
+        (torch.ops.aten.neg_.default, (xf,), {}, "neg_"),
+        (torch.ops.aten.abs_.default, (xf,), {}, "abs_"),
+        (torch.ops.aten.sign_.default, (xf,), {}, "sign_"),
+        (torch.ops.aten.floor_.default, (xf,), {}, "floor_"),
+        (torch.ops.aten.ceil_.default, (xf,), {}, "ceil_"),
+        (torch.ops.aten.round_.default, (xf,), {}, "round_"),
+        (torch.ops.aten.clip_.default, (xf,), {"min": -1.0, "max": 1.5},
+         "clip_"),
+        (torch.ops.aten.remainder_.Tensor, (yf, xf + 4), {},
+         "remainder_"),
+        (torch.ops.aten.sigmoid_.default, (xf,), {}, "sigmoid_"),
+        (torch.ops.aten.tanh_.default, (xf,), {}, "tanh_"),
+        (torch.ops.aten.erf_.default, (xf,), {}, "erf_"),
+        (torch.ops.aten.i0.default, (xb,), {}, "i0"),
+        (torch.ops.aten.i0_.default, (xb,), {}, "i0"),
+        (torch.ops.aten.xlogy_.Tensor, (xf + 3, yf + 4), {}, "xlogy"),
+        (torch.ops.aten.nan_to_num.default, (xn,), {}, "nan_to_num"),
+        (torch.ops.aten.nan_to_num.default, (xn,),
+         {"nan": -1.0, "posinf": 3.0, "neginf": -3.0}, "nan_to_num"),
+        (torch.ops.aten.nan_to_num_.default, (xn,), {}, "nan_to_num"),
+        (torch.ops.aten.hypot.default, (xh, yh), {}, "hypot"),
+        (torch.ops.aten.gcd.default, (xi, yi), {}, "gcd"),
+        (torch.ops.aten.lcm.default, (xi, yi), {}, "lcm"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 5e-4 if fam == "i0" else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(),
+                           atol=tol, equal_nan=True), (str(target), got, ref)
+    print("test_misc_math_extras PASS")
+
+
 def test_flip_rot90():
     # PT-Q11: aten.flip(self, int[] dims) reverses along each listed dim;
     # aten.rot90(self, int k=1, int[] dims=[0,1]) is the ATen
@@ -3061,6 +3130,7 @@ if __name__ == "__main__":
     test_softplus_mish()
     test_elu_selu_celu()
     test_log1p_expm1_logaddexp()
+    test_misc_math_extras()
     test_logsumexp()
     test_glu()
     test_reciprocal_frac()

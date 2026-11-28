@@ -2059,6 +2059,70 @@ def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
 
+def _hypot(a, b):
+    # aten.hypot: sqrt(a²+b²) without intermediate overflow — the scaled
+    # form max*sqrt((a/max)²+(b/max)²); the max==0 and isinf arms keep
+    # 0/0 and inf*nan away (aten: hypot(0,0)=0, hypot(inf,x)=inf).
+    a, b = _mx(a), _mx(b)
+    _fdts = (mx.float32, mx.float16, mx.bfloat16)
+    if a.dtype not in _fdts or b.dtype not in _fdts:
+        _raise("hypot on non-floating input")
+    f1, f2 = _opmath_f32(a)[1], _opmath_f32(b)[1]
+    m = mx.maximum(mx.abs(f1), mx.abs(f2))
+    r = m * mx.sqrt(mx.square(f1 / m) + mx.square(f2 / m))
+    out = mx.where(m == 0, m, mx.where(mx.isinf(m), m, r))
+    return out.astype(_promote_dtype(a.dtype, b.dtype))
+
+
+def _promote_dtype(dt1, dt2):
+    # Rough torch-style promotion for the composed helpers: float64 >
+    # float32 > bf16/f16 > ints; the table's callers mix same-dtype pairs
+    # almost always, so this only guards the mixed case.
+    order = (mx.bool_, mx.uint8, mx.int8, mx.int16, mx.int32, mx.int64,
+             mx.uint16, mx.uint32, mx.uint64, mx.float16, mx.bfloat16,
+             mx.float32, mx.float64)
+    try:
+        return dt1 if order.index(dt1) >= order.index(dt2) else dt2
+    except ValueError:
+        return dt1
+
+
+def _gcd(a, b):
+    # aten.gcd: euclid on the magnitudes, unrolled — 93 steps covers the
+    # int64 Fibonacci bound; converged lanes freeze at (g, 0).
+    a, b = mx.abs(_mx(a)), mx.abs(_mx(b))
+    for _ in range(93):
+        hi = mx.maximum(a, b)
+        lo = mx.minimum(a, b)
+        safe = mx.where(lo == 0, mx.ones_like(lo), lo)
+        # converged lanes (lo == 0) freeze at g; the rest take a Euclid step
+        a = mx.where(lo == 0, hi, lo)
+        b = mx.where(lo == 0, mx.zeros_like(lo), mx.remainder(hi, safe))
+    return mx.maximum(a, b)
+
+
+def _lcm(a, b):
+    # aten.lcm: |a*b|/gcd, and 0 when either side is 0.
+    a, b = _mx(a), _mx(b)
+    g = _gcd(a, b)
+    out = mx.floor_divide(mx.abs(a) * mx.abs(b), g)
+    return mx.where(g == 0, mx.zeros_like(g), out)
+
+
+def _i0(a):
+    # aten.i0: modified Bessel I0 — mx has no special-fn Bessel; the
+    # power series sum_{k>=0} (x²/4)^k/(k!)² unrolled 30 terms converges
+    # inside f32 tolerance through the finite range.
+    a, f = _opmath_f32(a)
+    u = mx.square(f * 0.5)
+    term = mx.ones_like(f)
+    s = mx.ones_like(f)
+    for k in range(1, 31):
+        term = term * u / (k * k)
+        s = s + term
+    return s.astype(a.dtype)
+
+
 def _linalg_norm(a, ord=None, dim=None, keepdim=False, dtype=None):
     # aten.linalg_norm: mx.linalg.norm shares the vector/matrix
     # ord/axis/keepdims contract (ord=None + axis=None flattens, a
@@ -2424,6 +2488,30 @@ _FUNC_SPECS = {
     "abs": mx.abs, "sign": mx.sign,
     "maximum": mx.maximum, "minimum": mx.minimum, "fmax": mx.maximum, "fmin": mx.minimum,
     "floor": mx.floor, "ceil": mx.ceil, "round": mx.round, "floor_divide": mx.floor_divide,
+    # PT-AL-k: misc math — full-spelling op names, the in-place
+    # variants of elementwise ops (result dtype equals the input dtype,
+    # so they map straight like expm1_), nan_to_num, hypot, gcd/lcm
+    # (unrolled euclid), and i0 (unrolled power series).
+    "divide": lambda a, b, *k: _ar(_mx(a) / _mx(b)),
+    "multiply": lambda a, b, *k: _ar(_mx(a) * _mx(b)),
+    "subtract": lambda a, b, alpha=1, *k: _alpha_arith(a, b, alpha, -1),
+    "pow_": lambda a, b: mx.power(_mx(a), _mx(b)),
+    "sqrt_": mx.sqrt, "rsqrt_": mx.rsqrt, "exp_": mx.exp, "log_": mx.log,
+    "log1p_": mx.log1p,
+    "neg_": lambda a: -a,
+    "abs_": mx.abs, "sign_": mx.sign,
+    "floor_": mx.floor, "ceil_": mx.ceil, "round_": mx.round,
+    "clip_": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
+    "remainder_": lambda a, b, *k: _ar(_mx(a) % _mx(b)),
+    "sigmoid_": mx.sigmoid, "tanh_": mx.tanh, "erf_": mx.erf,
+    "i0": _i0, "i0_": _i0,
+    "xlogy_": _xlogy,
+    "nan_to_num": lambda a, nan=0.0, posinf=None, neginf=None: mx.nan_to_num(
+        _mx(a), nan=nan, posinf=posinf, neginf=neginf),
+    "nan_to_num_": lambda a, nan=0.0, posinf=None, neginf=None: mx.nan_to_num(
+        _mx(a), nan=nan, posinf=posinf, neginf=neginf),
+    "hypot": _hypot,
+    "gcd": _gcd, "lcm": _lcm,
     "negative": mx.negative, "isnan": mx.isnan, "isinf": mx.isinf,
     "isfinite": lambda a: mx.logical_not(mx.isinf(a)),
     "linspace": lambda s, e, n, **k: mx.linspace(s, e, n),
