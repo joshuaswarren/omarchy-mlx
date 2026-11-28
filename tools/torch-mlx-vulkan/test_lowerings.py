@@ -2928,6 +2928,63 @@ def test_log1p_expm1_logaddexp():
     print("test_log1p_expm1_logaddexp PASS")
 
 
+def test_trig_extras():
+    # PT-AL-i: trig extras — tan, deg2rad/rad2deg, sinc (sinc(0)=1),
+    # the arc* aliases of the existing a* spellings, and the in-place
+    # variants of the trig family.
+    torch.manual_seed(0)
+    xt = torch.tensor([-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0])
+    xd = torch.tensor([0.0, 30.0, 45.0, 90.0, 180.0, 360.0])
+    xs = torch.tensor([0.0, 1e-7, 0.25, 0.5, 1.0, 2.5, -3.5])
+    xa = torch.tensor([-0.99, -0.5, 0.0, 0.5, 0.99])
+    xh = torch.tensor([1.0, 1.5, 2.0, 10.0])
+    cases = [
+        (torch.ops.aten.tan.default, (xt,), {}, "tan"),
+        (torch.ops.aten.tan_.default, (xt,), {}, "tan"),
+        (torch.ops.aten.deg2rad.default, (xd,), {}, "deg2rad"),
+        (torch.ops.aten.deg2rad_.default, (xd,), {}, "deg2rad"),
+        (torch.ops.aten.rad2deg.default, (xd,), {}, "rad2deg"),
+        (torch.ops.aten.rad2deg_.default, (xd,), {}, "rad2deg"),
+        (torch.ops.aten.sinc.default, (xs,), {}, "sinc"),
+        (torch.ops.aten.sinc_.default, (xs,), {}, "sinc"),
+        (torch.ops.aten.arccos.default, (xa,), {}, "arccos"),
+        (torch.ops.aten.arcsin.default, (xa,), {}, "arcsin"),
+        (torch.ops.aten.arctan.default, (xt,), {}, "arctan"),
+        (torch.ops.aten.arctan2.default, (xt, xs), {}, "arctan2"),
+        (torch.ops.aten.arccosh.default, (xh,), {}, "arccosh"),
+        (torch.ops.aten.arcsinh.default, (xt,), {}, "arcsinh"),
+        (torch.ops.aten.arctanh.default, (xa,), {}, "arctanh"),
+        (torch.ops.aten.arccos_.default, (xa,), {}, "arccos"),
+        (torch.ops.aten.arctan2_.default, (xt, xs), {}, "arctan2"),
+        (torch.ops.aten.sinh_.default, (xt,), {}, "sinh"),
+        (torch.ops.aten.cosh_.default, (xt,), {}, "cosh"),
+        (torch.ops.aten.asin_.default, (xa,), {}, "asin"),
+        (torch.ops.aten.acos_.default, (xa,), {}, "acos"),
+        (torch.ops.aten.atan_.default, (xt,), {}, "atan"),
+        (torch.ops.aten.asinh_.default, (xt,), {}, "asinh"),
+        (torch.ops.aten.acosh_.default, (xh,), {}, "acosh"),
+        (torch.ops.aten.atanh_.default, (xa,), {}, "atanh"),
+        (torch.ops.aten.sinc.default, (xs.bfloat16(),), {}, "sinc"),
+        (torch.ops.aten.deg2rad.default, (xd.bfloat16(),), {}, "deg2rad"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), got, ref)
+    print("test_trig_extras PASS")
+
+
 def test_flip_rot90():
     # PT-Q11: aten.flip(self, int[] dims) reverses along each listed dim;
     # aten.rot90(self, int k=1, int[] dims=[0,1]) is the ATen
@@ -3018,6 +3075,7 @@ if __name__ == "__main__":
     test_softplus_mish()
     test_elu_selu_celu()
     test_log1p_expm1_logaddexp()
+    test_trig_extras()
     test_logsumexp()
     test_glu()
     test_reciprocal_frac()
