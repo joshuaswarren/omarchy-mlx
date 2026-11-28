@@ -2048,6 +2048,49 @@ def _glu(a, dim=-1):
         return _raise("glu")
     lo, hi = mx.split(f, 2, axis=dim % a.ndim)
     return (lo * mx.sigmoid(hi)).astype(a.dtype)
+
+def _leaky_relu(a, negative_slope=0.01, inplace=False):
+    # aten.leaky_relu(input, negative_slope=0.01): x when x >= 0, else
+    # negative_slope * x. >= 0 keeps the zero point on the x branch so -0.0
+    # does not pick up the slope.
+    a, f = _opmath_f32(a)
+    out = mx.where(mx.greater_equal(f, 0.0), f, f * negative_slope)
+    return out.astype(a.dtype)
+
+
+def _hardtanh(a, min_val=-1.0, max_val=1.0, inplace=False):
+    # aten.hardtanh(input, min_val=-1, max_val=1): elementwise clamp.
+    return mx.clip(a, min_val, max_val)
+
+
+def _threshold(a, threshold, value, inplace=False):
+    # aten.threshold(input, threshold, value): x when x > threshold, else
+    # the constant value (strictly greater — x == threshold yields value).
+    a, f = _opmath_f32(a)
+    out = mx.where(mx.greater(f, threshold), f, value)
+    return out.astype(a.dtype)
+
+
+def _prelu(a, weight):
+    # aten.prelu(input, weight): x when x >= 0, else x * weight. weight is a
+    # scalar tensor or one element per channel on dim 1.
+    a, f = _opmath_f32(a)
+    w = _mx(weight)
+    if w.ndim == 1 and f.ndim >= 2 and w.shape[0] == f.shape[1]:
+        w = mx.reshape(w, [1, w.shape[0]] + [1] * (f.ndim - 2))
+    elif w.ndim == 1 and w.shape[0] != 1:
+        return _raise("prelu weight")
+    return mx.where(mx.greater_equal(f, 0.0), f, f * w).astype(a.dtype)
+
+
+def _rrelu(a, lower=0.125, upper=1.0 / 3.0, training=False, generator=None):
+    # aten.rrelu in eval mode is leaky_relu at the mean of [lower, upper].
+    # training samples a per-element slope from a generator, which has no
+    # deterministic lowering here.
+    if training:
+        return _raise("rrelu training")
+    return _leaky_relu(a, (lower + upper) / 2.0)
+
 def _frac(a):
     # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
     # NOT x - floor(x) which would give +0.7).
@@ -2376,6 +2419,16 @@ _FUNC_SPECS = {
     "elu": lambda a, alpha=1.0, scale=1.0, input_scale=1.0, inplace=False: scale * mx.where(mx.greater(a, 0), a, alpha * mx.expm1(input_scale * a)),
     "selu": lambda a, inplace=False: 1.0507009873554805 * mx.where(mx.greater(a, 0), a, 1.6732632423543772 * mx.expm1(a)),
     "celu": lambda a, alpha=1.0, inplace=False: mx.where(mx.greater(a, 0), a, alpha * mx.expm1(a / alpha)),
+    # the parameterized activation family (Q-58).
+    "leaky_relu": _leaky_relu,
+    "leaky_relu_": _leaky_relu,
+    "hardtanh": _hardtanh,
+    "hardtanh_": _hardtanh,
+    "threshold": _threshold,
+    "threshold_": _threshold,
+    "prelu": _prelu,
+    "rrelu": _rrelu,
+    "rrelu_": _rrelu,
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,

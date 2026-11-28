@@ -2680,6 +2680,109 @@ def test_elu_selu_celu():
     print("test_elu_selu_celu PASS")
 
 
+def test_parametric_activations():
+    # Q-58: the parameterized activation family.
+    # aten.leaky_relu(input, negative_slope=0.01): x when x >= 0, else
+    # negative_slope*x. aten.hardtanh(input, min_val=-1, max_val=1) is a
+    # clamp. aten.threshold(input, threshold, value): x when x > threshold,
+    # else value. aten.prelu(input, weight) scales negatives by a scalar or
+    # per-channel weight. aten.rrelu eval mode is leaky_relu at the mean of
+    # [lower, upper]; training samples noise and refuses.
+    x = torch.tensor([[-6.0, -2.0, -0.25, 0.0], [0.5, 1.0, 4.0, -0.001]])
+    w1 = torch.tensor([0.2])          # scalar weight
+    wc = torch.tensor([0.1, 0.3])     # per-channel weight (dim 1)
+    x4 = torch.tensor([[[[-2.0], [-1.0]], [[0.5], [3.0]]]])  # NCHW, C=2
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        xd = x.to(dtype)
+        w1d = w1.to(dtype)
+        wcd = wc.to(dtype)
+        x4d = x4.to(dtype)
+        cases = [
+            (torch.ops.aten.leaky_relu.default, (xd,), {},
+             torch.ops.aten.leaky_relu.default(xd), "leaky_relu"),
+            (torch.ops.aten.leaky_relu.default, (xd, 0.2), {},
+             torch.ops.aten.leaky_relu.default(xd, 0.2), "leaky_relu"),
+            (torch.ops.aten.hardtanh.default, (xd,), {},
+             torch.ops.aten.hardtanh.default(xd), "hardtanh"),
+            (torch.ops.aten.hardtanh.default, (xd, -0.5, 0.5), {},
+             torch.ops.aten.hardtanh.default(xd, -0.5, 0.5), "hardtanh"),
+            (torch.ops.aten.threshold.default, (xd, 0.0, -1.0), {},
+             torch.ops.aten.threshold.default(xd, 0.0, -1.0), "threshold"),
+            (torch.ops.aten.threshold.default, (xd, 0.25, 0.0), {},
+             torch.ops.aten.threshold.default(xd, 0.25, 0.0), "threshold"),
+            (torch.ops.aten.prelu.default, (xd, w1d), {},
+             torch.ops.aten.prelu.default(xd, w1d), "prelu"),
+            (torch.ops.aten.prelu.default, (xd, wcd), {},
+             torch.ops.aten.prelu.default(xd, wcd), "prelu"),
+            (torch.ops.aten.prelu.default, (x4d, wcd), {},
+             torch.ops.aten.prelu.default(x4d, wcd), "prelu"),
+            (torch.ops.aten.rrelu.default, (xd,), {},
+             torch.ops.aten.rrelu.default(xd, training=False), "rrelu"),
+            (torch.ops.aten.rrelu.default, (xd, 0.1, 0.5, False), {},
+             torch.ops.aten.rrelu.default(xd, 0.1, 0.5, False), "rrelu"),
+            (torch.nn.functional.leaky_relu, (xd,), {"negative_slope": 0.3},
+             torch.nn.functional.leaky_relu(xd, negative_slope=0.3),
+             "leaky_relu"),
+            (torch.nn.functional.hardtanh, (xd,), {},
+             torch.nn.functional.hardtanh(xd), "hardtanh"),
+            (torch.nn.functional.threshold, (xd, 0.5, 9.0), {},
+             torch.nn.functional.threshold(xd, 0.5, 9.0), "threshold"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert any(name.split("_")[0] in s for s in stats["mlx"]), \
+                (stats, str(target))
+            got = out.float().numpy()
+            assert np.allclose(got, ref.float().numpy(), atol=tol), \
+                (str(target), kw, dtype, got, ref.float().numpy())
+    # rrelu with training=True has no deterministic lowering — the node
+    # falls back to torch CPU rather than sampling on the accelerator.
+    g = torch.fx.Graph()
+    ph = g.placeholder("x")
+    n = g.call_function(torch.ops.aten.rrelu.default, (ph,),
+                        {"training": True})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(x)
+    assert stats["cpu"], stats
+    ref = torch.ops.aten.rrelu.default(x, training=False)
+    # eval-equivalent pins the table entry: mean slope of [0.125, 1/3].
+    m = mx.array(x.numpy())
+    got = torch.from_numpy(np.array(
+        mlx_vulkan.ATEN_TABLE["rrelu"](m).astype(mx.float32)))
+    assert torch.allclose(got, ref.float(), atol=1e-5), \
+        (got - ref.float()).abs().max()
+    # the in-place aten names share the table entries — parity at the table.
+    F = torch.nn.functional
+    for name, ref, params in (("leaky_relu_", F.leaky_relu(x, 0.15), (0.15,)),
+                              ("hardtanh_", F.hardtanh(x, -0.4, 0.4), (-0.4, 0.4)),
+                              ("threshold_", F.threshold(x, 0.1, -1.5), (0.1, -1.5))):
+        lowering = mlx_vulkan.ATEN_TABLE[name]
+        got = torch.from_numpy(np.array(
+            lowering(m, *params).astype(mx.float32)))
+        assert torch.allclose(got, ref.float(), atol=1e-5), \
+            (name, (got - ref.float()).abs().max())
+    # exact-zero pin: x = 0 stays 0 for the whole family.
+    z = mx.zeros((2,))
+    for name, params in (("leaky_relu", (0.01,)), ("hardtanh", ()),
+                         ("threshold", (0.0, 0.0)),
+                         ("prelu", (mx.array([0.25]),)), ("rrelu", ())):
+        got = np.array(mlx_vulkan.ATEN_TABLE[name](z, *params))
+        assert np.all(np.array(got) == 0.0), (name, got)
+    # threshold at x == threshold yields `value`, not x (strictly greater).
+    got = np.array(mlx_vulkan.ATEN_TABLE["threshold"](z, 0.0, -3.0))
+    assert np.all(np.array(got) == -3.0), got
+    print("test_parametric_activations PASS")
+
+
 def test_cosine_similarity():
     # PT-NORM-a: aten.cosine_similarity.default (embedding-eval family).
     # sum(x1*x2, dim) / (clamp(norm1,eps) * clamp(norm2,eps)) - eps clamps
@@ -3074,6 +3177,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_parametric_activations()
     print("ALL PASS")
 
 
