@@ -217,7 +217,8 @@ const QmmGeometry& qmm_geometry() {
           caps.subgroup_operations,
           caps.max_compute_work_group_invocations,
           caps.max_compute_work_group_size[0],
-          caps.subgroup_size_32_wide_admitted};
+          caps.subgroup_size_32_wide_admitted,
+          caps.subgroup_size_32_admitted_max_wg};
       const std::string_view chosen = omarchy::select_default_qmm_geometry_name(
           caps.device_name,
           dev.physical_type(),
@@ -331,16 +332,19 @@ bool apple_norm_subgroup_ready(const omarchy::Device& device) {
   }
   const auto& caps = device.capabilities();
   bool subgroup_ready =
-      (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted ||
+       caps.subgroup_size_32_admitted_max_wg >= 256u) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   omarchy::capsim::require_backed(
       device,
       caps,
       subgroup_ready,
       "*NormApple*",
-      "subgroup_size==32||32-wide-pin + subgroup_ops_mask[ARITHMETIC]",
+      "subgroup_size==32||32-wide-pin||pin32_wg>=256 + subgroup_ops_mask[ARITHMETIC]",
       ((device.hardware_capabilities().subgroup_size == 32u ||
-        device.hardware_capabilities().subgroup_size_32_wide_admitted) &&
+        device.hardware_capabilities().subgroup_size_32_wide_admitted ||
+        device.hardware_capabilities()
+                .subgroup_size_32_admitted_max_wg >= 256u) &&
        (device.hardware_capabilities().subgroup_operations &
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
   return subgroup_ready;
@@ -1193,7 +1197,7 @@ void dispatch_matmul(
   // gate (cooperative_matrix_bf16) that device creation chained the
   // cooperative-matrix feature on for an f32_8-less driver.
   const bool c16_subgroup = caps.subgroup_size == 32u ||
-      caps.subgroup_size_32_admitted;
+      caps.subgroup_size_32_admitted_max_wg >= 128u;
   bool direct16_shape = direct_dtype == float16 &&
       omarchy::cooperative_matrix_advertises(
           caps.cooperative_matrix_shapes,
@@ -1307,7 +1311,8 @@ void dispatch_matmul(
       params.matrix_m == 1u &&
       b_transposed && !a_transposed && !use_c && alpha == 1.0f &&
       (params.matrix_k % 128u) == 0u && (params.matrix_n % 4u) == 0u &&
-      caps.subgroup_size == 32u &&
+      (caps.subgroup_size == 32u ||
+       caps.subgroup_size_32_admitted_max_wg >= 32u) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0 &&
       bf16_vec_aligned;
   if (bf16_vec) {
@@ -1316,8 +1321,11 @@ void dispatch_matmul(
         caps,
         bf16_vec,
         "MatmulVecBF16",
-        "subgroup_size==32+subgroup_ops_mask[SHUFFLE_RELATIVE]",
-        (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+        "subgroup_size==32||pin32_wg>=32+subgroup_ops_mask[SHUFFLE_RELATIVE]",
+        ((encoder.device().hardware_capabilities().subgroup_size == 32u ||
+          encoder.device()
+                  .hardware_capabilities()
+                  .subgroup_size_32_admitted_max_wg >= 32u) &&
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0));
     encoder.dispatch_compute(
@@ -3901,7 +3909,8 @@ void dispatch_gather_qmm(
          // kernels applies unchanged (group 64 and 128; shipped with a device check).
          (bits == 2u && (group_size == 64u || group_size == 128u))) &&
         (out.dtype() == bfloat16 || (out.dtype() == float16 && !no_bias)) &&
-        sub_caps.subgroup_size == 32u &&
+        (sub_caps.subgroup_size == 32u ||
+         sub_caps.subgroup_size_32_admitted_max_wg >= 256u) &&
         (sub_caps.subgroup_operations &
          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
         sub_caps.storage_buffer_16bit_access;
@@ -3913,7 +3922,8 @@ void dispatch_gather_qmm(
   const bool use_sub_q3 = bits == 3 && transpose && !fp_mode && m == 1 &&
       group_size == 64 && !no_bias && out.dtype() == float16 && (n % 8) == 0 &&
       omarchy::gather_qmm_sub_default_part(q3_caps.device_name) &&
-      q3_caps.subgroup_size == 32u &&
+      (q3_caps.subgroup_size == 32u ||
+       q3_caps.subgroup_size_32_admitted_max_wg >= 256u) &&
       (q3_caps.subgroup_operations &
        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
       q3_caps.storage_buffer_16bit_access;
@@ -3927,7 +3937,8 @@ void dispatch_gather_qmm(
     const auto& fp_hw = encoder.device().hardware_capabilities();
     use_sub_fp = omarchy::gather_qmm_sub_fp_default_part(
             fp_caps.device_name) &&
-        fp_caps.subgroup_size == 32u &&
+        (fp_caps.subgroup_size == 32u ||
+         fp_caps.subgroup_size_32_admitted_max_wg >= 256u) &&
         (fp_caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
         fp_caps.storage_buffer_16bit_access;
     omarchy::capsim::require_backed(
@@ -3935,8 +3946,9 @@ void dispatch_gather_qmm(
         fp_caps,
         use_sub_fp,
         "GatherQmmNbSubFp*",
-        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-        (fp_hw.subgroup_size == 32u &&
+        "subgroup_size==32||pin32_wg>=256+subgroup_ops_mask[ARITHMETIC]",
+        ((fp_hw.subgroup_size == 32u ||
+          fp_hw.subgroup_size_32_admitted_max_wg >= 256u) &&
          (fp_hw.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u));
   }
   // Tiled route (sorted-expert prefill): MoE SwitchLinear at N*k >= 64 rows
@@ -4039,11 +4051,14 @@ void dispatch_gather_qmm(
       omarchy::capsim::require_backed(
           encoder.device(),
           word_caps,
-          word_caps.subgroup_size == 32u &&
+          (word_caps.subgroup_size == 32u ||
+           word_caps.subgroup_size_32_admitted_max_wg >= 128u) &&
               (word_caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u,
           "GatherQmmWord*",
-          "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-          (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+          "subgroup_size==32||pin32_wg>=128+subgroup_ops_mask[ARITHMETIC]",
+          ((encoder.device().hardware_capabilities().subgroup_size == 32u ||
+            encoder.device().hardware_capabilities()
+                    .subgroup_size_32_admitted_max_wg >= 128u) &&
            (encoder.device().hardware_capabilities().subgroup_operations &
             VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
       params.shape[2] = static_cast<uint32_t>(scales_d.offset() / 2);
@@ -8916,7 +8931,8 @@ void dispatch_qmm_tile(
   const uint64_t budget = encoder.in_tape_recording
       ? 0u
       : omarchy::batch_work_budget(
-            encoder.device().hardware_capabilities().device_name);
+            encoder.device().hardware_capabilities().device_name,
+            /*has_prefill=*/true);
   const uint32_t m_groups =
       (params.matrix_m + m_tile_rows - 1u) / m_tile_rows;
   const uint32_t piece = qmm_tile_columns_per_piece(n_groups, m_groups, budget);
@@ -9082,16 +9098,19 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     if (params.matrix_m == 1u) {
       const auto& caps = fp_encoder.device().capabilities();
       bool subgroup_ready =
-          caps.subgroup_size == 32u &&
+          (caps.subgroup_size == 32u ||
+           caps.subgroup_size_32_admitted_max_wg >= 256u) &&
           (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
       omarchy::capsim::require_backed(
           fp_encoder.device(),
           caps,
           subgroup_ready,
           "QmmVecSubgroupFp*",
-          "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-          (fp_encoder.device().hardware_capabilities().subgroup_size ==
-                  32u &&
+          "subgroup_size==32||pin32_wg>=256+subgroup_ops_mask[ARITHMETIC]",
+          ((fp_encoder.device().hardware_capabilities().subgroup_size ==
+                  32u ||
+            fp_encoder.device().hardware_capabilities()
+                    .subgroup_size_32_admitted_max_wg >= 256u) &&
               (fp_encoder.device().hardware_capabilities()
                        .subgroup_operations &
                   VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
@@ -9303,7 +9322,9 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       !coopmat_reachable && tile_path && rb_enabled && q4_g64_transpose &&
       out.dtype() == bfloat16 && x.ndim() >= 2 && x.shape(-2) > 1 &&
       coopmat_caps.cooperative_matrix_bf16 && coopmat16_shape_advertised &&
-      coopmat_caps.subgroup_size == 32u && !coopmat_disabled &&
+      (coopmat_caps.subgroup_size == 32u ||
+       coopmat_caps.subgroup_size_32_admitted_max_wg >= 64u) &&
+      !coopmat_disabled &&
       kQmmCoopmat16SharedBytes <= coopmat_caps.max_compute_shared_memory_size;
   // Intel/ANV-shaped coopmat16 twin (shaders/qmm_coopmat16_xe.comp):
   // same bf16-operand contract as QmmPrefillIntelBF16 on the 8x16x16
@@ -9571,15 +9592,20 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (qmm6_stream && batch == 1u && w.ndim() == 2 && scales.ndim() == 2 &&
       biases.ndim() == 2 && params.matrix_m <= 32u) {
     const auto& caps6 = encoder.device().capabilities();
-    bool sg32 = caps6.subgroup_size == 32u &&
+    bool sg32 =
+        (caps6.subgroup_size == 32u ||
+         caps6.subgroup_size_32_admitted_max_wg >= 256u) &&
         (caps6.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     omarchy::capsim::require_backed(
         encoder.device(),
         caps6,
         sg32,
         "QmmVec6*",
-        "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-        (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+        "subgroup_size==32||pin32_wg>=256 + subgroup_ops_mask[ARITHMETIC]",
+        ((encoder.device().hardware_capabilities().subgroup_size == 32u ||
+          encoder.device()
+                  .hardware_capabilities()
+                  .subgroup_size_32_admitted_max_wg >= 256u) &&
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (sg32) {
@@ -9616,19 +9642,27 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   if (params.matrix_m == 1u) {
     const auto& caps = encoder.device().capabilities();
+    // DEC-45: the subgroup word kernels assume 32-lane subgroups; a
+    // device reporting another native size takes them only under the
+    // requiredSubgroupSize = 32 pin (create_pipeline), admitted for the
+    // family's 256-lane workgroups here.
     bool subgroup_ready =
         (caps.subgroup_size == 32u ||
-         caps.subgroup_size_32_wide_admitted) &&
+         caps.subgroup_size_32_wide_admitted ||
+         caps.subgroup_size_32_admitted_max_wg >= 256u) &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     omarchy::capsim::require_backed(
         encoder.device(),
         caps,
         subgroup_ready,
         "QmmVec*Subgroup*",
-        "subgroup_size==32|pin32+subgroup_ops_mask[ARITHMETIC]",
+        "subgroup_size==32||32-wide||pin32_wg>=256+subgroup_ops_mask[ARITHMETIC]",
         ((encoder.device().hardware_capabilities().subgroup_size == 32u ||
           encoder.device().hardware_capabilities()
-              .subgroup_size_32_wide_admitted) &&
+              .subgroup_size_32_wide_admitted ||
+          encoder.device()
+                  .hardware_capabilities()
+                  .subgroup_size_32_admitted_max_wg >= 256u) &&
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     // 4-bit group-128 decode GEMV: the shipped word-format fast path only
@@ -9794,17 +9828,21 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     const auto& caps = encoder.device().capabilities();
     bool subgroup_ready =
         (caps.subgroup_size == 32u ||
-         caps.subgroup_size_32_wide_admitted) &&
+         caps.subgroup_size_32_wide_admitted ||
+         caps.subgroup_size_32_admitted_max_wg >= 256u) &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     omarchy::capsim::require_backed(
         encoder.device(),
         caps,
         subgroup_ready,
         "QmmVec*Subgroup*",
-        "subgroup_size==32|pin32+subgroup_ops_mask[ARITHMETIC]",
+        "subgroup_size==32||32-wide||pin32_wg>=256+subgroup_ops_mask[ARITHMETIC]",
         ((encoder.device().hardware_capabilities().subgroup_size == 32u ||
           encoder.device().hardware_capabilities()
-              .subgroup_size_32_wide_admitted) &&
+              .subgroup_size_32_wide_admitted ||
+          encoder.device()
+                  .hardware_capabilities()
+                  .subgroup_size_32_admitted_max_wg >= 256u) &&
          (encoder.device().hardware_capabilities().subgroup_operations &
           VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
     if (subgroup_ready) {
@@ -9860,7 +9898,9 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       params.matrix_m >= 2u && params.matrix_m <= 4u &&
       (params.matrix_k % 8u) == 0u && (params.lhs_offset % 8u) == 0u) {
     const auto& caps_rows = encoder.device().capabilities();
-    bool sg32_rows = caps_rows.subgroup_size == 32u &&
+    bool sg32_rows =
+        (caps_rows.subgroup_size == 32u ||
+         caps_rows.subgroup_size_32_admitted_max_wg >= 128u) &&
         (caps_rows.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     if (sg32_rows) {
       omarchy::capsim::require_backed(
@@ -9868,8 +9908,11 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           caps_rows,
           sg32_rows,
           "QmmVecRows8SubgroupBF16",
-          "subgroup_size==32+subgroup_ops_mask[ARITHMETIC]",
-          (encoder.device().hardware_capabilities().subgroup_size == 32u &&
+          "subgroup_size==32||pin32_wg>=128 + subgroup_ops_mask[ARITHMETIC]",
+          ((encoder.device().hardware_capabilities().subgroup_size == 32u ||
+            encoder.device()
+                    .hardware_capabilities()
+                    .subgroup_size_32_admitted_max_wg >= 128u) &&
            (encoder.device().hardware_capabilities().subgroup_operations &
             VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
       auto rows_params = params;
@@ -10060,10 +10103,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           coopmat_caps,
           coopmat16_reachable,
           "QmmPrefillCoopmat16BF16",
-          "cooperative_matrix_fp16_16x16x16",
+          "cooperative_matrix_fp16_16x16x16+subgroup_size==32||pin32_wg>=64",
           omarchy::cooperative_matrix_advertises(
               c16_hw.cooperative_matrix_shapes,
-              omarchy::qmm_prefill_coopmat_shape_f16x16()));
+              omarchy::qmm_prefill_coopmat_shape_f16x16()) &&
+              (c16_hw.subgroup_size == 32u ||
+               c16_hw.subgroup_size_32_admitted_max_wg >= 64u));
       dispatch_qmm_out_rows(
           encoder,
           out,
@@ -10747,7 +10792,8 @@ bool dispatch_quantized_gemv_group(
     rows = static_cast<uint32_t>(x.shape(-2));
   }
   bool subgroup_ready =
-      (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted ||
+       caps.subgroup_size_32_admitted_max_wg >= 256u) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   if (outgate != nullptr) {
     // The prologue deletes the Multiply that produced x (it was never
@@ -11203,15 +11249,16 @@ bool dispatch_quantized_gemv_group(
       encoder.device().compute().binding_limit() >= 13u &&
       encoder.device().capabilities().max_compute_work_group_invocations >= 512u &&
       encoder.device().capabilities().max_compute_work_group_size[0] >= 512u) {
+    const uint32_t rn_width = static_cast<uint32_t>(res_norm->out.shape(-1));
     const char* rn_vec4_env = omarchy::env_str("MLX_OMARCHY_RESNORM_VEC4");
     const bool rn_vec4_on = (rn_vec4_env != nullptr && rn_vec4_env[0] != '\0')
         ? (std::strcmp(rn_vec4_env, "0") != 0)
-        : omarchy::qmm_resnorm_vec4_default(qmm_dev_name);
+        : omarchy::qmm_resnorm_vec4_default(qmm_dev_name, rn_width);
     if (rn_vec4_on) {
       const char* rn_s32_env = omarchy::env_str("MLX_OMARCHY_RESNORM_R2S32");
       const bool rn_s32_want = (rn_s32_env != nullptr && rn_s32_env[0] != '\0')
           ? (std::strcmp(rn_s32_env, "0") != 0)
-          : omarchy::qmm_resnorm_r2s32_default(qmm_dev_name);
+          : omarchy::qmm_resnorm_r2s32_default(qmm_dev_name, rn_width);
       // The R2S32W2 build runs a 1024-lane workgroup, over the 512-lane
       // bound the 32-pin admission was derived at — it stays native-32
       // only even where a requiredSubgroupSize = 32 pin is legal.
@@ -11905,6 +11952,27 @@ bool dispatch_quantized_gemv_group(
         if (res_norm->dead_qmm_out) {
           params.flags |= 0x1000000u;
         }
+      } else if (
+          resnorm_kernel == ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2 &&
+          params.matrix_k % 512u == 0u && params.shape[0] == 4096u &&
+          params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u &&
+          (members[0].node.offset() & 3u) == 0u &&
+          (members[0].addend->offset() & 3u) == 0u &&
+          (members[0].epilogue->offset() & 15u) == 0u &&
+          (res_norm->out.offset() & 15u) == 0u &&
+          omarchy::qmm_resnorm_d4096_midsb_default_part(
+              encoder.device().capabilities().device_name)) {
+        const char* spec_env = omarchy::env_str("MLX_OMARCHY_RESNORM_SPEC");
+        const bool spec_allow =
+            (spec_env == nullptr || spec_env[0] == '\0' ||
+             std::strcmp(spec_env, "0") != 0);
+        if (spec_allow) {
+          resnorm_kernel =
+              ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD4096Midsb;
+          if (res_norm->dead_qmm_out) {
+            params.flags |= 0x1000000u;
+          }
+        }
       }
       encoder.dispatch_compute(
           resnorm_kernel,
@@ -12194,7 +12262,8 @@ bool dispatch_dense_gemv_group(
   const auto& caps = encoder.device().capabilities();
   if (encoder.device().compute().binding_limit() < kDenseVecMultiBindings ||
       !caps.storage_buffer_16bit_access || !caps.shader_int16 ||
-      caps.subgroup_size != 32u ||
+      (caps.subgroup_size != 32u &&
+       caps.subgroup_size_32_admitted_max_wg < 32u) ||
       (caps.subgroup_operations &
        VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) == 0u) {
     return false;
@@ -12295,8 +12364,10 @@ bool dispatch_dense_gemv_group(
       caps,
       true,
       "MatmulVecMultiBF16",
-      "subgroup_size==32+subgroup_ops_mask[SHUFFLE_RELATIVE]",
-      encoder.device().hardware_capabilities().subgroup_size == 32u &&
+      "subgroup_size==32||pin32_wg>=32+subgroup_ops_mask[SHUFFLE_RELATIVE]",
+      (encoder.device().hardware_capabilities().subgroup_size == 32u ||
+       encoder.device().hardware_capabilities()
+               .subgroup_size_32_admitted_max_wg >= 32u) &&
           (encoder.device().hardware_capabilities().subgroup_operations &
            VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0u);
   if (any_window) {
@@ -12980,6 +13051,12 @@ bool dispatch_rope_pair(
     commit_rope_kv_redirect(k_node);
   }
   return true;
+}
+
+bool dispatch_rope_pair(
+    std::array<array, 2>& nodes,
+    const Stream& stream) {
+  return dispatch_rope_pair(nodes, {nullptr, nullptr}, stream);
 }
 
 bool dispatch_add_norm_pair(
@@ -16377,7 +16454,8 @@ void GatedDeltaUpdate::eval_gpu(
       const auto& gdn_caps = encoder.device().capabilities();
       constexpr VkSubgroupFeatureFlags kGdnSgFeatures =
           VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
-      if (gdn_caps.subgroup_size == 32u &&
+      if ((gdn_caps.subgroup_size == 32u ||
+           gdn_caps.subgroup_size_32_admitted_max_wg >= 1024u) &&
           (gdn_caps.subgroup_operations & kGdnSgFeatures) == kGdnSgFeatures &&
           gdn_caps.max_compute_work_group_invocations >= 1024u &&
           gdn_caps.max_compute_work_group_size[0] >= 1024u) {
@@ -16471,7 +16549,8 @@ void GatedDeltaUpdate::eval_gpu(
   const uint32_t gdn_recur32_min_t = gdn_recur32_mode == 2 ? 2u : 64u;
   const bool gdn_recur32 = gdn_recur32_mode != 0 &&
       g.ndim() == 3 && static_cast<uint32_t>(T) >= gdn_recur32_min_t &&
-      gdn_caps.subgroup_size == 32u;
+      (gdn_caps.subgroup_size == 32u ||
+       gdn_caps.subgroup_size_32_admitted_max_wg >= 128u);
   if (gdn_recur32) {
     omarchy::ComputeParams params;
     params.count = Dv;
@@ -17077,7 +17156,9 @@ void BonsaiQ1AffineQmv::eval_gpu(
     return;
   }
   const auto& caps = encoder.device().capabilities();
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  bool subgroup_ready =
+      (caps.subgroup_size == 32u ||
+       caps.subgroup_size_32_admitted_max_wg >= 256u) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   omarchy::ComputeKernel kernel;
   switch (out.dtype()) {
@@ -17187,7 +17268,9 @@ void BonsaiQmvWide::eval_gpu(
     omarchy::unsupported(tag + " M (2..5)", out);
   }
   const auto& caps = encoder.device().capabilities();
-  bool subgroup_ready = caps.subgroup_size == 32u &&
+  bool subgroup_ready =
+      (caps.subgroup_size == 32u ||
+       caps.subgroup_size_32_admitted_max_wg >= 128u) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   if (!subgroup_ready) {
     omarchy::unsupported(tag + " subgroup_size==32", out);
@@ -17576,17 +17659,20 @@ void GreedyQuantizedArgmax::eval_gpu(
   auto& encoder = omarchy::get_command_encoder(s);
   const auto& caps = encoder.device().capabilities();
   bool subgroup_ready =
-      (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
+      (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted ||
+       caps.subgroup_size_32_admitted_max_wg >= 256u) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
   omarchy::capsim::require_backed(
       encoder.device(),
       caps,
       subgroup_ready,
       "QmmVec*Subgroup*",
-      "subgroup_size==32|pin32+subgroup_ops_mask[ARITHMETIC]",
+      "subgroup_size==32||32-wide||pin32_wg>=256+subgroup_ops_mask[ARITHMETIC]",
       ((encoder.device().hardware_capabilities().subgroup_size == 32u ||
         encoder.device().hardware_capabilities()
-            .subgroup_size_32_wide_admitted) &&
+            .subgroup_size_32_wide_admitted ||
+        encoder.device().hardware_capabilities()
+                .subgroup_size_32_admitted_max_wg >= 256u) &&
        (encoder.device().hardware_capabilities().subgroup_operations &
         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0));
   const array& w = inputs.at(1);
@@ -18327,7 +18413,8 @@ bool GdnConvDeltaUpdate::f32_a_log_supported(Stream s) {
       VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
-  return caps.subgroup_size == 32u &&
+  return (caps.subgroup_size == 32u ||
+          caps.subgroup_size_32_admitted_max_wg >= 1024u) &&
       (caps.subgroup_operations & kGdnSgFeatures) == kGdnSgFeatures &&
       caps.max_compute_work_group_invocations >= 1024u &&
       caps.max_compute_work_group_size[0] >= 1024u;
@@ -18390,7 +18477,8 @@ void GdnConvDeltaUpdate::eval_gpu(
       VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
   const bool gdn_coal_sg32_ok = gdn_coal_want && with_norm && dk == 128u &&
-      gdn_caps.subgroup_size == 32u &&
+      (gdn_caps.subgroup_size == 32u ||
+       gdn_caps.subgroup_size_32_admitted_max_wg >= 1024u) &&
       (gdn_caps.subgroup_operations & kGdnSgFeatures) == kGdnSgFeatures &&
       gdn_caps.max_compute_work_group_invocations >= 1024u &&
       gdn_caps.max_compute_work_group_size[0] >= 1024u;
@@ -19542,7 +19630,9 @@ void ScaledDotProductAttention::eval_gpu(
         VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
         VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
         VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
-    const bool online_rope_device_ready = decode_caps.subgroup_size == 32u &&
+    const bool online_rope_device_ready =
+        (decode_caps.subgroup_size == 32u ||
+         decode_caps.subgroup_size_32_admitted_max_wg >= 1024u) &&
         decode_caps.max_compute_work_group_invocations >= 1024u &&
         decode_caps.max_compute_work_group_size[0] >= 1024u &&
         decode_caps.max_compute_shared_memory_size >= min_shared &&
@@ -19912,7 +20002,8 @@ void ScaledDotProductAttention::eval_gpu(
     return (c.cooperative_matrix_f32_8 ||
             omarchy::sdpa_decode_f16_without_coopmat_part(
                 c.device_name, static_cast<uint32_t>(k_len))) &&
-        c.subgroup_size == 32u &&
+        (c.subgroup_size == 32u ||
+         c.subgroup_size_32_admitted_max_wg >= 1024u) &&
         c.max_compute_work_group_invocations >= 1024u &&
         c.max_compute_work_group_size[0] >= 1024u &&
         c.max_compute_shared_memory_size >= kDecodeSharedBytes &&
@@ -20053,7 +20144,9 @@ void ScaledDotProductAttention::eval_gpu(
       constexpr VkSubgroupFeatureFlags kOnlineSubgroupFeatures =
           VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
           VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
-      const bool online_device_ready = decode_caps.subgroup_size == 32u &&
+      const bool online_device_ready =
+          (decode_caps.subgroup_size == 32u ||
+           decode_caps.subgroup_size_32_admitted_max_wg >= min_threads) &&
           decode_caps.max_compute_work_group_invocations >= min_threads &&
           decode_caps.max_compute_work_group_size[0] >= min_threads &&
           decode_caps.max_compute_shared_memory_size >= min_shared &&

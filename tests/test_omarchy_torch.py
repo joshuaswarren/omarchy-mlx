@@ -113,6 +113,97 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 self.assertTrue(
                     torch.allclose(got, ref.float(), **tol),
                     (name, dtype, float((got - ref.float()).abs().max())))
+        torch.manual_seed(1)
+
+    def test_unfold_last_dim(self):
+        """PT-IM-b: aten.unfold lowers via gather + transpose — fp32 parity
+        against the aten CPU op on the last dimension."""
+        lowering = ATEN_TABLE["unfold"]
+        for shape, dim, size, step in [((2, 3, 10), 2, 4, 2), ((4, 10), 1, 3, 1),
+                                       ((2, 3, 12), 2, 5, 3)]:
+            x = torch.randn(*shape)
+            ref = x.unfold(dim, size, step)
+            mine = lowering(mx.array(x.numpy()), dim, size, step)
+            got = torch.from_numpy(__import__("numpy").array(mine))
+            self.assertTrue(got.shape == ref.shape, (shape, got.shape, ref.shape))
+            self.assertTrue(torch.allclose(got.float(), ref.float(), atol=0, rtol=0),
+                            (shape, float((got - ref).abs().max())))
+
+    def test_unfold_non_last_dim(self):
+        """PT-IM-b: unfold on a non-last dimension moves the window dim to
+        the end per the aten spec."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(2)
+        lowering = ATEN_TABLE["unfold"]
+        x = torch.randn(2, 4, 6)
+        ref = x.unfold(1, 3, 2)
+        mine = lowering(mx.array(x.numpy()), 1, 3, 2)
+        got = torch.from_numpy(__import__("numpy").array(mine))
+        self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
+        self.assertTrue(torch.allclose(got.float(), ref.float(), atol=0, rtol=0))
+
+    def test_fold_non_overlapping(self):
+        """PT-IM-b: aten.fold with stride == kernel is reshape/transpose —
+        fp32 parity against the aten CPU op, and the fold(unfold(x)) round
+        trip is exact."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(3)
+        fold = ATEN_TABLE["fold"]
+        unfold = ATEN_TABLE["unfold"]
+        x = torch.randn(2, 9, 1)  # [N, C*k, L] for C=3, k=3x3, stride=3x3: L=1
+        ref = torch.nn.functional.fold(
+            x, output_size=(3, 3), kernel_size=(3, 3))
+        mine = fold(mx.array(x.numpy()), (3, 3), (3, 3))
+        got = torch.from_numpy(__import__("numpy").array(mine))
+        self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
+        self.assertTrue(torch.allclose(got.float(), ref.float(), atol=1e-5, rtol=1e-5))
+
+    def test_fold_overlapping_sums(self):
+        """PT-IM-b: aten.fold with stride < kernel SUMS overlapping windows —
+        fp32 parity against the aten CPU op."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(4)
+        fold = ATEN_TABLE["fold"]
+        x = torch.randn(2, 12, 16)  # [N, C*k, L] for C=3, k=2x2, L=16
+        ref = torch.nn.functional.fold(
+            x, output_size=(5, 5), kernel_size=(2, 2), stride=(1, 1))
+        mine = fold(mx.array(x.numpy()), (5, 5), (2, 2), (1, 1), (0, 0))
+        got = torch.from_numpy(__import__("numpy").array(mine))
+        self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
+        self.assertTrue(torch.allclose(got.float(), ref.float(), atol=1e-5, rtol=1e-5),
+                        float((got - ref).abs().max()))
+
+    def test_fold_strided_multi_block(self):
+        """PT-IM-b re-review: the strided-placement path with multiple
+        blocks per axis (stride < output span, L > 1) — fp32 parity vs the
+        aten CPU op. Pins the bug where blocks stacked at stride 1."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(9)
+        fold = ATEN_TABLE["fold"]
+        x = torch.randn(2, 12, 4)  # [N, C*4, L] for C=3, k=2x2, L=4
+        ref = torch.nn.functional.fold(
+            x, output_size=(8, 8), kernel_size=(2, 2), stride=(2, 2))
+        mine = fold(mx.array(x.numpy()), (8, 8), (2, 2), (1, 1), (0, 0), (2, 2))
+        got = torch.from_numpy(__import__("numpy").array(mine))
+        self.assertTrue(got.shape == ref.shape, (got.shape, ref.shape))
+        self.assertTrue(torch.allclose(got.float(), ref.float(), atol=1e-5, rtol=1e-5),
+                        float((got - ref).abs().max()))
 
 
     def test_searchsorted_bucketize_parity(self):
@@ -294,8 +385,8 @@ class TestOmarchyTorchBackend(unittest.TestCase):
 
     def test_linalg_norm_parity(self):
         """PT-NORM-b: linalg_vector_norm/linalg_norm lower in the wheel
-        backend — parity vs torch across ord=1/2/inf, dims, keepdim,
-        dtype cast; plus the aten.norm inf/-inf pin."""
+        backend — fp32 and bf16 parity vs torch across ord=1/2/inf, dims,
+        keepdim, dtype cast; plus the aten.norm inf/-inf pin."""
         import mlx.core as mx
         import numpy as np
         import torch
@@ -305,33 +396,36 @@ class TestOmarchyTorchBackend(unittest.TestCase):
         x = torch.randn(3, 4)
         x3 = torch.randn(2, 3, 4)
         cases = [
-            ("linalg_vector_norm", (x,), {},
-             torch.linalg.vector_norm(x)),
-            ("linalg_vector_norm", (x,), {"ord": 1.0},
-             torch.linalg.vector_norm(x, ord=1.0)),
-            ("linalg_vector_norm", (x,),
-             {"ord": float("inf"), "dim": [1]},
-             torch.linalg.vector_norm(x, ord=float("inf"), dim=[1])),
-            ("linalg_vector_norm", (x3,),
-             {"ord": 0.5, "dim": [1, 2], "keepdim": True},
-             torch.linalg.vector_norm(x3, ord=0.5, dim=[1, 2],
-                                      keepdim=True)),
-            ("linalg_vector_norm", (x,), {"dtype": torch.float64},
-             torch.linalg.vector_norm(x, dtype=torch.float64)),
-            ("linalg_norm", (x,), {}, torch.linalg.norm(x)),
-            ("linalg_norm", (x,), {"ord": float("-inf"), "dim": [0]},
-             torch.linalg.norm(x, ord=float("-inf"), dim=[0])),
-            ("linalg_norm", (x3,), {"ord": 2.0, "dim": [2]},
-             torch.linalg.norm(x3, ord=2.0, dim=[2])),
+            ("linalg_vector_norm", torch.linalg.vector_norm, (x,), {}),
+            ("linalg_vector_norm", torch.linalg.vector_norm, (x,),
+             {"ord": 1.0}),
+            ("linalg_vector_norm", torch.linalg.vector_norm, (x,),
+             {"ord": float("inf"), "dim": [1]}),
+            ("linalg_vector_norm", torch.linalg.vector_norm, (x3,),
+             {"ord": 0.5, "dim": [1, 2], "keepdim": True}),
+            ("linalg_vector_norm", torch.linalg.vector_norm, (x,),
+             {"dtype": torch.float64}),
+            ("linalg_norm", torch.linalg.norm, (x,), {}),
+            ("linalg_norm", torch.linalg.norm, (x,),
+             {"ord": float("-inf"), "dim": [0]}),
+            ("linalg_norm", torch.linalg.norm, (x3,),
+             {"ord": 2.0, "dim": [2]}),
         ]
-        for name, ins, kw, ref in cases:
+        for name, fn, ins, kw in cases:
             lowering = ATEN_TABLE[name]
-            mins = tuple(mx.array(t.numpy()) for t in ins)
-            got = torch.from_numpy(
-                np.array(lowering(*mins, **kw).astype(mx.float32)))
-            self.assertTrue(
-                torch.allclose(got, ref.float(), atol=1e-5, rtol=1e-5),
-                (name, kw, float((got - ref.float()).abs().max())))
+            for dtype, tol in ((torch.float32, 1e-5),
+                               (torch.bfloat16, 2e-2)):
+                mins = tuple(
+                    (mx.array(t.float().numpy()).astype(mx.bfloat16)
+                     if dtype == torch.bfloat16 else mx.array(t.numpy()))
+                    for t in ins)
+                ref = fn(*[t.to(dtype) for t in ins], **kw)
+                got = torch.from_numpy(
+                    np.array(lowering(*mins, **kw).astype(mx.float32)))
+                self.assertTrue(
+                    torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                    (name, kw, dtype,
+                     float((got - ref.float()).abs().max())))
         m = mx.array(x.numpy())
         for p, ref in ((float("inf"), torch.norm(x, float("inf"))),
                        (float("-inf"), torch.norm(x, float("-inf")))):
@@ -409,6 +503,45 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 torch.allclose(got, ref.float(), atol=1e-5, rtol=1e-5),
                 (name, kw, float((got - ref.float()).abs().max())))
 
+    def test_flip_rot90_parity(self):
+        """PT-Q11: aten.flip + aten.rot90 lower in the wheel backend —
+        parity vs torch across dims lists, negative dims, k mod 4
+        (including negative k), non-default dims planes, and bf16."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(0)
+        x2 = torch.randn(3, 5)
+        x3 = torch.randn(2, 3, 4)
+        cases = [
+            ("flip", (x2, [0]), {}, torch.flip(x2, [0])),
+            ("flip", (x2, [0, 1]), {}, torch.flip(x2, [0, 1])),
+            ("flip", (x3, [-1]), {}, torch.flip(x3, [-1])),
+            ("flip", (x2.bfloat16(), [1]), {}, torch.flip(x2.bfloat16(), [1])),
+            ("rot90", (x2,), {"k": 1}, torch.rot90(x2, 1)),
+            ("rot90", (x2,), {"k": 2}, torch.rot90(x2, 2)),
+            ("rot90", (x2,), {"k": 3}, torch.rot90(x2, 3)),
+            ("rot90", (x2,), {"k": 4}, torch.rot90(x2, 4)),
+            ("rot90", (x2,), {"k": -1}, torch.rot90(x2, -1)),
+            ("rot90", (x3,), {"k": 1, "dims": [1, 2]}, torch.rot90(x3, 1, [1, 2])),
+            ("rot90", (x3,), {"k": 3, "dims": [-1, -2]}, torch.rot90(x3, 3, [-1, -2])),
+            ("rot90", (x2.bfloat16(),), {"k": 1}, torch.rot90(x2.bfloat16(), 1)),
+        ]
+        for name, ins, kw, ref in cases:
+            mins = tuple(
+                (mx.array(t.float().numpy()).astype(mx.bfloat16)
+                 if torch.is_tensor(t) and t.dtype == torch.bfloat16
+                 else mx.array(t.numpy()) if torch.is_tensor(t) else t)
+                for t in ins)
+            got = torch.from_numpy(
+                np.array(ATEN_TABLE[name](*mins, **kw).astype(mx.float32)))
+            tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+            self.assertTrue(
+                torch.allclose(got, ref.float(), atol=tol, rtol=tol),
+                (name, kw, float((got - ref.float()).abs().max())))
 
 
 if __name__ == "__main__":

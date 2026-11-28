@@ -210,6 +210,30 @@ const SimulationProfile kProfiles[] = {
         -1,
         134217728ull,
     },
+    {
+        "radv-rdna-subgroup64-pin32",
+        "radv",
+        "RADV/RDNA-class discrete GPU: native subgroup size 64 with the "
+        "full op mask, the 16x16x16 fp16 coopmat shape advertised, and a "
+        "legal requiredSubgroupSize = 32 pin for workgroups up to 1024 "
+        "lanes (maxComputeWorkgroupSubgroups = 32). DEC-45 admission "
+        "set: the 32-lane QMV/ResNorm/SwiGLU/*NormApple/Coopmat16 "
+        "routes open under the pin",
+        64,
+        VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+            VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+            VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT,
+        kAllSubgroupOps,
+        0,
+        0,
+        0,
+        0,
+        -1,
+        "AMD Radeon RX 9070",
+        1,
+        0,
+        1024,
+    },
 };
 
 std::string lowered(const char* v) {
@@ -277,6 +301,9 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
     // the QMV/norm gates fall back deterministically instead of depending
     // on what the host hardware could pin.
     caps.subgroup_size_32_wide_admitted = false;
+    // DEC-45: same carry-over rule for the workgroup-general pin bound —
+    // a profile sets it explicitly through subgroup_pin32_max_wg.
+    caps.subgroup_size_32_admitted_max_wg = 0;
   }
   caps.subgroup_operations =
       (caps.subgroup_operations | profile.subgroup_ops_mask_or) &
@@ -378,6 +405,10 @@ CapabilityReport apply(const CapabilityReport& hw, const SimulationProfile& prof
   }
   if (profile.max_storage_buffer_range != 0) {
     caps.max_storage_buffer_range = profile.max_storage_buffer_range;
+  }
+  if (profile.subgroup_pin32_max_wg >= 0) {
+    caps.subgroup_size_32_admitted_max_wg =
+        static_cast<uint32_t>(profile.subgroup_pin32_max_wg);
   }
   caps.simulated = true;
   caps.simulation_profile = profile.name;

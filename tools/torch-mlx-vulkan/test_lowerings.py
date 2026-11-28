@@ -742,6 +742,49 @@ def test_comparisons():
     print("test_comparisons PASS")
 
 
+def test_frac_reciprocal_rsqrt():
+    # PT-AL-e: aten.reciprocal / aten.rsqrt / aten.frac — basic math ops in
+    # normalization chains. frac = x - trunc(x) (keeps the sign on negatives).
+    rng = np.random.RandomState(6)
+    x = rng.randn(4, 6).astype(np.float32) * 3.0
+    OPS = [
+        ("reciprocal", torch.ops.aten.reciprocal.default,
+         lambda a: np.abs(a) > 1e-3),       # keep off the singularity
+        ("rsqrt", torch.ops.aten.rsqrt.default,
+         lambda a: a > 0),                  # domain: positive only
+        ("frac", torch.ops.aten.frac.default,
+         lambda a: np.ones_like(a, dtype=bool)),
+    ]
+    for name, aten_op, domain in OPS:
+        a = np.where(domain(x), x, np.ones_like(x))
+        # fp32 parity vs the aten reference
+        ref = aten_op(torch.tensor(a))
+        got = mlx_vulkan.ATEN_TABLE[name](mx.array(a))
+        np.testing.assert_allclose(_np(got), ref.numpy(), rtol=1e-5, atol=1e-6,
+                                   err_msg=name)
+        # bf16: aten rounds through fp32 opmath; tolerance per the family
+        ab = torch.tensor(a, dtype=torch.bfloat16)
+        ref_b = aten_op(ab)
+        mine = mlx_vulkan.ATEN_TABLE[name](
+            mx.array(ab.float().numpy()).astype(mx.bfloat16))
+        assert mine.dtype == mx.bfloat16, name
+        d = float(np.abs(_np(mine.astype(mx.float32))
+                         - ref_b.float().numpy()).max())
+        assert d < 0.02, f"{name} bf16: {d:.3e}"
+        # executor path: lands in stats["mlx"], not the CPU fallback
+        gfx = torch.fx.Graph()
+        pa = gfx.placeholder("a")
+        gfx.output(gfx.call_function(aten_op, (pa,)))
+        gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(torch.tensor(a))
+        np.testing.assert_allclose(_np(out), ref.numpy(), rtol=1e-5, atol=1e-6,
+                                   err_msg=name)
+        assert name in stats["mlx"], (name, stats)
+        assert name not in stats["cpu"], (name, stats)
+    print("test_frac_reciprocal_rsqrt PASS")
+
+
 def test_linear():
     rng = np.random.RandomState(3)
     x = rng.randn(2, 4, 8).astype(np.float32)   # batched input
@@ -2928,6 +2971,49 @@ def test_log1p_expm1_logaddexp():
     print("test_log1p_expm1_logaddexp PASS")
 
 
+def test_flip_rot90():
+    # PT-Q11: aten.flip(self, int[] dims) reverses along each listed dim;
+    # aten.rot90(self, int k=1, int[] dims=[0,1]) is the ATen
+    # flip/transpose decomposition per quarter-turn. Both are view-level
+    # permutes — the lowered path must stay on mx with zero CPU fallback.
+    torch.manual_seed(0)
+    x2 = torch.randn(3, 5)
+    x3 = torch.randn(2, 3, 4)
+    cases = [
+        (torch.ops.aten.flip.default, (x2,), {"dims": [0]}, "flip"),
+        (torch.ops.aten.flip.default, (x2,), {"dims": [1]}, "flip"),
+        (torch.ops.aten.flip.default, (x2,), {"dims": [0, 1]}, "flip"),
+        (torch.ops.aten.flip.default, (x2,), {"dims": [-1]}, "flip"),
+        (torch.ops.aten.flip.default, (x3,), {"dims": [0, 2]}, "flip"),
+        (torch.ops.aten.flip.default, (x2.bfloat16(),), {"dims": [1]}, "flip"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 1}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 2}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 3}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": 4}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2,), {"k": -1}, "rot90"),
+        (torch.ops.aten.rot90.default, (x3,), {"k": 1, "dims": [1, 2]}, "rot90"),
+        (torch.ops.aten.rot90.default, (x3,), {"k": 2, "dims": [0, 2]}, "rot90"),
+        (torch.ops.aten.rot90.default, (x3,), {"k": 3, "dims": [-1, -2]}, "rot90"),
+        (torch.ops.aten.rot90.default, (x2.bfloat16(),), {"k": 1}, "rot90"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs, got, ref)
+    print("test_flip_rot90 PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -2978,9 +3064,16 @@ if __name__ == "__main__":
     test_logsumexp()
     test_glu()
     test_reciprocal_frac()
+    test_frac_reciprocal_rsqrt()
     test_linalg_norm()
     test_cosine_similarity()
     test_pdist_cdist()
+    test_flip_rot90()
+    test_mode()
+    test_kthvalue()
+    test_squeeze_inplace()
+    test_clamp_bounds()
+    test_piecewise_activations()
     print("ALL PASS")
 
 

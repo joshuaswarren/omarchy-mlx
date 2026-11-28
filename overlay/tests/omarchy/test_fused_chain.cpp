@@ -2219,7 +2219,7 @@ TEST_CASE("greedy prune default: the part rule and overrides") {
 TEST_CASE("greedy word over staged default: the part rule and overrides") {
   CHECK(omarchy::greedy_word_over_staged_part("Apple M2 Max (G14C B1)"));
   CHECK(omarchy::greedy_word_over_staged_part("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::greedy_word_over_staged_part("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::greedy_word_over_staged_part("Apple M4 (G16G B1)"));
   CHECK_FALSE(omarchy::greedy_word_over_staged_part(""));
 
@@ -2230,16 +2230,20 @@ TEST_CASE("greedy word over staged default: the part rule and overrides") {
 
   const std::string g14c = "Apple M2 Max (G14C B1)";
   const std::string g13c = "Apple M1 Max (G13C C0)";
+  const std::string g16g = "Apple M4 (G16G B1)";
   CHECK(omarchy::greedy_word_preferred(g14c));
-  CHECK_FALSE(omarchy::greedy_word_preferred(g13c));
+  CHECK(omarchy::greedy_word_preferred(g13c));
+  CHECK_FALSE(omarchy::greedy_word_preferred(g16g));
 
   setenv("MLX_OMARCHY_GREEDY_WORD", "0", 1);
   CHECK_FALSE(omarchy::greedy_word_preferred(g14c));
   CHECK_FALSE(omarchy::greedy_word_preferred(g13c));
+  CHECK_FALSE(omarchy::greedy_word_preferred(g16g));
 
   setenv("MLX_OMARCHY_GREEDY_WORD", "1", 1);
   CHECK(omarchy::greedy_word_preferred(g14c));
   CHECK(omarchy::greedy_word_preferred(g13c));
+  CHECK(omarchy::greedy_word_preferred(g16g));
 
   if (saved) {
     setenv("MLX_OMARCHY_GREEDY_WORD", saved->c_str(), 1);

@@ -18,6 +18,7 @@
 
 using mlx::core::omarchy::DependencyTracker;
 using mlx::core::omarchy::TrackedRange;
+using mlx::core::omarchy::view_hazard_window;
 
 namespace {
 
@@ -205,4 +206,80 @@ TEST_CASE("indexed answers match the linear scan across 200 buffers and saturate
       }
     }
   }
+}
+
+// M2D-6: the hazard window a view contributes to the tracker. Whole-
+// allocation registration collided every disjoint view of one buffer
+// (the ResNorm -> Word stall edge barriered on every occurrence); the
+// window derives from shape*strides because data_size understates a
+// strided footprint (the concat column slice).
+
+TEST_CASE("view hazard window covers a contiguous view exactly") {
+  int32_t shape[]{4, 8};
+  int64_t strides[]{8, 1};
+  auto [lo, hi] = view_hazard_window(0, 2, shape, strides, 2, 64);
+  CHECK(lo == 0);
+  CHECK(hi == 64);
+  // A tail slice: elements 24..32 of a 32-element f16 buffer.
+  int32_t s1[]{8};
+  int64_t st1[]{1};
+  auto [lo2, hi2] = view_hazard_window(48, 1, s1, st1, 2, 64);
+  CHECK(lo2 == 48);
+  CHECK(hi2 == 64);
+}
+
+TEST_CASE("view hazard window spans a strided footprint data_size understates") {
+  // The concat column slice: a 4x2 view with parent strides (8,1) at
+  // element offset 2. Logical size is 8 items (16 B) but the footprint
+  // reaches element 2 + 3*8 + 1 = 27, so the window must end at 56.
+  int32_t shape[]{4, 2};
+  int64_t strides[]{8, 1};
+  auto [lo, hi] = view_hazard_window(4, 2, shape, strides, 2, 64);
+  CHECK(lo == 4);
+  CHECK(hi == 56);
+}
+
+TEST_CASE("view hazard window follows negative strides below the view offset") {
+  int32_t shape[]{4};
+  int64_t strides[]{-1};
+  auto [lo, hi] = view_hazard_window(6, 1, shape, strides, 1, 64);
+  CHECK(lo == 3);
+  CHECK(hi == 7);
+}
+
+TEST_CASE("view hazard window is one element for stride-0 broadcasts and scalars") {
+  int32_t shape[]{8};
+  int64_t strides[]{0};
+  auto [lo, hi] = view_hazard_window(0, 1, shape, strides, 4, 64);
+  CHECK(lo == 0);
+  CHECK(hi == 4);
+  auto [slo, shi] = view_hazard_window(8, 0, shape, strides, 4, 64);
+  CHECK(slo == 8);
+  CHECK(shi == 12);
+}
+
+TEST_CASE("view hazard window degenerates on empty axes and clamps to the allocation") {
+  int32_t empty_shape[]{0, 4};
+  int64_t strides[]{4, 1};
+  auto [lo, hi] = view_hazard_window(0, 2, empty_shape, strides, 2, 64);
+  CHECK(lo == 0);
+  CHECK(hi == 0);
+  // A reach past the allocation end clamps (the caller's fallback keeps
+  // the bound range only when the window is fully degenerate).
+  int32_t shape[]{8, 8};
+  int64_t st[]{8, 1};
+  auto [lo2, hi2] = view_hazard_window(0, 2, shape, st, 2, 100);
+  CHECK(lo2 == 0);
+  CHECK(hi2 == 100);
+}
+
+TEST_CASE("disjoint views of one buffer no longer hazard each other") {
+  // Two views of one 256 B buffer: a res-norm output slice at [0,64)
+  // and a staged read slice at [192,256). Whole-allocation ranges
+  // collided on every batch head; the view windows are disjoint.
+  DependencyTracker t;
+  t.add_write(range(1, 0, 64));
+  CHECK_FALSE(needs(t, {range(1, 192, 256)}, {}));
+  // A view that does overlap the written slice still hazards.
+  CHECK(needs(t, {range(1, 32, 96)}, {}));
 }
