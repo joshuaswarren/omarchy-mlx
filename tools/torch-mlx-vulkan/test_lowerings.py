@@ -3014,6 +3014,104 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_reduction_variants():
+    # Q-64 / PT: aten.amin, amax, aminmax, prod, nanmedian — reduction
+    # variants over multi-dim tuples and keepdim. Every executor leg asserts
+    # stats["cpu"] == [] (zero CPU fallback on the happy path).
+    rng = np.random.RandomState(7)
+    x32 = rng.randn(2, 3, 4).astype(np.float32)
+    xn = x32.copy()
+    xn[0, 1, 2] = np.nan
+    xn[1, :, :] = np.nan  # one all-NaN plane
+
+    def run_one(target, ins, kw):
+        ref = target(*ins, **kw)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kw)
+        return ref, out
+
+    def close(a, b, what=""):
+        assert np.allclose(np.asarray(a, dtype=np.float64),
+                           np.asarray(b, dtype=np.float64),
+                           atol=2e-5, equal_nan=True), (what, a, b)
+
+    # single-output ops through the executor: value + shape parity
+    for target, ins, kw in [
+        (torch.ops.aten.amin.default, (torch.tensor(x32),), {"dim": [1]}),
+        (torch.ops.aten.amin.default, (torch.tensor(x32),), {"dim": [0, 2]}),
+        (torch.ops.aten.amin.default, (torch.tensor(x32),), {"dim": [0, 2], "keepdim": True}),
+        (torch.ops.aten.amin.default, (torch.tensor(x32),), {"dim": []}),
+        (torch.ops.aten.amin.default, (torch.tensor(5.0),), {"dim": [0]}),
+        (torch.ops.aten.amax.default, (torch.tensor(x32),), {"dim": [2]}),
+        (torch.ops.aten.amax.default, (torch.tensor(x32),), {"dim": [0, 1], "keepdim": True}),
+        (torch.ops.aten.amax.default, (torch.tensor(x32),), {"dim": []}),
+        (torch.ops.aten.amax.default, (torch.tensor(xn),), {"dim": [1]}),  # NaN propagates
+        (torch.ops.aten.prod.default, (torch.tensor(x32),), {}),
+        (torch.ops.aten.prod.dim_int, (torch.tensor(x32),), {"dim": 1}),
+        (torch.ops.aten.prod.dim_int, (torch.tensor(x32),), {"dim": 2, "keepdim": True}),
+        (torch.ops.aten.prod.dim_int,
+         (torch.arange(6, dtype=torch.int64).reshape(2, 3),), {"dim": 0}),
+        (torch.ops.aten.prod.dim_int,
+         (torch.arange(6, dtype=torch.int64).reshape(2, 3),),
+         {"dim": 0, "dtype": torch.float32}),  # input cast before reducing
+        (torch.ops.aten.nanmedian.default, (torch.tensor(xn),), {}),
+        (torch.ops.aten.nanmedian.default, (torch.tensor(x32),), {}),
+    ]:
+        ref, out = run_one(target, ins, kw)
+        assert torch.as_tensor(out).shape == ref.shape, \
+            (str(target), kw, torch.as_tensor(out).shape, ref.shape)
+        close(torch.as_tensor(out).float().numpy(), ref.float().numpy(),
+              f"{target} {kw}")
+
+    # aminmax returns the (min, max) pair through the executor
+    for kw in [{}, {"dim": 1}, {"dim": 0, "keepdim": True}]:
+        ref, out = run_one(torch.ops.aten.aminmax.default, (torch.tensor(x32),), kw)
+        omin, omax = out
+        assert torch.as_tensor(omin).shape == ref.min.shape, (kw,)
+        assert torch.as_tensor(omax).shape == ref.max.shape
+        close(torch.as_tensor(omin).float().numpy(), ref.min.float().numpy(),
+              f"aminmax {kw} min")
+        close(torch.as_tensor(omax).float().numpy(), ref.max.float().numpy(),
+              f"aminmax {kw} max")
+
+    # aminmax on a 0-d tensor: (scalar, scalar)
+    omin, omax = mlx_vulkan._aminmax(mx.array(4.0), dim=None)
+    assert omin.shape == () and _np(omin).item() == 4.0 and _np(omax).item() == 4.0
+
+    # nanmedian.dim through the executor: (values, indices) + the
+    # index-position contract (each returned index holds the returned
+    # value, or the position is NaN on all-NaN rows)
+    xt = torch.tensor(xn)
+    for dim, keepdim in [(1, False), (2, False), (1, True), (0, False), (-1, True)]:
+        ref = torch.nanmedian(xt, dim, keepdim=keepdim)
+        out_v, out_i = run_one(torch.ops.aten.nanmedian.dim, (xt,),
+                               {"dim": dim, "keepdim": keepdim})[1]
+        v_np, i_np = _np(out_v), _np(out_i)
+        assert v_np.shape == ref.values.shape, (dim, keepdim, v_np.shape, ref.values.shape)
+        assert i_np.shape == ref.indices.shape, (dim, keepdim, i_np.shape, ref.indices.shape)
+        close(v_np, ref.values.numpy(), f"nanmedian dim={dim} keepdim={keepdim} values")
+        d = dim % xn.ndim
+        i_full = i_np if keepdim else np.expand_dims(i_np, d)
+        v_full = v_np if keepdim else np.expand_dims(v_np, d)
+        held = np.take_along_axis(xn, i_full, axis=d)
+        assert np.isclose(held, np.broadcast_to(v_full, held.shape),
+                          atol=1e-6, equal_nan=True).all(), \
+            (dim, keepdim, held, v_full)
+
+    # int64 nanmedian: no NaN path, still a correct lower-middle median
+    xi = rng.randint(0, 9, size=(3, 8)).astype(np.int64)
+    ref = torch.nanmedian(torch.tensor(xi), 1)
+    vals, idx = mlx_vulkan._nanmedian(mx.array(xi), dim=1)
+    assert np.array_equal(_np(vals), ref.values.numpy()), (_np(vals), ref.values)
+    print("test_reduction_variants PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3172,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_reduction_variants()
     print("ALL PASS")
 
 
