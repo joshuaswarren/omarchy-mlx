@@ -186,7 +186,7 @@ int scenario(const std::string& name, const std::string& out) {
     // to `out`; "smalln" writes the outputs for byte comparison.
     int saved = -1;
     FILE* cap = nullptr;
-    const bool capture = std::strcmp(name, "smalln_ids") == 0;
+    const bool capture = name == "smalln_ids";
     if (capture) {
       saved = ::dup(::fileno(stderr));
       cap = std::fopen("/tmp/w7p-smalln-ids.cap", "w");
