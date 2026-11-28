@@ -2,6 +2,7 @@
 """PAR-47/PT-F census: prove aten.embedding_dense_backward and
 aten.select_backward lower (not FALLBACK) through torch.compile with the
 mlx_vulkan backend behind aot_autograd, and that their gradients are finite.
+PT-AL-a adds the same check for the functional elu/selu/celu lowerings.
 Run on a GPU host with torch + mlx-omarchy on the path."""
 import contextlib
 import io
@@ -104,3 +105,30 @@ print("CENSUS:", results)
 assert results["select_backward"], "select_backward did not lower"
 assert results["embedding_dense_backward"], "embedding_dense_backward did not lower"
 print("PT-F CENSUS PASS: both ops lower")
+
+
+# PT-AL-a: the functional elu/selu/celu entries lower through the same
+# compiled path; the forward pass alone exercises the dispatch. dynamo
+# decomposes selu onto aten.elu (scale=1.0507..., alpha=1.6732...), so the
+# selu graph is censed for aten.elu too - verified live: its only nodes are
+# LOWERED elu + LOWERED sum.
+x_act = torch.randn(16, requires_grad=True)
+
+for name, fn, ops in (
+    ("elu", lambda t: F.elu(t, alpha=1.2).sum(), ("aten.elu",)),
+    ("selu", lambda t: F.selu(t).sum(), ("aten.elu",)),
+    ("celu", lambda t: F.celu(t, alpha=1.5).sum(), ("aten.celu",)),
+):
+    _out, text = run_graph(fn, (x_act,))
+    shorts = {op.split(".")[-1] for op in ops}
+    fwd_fallback = [ln for ln in text.splitlines()
+                    if ln.startswith("FALLBACK") and ln.split("\t")[1:2][0] in shorts]
+    assert not fwd_fallback, f"{name} forward fell back:\n" + "\n".join(fwd_fallback)
+    for op in ops:
+        census(text, op, results)
+    x_act.grad = None
+
+print("CENSUS:", results)
+assert results["aten.elu"], "elu (and selu's decomposition) did not lower"
+assert results["aten.celu"], "celu did not lower"
+print("PT-AL-a CENSUS PASS: elu, selu (as decomposed aten.elu), celu lower")

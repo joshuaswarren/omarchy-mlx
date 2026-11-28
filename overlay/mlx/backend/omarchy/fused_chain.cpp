@@ -3318,7 +3318,9 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
           : (a_log_f32 ? omarchy::gdn_conv_coalesced_f32a_default(caps.device_name)
                        : omarchy::gdn_conv_coalesced_default(
                              caps.device_name, gdn_hk, gdn_hv));
-      if (!gdn_coal_want || caps.subgroup_size != 32u ||
+      if (!gdn_coal_want ||
+          (caps.subgroup_size != 32u &&
+           caps.subgroup_size_32_admitted_max_wg < 1024u) ||
           (caps.subgroup_operations & kGdnSgFeatures) != kGdnSgFeatures ||
           caps.max_compute_work_group_invocations < 1024u ||
           caps.max_compute_work_group_size[0] < 1024u ||
@@ -3637,7 +3639,8 @@ EagerFusionScope::EagerFusionScope(const std::deque<array>& tape)
     auto& encoder = get_command_encoder(member_stream);
     const auto& caps = encoder.device().capabilities();
     bool subgroup_ready =
-        (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
+        (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted ||
+         caps.subgroup_size_32_admitted_max_wg >= 256u) &&
         (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
     // The group dispatch refuses every group while the Q4 word path is off
     // (MLX_OMARCHY_QMM_VEC_Q4_WORD=0); adopting the fold then would leave the
@@ -5420,7 +5423,8 @@ bool qmm_residual_norm_enabled(
   // The plain and out-gate kernels use 16 and 8 32-lane slots respectively.
   const uint32_t threads = outgate ? 256u : 512u;
   if (!fused_chain_enabled() ||
-      (caps.subgroup_size != 32 && !caps.subgroup_size_32_wide_admitted) ||
+      (caps.subgroup_size != 32u && !caps.subgroup_size_32_wide_admitted &&
+       caps.subgroup_size_32_admitted_max_wg < threads) ||
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) == 0 ||
       caps.max_compute_work_group_invocations < threads ||
       caps.max_compute_work_group_size[0] < threads) {
@@ -5628,7 +5632,9 @@ bool sdpa_online_rope_enabled(
       VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
       VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
-  const bool device_ok = caps.subgroup_size == 32u &&
+  const bool device_ok =
+      (caps.subgroup_size == 32u ||
+       caps.subgroup_size_32_admitted_max_wg >= 1024u) &&
       caps.max_compute_work_group_invocations >= 1024u &&
       caps.max_compute_work_group_size[0] >= 1024u &&
       caps.max_compute_shared_memory_size >= min_shared &&
@@ -6193,7 +6199,8 @@ bool dispatch_prologue_fold(
     const auto& caps = encoder.device().capabilities();
     constexpr VkSubgroupFeatureFlags kPnSgOps =
         VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
-    if ((caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
+    if ((caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted ||
+         caps.subgroup_size_32_admitted_max_wg >= 256u) &&
         (caps.subgroup_operations & kPnSgOps) == kPnSgOps &&
         caps.max_compute_work_group_invocations >= 256u &&
         caps.max_compute_work_group_size[0] >= 256u) {

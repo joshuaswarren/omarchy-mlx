@@ -127,6 +127,12 @@ struct QmmWideCaps {
   // wave64) then runs the same 32-lane kernels through the pin in
   // ComputeRuntime::create_pipeline.
   bool subgroup_size_32_wide_admitted{false};
+  // caps.subgroup_pin32_max_wg: largest workgroup lane-count
+  // this device can run pinned at requiredSubgroupSize = 32, 0 when it
+  // cannot pin 32 at all. Admits the 32-lane geometries on parts whose
+  // native subgroup is not 32 (RADV 64, ANV 16) at each kernel's own
+  // workgroup bound, below the 512-wide admission check.
+  uint32_t subgroup_pin32_max_wg{0};
 };
 
 inline bool supports_qmm_2x16(const QmmWideCaps& caps) {
@@ -164,11 +170,15 @@ inline bool select_qmm_wide_2x16(
 // Pure capability check for the 2x8w2 Qmm decode workgroup geometry
 // (SLOTS_PER_GROUP=8, 32-lane subgroups -> 256 threads along local_size_x).
 // The kernels assume subgroupSize == 32 (see shaders/qmm_vec.comp): a
-// device reporting subgroup_size == 64 takes this path only when the
-// hardware report admitted a requiredSubgroupSize = 32 pin, which
-// ComputeRuntime::create_pipeline then sets on every QMV/norm pipeline.
+// device reporting a different native size (64 on RADV, 16 on ANV)
+// takes this path only when the hardware report admitted a
+// requiredSubgroupSize = 32 pin for the 256-lane workgroup — either the
+// DEC-18 wide admission (512) or the exact 256 bound
+// (subgroup_pin32_max_wg) — which ComputeRuntime::create_pipeline then
+// sets on every QMV/norm pipeline.
 inline bool supports_qmm_2x8w2(const QmmWideCaps& caps) {
-  return (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted) &&
+  return (caps.subgroup_size == 32u || caps.subgroup_size_32_wide_admitted ||
+          caps.subgroup_pin32_max_wg >= 256u) &&
       (caps.subgroup_operations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0u &&
       caps.max_workgroup_invocations >= 256u &&
       caps.max_workgroup_size_x >= 256u;

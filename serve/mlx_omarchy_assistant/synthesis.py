@@ -28,6 +28,7 @@ from __future__ import annotations
 import array
 import atexit
 import contextlib
+import fcntl
 import hashlib
 import importlib
 import importlib.metadata
@@ -42,10 +43,13 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import wave
 from pathlib import Path
 from typing import Iterator, NamedTuple
+
+from .wake_word import _DropRedirectBody
 
 MAX_TEXT_CHARS = 4000
 MAX_OUTPUT_SECONDS = 30.0
@@ -509,8 +513,9 @@ def _verify_pinned(path: Path, entry: dict, *,
     when ``st_size == entry['bytes']`` and either ``identity == cached``
     (skipping the hash) or a bounded read of at most ``entry['bytes'] + 1``
     bytes matches ``entry['sha256']``. Returns ``(None, None)`` on a size
-    mismatch and ``(None, actual_sha256)`` on a same-size digest mismatch.
-    Raises ``OSError`` from opening or reading the file.
+    mismatch, including a file whose size changes while it is hashed, and
+    ``(None, actual_sha256)`` on a same-size digest mismatch. Raises
+    ``OSError`` from opening or reading the file.
     """
     fh, st = _open_regular(path)
     with fh:
@@ -544,11 +549,59 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
         raise
 
 
-def _default_fetch(url: str, dest: Path) -> None:
-    with urllib.request.urlopen(url, timeout=_URL_TIMEOUT) as response:
-        with dest.open("wb") as fh:
-            for chunk in iter(lambda: response.read(1 << 20), b""):
+@contextlib.contextmanager
+def _pack_lock(assets: Path):
+    """One prepare downloads into a pack at a time; a second waits, then
+    finds the files verified and downloads nothing."""
+    lock_path = assets.with_name(f".{assets.name}.lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _default_fetch(url: str, dest: Path, *, max_bytes: int | None = None) -> None:
+    """Download ``url`` into the staging path ``dest``, following redirects.
+
+    Raises ``OSError`` for an HTTP status other than 200, a body cut short
+    of its Content-Length, and, when ``max_bytes`` is set, a declared
+    Content-Length or a body over ``max_bytes`` (at most ``max_bytes + 1``
+    bytes are read). A body sent without a Content-Length that ends early
+    cannot be told from a complete one; the caller's hash check catches it.
+    Whatever is at ``dest`` is removed (a symlink is not followed) and
+    ``dest`` is created with O_EXCL, which also refuses a symlink planted
+    after the removal.
+    """
+    opener = urllib.request.build_opener(_DropRedirectBody)
+    try:
+        response = opener.open(url, timeout=_URL_TIMEOUT)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise OSError(f"{url} returned HTTP {exc.code}") from None
+    with response:
+        if response.status != 200:
+            raise OSError(f"{url} returned HTTP {response.status}")
+        declared = response.length
+        if max_bytes is not None and declared is not None and declared > max_bytes:
+            raise OSError(f"{url} is {declared} bytes, over the "
+                          f"{max_bytes}-byte limit")
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(dest)
+        total = 0
+        with open(dest, "xb") as fh:
+            while max_bytes is None or total <= max_bytes:
+                chunk = response.read(1 << 20 if max_bytes is None else
+                                      min(1 << 20, max_bytes + 1 - total))
+                if not chunk:
+                    break
                 fh.write(chunk)
+                total += len(chunk)
+        if max_bytes is not None and total > max_bytes:
+            raise OSError(f"{url} sent more than {max_bytes} bytes")
+        if response.length:
+            raise OSError(f"{url} ended after {total} of {declared} bytes")
 
 
 def to_wav_bytes(samples, sample_rate: int,
@@ -1478,12 +1531,15 @@ class Synthesis:
                         "path": str(self.assets_dir()), "reason": reason,
                         "engines": [{"engine": p["id"], "downloaded": False,
                                      "verified": False} for p in VOICE_ENGINES]}
-            results.append(self._prepare_pack(pack, assets, fetch or _default_fetch))
+            results.append(self._prepare_pack(pack, assets, fetch))
         default_result = next(r for r in results
                               if r["engine"] == default["id"])
         return {**default_result, "engines": results}
 
-    def _prepare_pack(self, pack: dict, assets: Path, fetch) -> dict:
+    def _prepare_pack(self, pack: dict, assets: Path, fetch=None) -> dict:
+        """Download and verify one pack. ``fetch(url, path)`` replaces the
+        network for tests; the default download is capped at each file's
+        pinned size."""
         assets.mkdir(parents=True, exist_ok=True)
 
         def verify_or_raise(path: Path, entry: dict, *,
@@ -1507,29 +1563,40 @@ class Synthesis:
             return ident
 
         try:
-            for entry in sorted(pack["files"], key=lambda e: e["bytes"]):
-                dest = assets / entry["name"]
-                try:
-                    ident, _actual = _verify_pinned(dest, entry)
-                except OSError:
-                    ident = None
-                if ident is not None:
-                    continue
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dest.with_name(dest.name + ".part")
-                try:
-                    fetch(_URL_TEMPLATE.format(repo=pack["repo"],
+            with _pack_lock(assets):
+                for entry in sorted(pack["files"], key=lambda e: e["bytes"]):
+                    dest = assets / entry["name"]
+                    try:
+                        ident, _actual = _verify_pinned(dest, entry)
+                    except OSError:
+                        ident = None
+                    if ident is not None:
+                        continue
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    # Fixed staging path under the pack lock: one prepare owns
+                    # it at a time, and any leftover file or planted symlink is
+                    # removed before fetching.
+                    tmp = dest.with_name(dest.name + ".part")
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(tmp)
+                    url = _URL_TEMPLATE.format(repo=pack["repo"],
                                                revision=pack["revision"],
-                                               name=entry["name"]), tmp)
-                    verify_or_raise(tmp, entry, downloaded=True)
-                    os.replace(tmp, dest)
-                finally:
-                    tmp.unlink(missing_ok=True)
-            for entry in pack["files"]:
-                ident = verify_or_raise(assets / entry["name"], entry)
-                with _stat_identity_lock:
-                    _stat_identity_cache[(str(assets), entry["name"])] = ident
-            self._write_receipt(assets, pack)
+                                               name=entry["name"])
+                    try:
+                        if fetch is None:
+                            _default_fetch(url, tmp, max_bytes=entry["bytes"])
+                        else:
+                            fetch(url, tmp)
+                        verify_or_raise(tmp, entry, downloaded=True)
+                        os.replace(tmp, dest)
+                    finally:
+                        with contextlib.suppress(OSError):
+                            tmp.unlink(missing_ok=True)
+                for entry in pack["files"]:
+                    ident = verify_or_raise(assets / entry["name"], entry)
+                    with _stat_identity_lock:
+                        _stat_identity_cache[(str(assets), entry["name"])] = ident
+                self._write_receipt(assets, pack)
         except VoiceError as exc:
             self._last_error = str(exc)
             raise

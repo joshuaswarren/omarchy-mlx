@@ -264,6 +264,17 @@ struct CapabilityReport {
   // Apple-norm kernel family (DEC-18). Same derivation rule as
   // subgroup_size_32_admitted, at the wider VUID-02757 bound.
   bool subgroup_size_32_wide_admitted{false};
+  // Largest compute workgroup lane-count this hardware can run pinned
+  // at requiredSubgroupSize = 32: 32 * maxComputeWorkgroupSubgroups
+  // capped by maxComputeWorkGroupInvocations when size control is on,
+  // the compute stage is covered and 32 sits in [min, max]; 0
+  // otherwise. Same enable rule as the per-size admitted bits; a value
+  // >= 128 implies subgroup_size_32_admitted (probed at a 128-lane
+  // workgroup), >= 512 implies subgroup_size_32_wide_admitted. The
+  // 32-lane kernels whose workgroup is not the DEC-18 512 bound gate
+  // on it so RADV (native 64) and ANV-class parts run the NVIDIA
+  // 32-lane routes under a requiredSubgroupSize = 32 pipeline pin.
+  uint32_t subgroup_size_32_admitted_max_wg{0};
   // True: this hardware can pin requiredSubgroupSize = 64 for a 64-lane
   // compute workgroup (the one-subgroup 16x16x16 coopmat builds). Same
   // derivation rule as subgroup_size_16_admitted.
@@ -1105,13 +1116,17 @@ inline bool qmm_g14c_fast_only_default_part(const std::string& device_name) {
 // M2 Max (G14C): halves QKV preamble launches while keeping 64 half-regs and
 // 1024-thread occupancy (0-ULP bit-identical). Measured on Apple M2 Max
 // (G14C B1, DEFER_TOKENS=0): Qwen3.8-2B ctx=512 +0.22% (210.14 -> 210.43 tok/s,
-// 4/5, identical greedy digest). Default on G14C only;
-// MLX_OMARCHY_MULTI_R2S16=0/1 overrides. Pure.
+// 4/5, identical greedy digest). Measured on Apple M1 Max (G13C C0,
+// DEFER_TOKENS=0) vs the R2S8W2Fast3w default: Qwen3-4B ctx=512 +0.80%
+// (105.78 -> 106.63 tok/s, 5-pair ABBA, 10/10 leg separation) and ctx=2048
+// +0.60% (93.60 -> 94.16 tok/s), all legs greedy-identical. Default on
+// G14C and G13C; MLX_OMARCHY_MULTI_R2S16=0/1 overrides. Pure.
 inline bool qmm_g14c_multi_r2s16_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_MULTI_R2S16")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+         device_name.find("G13C") != std::string::npos;
 }
 
 // G13C-gated HD=128 SdpaOnlineRope fast path (parallel Phase-A sg 2..3 RoPE
@@ -1149,7 +1164,12 @@ inline bool prologue_norm_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_PROLOGUE_NORM")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("G14C") != std::string::npos;
+  // G13G added per M1D-2/BEY-03: the 13-inch 5-pair ABBA (Qwen3.8-2B 4-bit
+  // decode) measured the fused prologue at +2.66 percent median (5/5 legs
+  // above the default arm's median), 4-bit neutral (-0.38 percent), greedy
+  // ids bit-identical across all arms.
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 inline bool vocab_tail_chunked_default(const std::string& device_name) {

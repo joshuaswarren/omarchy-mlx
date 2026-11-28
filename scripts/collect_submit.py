@@ -37,8 +37,10 @@ and prints the error; a failed submit never destroys local output.
 
 import hashlib
 import http.client
+import inspect
 import json
 import os
+import re
 import reprlib
 import sys
 import urllib.error
@@ -51,6 +53,13 @@ DEFAULT_TIMEOUT = 60
 CHUNK_BYTES = 768 * 1024
 MAX_ARCHIVE_BYTES = 8 * 1024 * 1024
 MAX_PAYLOAD_BYTES = 256 * 1024
+# Client-only cap on a single HTTP response (or error) body from the
+# endpoint. All v1 responses are small JSON objects; capping at
+# MAX_PAYLOAD_BYTES keeps diagnostic errors intact while refusing
+# oversized streams before they fill memory.
+MAX_RESPONSE_BYTES = MAX_PAYLOAD_BYTES
+_READ_CHUNK_BYTES = 64 * 1024
+_DECIMAL_RE = re.compile(r"[0-9]+")
 POW_DIFFICULTY = 18
 
 # Client-only: the most a pow_invalid answer may ask for. The server
@@ -67,16 +76,198 @@ class SubmitError(RuntimeError):
     pass
 
 
+def _header_values(headers, name):
+    """All values for header `name`, matched case-insensitively."""
+    if headers is None:
+        return []
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        return list(get_all(name) or ())
+    items = getattr(headers, "items", None)
+    if callable(items):
+        target = name.lower()
+        return [v for k, v in items()
+                if isinstance(k, str) and k.lower() == target]
+    get = getattr(headers, "get", None)
+    if callable(get):
+        value = get(name)
+        return [] if value is None else [value]
+    return []
+
+
+def _header_get(headers, name):
+    values = _header_values(headers, name)
+    return values[0] if values else None
+
+
+def _check_content_length(headers, limit):
+    """Refuse responses whose strict-ASCII-digit Content-Length exceeds limit."""
+    max_digits = len(str(limit))
+    for raw in _header_values(headers, "Content-Length"):
+        if not isinstance(raw, str):
+            continue
+        for part in raw.split(","):
+            token = part.strip(" \t")
+            if not _DECIMAL_RE.fullmatch(token):
+                continue
+            digits = token.lstrip("0") or "0"
+            if len(digits) > max_digits or int(digits) > limit:
+                shown = digits if len(digits) <= 32 else digits[:32] + "..."
+                raise SubmitError(
+                    f"endpoint response too large: Content-Length {shown} "
+                    f"exceeds {limit} bytes")
+
+
+def _read_accepts_size(read_fn):
+    """True unless read_fn explicitly takes no positional arguments."""
+    try:
+        sig = inspect.signature(read_fn)
+    except (TypeError, ValueError):
+        return True
+    for param in sig.parameters.values():
+        if param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.VAR_POSITIONAL):
+            return True
+    return False
+
+
+def _remaining_framed_bytes(resp):
+    """Unconsumed Content-Length bytes left on an HTTPResponse, or 0."""
+    for obj in (resp, getattr(resp, "fp", None)):
+        if obj is None:
+            continue
+        rem = getattr(obj, "length", None)
+        if type(rem) is int:
+            return rem if rem > 0 else 0
+    return 0
+
+
+def _bytes_len(chunk):
+    return chunk.nbytes if isinstance(chunk, memoryview) else len(chunk)
+
+
+def _read_bounded(resp, headers, limit=MAX_RESPONSE_BYTES):
+    """Read at most `limit` bytes from `resp`, refusing oversized or
+    truncated framed bodies with SubmitError."""
+    _check_content_length(headers, limit)
+    read_fn = resp.read
+    if _read_accepts_size(read_fn):
+        buf = bytearray()
+        remaining = limit + 1
+        while remaining > 0:
+            chunk = read_fn(min(_READ_CHUNK_BYTES, remaining))
+            if not isinstance(chunk, (bytes, bytearray, memoryview)):
+                raise SubmitError("endpoint returned non-bytes response body")
+            chunk_len = _bytes_len(chunk)
+            if chunk_len == 0:
+                break
+            if len(buf) + chunk_len > limit:
+                raise SubmitError(
+                    f"endpoint response too large: exceeded {limit} bytes")
+            buf += chunk.tobytes() if isinstance(chunk, memoryview) else chunk
+            remaining = (limit + 1) - len(buf)
+        data = bytes(buf)
+    else:
+        data = read_fn()
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise SubmitError("endpoint returned non-bytes response body")
+        if _bytes_len(data) > limit:
+            raise SubmitError(
+                f"endpoint response too large: exceeded {limit} bytes")
+        data = bytes(data)
+    short = _remaining_framed_bytes(resp)
+    if short > 0:
+        raise SubmitError(
+            f"endpoint response truncated: {short} bytes remaining")
+    return data
+
+
+def _close_quietly(obj, *, is_cm=False):
+    """Close a response or context manager without masking an active error."""
+    if obj is None:
+        return
+    try:
+        if is_cm:
+            exit_fn = getattr(obj, "__exit__", None)
+            if callable(exit_fn):
+                exit_fn(None, None, None)
+                return
+        close_fn = getattr(obj, "close", None)
+        if callable(close_fn):
+            close_fn()
+    except Exception:
+        pass
+
+
+def _redirect_target_hint(headers):
+    """Safe scheme://host summary of a printable http(s) Location, or None."""
+    location = _header_get(headers, "Location")
+    if (not isinstance(location, str) or not location
+            or any(ch.isspace() or not ch.isprintable() for ch in location)):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(location)
+        parts.port  # ValueError on a non-numeric or out-of-range port
+    except ValueError:
+        return None
+    host = parts.hostname
+    if parts.scheme not in ("http", "https") or not host or len(host) > 255:
+        return None
+    rendered = f"[{host}]" if ":" in host else host
+    return f"{parts.scheme}://{rendered}"
+
+
+def _safe_request_id(headers):
+    raw = _header_get(headers, "cf-ray")
+    if (not isinstance(raw, str) or not raw or len(raw) > 128
+            or any(ch.isspace() or not ch.isprintable() for ch in raw)):
+        return None
+    return raw
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse 3xx redirects without reading the body or forwarding headers."""
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        _close_quietly(fp)
+        request_id = _safe_request_id(headers)
+        target = _redirect_target_hint(headers)
+        dest = f" to {target}" if target else ""
+        raise SubmitError(
+            f"endpoint redirected{dest} (HTTP {code}, request "
+            f"{request_id or 'unknown'}); refusing to follow redirects")
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = (
+        http_error_302)
+
+
+def _default_urlopen():
+    return urllib.request.build_opener(_NoRedirectHandler).open
+
+
 def _request(urlopen, req, timeout):
     """(status, body, request_id): the request id is the server's
     cf-ray header, so a contributor report is actionable."""
     try:
         try:
-            with urlopen(req, timeout=timeout) as resp:
-                body = resp.read()
-                return resp.status, body, resp.headers.get("cf-ray")
+            cm = urlopen(req, timeout=timeout)
+            try:
+                enter_fn = getattr(cm, "__enter__", None)
+                resp = enter_fn() if callable(enter_fn) else cm
+                headers = resp.headers
+                body = _read_bounded(resp, headers)
+                return resp.status, body, _header_get(headers, "cf-ray")
+            finally:
+                _close_quietly(cm, is_cm=True)
         except urllib.error.HTTPError as exc:
-            return exc.code, exc.read(), exc.headers.get("cf-ray")
+            try:
+                headers = exc.headers
+                body = _read_bounded(exc, headers)
+                return exc.code, body, _header_get(headers, "cf-ray")
+            finally:
+                _close_quietly(exc)
     # HTTPException: protocol errors, IncompleteRead included. ValueError:
     # a redirect Location urllib cannot parse.
     except (urllib.error.URLError, OSError, TimeoutError,
@@ -232,8 +423,7 @@ def submit(endpoint, data, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
             f"archive too large for the public endpoint: {len(data)} > "
             f"{MAX_ARCHIVE_BYTES} bytes; it stays local")
     if urlopen is None:
-        opener = urllib.request.build_opener()
-        urlopen = opener.open
+        urlopen = _default_urlopen()
     base = _endpoint_base(endpoint)
     digest = sha256_hex(data)
     chunks = chunk_archive(data)
@@ -346,8 +536,7 @@ def submit_payload(endpoint, payload, timeout=DEFAULT_TIMEOUT, urlopen=None,
     machine deduplicates instead of adding a row.
     """
     if urlopen is None:
-        opener = urllib.request.build_opener()
-        urlopen = opener.open
+        urlopen = _default_urlopen()
     base = _endpoint_base(endpoint)
     body = json.dumps(payload, sort_keys=True,
                       separators=(",", ":")).encode("utf-8")

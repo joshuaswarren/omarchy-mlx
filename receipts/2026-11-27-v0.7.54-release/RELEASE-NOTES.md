@@ -105,3 +105,22 @@ since v0.7.53.
 ## Cut
 
 Cut commit and assets recorded in the release receipt at tag time.
+
+## Note on Apple M1 Max PMP memory DVFS
+
+The 16-inch M1 Max parity rows referenced for this release ran with the
+Apple PMP (`apple_pmp`) memory DVFS driver active, which the shipped
+Linux kernel does not yet turn on for M1 Max (`t6001`).
+[`aurora-silicon/linux#3401`](https://github.com/aurora-silicon/linux/pull/3401)
+turns it on. Matched decode measurements on the same 16-inch M1 Max
+with Mesa `53ad9af196f5` (`MLX_OMARCHY_DEFER_TOKENS=0`) without PMP vs
+with PMP:
+
+- `Qwen3-4B-Instruct-2507-4bit` (`50d42775`) `ctx=512`: `98.48 tok/s`
+  without PMP vs `107.87 tok/s` with PMP (`+9.5%` / `−8.7%` without).
+- `Qwen3.5-9B-MLX-4bit` (`938d8919`) `ctx=512`: `58.56 tok/s` without
+  PMP vs `64.09 tok/s` with PMP (`+9.4%` / `−8.6%` without).
+- `Qwen3.5-9B-MLX-4bit` (`938d8919`) `ctx=2048`: `57.74 tok/s` without
+  PMP vs `63.49 tok/s` steady with PMP (`+10.0%` steady / `−9.1%`
+  without; second consecutive alias leg `60.44 tok/s` under fan ramp).
+

@@ -568,7 +568,7 @@ int main(int argc, char** argv) {
     unsetenv("MLX_OMARCHY_LM_R2S16_MIDSB");
     unsetenv("MLX_OMARCHY_MULTI_R2S16");
     if (!mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M2 Max (G14C B1)") ||
-        mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M1 Max (G13C C0)") ||
+        !mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::qmm_g14c_multi_r2s16_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: qmm_g14c_multi_r2s16_default_part part check\n";
@@ -600,13 +600,15 @@ int main(int argc, char** argv) {
     unsetenv("MLX_OMARCHY_SDPA_HD256_FAST");
     unsetenv("MLX_OMARCHY_PROLOGUE_NORM");
     if (!mlx::core::omarchy::prologue_norm_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::prologue_norm_default_part("Apple M1 (G13G B1)") ||
         mlx::core::omarchy::prologue_norm_default_part("Apple M1 Max (G13C C0)") ||
         mlx::core::omarchy::prologue_norm_default_part("llvmpipe (LLVM 15.0.6, 256 bits)")) {
       std::cout << "FAIL: prologue_norm_default_part part check\n";
       ++failures;
     }
     setenv("MLX_OMARCHY_PROLOGUE_NORM", "0", 1);
-    if (mlx::core::omarchy::prologue_norm_default_part("Apple M2 Max (G14C B1)")) {
+    if (mlx::core::omarchy::prologue_norm_default_part("Apple M2 Max (G14C B1)") ||
+        mlx::core::omarchy::prologue_norm_default_part("Apple M1 (G13G B1)")) {
       std::cout << "FAIL: prologue_norm_default_part =0 override\n";
       ++failures;
     }

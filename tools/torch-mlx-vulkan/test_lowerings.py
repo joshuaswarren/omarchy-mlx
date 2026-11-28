@@ -742,6 +742,49 @@ def test_comparisons():
     print("test_comparisons PASS")
 
 
+def test_frac_reciprocal_rsqrt():
+    # PT-AL-e: aten.reciprocal / aten.rsqrt / aten.frac — basic math ops in
+    # normalization chains. frac = x - trunc(x) (keeps the sign on negatives).
+    rng = np.random.RandomState(6)
+    x = rng.randn(4, 6).astype(np.float32) * 3.0
+    OPS = [
+        ("reciprocal", torch.ops.aten.reciprocal.default,
+         lambda a: np.abs(a) > 1e-3),       # keep off the singularity
+        ("rsqrt", torch.ops.aten.rsqrt.default,
+         lambda a: a > 0),                  # domain: positive only
+        ("frac", torch.ops.aten.frac.default,
+         lambda a: np.ones_like(a, dtype=bool)),
+    ]
+    for name, aten_op, domain in OPS:
+        a = np.where(domain(x), x, np.ones_like(x))
+        # fp32 parity vs the aten reference
+        ref = aten_op(torch.tensor(a))
+        got = mlx_vulkan.ATEN_TABLE[name](mx.array(a))
+        np.testing.assert_allclose(_np(got), ref.numpy(), rtol=1e-5, atol=1e-6,
+                                   err_msg=name)
+        # bf16: aten rounds through fp32 opmath; tolerance per the family
+        ab = torch.tensor(a, dtype=torch.bfloat16)
+        ref_b = aten_op(ab)
+        mine = mlx_vulkan.ATEN_TABLE[name](
+            mx.array(ab.float().numpy()).astype(mx.bfloat16))
+        assert mine.dtype == mx.bfloat16, name
+        d = float(np.abs(_np(mine.astype(mx.float32))
+                         - ref_b.float().numpy()).max())
+        assert d < 0.02, f"{name} bf16: {d:.3e}"
+        # executor path: lands in stats["mlx"], not the CPU fallback
+        gfx = torch.fx.Graph()
+        pa = gfx.placeholder("a")
+        gfx.output(gfx.call_function(aten_op, (pa,)))
+        gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(torch.tensor(a))
+        np.testing.assert_allclose(_np(out), ref.numpy(), rtol=1e-5, atol=1e-6,
+                                   err_msg=name)
+        assert name in stats["mlx"], (name, stats)
+        assert name not in stats["cpu"], (name, stats)
+    print("test_frac_reciprocal_rsqrt PASS")
+
+
 def test_linear():
     rng = np.random.RandomState(3)
     x = rng.randn(2, 4, 8).astype(np.float32)   # batched input
@@ -3021,10 +3064,16 @@ if __name__ == "__main__":
     test_logsumexp()
     test_glu()
     test_reciprocal_frac()
+    test_frac_reciprocal_rsqrt()
     test_linalg_norm()
     test_cosine_similarity()
     test_pdist_cdist()
     test_flip_rot90()
+    test_mode()
+    test_kthvalue()
+    test_squeeze_inplace()
+    test_clamp_bounds()
+    test_piecewise_activations()
     print("ALL PASS")
 
 

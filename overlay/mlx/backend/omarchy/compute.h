@@ -1484,6 +1484,13 @@ struct ComputeBinding {
   // the batch drains would be recycled or destroyed while the queued
   // commands still reference it.
   const void* owner{nullptr};
+  // Dependency-tracked byte window [tracked_offset, tracked_end). A zero
+  // tracked_end keeps the bound [offset, offset+range) window.
+  // binding(array) narrows it to the view's own element span so disjoint
+  // views of one allocation do not collide in the tracker; the
+  // descriptor still covers the allocation.
+  VkDeviceSize tracked_offset{0};
+  VkDeviceSize tracked_end{0};
 };
 
 struct ComputeParams {
@@ -1551,7 +1558,8 @@ class ComputeRuntime {
       bool subgroup_size_16_admitted,
       bool subgroup_size_32_admitted,
       bool subgroup_size_64_admitted,
-      bool subgroup_size_32_wide_admitted);
+      bool subgroup_size_32_wide_admitted,
+      uint32_t subgroup_size_32_admitted_max_wg);
   ~ComputeRuntime();
 
   ComputeRuntime(const ComputeRuntime&) = delete;
@@ -1626,6 +1634,7 @@ class ComputeRuntime {
   bool subgroup_size_32_admitted_{false};
   bool subgroup_size_64_admitted_{false};
   bool subgroup_size_32_wide_admitted_{false};
+  uint32_t subgroup_size_32_admitted_max_wg_{0};
   bool push_descriptors_{false};
 
   VkDevice device_;

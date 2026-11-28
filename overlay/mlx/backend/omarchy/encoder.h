@@ -51,11 +51,27 @@ inline ComputeBinding binding(const array& value) {
   // buffer whose first-half view would declare a shorter range, and
   // conformant drivers drop writes outside the descriptor range. The
   // full-allocation range removes that class entirely.
-  return {
+  ComputeBinding b{
       buffer->buffer,
       0,
       std::max<VkDeviceSize>(buffer->size, 1),
       buffer};
+  // The dependency tracker registers the bytes the shader can name
+  // through the view, not the whole allocation: two disjoint views of
+  // one buffer must not collide (the M2 stall map's ResNorm -> Word
+  // edge barriered on every occurrence for ranges that are provably
+  // disjoint). The window derives from shape*strides, not data_size,
+  // which understates a strided footprint (the concat column slice).
+  const auto [lo, hi] = view_hazard_window(
+      value.offset(),
+      value.ndim(),
+      value.shape().data(),
+      value.strides().data(),
+      static_cast<int64_t>(value.itemsize()),
+      buffer->size);
+  b.tracked_offset = lo;
+  b.tracked_end = hi;
+  return b;
 }
 
 // Per-stream command recorder over the device's single VkQueue. Recording

@@ -29,20 +29,29 @@ import fcntl
 import hashlib
 import json
 import os
-import shutil
 import stat
 import struct
 import sys
 import urllib.request
 from pathlib import Path
 
+from .jsonfile import (
+    _JSON_MAX_BYTES,
+    FileTooLargeError,
+    NotRegularFileError,
+    open_regular_file,
+    read_regular_bytes,
+)
+
 SOURCE_REPO = "convaiinnovations/laya"
+HF_BASE_URL = "https://huggingface.co"
 PINNED_REVISION = "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"
 WORKSPACE_HEADROOM_BYTES = 512 * 1024 * 1024
-# A converted manifest is about 1 KiB; cap reads to bound corrupt or hostile files.
-_MANIFEST_MAX_BYTES = 1 << 20
-# A Laya config is a few KiB; cap reads to bound corrupt or hostile files.
-_CONFIG_MAX_BYTES = 1 << 20
+# Manifest and config reads share the server's cap (jsonfile.py).
+_MANIFEST_MAX_BYTES = _JSON_MAX_BYTES
+# The pinned weights are 0.8 GiB and the next-largest file 3.4 MiB; this
+# bounds the disk a runaway download can fill.
+_FETCH_MAX_BYTES = 4 << 30
 # The safetensors format's own header size limit.
 _SAFETENSORS_HEADER_MAX_BYTES = 100_000_000
 _MANIFEST_FIELD_TYPES = (
@@ -65,17 +74,25 @@ FILES = ["model.safetensors", "rl_agent_config.json", "encoder/config.json",
 
 
 @contextlib.contextmanager
-def _open_source(path: Path, name: str):
+def _source_errors(name: str):
+    """Turn source-file read failures into convert: messages naming the file."""
     try:
-        with open(path, "rb", opener=lambda p, flags: os.open(p, flags | os.O_NONBLOCK)) as f:
-            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-                raise SystemExit("convert: %s in source snapshot is not a regular file" % name)
-            yield f
+        yield
+    except NotRegularFileError:
+        raise SystemExit("convert: %s in source snapshot is not a regular file" % name) from None
+    except FileTooLargeError:
+        raise SystemExit("convert: %s exceeds %d bytes" % (name, _JSON_MAX_BYTES)) from None
     except OSError as exc:
         raise SystemExit(
             "convert: cannot read %s in source snapshot (%s)"
             % (name, exc.strerror or type(exc).__name__)
         ) from None
+
+
+@contextlib.contextmanager
+def _open_source(path: Path, name: str):
+    with _source_errors(name), open_regular_file(path) as f:
+        yield f
 
 
 def _read_chunks(path: Path, name: str):
@@ -85,10 +102,8 @@ def _read_chunks(path: Path, name: str):
 
 
 def _read_config(path: Path, name: str) -> tuple[dict, str]:
-    with _open_source(path, name) as f:
-        raw = f.read(_CONFIG_MAX_BYTES + 1)
-    if len(raw) > _CONFIG_MAX_BYTES:
-        raise SystemExit("convert: %s exceeds %d bytes" % (name, _CONFIG_MAX_BYTES))
+    with _source_errors(name):
+        raw = read_regular_bytes(path)
     return _parse_json_object(raw, name), hashlib.sha256(raw).hexdigest()
 
 
@@ -139,10 +154,38 @@ def _copy_source(src: Path, dst: Path, name: str, sha256: str):
             raise SystemExit("convert: %s changed in the source snapshot during conversion" % name)
 
 
+class _DropRedirectBody(urllib.request.HTTPRedirectHandler):
+    """Close a redirect response before following it; urllib would otherwise
+    read its whole body first, with no size limit."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None:
+            fp.close()
+        return new
+
+
 def _fetch(repo: str, revision: str, subpath: str, name: str, dest: Path):
-    url = "https://huggingface.co/%s/resolve/%s/%s%s" % (repo, revision, subpath, name)
-    with urllib.request.urlopen(url, timeout=1800) as resp, open(dest, "wb") as f:
-        shutil.copyfileobj(resp, f)
+    """Download one file to dest; dest appears only after the body completes,
+    and when the server declares a length, only after that many bytes arrived."""
+    url = "%s/%s/resolve/%s/%s%s" % (HF_BASE_URL, repo, revision, subpath, name)
+    opener = urllib.request.build_opener(_DropRedirectBody)
+    with opener.open(url, timeout=1800) as resp:
+        expected = resp.length  # Content-Length; None when the server sends none
+        if expected is not None and expected > _FETCH_MAX_BYTES:
+            raise SystemExit("convert: %s is %d bytes, over the %d-byte download limit"
+                             % (name, expected, _FETCH_MAX_BYTES))
+        received = 0
+        with _replace_file(dest) as f:
+            while chunk := resp.read(min(1 << 20, _FETCH_MAX_BYTES + 1 - received)):
+                received += len(chunk)
+                if received > _FETCH_MAX_BYTES:
+                    raise SystemExit("convert: %s download exceeds %d bytes"
+                                     % (name, _FETCH_MAX_BYTES))
+                f.write(chunk)
+            if expected is not None and received != expected:
+                raise SystemExit("convert: %s download ended after %d of %d bytes"
+                                 % (name, received, expected))
 
 
 def _apply_aliases(header: dict) -> dict:
@@ -372,14 +415,11 @@ def convert(source: Path, repo: str, revision: str, out: Path, catalog_id: str) 
 def _read_manifest(model_dir: Path) -> dict | None:
     path = Path(model_dir) / "manifest.json"
     try:
-        with open(
-            path,
-            "rb",
-            opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK),
-        ) as f:
-            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-                raise ValueError("manifest.json is not a regular file")
-            raw = f.read(_MANIFEST_MAX_BYTES + 1)
+        raw = read_regular_bytes(path, _MANIFEST_MAX_BYTES)
+    except NotRegularFileError:
+        raise ValueError("manifest.json is not a regular file") from None
+    except FileTooLargeError:
+        raise ValueError("manifest.json exceeds %d bytes" % _MANIFEST_MAX_BYTES) from None
     except OSError as exc:
         if isinstance(exc, FileNotFoundError):
             try:
@@ -391,8 +431,6 @@ def _read_manifest(model_dir: Path) -> dict | None:
         raise ValueError(
             "manifest.json is unreadable: %s" % (exc.strerror or type(exc).__name__)
         ) from None
-    if len(raw) > _MANIFEST_MAX_BYTES:
-        raise ValueError("manifest.json exceeds %d bytes" % _MANIFEST_MAX_BYTES)
     try:
         data = json.loads(raw.decode("utf-8"))
     except (ValueError, RecursionError) as exc:
@@ -499,8 +537,8 @@ def main(argv=None):
     else:
         if not args.yes:
             print(
-                "convert would download from https://huggingface.co/%s at revision %s:\n  %s"
-                % (SOURCE_REPO, args.revision, "\n  ".join(subpath + n for n in FILES))
+                "convert would download from %s/%s at revision %s:\n  %s"
+                % (HF_BASE_URL, SOURCE_REPO, args.revision, "\n  ".join(subpath + n for n in FILES))
             )
             raise SystemExit("convert: re-run with --yes to approve the fetch")
         import tempfile

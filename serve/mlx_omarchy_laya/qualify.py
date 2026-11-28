@@ -32,11 +32,35 @@ import time
 import urllib.request
 from pathlib import Path
 
+from mlx_omarchy_laya.jsonfile import read_json_object
+
 FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "laya" / "laya_reference.json"
 
 ARGMAX_GATE = 1.0
 PROB_GATE = 2e-2
 ACT_GATE = 5e-2
+# A case's answer envelope is under 1 KiB; cap reads so a misbehaving server
+# cannot exhaust memory.
+_RESPONSE_MAX_BYTES = 1 << 20
+
+
+class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+    """Fail on a redirect without reading its body (urllib reads it whole)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _read_json_file(path, what, missing_ok=False):
+    """Read a JSON object file or exit with a qualify: message; with
+    missing_ok, a path that does not exist returns None."""
+    try:
+        return read_json_object(path)
+    except (OSError, ValueError, RecursionError) as exc:
+        if missing_ok and isinstance(exc, (FileNotFoundError, NotADirectoryError)):
+            return None
+        raise SystemExit("qualify: cannot read the %s %s (%s: %s)"
+                         % (what, path, type(exc).__name__, exc)) from None
 
 
 def _provenance(repo_root: Path) -> str:
@@ -83,8 +107,15 @@ def _run_case_url(url, state, questions):
                                  data=json.dumps({"state": state, "questions": questions}).encode(),
                                  headers={"Content-Type": "application/json"})
     t0 = time.perf_counter()
-    with urllib.request.urlopen(req, timeout=600) as r:
-        out = json.load(r)
+    with urllib.request.build_opener(_RefuseRedirect).open(req, timeout=600) as r:
+        raw = r.read(_RESPONSE_MAX_BYTES + 1)
+        remaining = r.length
+    if len(raw) > _RESPONSE_MAX_BYTES:
+        raise SystemExit("qualify: %s response exceeds %d bytes" % (req.full_url, _RESPONSE_MAX_BYTES))
+    if remaining:
+        raise SystemExit("qualify: %s response ended after %d of %d bytes"
+                         % (req.full_url, len(raw), len(raw) + remaining))
+    out = json.loads(raw)
     return out, (time.perf_counter() - t0) * 1000.0
 
 
@@ -119,7 +150,9 @@ def main(argv=None):
     p.add_argument("--allow-cpu", action="store_true", help="permit CPU engine (diagnostics only, never qualification)")
     args = p.parse_args(argv)
 
-    fixture = json.loads(args.fixture.read_text())
+    fixture = _read_json_file(args.fixture, "fixture")
+    # Read before any case runs, so a bad manifest cannot waste a hardware run.
+    m = _read_json_file(Path(args.model) / "manifest.json", "checkpoint manifest", missing_ok=True)
     repo_root = Path(__file__).resolve().parents[2]
     import mlx.core as mx
 
@@ -171,9 +204,7 @@ def main(argv=None):
     print(provenance)
     print("mlx: %s | device: %s | mode: %s" % (
         mx.__version__, device, "server %s" % args.url if args.url else "direct engine"))
-    manifest = Path(args.model) / "manifest.json"
-    if manifest.exists():
-        m = json.loads(manifest.read_text())
+    if m is not None:
         print("checkpoint: %s @ %s (weights sha256 %s)" % (
             m.get("catalog_id"), (m.get("source_revision") or "")[:12],
             (m.get("source_files_sha256") or {}).get("model.safetensors", "?")[:16]))
