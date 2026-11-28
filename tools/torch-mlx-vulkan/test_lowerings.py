@@ -2929,17 +2929,15 @@ def test_log1p_expm1_logaddexp():
 
 
 def test_log_exp_extras():
-    # PT-AL-g: log/exp extras — log2/log10/logit/logaddexp2/logspace/
-    # exp2/square lower with fp32 parity vs torch CPU and zero CPU
-    # fallback. logit's eps clamps endpoints; logaddexp2 covers the
-    # +-80 magnitudes where the naive log2(2^a+2^b) overflows fp32.
+    # PT-AL-g: log/exp extras — log2/log10/logit/logspace/exp2/
+    # square lower with fp32 parity vs torch CPU and zero CPU
+    # fallback. logit's eps clamps endpoints; logaddexp2 is covered
+    # by #1185 (PT row Q-16).
     torch.manual_seed(0)
     xp = torch.tensor([1e-8, 1e-4, 0.5, 1.0, 2.0, 10.0, 1e6])
     xg = torch.tensor([-2.0, -0.5, 0.0, 0.5, 1.0, 3.0])
     xi = torch.tensor([1e-6, 0.01, 0.5, 0.99, 0.999999])
     xc = torch.tensor([0.0, 1e-4, 0.5, 0.9999, 1.0])
-    a2 = torch.tensor([-80.0, -10.0, 0.0, 1.0, 10.0, 80.0])
-    b2 = torch.tensor([-80.0, -5.0, 0.5, 2.0, -10.0, 80.0])
     xe = torch.tensor([-20.0, -2.0, -0.5, 0.0, 0.5, 1.0, 10.0, 20.0])
     cases = [
         (torch.ops.aten.log2.default, (xp,), {}, "log2"),
@@ -2951,7 +2949,6 @@ def test_log_exp_extras():
         (torch.ops.aten.logit.default, (xi,), {}, "logit"),
         (torch.ops.aten.logit.default, (xc,), {"eps": 1e-3}, "logit"),
         (torch.ops.aten.logit_.default, (xc,), {"eps": 1e-3}, "logit"),
-        (torch.ops.aten.logaddexp2.default, (a2, b2), {}, "logaddexp2"),
         (torch.ops.aten.exp2.default, (xe,), {}, "exp2"),
         (torch.ops.aten.exp2_.default, (xe,), {}, "exp2"),
         (torch.ops.aten.logspace.default, (0.0, 2.0, 5), {}, "logspace"),

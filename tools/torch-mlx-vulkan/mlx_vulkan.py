@@ -2070,16 +2070,6 @@ def _logit(a, eps=None):
     return mx.log(f / (1.0 - f)).astype(a.dtype)
 
 
-_LN2 = 0.6931471805599453
-
-
-def _logaddexp2(a, b):
-    # aten.logaddexp2(a,b) = log2(2^a + 2^b). Fold the base change into
-    # the stable natural-log form: log(e^{a·ln2} + e^{b·ln2}) / ln2.
-    a, b = _mx(a), _mx(b)
-    return mx.logaddexp(a * _LN2, b * _LN2) / _LN2
-
-
 def _exp2(a):
     # aten.exp2(input): 2^x elementwise.
     a, f = _opmath_f32(a)
@@ -2418,12 +2408,11 @@ _FUNC_SPECS = {
     "expm1": mx.expm1, "expm1_": mx.expm1,
     "logaddexp": lambda a, b: mx.logaddexp(_mx(a), _mx(b)),
     # PT-AL-g: log/exp extras. logit clamps into [eps, 1-eps] when eps
-    # is given; logaddexp2 folds the base-2 change into the stable
-    # natural-log form; logspace is base**linspace.
+    # is given; logspace is base**linspace. logaddexp2 stays with
+    # #1185 (opened first, CI-green) — one key, one entry.
     "log2": mx.log2, "log2_": mx.log2,
     "log10": mx.log10, "log10_": mx.log10,
     "logit": _logit, "logit_": _logit,
-    "logaddexp2": _logaddexp2,
     "logspace": lambda s, e, n=100, base=10.0, **k: mx.power(
         base, mx.linspace(float(s), float(e), int(n))),
     "exp2": _exp2, "exp2_": _exp2,
