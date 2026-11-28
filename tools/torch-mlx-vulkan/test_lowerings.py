@@ -2928,6 +2928,86 @@ def test_log1p_expm1_logaddexp():
     print("test_log1p_expm1_logaddexp PASS")
 
 
+def test_comparison_bitwise_extras():
+    # PT-AL-h: comparison/bitwise extras — ge/le aliases plus every
+    # in-place comparison and logical variant, isneginf/isposinf, and
+    # the bitwise not/shift/or/xor family. In-place comparison ops cast
+    # the bool result back into the dest dtype like aten (ge_ on a
+    # float tensor writes 1.0/0.0 floats).
+    torch.manual_seed(0)
+    xf = torch.tensor([-1.0, 0.0, 0.5, 2.0, 1e6])
+    yf = torch.tensor([-1.0, 0.5, 0.5, -2.0, 1e5])
+    xi = torch.tensor([0b1100, 0b1010, 7, -3], dtype=torch.int32)
+    yi = torch.tensor([0b1010, 0b1100, 2, 1], dtype=torch.int32)
+    xb = torch.tensor([True, False, True, False])
+    yb = torch.tensor([True, True, False, False])
+    xe = torch.tensor([float("-inf"), -1.0, 0.0,
+                       float("nan"), float("inf")])
+    cases = [
+        (torch.ops.aten.greater_equal.Tensor, (xf, yf), {}, "greater_equal"),
+        (torch.ops.aten.greater_equal.Tensor, (xi, yi), {}, "greater_equal"),
+        (torch.ops.aten.less_equal.Tensor, (xf, yf), {}, "less_equal"),
+        (torch.ops.aten.less_equal.Tensor, (xi, yi), {}, "less_equal"),
+        (torch.ops.aten.logical_xor.default, (xb, yb), {}, "logical_xor"),
+        (torch.ops.aten.logical_xor.default, (xf, yf), {}, "logical_xor"),
+        (torch.ops.aten.isneginf.default, (xe,), {}, "isneginf"),
+        (torch.ops.aten.isposinf.default, (xe,), {}, "isposinf"),
+        (torch.ops.aten.bitwise_not.default, (xi,), {}, "bitwise_not"),
+        (torch.ops.aten.bitwise_not.default, (xb,), {}, "bitwise_not"),
+        (torch.ops.aten.bitwise_not_.default, (xi,), {}, "bitwise_not_"),
+        (torch.ops.aten.bitwise_left_shift.Tensor, (xi, yi), {},
+         "bitwise_left_shift"),
+        (torch.ops.aten.bitwise_left_shift_.Tensor, (xi, yi), {},
+         "bitwise_left_shift_"),
+        (torch.ops.aten.bitwise_right_shift.Tensor, (xi, yi), {},
+         "bitwise_right_shift"),
+        (torch.ops.aten.bitwise_right_shift_.Tensor, (xi, yi), {},
+         "bitwise_right_shift_"),
+        (torch.ops.aten.bitwise_or_.Tensor, (xi, yi), {}, "bitwise_or_"),
+        (torch.ops.aten.bitwise_xor_.Tensor, (xi, yi), {}, "bitwise_xor_"),
+        # in-place comparisons: bool dest keeps bool, float dest gets
+        # the bool result cast back like aten
+        (torch.ops.aten.ge_.Tensor, (xb, yb), {}, "ge_"),
+        (torch.ops.aten.ge_.Tensor, (xf.clone(), yf), {}, "ge_"),
+        (torch.ops.aten.le_.Tensor, (xb, yb), {}, "le_"),
+        (torch.ops.aten.gt_.Tensor, (xb, yb), {}, "gt_"),
+        (torch.ops.aten.lt_.Tensor, (xb, yb), {}, "lt_"),
+        (torch.ops.aten.eq_.Tensor, (xb, yb), {}, "eq_"),
+        (torch.ops.aten.not_equal_.Tensor, (xb, yb), {}, "not_equal_"),
+        (torch.ops.aten.greater_.Tensor, (xb, yb), {}, "greater_"),
+        (torch.ops.aten.less_.Tensor, (xb, yb), {}, "less_"),
+        (torch.ops.aten.greater_equal_.Tensor, (xb, yb), {},
+         "greater_equal_"),
+        (torch.ops.aten.less_equal_.Tensor, (xb, yb), {},
+         "less_equal_"),
+        (torch.ops.aten.logical_xor_.default, (xb, yb), {},
+         "logical_xor_"),
+        (torch.ops.aten.logical_and_.default, (xb, yb), {},
+         "logical_and_"),
+        (torch.ops.aten.logical_and_.default, (xf.clone(), yf), {},
+         "logical_and_"),
+        (torch.ops.aten.logical_or_.default, (xb, yb), {},
+         "logical_or_"),
+        (torch.ops.aten.logical_not_.default, (xb,), {}, "logical_not_"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert torch.equal(got, ref) or np.allclose(
+            got.float().numpy(), ref.float().numpy(), atol=1e-5), (
+            str(target), got, ref)
+    print("test_comparison_bitwise_extras PASS")
+
+
 def test_flip_rot90():
     # PT-Q11: aten.flip(self, int[] dims) reverses along each listed dim;
     # aten.rot90(self, int k=1, int[] dims=[0,1]) is the ATen
@@ -3018,6 +3098,7 @@ if __name__ == "__main__":
     test_softplus_mish()
     test_elu_selu_celu()
     test_log1p_expm1_logaddexp()
+    test_comparison_bitwise_extras()
     test_logsumexp()
     test_glu()
     test_reciprocal_frac()
