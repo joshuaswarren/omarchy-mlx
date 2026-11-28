@@ -3014,6 +3014,53 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+
+def test_special_polys():
+    # special_* polynomial family: P_0=1/P_1=seed/three-term recurrence,
+    # per-element broadcast degree (non-integer floors, negative -> 0).
+    def run_fx(target, args, kwargs, *ins):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*[a.clone() for a in ins])
+        assert stats["cpu"] == [], (stats, str(target))
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        got = torch.as_tensor(out)
+        assert got.shape == ref.shape, (str(target), got.shape, ref.shape)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(),
+                           atol=1e-4), (str(target), got, ref)
+
+    A = torch.ops.aten
+    x = torch.linspace(-2, 2, 9)
+    polys = ["special_chebyshev_polynomial_t",
+             "special_chebyshev_polynomial_u",
+             "special_chebyshev_polynomial_v",
+             "special_chebyshev_polynomial_w",
+             "special_shifted_chebyshev_polynomial_t",
+             "special_shifted_chebyshev_polynomial_u",
+             "special_shifted_chebyshev_polynomial_v",
+             "special_shifted_chebyshev_polynomial_w",
+             "special_hermite_polynomial_h",
+             "special_hermite_polynomial_he",
+             "special_laguerre_polynomial_l",
+             "special_legendre_polynomial_p"]
+    for name in polys:
+        f = getattr(A, name).default
+        for deg in (0, 1, 2, 3, 5):
+            run_fx(f, (), {}, x, torch.tensor(float(deg)))
+        # per-element degree broadcast + floor of non-integer degrees
+        run_fx(f, (), {}, x, torch.linspace(-1, 5.5, 9))
+        # n broadcast from a different shape
+        run_fx(f, (), {}, x.reshape(3, 3), torch.tensor([[0.], [2.], [4.]]))
+    run_fx(A.special_spherical_bessel_j0.default, (), {},
+           torch.tensor([0.0, 0.5, 1.0, 3.14159, -2.0]))
+    print("test_special_polys PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3121,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_special_polys()
     print("ALL PASS")
 
 
