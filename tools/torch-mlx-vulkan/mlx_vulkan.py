@@ -1110,6 +1110,31 @@ def _topk(a, k, dim=-1, largest=True, sorted=True):
     inv = [perm.index(i) for i in range(a.ndim)]
     return (mx.transpose(vals, axes=inv), mx.transpose(idx, axes=inv).astype(mx.int64))
 
+def _median(a, dim=None, keepdim=False):
+    """torch.median parity: the lower middle value along dim (torch takes
+    the lower of the two middle slots at even n) and its index in the
+    original tensor. Sort + argsort, then the (n-1)//2 slot."""
+    a = _mx(a)
+    if dim is None:
+        s = mx.sort(mx.reshape(a, (-1,)))
+        return s[(s.shape[0] - 1) // 2]
+    dim %= a.ndim
+    # integral sorts run on an explicit CPU stream (no int64 argsort
+    # kernel in the omarchy backend); see _mode
+    if mx.issubdtype(a.dtype, mx.integer):
+        with mx.stream(mx.cpu):
+            idx = mx.argsort(a, axis=dim)
+    else:
+        idx = mx.argsort(a, axis=dim)
+    m = (a.shape[dim] - 1) // 2
+    sel = mx.take(idx, mx.array([m]), axis=dim)
+    vals = mx.take_along_axis(a, sel, axis=dim)
+    if not keepdim:
+        vals = mx.squeeze(vals, axis=dim)
+        sel = mx.squeeze(sel, axis=dim)
+    return (vals.astype(a.dtype), sel.astype(mx.int64))
+
+
 def _mode(a, dim=-1, keepdim=False):
     """torch.mode parity: (values, indices) of the row-wise most frequent
     value, ties resolving to the smallest such value (torch CPU behavior),
@@ -1148,9 +1173,6 @@ def _mode(a, dim=-1, keepdim=False):
     if not keepdim:
         vals = mx.squeeze(vals, dim)
         index = mx.squeeze(index, dim)
-    if keepdim and a.ndim > 1:
-        vals = mx.expand_dims(vals, dim)
-        index = mx.expand_dims(index, dim)
     return (vals.astype(a.dtype), index.astype(mx.int64))
 
 
@@ -1183,9 +1205,6 @@ def _kthvalue(a, k, dim=-1, keepdim=False):
     if not keepdim:
         vals = mx.squeeze(vals, dim)
         sel_idx = mx.squeeze(sel_idx, dim)
-    if keepdim and a.ndim > 1:
-        vals = mx.expand_dims(vals, dim)
-        sel_idx = mx.expand_dims(sel_idx, dim)
     return (vals.astype(a.dtype), sel_idx.astype(mx.int64))
 
 
@@ -2403,6 +2422,7 @@ _FUNC_SPECS = {
     "multinomial": _multinomial,
     "histc": _histc,
     "histogram": _histogram,
+    "median": _median,
     "mode": _mode,
     "kthvalue": _kthvalue,
     "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
