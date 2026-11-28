@@ -11365,7 +11365,7 @@ bool dispatch_quantized_gemv_group(
       omarchy::env_str("MLX_OMARCHY_QMM_ORDER") != nullptr &&
       std::string_view(omarchy::env_str("MLX_OMARCHY_QMM_ORDER")) == "stride";
   if (qmm_order_stride) {
-    params.flags |= 131072u;
+    params.flags |= 524288u;  // bit 19: the DEC-44 permute's own bit
   }
   // Token route: rows 1..4 ride token4, rows 5..8 token8, rows 9..16 TWO
   // token8 passes (the token16 unroll miscompiles on AGX; per-row chains

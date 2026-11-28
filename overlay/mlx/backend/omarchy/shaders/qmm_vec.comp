@@ -1580,7 +1580,7 @@ void main() {
   // blocks. Pure permutation of which WG computes which row block:
   // bit-identical output. Applied only when the grid is an exact
   // multiple of 64 so the remap is a bijection.
-  if ((params.flags & 131072u) != 0u) {
+  if ((params.flags & 524288u) != 0u) {
     uint groups3 = (n3 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
     // The paired-epilogue dispatch (flag 16) sends one workgroup per
     // column pair for both members: the grid is groups0 alone. Counting
@@ -2202,7 +2202,7 @@ void main() {
   // blocks. Pure permutation of which WG computes which row block:
   // bit-identical output. Applied only when the grid is an exact
   // multiple of 64 so the remap is a bijection.
-  if ((params.flags & 131072u) != 0u) {
+  if ((params.flags & 524288u) != 0u) {
     // The paired-epilogue dispatch (flag 16) sends one workgroup per
     // column pair for both members: the grid is groups0 alone. Counting
     // the sum produced workgroup indices past n, leaving the top half

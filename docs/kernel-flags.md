@@ -182,15 +182,20 @@ and `ane-linux-experiments` receipts 2026-09-22-qwen38-integration /
 equivalence (≤ 2 bf16 quanta) is.
 
 - `MLX_OMARCHY_QMM_ORDER=stride` (DEC-44 probe, default off). Setting it to
-  `stride` raises flags bit 17 (`131072`) on the `qmm_vec.comp` plain
+  `stride` raises flags **bit 19** (`524288`) on the `qmm_vec.comp` plain
   dispatch and remaps the workgroup → row-block walk to a 64-wide transpose,
   guarded `groups_total >= 64 && groups_total % 64 == 0` with
   `groups_total` keyed on the dispatched grid (groups0 under the flag-16
-  paired epilogue, the full sum otherwise). Bit 17 is shared with the
-  out-gate prologue marker on the same params field
-  (`primitives.cpp:12048`, the `QmmVecQ4MultiOutgateBF16` variant) — the
-  two routes select different kernel variants so the bit never collides
-  live. Measured negative: 40 ABBA legs (5 pairs, ctx512 + ctx2048) on
-  G13C and G14C, all greedy-identical, medians within ±0.64%; the knob
-  ships default-off
+  paired epilogue, the full sum otherwise). The probe owns bit 19 outright:
+  an earlier revision shared flags bit 17 with the out-gate prologue marker
+  (`primitives.cpp:12048/12077`, `QmmVecQ4MultiOutgateBF16`), which spirv-dis
+  falsified — the outgate build read the bit as both the prologue marker and
+  the permute enable, and every outgate dispatch with
+  `groups_total % 64 == 0` remapped without the env set (bit-identical
+  output — the remap is a bijection — but the default-off property was
+  broken, and an ABBA arm on an outgate-dispatching shape measured with the
+  bit set in both arms). The bits are split now: bit 17 is solely the
+  out-gate marker, bit 19 solely the probe. The 40-leg ABBA on the
+  outgate-dispatching shape needs a re-run with the split bits before any
+  "no win" claim covers that shape
   (`receipts/2026-11-26-dec44-qkv-dispatch-order.md`).

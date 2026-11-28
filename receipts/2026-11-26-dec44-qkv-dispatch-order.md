@@ -33,10 +33,15 @@ dispatched grid at both permute sites (`qmm_vec.comp` dispatch paths for the
 plain and paired-epilogue routes). The regression arm gates 6144 rows so
 `groups0 = 384` engages the remap, asserting byte identity.
 
-## Shared-bit note
+## Shared-bit correction (2026-11-28, re-review)
 
-Flags bit 17 (`131072`) is also the out-gate prologue marker set on the same
-params field at `primitives.cpp:12048` (the `QmmVecQ4MultiOutgateBF16`
-variant). The probe route and the out-gate route select different kernel
-variants, so the bit never collides live, but any future consumer of bit 17
-must account for both writers (see `docs/kernel-flags.md`).
+The original probe shared flags bit 17 with the out-gate prologue marker;
+spirv-dis of the outgate build showed the bit consumed as both the marker
+and the permute enable, and every outgate dispatch with
+`groups_total % 64 == 0` remapped without the env set. The probe now owns
+flags bit 19 (`524288`) outright — bit 17 is solely the out-gate marker —
+so the ABBA arms differ again. **The 40-leg ABBA above was potentially
+vacuous on an outgate-dispatching shape** (the bit set in both arms); that
+shape needs a re-run with the split bits before a "no win" claim covers it.
+Non-outgate shapes were measured with neither arm carrying the bit and
+stand as recorded.
