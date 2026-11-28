@@ -1294,6 +1294,63 @@ def _rsub(a, b, alpha=1, **k):
     return _mx(b) - _mx(a) * alpha
 
 
+
+def _index_put(self, indices, values, accumulate=False):
+    """aten.index_put(self, indices, values, accumulate=False): advanced-
+    indexing assignment on a copy, for the standard case where the index
+    tensors enumerate the leading len(indices) dimensions. values
+    broadcast to bshape + a.shape[len(indices):], duplicate indices keep
+    the last write, and negative indices wrap - all like torch.
+    accumulate=True defers: the backend has no atomic scatter primitive
+    (the executor falls back to torch CPU, which is torch's own
+    accumulate semantics)."""
+    if accumulate:
+        return _raise("aten.index_put accumulate=True: no atomic scatter primitive")
+    a = _mx(self)
+    if not isinstance(indices, (tuple, list)):
+        indices = (indices,)
+    n_adv = len(indices)
+    if a.ndim < n_adv:
+        return _raise("aten.index_put: more index tensors than dims")
+    if any(t is None for t in indices):
+        return _raise("aten.index_put: None index entries")
+    # aten reads bool index tensors as masks (masked positions), not as
+    # 0/1 integers - defer rather than write the wrong positions.
+    if any(mx.issubdtype(_mx(t).dtype, mx.bool_) for t in indices):
+        return _raise("aten.index_put: bool mask indices")
+    idx_ts = []
+    for i, t in enumerate(indices):
+        tt = _mx(t).astype(mx.int32)
+        dim_sz = a.shape[i]
+        tt = tt + dim_sz * (tt < 0)  # negative indices wrap, like torch
+        if bool(((tt < 0) | (tt >= dim_sz)).any().item()):
+            return _raise("aten.index_put: index out of range")
+        idx_ts.append(tt)
+    # torch advanced-index rules: broadcast the index tensors to one shape
+    bshape = np.broadcast_shapes(*[tuple(t.shape) for t in idx_ts])
+    idx_ts = [mx.broadcast_to(t, bshape) for t in idx_ts]
+    trailing = int(np.prod(a.shape[n_adv:])) if a.ndim > n_adv else 1
+    # group-linear position inside the leading n_adv dims (row-major)
+    lin = mx.zeros(bshape, mx.int32)
+    stride = 1
+    for i in range(n_adv - 1, -1, -1):
+        lin = lin + idx_ts[i] * stride
+        stride *= a.shape[i]
+    lin_flat = lin.reshape(-1)
+    nb = int(lin_flat.shape[0])
+    flat = a.reshape(-1)
+    pos = mx.arange(int(flat.shape[0]), dtype=mx.int32)
+    grp, tail = pos // trailing, pos % trailing
+    # last write wins: the largest matching index slot per output element
+    # (one numel x bshape compare - fine at lowering-graph scale, O(n*B)
+    # memory if both are large)
+    sel = mx.max((grp[:, None] == lin_flat[None, :]).astype(mx.int32)
+                 * (mx.arange(nb, dtype=mx.int32) + 1)[None, :], axis=1)
+    vshape = tuple(bshape) + tuple(a.shape[n_adv:])
+    vals_b = mx.broadcast_to(_mx(values), vshape).astype(a.dtype).reshape(-1)
+    upd = mx.take(vals_b, mx.maximum((sel - 1) * trailing + tail, 0))
+    out_flat = mx.where(sel > 0, upd, flat)
+    return out_flat.reshape(a.shape).astype(a.dtype)
 def _alpha_arith(a, b, alpha, sign):
     # aten.add/sub (self, other, *, alpha=1): self +/- alpha*other. Torch
     # rejects sub on bool operands and a floating alpha when the promoted
@@ -2404,6 +2461,8 @@ _FUNC_SPECS = {
     "histogram": _histogram,
     "mode": _mode,
     "kthvalue": _kthvalue,
+    "index_put": _index_put,
+    "index_put_": _index_put,
     "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "index_select": lambda a, dim, i: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
@@ -2494,6 +2553,8 @@ _FUNC_SPECS = {
 
 def _raise(name):
     raise NotImplementedError(name)
+
+
 
 FUNC_TABLE = {}
 _FN_SOURCES = [torch, F, torch.special, operator]
@@ -2617,6 +2678,10 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
 ATEN_TABLE["aten.rsub.Scalar"] = _FUNC_SPECS["rsub"]
+ATEN_TABLE["aten.rsub.Tensor"] = _FUNC_SPECS["rsub"]
+ATEN_TABLE["aten.index_put"] = _FUNC_SPECS["index_put"]
+ATEN_TABLE["aten.index_put.Tensor"] = _FUNC_SPECS["index_put"]
+ATEN_TABLE["aten.index_put_"] = _FUNC_SPECS["index_put_"]
 ATEN_TABLE["_native_batch_norm_legit"] = _FUNC_SPECS["native_batch_norm"]
 # aten.embedding is (weight, indices): F.embedding is (input, weight).
 ATEN_TABLE["embedding"] = _embedding_any
@@ -3418,6 +3483,16 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                     continue
                 args = _dqall(args)
                 kwargs = {k: _dqall(v) for k, v in kwargs.items()}
+            if name == "index_put_":
+                upd = _index_put(args[0], args[1], args[2],
+                                 kwargs.get("accumulate",
+                                            args[3] if len(args) > 3 else False))
+                env[n.args[0]] = upd      # model in-place mutation
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
             if name == "index_copy_":
                 t, dim, idx, src = args[0], args[1], args[2], args[3]
                 if dim < 0:
