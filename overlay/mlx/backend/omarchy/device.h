@@ -1136,7 +1136,12 @@ inline bool prologue_norm_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_PROLOGUE_NORM")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("G14C") != std::string::npos;
+  // G13G added per M1D-2/BEY-03: the 13-inch 5-pair ABBA (Qwen3.8-2B 4-bit
+  // decode) measured the fused prologue at +2.66 percent median (5/5 legs
+  // above the default arm's median), 4-bit neutral (-0.38 percent), greedy
+  // ids bit-identical across all arms.
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 inline bool vocab_tail_chunked_default(const std::string& device_name) {
