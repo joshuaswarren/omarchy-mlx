@@ -2672,7 +2672,12 @@ _SAMPLERS = {"uniform", "normal", "cauchy", "exponential", "geometric",
 # torch tensors (e.g. pool bwd behind an unlowered conv/bn backward), and
 # cheap elementwise binops whose sampled forms can arrive with scalar-only
 # args (aten.mul.default(2, 3) style — no mx input to trip has_mx)
-_ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
+# tensor-rearrangement ops: dtype-exact in mx, so their args convert with
+# the exact bf16 view instead of the arithmetic-op fallback-to-CPU path
+_EXACT_BF16 = {"hstack", "vstack", "dstack", "column_stack", "row_stack"}
+
+_ALWAYS_LOWER = {"hstack", "vstack", "dstack", "column_stack", "row_stack",
+                 "max_pool2d", "max_pool2d_with_indices",
                  "max_pool2d_with_indices_backward", "avg_pool2d",
                  "avg_pool2d_backward", "adaptive_avg_pool2d",
                  "_adaptive_avg_pool2d", "adaptive_avg_pool2d_backward",
@@ -2784,11 +2789,14 @@ def make_executor(gm):
             return type(a)(resolve(x, env) for x in a)
         return a
 
-    def _deep_mx(v):
+    def _deep_mx(v, exact_bf16=False):
         if isinstance(v, torch.Tensor):
+            if exact_bf16:
+                return _mx(v)  # rearrangement ops are dtype-exact: the
+                # uint16 view keeps bf16 exact where mx.array(numpy) fails
             return mx.array(v.detach().cpu().numpy())
         if isinstance(v, (tuple, list)):
-            return type(v)(_deep_mx(x) for x in v)
+            return type(v)(_deep_mx(x, exact_bf16) for x in v)
         return v
 
     def has_mx(v):
@@ -2860,7 +2868,7 @@ def make_executor(gm):
                     lowering = None
                 if lowering is not None and (has_mx(args) or is_producer):
                     try:
-                        val = lowering(*_deep_mx(args), **{k: _deep_mx(v) for k, v in kwargs.items()})
+                        val = lowering(*_deep_mx(args, name in _EXACT_BF16), **{k: _deep_mx(v) for k, v in kwargs.items()})
                         on_mlx = True
                         # d-review: an in-place ATen op (masked_fill_, add_, ...)
                         # must mutate the graph's input placeholder, so later

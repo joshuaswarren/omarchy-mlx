@@ -2691,8 +2691,10 @@ def test_dir_stack_split():
     rng = np.random.RandomState(7)
 
     x1 = [torch.tensor(rng.randn(4).astype(np.float32)) for _ in range(2)]
-    x2 = [torch.tensor(rng.randn(2, n).astype(np.float32)) for n in (3, 2)]
-    x3 = [torch.tensor(rng.randn(2, 3, n).astype(np.float32)) for n in (2, 1)]
+    # vstack and hstack over the same list need equal shape off their own
+    # axis, so the multi-dim lists hold same-shaped tensors.
+    x2 = [torch.tensor(rng.randn(2, 3).astype(np.float32)) for _ in range(2)]
+    x3 = [torch.tensor(rng.randn(2, 3, 2).astype(np.float32)) for _ in range(2)]
     for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
         u = torch.tensor(rng.randn(2, 12).astype(np.float32))
         a1 = [t.to(dtype) for t in x1]
