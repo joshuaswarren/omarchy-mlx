@@ -2503,6 +2503,46 @@ _FUNC_SPECS = {
     "Float": _float_scalar,
 }
 
+
+def _cast_back(upd, dst):
+    # In-place comparison contract: the bool result casts into the
+    # destination dtype unconditionally (float dest gets 0.0/1.0), and
+    # the broadcast result may not grow the destination shape.
+    dst = _mx(dst)
+    if tuple(upd.shape) != tuple(dst.shape):
+        _raise(f"in-place result shape {tuple(upd.shape)} vs dest {tuple(dst.shape)}")
+    return upd.astype(dst.dtype)
+
+
+# aten `foo_` in-place aliases for ops already lowered above. The value
+# is the base op under torch's in-place cast-back contract; the build
+# loop's _INPLACE_SPECS branch models the mutation by writing the result
+# back into env[n.args[0]] (and any same-storage placeholder alias).
+_INPLACE_SPECS = {
+    "addbmm_": lambda a, *r, **k: _inplace_result(_FUNC_SPECS["addbmm"](a, *r, **k), a),
+    "addcdiv_": lambda a, *r, **k: _inplace_result(_FUNC_SPECS["addcdiv"](a, *r, **k), a),
+    "addcmul_": lambda a, *r, **k: _inplace_result(_FUNC_SPECS["addcmul"](a, *r, **k), a),
+    "addmm_": lambda a, *r, **k: _inplace_result(_FUNC_SPECS["addmm"](a, *r, **k), a),
+    "addmv_": lambda a, *r, **k: _inplace_result(_FUNC_SPECS["addmv"](a, *r, **k), a),
+    "baddbmm_": lambda a, *r, **k: _inplace_result(_FUNC_SPECS["baddbmm"](a, *r, **k), a),
+    "cos_": lambda a: _inplace_result(mx.cos(a), a),
+    "cumsum_": lambda a, dim, dtype=None: _inplace_result(mx.cumsum(a, axis=dim), a),
+    "div_": lambda a, b, *k: _inplace_result(_ar(_mx(a) / _mx(b)), a),
+    "floor_divide_": lambda a, b, *k: _inplace_result(mx.floor_divide(_mx(a), _mx(b)), a),
+    "gelu_": lambda a, approximate="none": _inplace_result(_FUNC_SPECS["gelu"](a, approximate), a),
+    "mish_": lambda a: _inplace_result(_mish(a), a),
+    "ne_": lambda a, b: _cast_back(mx.not_equal(_mx(a), _mx(b)), a),
+    "negative_": lambda a: _inplace_result(mx.negative(a), a),
+    "silu_": lambda a: _inplace_result(a * mx.sigmoid(a), a),
+    "sin_": lambda a: _inplace_result(mx.sin(a), a),
+    "tril_": lambda a, diagonal=0: _inplace_result(mx.tril(a, diagonal), a),
+    "triu_": lambda a, diagonal=0: _inplace_result(mx.triu(a, diagonal), a),
+    "true_divide_": lambda a, b, *k: _inplace_result(_ar(_mx(a) / _mx(b)), a),
+    "unsqueeze_": lambda a, dim: mx.expand_dims(a, axis=dim),
+}
+_FUNC_SPECS.update(_INPLACE_SPECS)
+
+
 def _raise(name):
     raise NotImplementedError(name)
 
@@ -3306,7 +3346,8 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
     # cache placeholders only count as mutated state when the graph actually
     # mutates them in place; HF concat-style cache (cat -> new outputs) must not
     # replay step-1 state on later calls.
-    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_", "scatter_", "index_put_", "bitwise_and_")
+    _mutfns = ("index_copy_", "add_", "sub_", "mul_", "div_", "copy_",
+               "scatter_", "index_put_", "bitwise_and_") + tuple(_INPLACE_SPECS)
     if not any(
             n.op == "call_method" and _opname(n) in _mutfns
             and getattr(n.args[0], "op", None)
@@ -3485,6 +3526,14 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                 upd = _inplace_result(
                     _bitwise_or_logical(env[n.args[0]], args[1], mx.bitwise_and, mx.logical_and),
                     env[n.args[0]])
+                env[n.args[0]] = upd
+                _ph = _ph_of(n.args[0])
+                if _ph is not None and _ph is not n.args[0]:
+                    env[_ph] = upd        # same-storage alias of a state ph
+                env[n] = upd
+                continue
+            if name in _INPLACE_SPECS and isinstance(n.args[0], torch.fx.Node):
+                upd = _INPLACE_SPECS[name](*args, **kwargs)
                 env[n.args[0]] = upd
                 _ph = _ph_of(n.args[0])
                 if _ph is not None and _ph is not n.args[0]:

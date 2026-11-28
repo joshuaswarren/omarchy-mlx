@@ -3014,6 +3014,93 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+
+
+def test_inplace_sweep():
+    # aten `foo_` in-place aliases lowered through _INPLACE_SPECS: the
+    # returned tensor is the mutated self, and a later consumer of the
+    # same placeholder must see the mutated value.
+    def run_fx(target, args, kwargs, *ins):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*[a.clone() for a in ins])
+        assert stats["cpu"] == [], (stats, str(target))
+        ref_ins = [a.clone() for a in ins]
+        ref = target(*ref_ins, **kwargs)
+        got = torch.as_tensor(out)
+        assert got.shape == ref.shape and got.dtype == ref.dtype, (
+            str(target), got.shape, got.dtype, ref.shape, ref.dtype)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(),
+                           atol=1e-5), (str(target), got, ref)
+
+    A = torch.ops.aten
+    x = torch.randn(3, 4, dtype=torch.float32)
+    xb = torch.randn(2, 3, 4, dtype=torch.float32)
+    pos = torch.rand(3, 4, dtype=torch.float32) + 0.5
+    run_fx(A.cos_.default, (), {}, x)
+    run_fx(A.sin_.default, (), {}, x)
+    run_fx(A.negative_.default, (), {}, x)
+    run_fx(A.gelu_.default, (), {}, x)
+    run_fx(A.gelu_.default, (), {"approximate": "tanh"}, x)
+    run_fx(A.mish_.default, (), {}, x)
+    run_fx(A.silu_.default, (), {}, x)
+    run_fx(A.cumsum_.default, (), {"dim": 1}, x)
+    run_fx(A.tril_.default, (), {"diagonal": 1}, x)
+    run_fx(A.triu_.default, (), {"diagonal": -1}, x)
+    run_fx(A.unsqueeze_.default, (), {"dim": 1}, x)
+    run_fx(A.div_.Tensor, (), {}, x, pos)
+    run_fx(A.true_divide_.Tensor, (), {}, x, pos)
+    run_fx(A.floor_divide_.Tensor, (), {}, x, pos)
+    run_fx(A.ne_.Tensor, (), {}, x, torch.randn(3, 4))
+    # comparison in-place keeps the destination dtype (bool -> 0.0/1.0)
+    ref = x.clone(); r = ref.ne_(torch.zeros(3, 4))
+    assert r.dtype == torch.float32
+    m1 = torch.randn(3, 4); m2 = torch.randn(4, 5)
+    run_fx(A.addmm_.default, (), {"beta": 0.5, "alpha": 2.0},
+           torch.randn(3, 5), m1, m2)
+    run_fx(A.baddbmm_.default, (), {"beta": 0.0},
+           torch.randn(2, 3, 5), xb, torch.randn(2, 4, 5))
+    run_fx(A.addbmm_.default, (), {}, torch.randn(3, 5), xb,
+           torch.randn(2, 4, 5))
+    run_fx(A.addmv_.default, (), {"alpha": -1.0}, torch.randn(3),
+           torch.randn(3, 4), torch.randn(4))
+    run_fx(A.addcmul_.default, (), {"value": 0.5}, x, pos, pos)
+    run_fx(A.addcdiv_.default, (), {"value": 2.0}, x, x, pos)
+
+    # mutation must be visible to later consumers of the placeholder
+    g = torch.fx.Graph()
+    p = g.placeholder("x")
+    g.call_function(A.sin_.default, (p,))
+    m = g.call_function(A.mul_.Scalar if False else A.mul.Scalar, (p, 2))
+    g.output(m)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    xx = torch.randn(5)
+    out = run(xx.clone())
+    assert stats["cpu"] == [], stats
+    ref = xx.clone(); ref.sin_(); ref = ref * 2
+    assert np.allclose(torch.as_tensor(out).numpy(), ref.numpy(), atol=1e-6)
+
+    # unsqueeze_ shape change must reach later consumers
+    g = torch.fx.Graph()
+    p = g.placeholder("x")
+    u = g.call_function(A.unsqueeze_.default, (p, 0))
+    m2n = g.call_function(A.sum.dim_IntList, (p, [0]))
+    g.output(m2n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    xx = torch.randn(3, 4)
+    out = run(xx.clone())
+    assert stats["cpu"] == [], stats
+    ref = xx.clone(); ref.unsqueeze_(0); ref = ref.sum(dim=0)
+    assert np.allclose(torch.as_tensor(out).numpy(), ref.numpy(), atol=1e-6)
+    print("test_inplace_sweep PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3161,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_inplace_sweep()
     print("ALL PASS")
 
 
