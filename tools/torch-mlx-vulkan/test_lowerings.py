@@ -2680,6 +2680,68 @@ def test_elu_selu_celu():
     print("test_elu_selu_celu PASS")
 
 
+def test_scatter_family():
+    # Q-62: the scatter family.
+    # aten.scatter(input, dim, index, src) writes src along dim; the
+    # .value overload passes a Scalar; scatter_add accumulates into the
+    # indexed positions instead. aten.take flattens then gathers.
+    rng = np.random.RandomState(11)
+    base = torch.tensor(rng.randn(3, 4).astype(np.float32))
+    src = torch.tensor(rng.randn(3, 3).astype(np.float32))
+    idx = torch.tensor([[0, 2, 1], [3, 0, 2], [1, 1, 3]])
+    # the dim-0 case uses a full-width index: put_along_axis (the mx
+    # primitive) matches input shape off the axis, and rows top out at 2
+    idx0 = torch.tensor([[0, 2, 1, 2], [1, 0, 2, 0], [1, 1, 2, 1]])
+    src0 = torch.tensor(rng.randn(3, 4).astype(np.float32))
+
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        bd, sd = base.to(dtype), src.to(dtype)
+        sd0 = src0.to(dtype)
+        cases = [
+            (torch.ops.aten.scatter.src, (bd, 1, idx, sd), {},
+             torch.scatter(bd, 1, idx, sd), "scatter"),
+            (torch.ops.aten.scatter.src, (bd, 0, idx0, sd0), {},
+             torch.scatter(bd, 0, idx0, sd0), "scatter"),
+            (torch.ops.aten.scatter.value, (bd, 1, idx, 9.5), {},
+             torch.ops.aten.scatter.value(bd, 1, idx, 9.5), "scatter"),
+            (torch.ops.aten.scatter_add.default, (bd, 1, idx, sd), {},
+             torch.scatter_add(bd, 1, idx, sd), "scatter_add"),
+            (torch.ops.aten.scatter_add_.default, (bd.clone(), 1, idx, sd), {},
+             torch.scatter_add(bd, 1, idx, sd), "scatter_add"),
+            (torch.ops.aten.take.default,
+             (bd, torch.tensor([0, 5, 11])), {},
+             torch.take(bd, torch.tensor([0, 5, 11])), "take"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target))
+            assert np.allclose(out.float().numpy(), ref.float().numpy(),
+                               atol=tol), (str(target), dtype)
+    # table-level pins: the scalar .value path and scatter_add semantics.
+    m = mx.array(base.numpy())
+    mi = mx.array(idx.numpy())
+    ms = mx.array(src.numpy())
+    T = mlx_vulkan.ATEN_TABLE
+    got = np.array(T["scatter"](m, 1, mi, 5.0))
+    ref = torch.ops.aten.scatter.value(base, 1, idx, 5.0)
+    assert np.allclose(got, ref.numpy()), "scatter.value"
+    # scatter_add on duplicate indices accumulates every hit.
+    dup = torch.tensor([[0, 0, 0]])
+    dup_src = torch.tensor([[1.0, 2.0, 4.0]])
+    got = np.array(T["scatter_add"](mx.array(base[:1].numpy()), 1,
+                                    mx.array(dup.numpy()),
+                                    mx.array(dup_src.numpy())))
+    ref = torch.scatter_add(base[:1], 1, dup, dup_src)
+    assert np.allclose(got, ref.numpy(), atol=1e-5), got
+    print("test_scatter_family PASS")
+
+
 def test_cosine_similarity():
     # PT-NORM-a: aten.cosine_similarity.default (embedding-eval family).
     # sum(x1*x2, dim) / (clamp(norm1,eps) * clamp(norm2,eps)) - eps clamps
@@ -3074,6 +3136,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_scatter_family()
     print("ALL PASS")
 
 

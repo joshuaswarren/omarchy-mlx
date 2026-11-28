@@ -2048,6 +2048,51 @@ def _glu(a, dim=-1):
         return _raise("glu")
     lo, hi = mx.split(f, 2, axis=dim % a.ndim)
     return (lo * mx.sigmoid(hi)).astype(a.dtype)
+
+def _scatter(a, dim, index, src, add=False):
+    # aten.scatter(input, dim, index, src) writes src into input at the
+    # indexed positions along dim; scatter_add accumulates instead. The
+    # .value overloads pass a Scalar in place of src.
+    #
+    # torch walks the index positions in row-major order: a later write to
+    # an already-written position wins (scatter) and scatter_add adds onto
+    # the value the earlier writes left. put_along_axis leaves that order
+    # undefined, so under duplicate indices it diverges from torch — the
+    # writes go one position at a time here, in torch's order. 2-D only;
+    # higher ranks defer to CPU rather than guess.
+    a = _mx(a)
+    if a.ndim != 2:
+        return _raise(f"scatter rank {a.ndim}")
+    idx = _mx(index).astype(mx.int32)
+    idx_np = np.array(idx)
+    dim = dim % a.ndim
+    scalar_src = not hasattr(src, "shape")
+    if scalar_src:
+        src_mx = mx.full(idx.shape, src, dtype=a.dtype)
+    else:
+        src_mx = _mx(src)
+    rows, cols = a.shape
+    row_grid = mx.arange(rows)[:, None]
+    col_grid = mx.arange(cols)[None, :]
+    cur = a
+    for pos in np.ndindex(idx_np.shape):
+        i, j = int(pos[0]), int(pos[1])
+        trow = int(idx_np[i, j]) if dim == 0 else i
+        tcol = j if dim == 0 else int(idx_np[i, j])
+        val = src_mx[i, j]
+        mask = (row_grid == trow) & (col_grid == tcol)
+        if add:
+            held = mx.take(mx.flatten(cur), mx.array(trow * cols + tcol))
+            cur = mx.where(mask, held + val.astype(cur.dtype), cur)
+        else:
+            cur = mx.where(mask, val.astype(cur.dtype), cur)
+    return cur.astype(a.dtype)
+
+
+def _take(a, index):
+    # aten.take(input, index): flatten first, then gather.
+    return mx.take(mx.flatten(_mx(a)), _mx(index).astype(mx.int32))
+
 def _frac(a):
     # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
     # NOT x - floor(x) which would give +0.7).
@@ -2376,6 +2421,12 @@ _FUNC_SPECS = {
     "elu": lambda a, alpha=1.0, scale=1.0, input_scale=1.0, inplace=False: scale * mx.where(mx.greater(a, 0), a, alpha * mx.expm1(input_scale * a)),
     "selu": lambda a, inplace=False: 1.0507009873554805 * mx.where(mx.greater(a, 0), a, 1.6732632423543772 * mx.expm1(a)),
     "celu": lambda a, alpha=1.0, inplace=False: mx.where(mx.greater(a, 0), a, alpha * mx.expm1(a / alpha)),
+    # the scatter family (Q-62).
+    "scatter": lambda a, dim, i, src: _scatter(a, dim, i, src),
+    "scatter_": lambda a, dim, i, src: _scatter(a, dim, i, src),
+    "scatter_add": lambda a, dim, i, src: _scatter(a, dim, i, src, add=True),
+    "scatter_add_": lambda a, dim, i, src: _scatter(a, dim, i, src, add=True),
+    "take": _take,
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,

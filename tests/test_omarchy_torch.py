@@ -115,6 +115,53 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     (name, dtype, float((got - ref.float()).abs().max())))
         torch.manual_seed(1)
 
+    def test_scatter_family(self):
+        """Q-62: the wheel backend lowers the scatter family —
+        aten.scatter(.value, +_), aten.scatter_add(+_) and aten.take —
+        with fp32 parity against the aten CPU ops, including duplicate
+        index accumulation and the scalar .value path."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(11)
+        np = __import__("numpy")
+        base = torch.randn(3, 4)
+        src = torch.randn(3, 3)
+        idx = torch.tensor([[0, 2, 1], [3, 0, 2], [1, 1, 3]])
+        m = mx.array(base.numpy())
+        mi = mx.array(idx.numpy())
+        ms = mx.array(src.numpy())
+        cases = [
+            ("scatter", ATEN_TABLE["scatter"](m, 1, mi, ms),
+             torch.scatter(base, 1, idx, src)),
+            ("scatter", ATEN_TABLE["scatter"](m, 0, mi.t(), ms.t()),
+             torch.scatter(base, 0, idx.t(), src.t())),
+            ("scatter", ATEN_TABLE["scatter"](m, 1, mi, 9.5),
+             torch.ops.aten.scatter.value(base, 1, idx, 9.5)),
+            ("scatter_", ATEN_TABLE["scatter_"](m, 1, mi, ms),
+             torch.scatter(base.clone(), 1, idx, src)),
+            ("scatter_add", ATEN_TABLE["scatter_add"](m, 1, mi, ms),
+             torch.scatter_add(base, 1, idx, src)),
+            ("scatter_add_", ATEN_TABLE["scatter_add_"](m, 1, mi, ms),
+             torch.scatter_add(base.clone(), 1, idx, src)),
+            ("take", ATEN_TABLE["take"](m, mx.array([0, 5, 11])),
+             torch.take(base, torch.tensor([0, 5, 11]))),
+        ]
+        for name, got, ref in cases:
+            got = torch.from_numpy(np.array(got))
+            self.assertTrue(torch.allclose(got.float(), ref.float(),
+                                           atol=1e-5), (name, got, ref))
+        # duplicate indices accumulate every hit under scatter_add.
+        dup = torch.tensor([[0, 0, 0]])
+        dup_src = torch.tensor([[1.0, 2.0, 4.0]])
+        got = torch.from_numpy(np.array(ATEN_TABLE["scatter_add"](
+            mx.array(base[:1].numpy()), 1, mx.array(dup.numpy()),
+            mx.array(dup_src.numpy()))))
+        ref = torch.scatter_add(base[:1], 1, dup, dup_src)
+        self.assertTrue(torch.allclose(got, ref, atol=1e-5), (got, ref))
+
     def test_unfold_last_dim(self):
         """PT-IM-b: aten.unfold lowers via gather + transpose — fp32 parity
         against the aten CPU op on the last dimension."""
