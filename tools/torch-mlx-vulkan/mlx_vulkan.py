@@ -2055,6 +2055,96 @@ def _frac(a):
     return a - mx.trunc(a)
 
 
+def _loss_reduce(l, reduction):
+    # plain element losses: mean divides by numel even when weighted.
+    if reduction == "none":
+        return l
+    if reduction == "sum":
+        return mx.sum(l)
+    return mx.mean(l)
+
+
+def _bce(x, t, weight=None, reduction="mean"):
+    x, t = _mx(x), _mx(t)
+    l = -(t * mx.log(x) + (1 - t) * mx.log(1 - x))
+    if weight is not None:
+        l = l * _mx(weight)
+    return _loss_reduce(l, _red(reduction, None, None))
+
+
+def _bce_logits(x, t, weight=None, pos_weight=None, reduction="mean"):
+    # -t*pw*logσ(x) - (1-t)*logσ(-x); logσ(v) = -log1p(e^{-v})
+    x, t = _mx(x), _mx(t)
+    lsg = lambda v: -mx.log1p(mx.exp(-v))
+    pw = _mx(pos_weight) if pos_weight is not None else 1.0
+    l = -(pw * t * lsg(x) + (1 - t) * lsg(-x))
+    if weight is not None:
+        l = l * _mx(weight)
+    return _loss_reduce(l, _red(reduction, None, None))
+
+
+def _huber(x, t, delta, reduction):
+    d = mx.abs(_mx(x) - _mx(t))
+    l = mx.where(d < delta, 0.5 * d * d, delta * (d - 0.5 * delta))
+    return _loss_reduce(l, _red(reduction, None, None))
+
+
+def _smooth_l1(x, t, beta, reduction):
+    d = mx.abs(_mx(x) - _mx(t))
+    l = mx.where(d < beta, 0.5 * d * d / beta, d - 0.5 * beta)
+    return _loss_reduce(l, _red(reduction, None, None))
+
+
+def _hinge_emb(x, t, margin, reduction):
+    x, t = _mx(x), _mx(t)
+    l = mx.where(t == 1, x, mx.maximum(margin - x, 0.0))
+    return _loss_reduce(l, _red(reduction, None, None))
+
+
+def _margin_rank(x1, x2, t, margin, reduction):
+    l = mx.maximum(margin - _mx(t) * (_mx(x1) - _mx(x2)), 0.0)
+    return _loss_reduce(l, _red(reduction, None, None))
+
+
+def _multi_margin(x, t, p, margin, weight, reduction):
+    # row-wise: sum_{j != t} relu(margin - x_t + x_j)^p / C, times w[t].
+    x, t = _mx(x), _mx(t).astype(mx.int32)
+    C = x.shape[-1]
+    xt = mx.take_along_axis(x, t[..., None], axis=-1)
+    l = mx.maximum(margin - xt + x, 0.0) ** float(p)
+    l = l * (t[..., None] != mx.arange(C)).astype(l.dtype)
+    l = mx.sum(l, axis=-1) / C
+    if weight is not None:
+        l = l * _mx(weight)[t]
+    return _loss_reduce(l, _red(reduction, None, None))
+
+
+def _pairwise_dist(x1, x2, p, eps, keepdim):
+    d = mx.abs(_mx(x1) - _mx(x2))
+    l = mx.sum(d ** float(p), axis=1, keepdims=keepdim) ** (1.0 / float(p))
+    return mx.maximum(l, eps)
+
+
+def _dist(x, y, p):
+    d = mx.abs(_mx(x) - _mx(y))
+    p = float(p)
+    if p == 0:
+        return mx.sum((d != 0).astype(mx.int64))
+    if p == float("inf"):
+        return mx.max(d)
+    if p == float("-inf"):
+        return mx.min(d)
+    return mx.sum(d ** p) ** (1.0 / p)
+
+
+def _cos_emb_loss(x1, x2, t, margin, reduction):
+    x1, x2, t = _mx(x1), _mx(x2), _mx(t)
+    cos = mx.sum(x1 * x2, axis=1) / (
+        _l2_clamped(x1, 1, 1e-12) * _l2_clamped(x2, 1, 1e-12))
+    l = mx.where(t == 1, 1 - cos, mx.maximum(cos - margin, 0.0))
+    return _loss_reduce(l, _red(reduction, None, None))
+
+
 def _l2_clamped(a, dim, eps):
     return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
 
@@ -2344,6 +2434,19 @@ _FUNC_SPECS = {
     "nll_loss": lambda logp, target, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction="mean", *a_, **k_: (
         _nll(logp, target, weight, ignore_index, _red(reduction, size_average, reduce))),
     "mse_loss": lambda a, b, size_average=None, reduce=None, reduction="mean": _mxnn.losses.mse_loss(a, b, reduction=_red(reduction, size_average, reduce)),
+    # loss extras (piece 11): mean divides by numel even when weighted;
+    # _loss_reduce holds that contract.
+    "binary_cross_entropy": _bce,
+    "binary_cross_entropy_with_logits": _bce_logits,
+    "huber_loss": lambda a, b, reduction=1, delta=1.0: _huber(a, b, delta, reduction),
+    "smooth_l1_loss": lambda a, b, reduction=1, beta=1.0: _smooth_l1(a, b, beta, reduction),
+    "soft_margin_loss": lambda a, b, reduction=1: _loss_reduce(mx.log1p(mx.exp(-_mx(b) * _mx(a))), _red(reduction, None, None)),
+    "hinge_embedding_loss": lambda a, b, margin=1.0, reduction=1: _hinge_emb(a, b, margin, reduction),
+    "margin_ranking_loss": lambda a, b, t, margin=0.0, reduction=1: _margin_rank(a, b, t, margin, reduction),
+    "multi_margin_loss": lambda a, t, p=1, margin=1.0, weight=None, reduction=1: _multi_margin(a, t, p, margin, weight, reduction),
+    "cosine_embedding_loss": lambda a, b, t, margin=0.0, reduction=1: _cos_emb_loss(a, b, t, margin, reduction),
+    "pairwise_distance": lambda a, b, p=2.0, eps=1e-6, keepdim=False: _pairwise_dist(a, b, p, eps, keepdim),
+    "dist": _dist,
     "native_layer_norm_backward": _ln_backward,
     "_scaled_dot_product_flash_attention_for_cpu": _sdpa_flash_cpu,
     "_scaled_dot_product_flash_attention_for_cpu_backward": _sdpa_flash_cpu_bwd,

@@ -3014,6 +3014,64 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_loss_extras():
+    # PT-AL-loss: elementwise/margin losses; mean divides by numel even
+    # when weighted (verified vs aten), reductions 0/1/2 = none/mean/sum.
+    torch.manual_seed(0)
+    x = torch.rand(4, 3) * 0.8 + 0.1
+    t01 = (torch.rand(4, 3) > 0.5).float()
+    pm = torch.tensor([[-1., 1., -1.], [1., 1., -1.], [-1., -1., 1.], [1., -1., 1.]])
+    xd = torch.randn(4, 3)
+    cases = [
+        (torch.ops.aten.binary_cross_entropy.default, (x, t01), {"reduction": 1}, "binary_cross_entropy"),
+        (torch.ops.aten.binary_cross_entropy.default, (x, t01), {"reduction": 0}, "binary_cross_entropy"),
+        (torch.ops.aten.binary_cross_entropy.default, (x, t01), {"weight": torch.rand(4, 3), "reduction": 2}, "binary_cross_entropy"),
+        (torch.ops.aten.binary_cross_entropy_with_logits.default, (xd, t01), {"reduction": 1}, "binary_cross_entropy_with_logits"),
+        (torch.ops.aten.binary_cross_entropy_with_logits.default, (xd, t01), {"pos_weight": torch.full((3,), 3.0), "reduction": 1}, "binary_cross_entropy_with_logits"),
+        (torch.ops.aten.binary_cross_entropy_with_logits.default, (xd, t01), {"weight": torch.rand(4, 3), "reduction": 2}, "binary_cross_entropy_with_logits"),
+        (torch.ops.aten.huber_loss.default, (xd, torch.randn(4, 3)), {"reduction": 1, "delta": 0.5}, "huber_loss"),
+        (torch.ops.aten.huber_loss.default, (xd, torch.randn(4, 3)), {"reduction": 0, "delta": 2.0}, "huber_loss"),
+        (torch.ops.aten.smooth_l1_loss.default, (xd, torch.randn(4, 3)), {"reduction": 1, "beta": 0.5}, "smooth_l1_loss"),
+        (torch.ops.aten.smooth_l1_loss.default, (xd, torch.randn(4, 3)), {"reduction": 2}, "smooth_l1_loss"),
+        (torch.ops.aten.soft_margin_loss.default, (xd, pm), {"reduction": 1}, "soft_margin_loss"),
+        (torch.ops.aten.soft_margin_loss.default, (xd, pm), {"reduction": 0}, "soft_margin_loss"),
+        (torch.ops.aten.hinge_embedding_loss.default, (xd, pm), {"margin": 0.5, "reduction": 1}, "hinge_embedding_loss"),
+        (torch.ops.aten.hinge_embedding_loss.default, (xd, pm), {"margin": 0.5, "reduction": 0}, "hinge_embedding_loss"),
+        (torch.ops.aten.margin_ranking_loss.default, (xd, torch.randn(4, 3), pm), {"margin": 0.3, "reduction": 1}, "margin_ranking_loss"),
+        (torch.ops.aten.multi_margin_loss.default, (xd, torch.tensor([0, 1, 2, 0])), {"p": 1, "margin": 1.0, "reduction": 1}, "multi_margin_loss"),
+        (torch.ops.aten.multi_margin_loss.default, (xd, torch.tensor([0, 1, 2, 0])), {"p": 2, "margin": 0.5, "weight": torch.tensor([1., 2., 3.]), "reduction": 2}, "multi_margin_loss"),
+        (torch.ops.aten.cosine_embedding_loss.default, (xd, torch.randn(4, 3), torch.tensor([1., -1., 1., -1.])), {"margin": 0.2, "reduction": 0}, "cosine_embedding_loss"),
+        (torch.ops.aten.cosine_embedding_loss.default, (xd, torch.randn(4, 3), torch.tensor([1., -1., 1., -1.])), {"reduction": 1}, "cosine_embedding_loss"),
+        (torch.ops.aten.pairwise_distance.default, (torch.randn(3, 4), torch.randn(3, 4)), {"p": 2.0}, "pairwise_distance"),
+        (torch.ops.aten.pairwise_distance.default, (torch.randn(3, 4), torch.randn(3, 4)), {"p": 1.5, "keepdim": True}, "pairwise_distance"),
+        (torch.ops.aten.dist.default, (xd, torch.randn(4, 3)), {"p": 2}, "dist"),
+        (torch.ops.aten.dist.default, (xd, torch.randn(4, 3)), {"p": 0}, "dist"),
+        (torch.ops.aten.dist.default, (xd, torch.randn(4, 3)), {"p": float("inf")}, "dist"),
+        (torch.ops.aten.dist.default, (xd, torch.randn(4, 3)), {"p": float("-inf")}, "dist"),
+        (torch.ops.aten.dist.default, (xd, torch.randn(4, 3)), {"p": 3.5}, "dist"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        wargs = dict(kwargs)
+        # weight/pos_weight kwargs that are tensors become placeholders too
+        extra = [k for k, v in wargs.items() if isinstance(v, torch.Tensor)]
+        for k in extra:
+            wargs[k] = g.placeholder(f"w{k}")
+        n = g.call_function(target, tuple(phs), dict(wargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins, *[kwargs[k] for k in extra])
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=1e-5), (
+            str(target), kwargs, np.abs(got.float().numpy() - ref.float().numpy()).max())
+    print("test_loss_extras PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3132,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_loss_extras()
     print("ALL PASS")
 
 
