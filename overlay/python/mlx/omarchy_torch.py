@@ -511,6 +511,32 @@ def _rot90(a, k=1, dims=(0, 1)):
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
 
+
+def _zeta(s, x):
+    # Hurwitz zeta via Euler-Maclaurin: sum the first 50 terms, then the
+    # tail integral plus three Bernoulli corrections. Valid for all
+    # s != 1 with x > 0; the s->1 pole falls out as +-inf through the
+    # 1/(s-1) term. Accuracy degrades only for s < -7 (too few
+    # Bernoulli terms for the deep negative strip).
+    s = _mx(s) if not isinstance(s, mx.array) else s
+    x = _mx(x) if not isinstance(x, mx.array) else x
+    z = s + x * 0.0 if not isinstance(s, (int, float)) else x
+    xb = x + z * 0.0
+    sb = (s + z * 0.0) if not isinstance(s, (int, float)) else s
+    ks = mx.arange(0, 50)
+    total = mx.sum(
+        mx.power(xb[..., None] + ks, -mx.array(sb)[..., None]), axis=-1)
+    N = xb + 50.0
+    return (total
+            + mx.power(N, 1.0 - sb) / (sb - 1.0)
+            + 0.5 * mx.power(N, -sb)
+            + sb / 12.0 * mx.power(N, -sb - 1.0)
+            - sb * (sb + 1.0) * (sb + 2.0) / 720.0 * mx.power(N, -sb - 3.0)
+            + sb * (sb + 1.0) * (sb + 2.0) * (sb + 3.0) * (sb + 4.0)
+            / 30240.0 * mx.power(N, -sb - 5.0))
+
+
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -549,6 +575,7 @@ _FUNC_SPECS = {
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
+    "special_zeta": _zeta,
     "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
     "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
