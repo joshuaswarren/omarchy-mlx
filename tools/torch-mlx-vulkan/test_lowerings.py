@@ -3014,6 +3014,60 @@ def test_flip_rot90():
     print("test_flip_rot90 PASS")
 
 
+def test_bit_conj_meta():
+    # Bit/conj/meta residue: frexp is bit-level (subnormals pre-scaled by
+    # 2^24), bitwise_not is two's-complement -a-1, mH/conj_physical/
+    # resolve_* are identities for real dtypes, mH swaps the last two dims.
+    torch.manual_seed(0)
+    x23 = torch.randn(2, 3)
+    xi = torch.randint(-100, 100, (2, 4))
+    vals = torch.tensor([0.5, -0.25, 1.0, -2.0, 8.0, 1e-40, -1e-39, 1234.5])
+    infv = torch.tensor([float("inf"), float("-inf"), 1.5, -0.0])
+    cases = [
+        (torch.ops.aten.bitwise_not.default, (xi,), {}, "bitwise_not"),
+        (torch.ops.aten.bitwise_not.default, (xi > 0,), {}, "bitwise_not"),
+        (torch.ops.aten.mH.default, (x23,), {}, "mH"),
+        (torch.ops.aten.positive.default, (x23,), {}, "positive"),
+        (torch.ops.aten.conj.default, (x23,), {}, "conj"),
+        (torch.ops.aten.conj_physical.default, (x23,), {}, "conj_physical"),
+        (torch.ops.aten.resolve_conj.default, (x23,), {}, "resolve_conj"),
+        (torch.ops.aten.resolve_neg.default, (x23,), {}, "resolve_neg"),
+        (torch.ops.aten.isneginf.default, (infv,), {}, "isneginf"),
+        (torch.ops.aten.isposinf.default, (infv,), {}, "isposinf"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s_ for s_ in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert torch.equal(got, ref), (str(target), kwargs, got, ref)
+    # frexp returns the (mantissa, exponent) pair — bit-exact on float32,
+    # including subnormals via the 2^24 pre-scale.
+    for ins in [(vals,), (vals * 1e-30,), (torch.tensor([0.0, -0.0, 1e-38]),)]:
+        ref = torch.ops.aten.frexp.Tensor(*ins)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(torch.ops.aten.frexp.Tensor, tuple(phs), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], stats
+        gm_, ge_ = torch.as_tensor(out[0]), torch.as_tensor(out[1])
+        rm, re = ref
+        assert torch.equal(ge_.to(re.dtype), re), (ge_, re)
+        assert torch.equal(gm_.view(torch.int32), rm.view(torch.int32)), (gm_, rm)
+    print("test_bit_conj_meta PASS")
+
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -3074,6 +3128,7 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+    test_bit_conj_meta()
     print("ALL PASS")
 
 

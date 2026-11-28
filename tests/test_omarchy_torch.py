@@ -73,6 +73,53 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                     torch.allclose(got, r, atol=1e-5, rtol=1e-5),
                     (ns_shape, tag, float((got - r).abs().max())))
 
+    def test_bit_conj_meta(self):
+        """Bit/conj/meta residue in the wheel backend: frexp is bit-level
+        with the 2^24 subnormal pre-scale, bitwise_not is two's-complement
+        -a-1, the conj/resolve ops are identities on real dtypes, mH swaps
+        the last two dims."""
+        import mlx.core as mx
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(0)
+        np = __import__("numpy")
+
+        def to_mx(args):
+            return tuple(
+                mx.array(a.numpy()) if isinstance(a, torch.Tensor) else a
+                for a in args)
+
+        x23 = torch.randn(2, 3)
+        xi = torch.randint(-100, 100, (2, 4))
+        infv = torch.tensor([float("inf"), float("-inf"), 1.5, -0.0])
+        cases = [
+            ("bitwise_not", torch.ops.aten.bitwise_not.default, (xi,), {}),
+            ("mH", torch.ops.aten.mH.default, (x23,), {}),
+            ("positive", torch.ops.aten.positive.default, (x23,), {}),
+            ("conj", torch.ops.aten.conj.default, (x23,), {}),
+            ("conj_physical", torch.ops.aten.conj_physical.default, (x23,), {}),
+            ("resolve_conj", torch.ops.aten.resolve_conj.default, (x23,), {}),
+            ("resolve_neg", torch.ops.aten.resolve_neg.default, (x23,), {}),
+            ("isneginf", torch.ops.aten.isneginf.default, (infv,), {}),
+            ("isposinf", torch.ops.aten.isposinf.default, (infv,), {}),
+        ]
+        for name, aten_fn, args, kwargs in cases:
+            ref = aten_fn(*args, **kwargs).numpy()
+            got = np.array(ATEN_TABLE[name](*to_mx(args), **kwargs))
+            self.assertTrue(np.array_equal(got, ref), (name, kwargs, got))
+        # frexp: (mantissa, exponent) pair, bit-exact incl subnormals
+        vals = torch.tensor([0.5, -0.25, 1.0, -2.0, 8.0, 1e-40, -1e-39,
+                             1234.5, 0.0, -0.0])
+        rm, re = torch.ops.aten.frexp.Tensor(vals)
+        gm, ge = ATEN_TABLE["frexp"](*to_mx((vals,)))
+        self.assertTrue(np.array_equal(
+            np.array(ge), re.numpy()))
+        got_bits = torch.as_tensor(np.array(gm)).view(torch.int32)
+        self.assertTrue(torch.equal(got_bits, rm.view(torch.int32)))
+        torch.manual_seed(1)
+
     def test_log1p_expm1_logaddexp(self):
         """PT-AL-f: the wheel backend lowers aten.log1p, aten.expm1 and
         aten.logaddexp with fp32/bf16 parity against the aten CPU ops,

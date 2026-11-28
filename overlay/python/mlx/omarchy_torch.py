@@ -511,6 +511,34 @@ def _rot90(a, k=1, dims=(0, 1)):
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
 
 
+
+def _frexp(a):
+    # aten.frexp -> (mantissa in [0.5,1), exponent). Bit-level on float32:
+    # e = biased_exp - 126, mantissa bits grafted onto exponent 126.
+    # Subnormals are pre-scaled by 2^24 and the exponent corrected.
+    a = _mx(a)
+    if a.dtype != mx.float32:
+        return _raise("frexp dtype")
+    aabs = mx.abs(a)
+    sub = (aabs > 0) & (aabs < 1.1754943508222875e-38)
+    av = mx.where(sub, a * 16777216.0, a)
+    u = av.view(mx.uint32)
+    sign = u // 2147483648
+    ebits = (u // 8388608) % 256
+    mant = u % 8388608
+    mb = (sign * 2147483648 + 1056964608 + mant).astype(mx.uint32)
+    e = ebits.astype(mx.int32) - 126 - mx.where(sub, 24, 0)
+    normal = (ebits > 0) & (ebits < 255)
+    m = mx.where(normal, mb.view(mx.float32), a)
+    return m, mx.where(normal, e, 0).astype(mx.int32)
+
+
+def _bitwise_not(a):
+    a = _mx(a)
+    if a.dtype == mx.bool_:
+        return mx.logical_not(a)
+    return -a - 1  # two's complement ~a
+
 _FUNC_SPECS = {
     "matmul": mx.matmul, "bmm": mx.matmul, "mm": mx.matmul,
     "addmm": lambda b, m1, m2, beta=1, alpha=1: beta * _mx(b) + alpha * mx.matmul(m1, m2),
@@ -549,6 +577,19 @@ _FUNC_SPECS = {
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
+    "frexp": _frexp,
+    "bitwise_not": _bitwise_not,
+    "bitwise_not_": _bitwise_not,
+    "mH": lambda a: mx.swapaxes(_mx(a), -2, -1),
+    "positive": lambda a: _mx(a) + 0,
+    "conj": lambda a: _mx(a),
+    "conj_": lambda a: _mx(a),
+    "conj_physical": lambda a: _mx(a),
+    "conj_physical_": lambda a: _mx(a),
+    "resolve_conj": lambda a: _mx(a),
+    "resolve_neg": lambda a: _mx(a),
+    "isneginf": lambda a: _mx(a) == float("-inf"),
+    "isposinf": lambda a: _mx(a) == float("inf"),
     "zeros": lambda *a, **k: mx.zeros(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
     "zeros_like": lambda a, **k: mx.zeros(a.shape, dtype=_MX_DT.get(k.get("dtype"), _mx(a).dtype)),
     "ones": lambda *a, **k: mx.ones(_shape_of(a, k), dtype=_MX_DT.get(k.get("dtype"))),
