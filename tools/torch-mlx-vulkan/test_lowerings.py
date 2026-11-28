@@ -3073,11 +3073,12 @@ def test_reduction_variants():
     for kw in [{}, {"dim": 1}, {"dim": 0, "keepdim": True}]:
         ref, out = run_one(torch.ops.aten.aminmax.default, (torch.tensor(x32),), kw)
         omin, omax = out
-        assert torch.as_tensor(omin).shape == ref.min.shape, (kw,)
-        assert torch.as_tensor(omax).shape == ref.max.shape
-        close(torch.as_tensor(omin).float().numpy(), ref.min.float().numpy(),
+        rmin, rmax = (ref[0], ref[1]) if isinstance(ref, tuple) else (ref.min, ref.max)
+        assert torch.as_tensor(omin).shape == rmin.shape, (kw,)
+        assert torch.as_tensor(omax).shape == rmax.shape
+        close(torch.as_tensor(omin).float().numpy(), rmin.float().numpy(),
               f"aminmax {kw} min")
-        close(torch.as_tensor(omax).float().numpy(), ref.max.float().numpy(),
+        close(torch.as_tensor(omax).float().numpy(), rmax.float().numpy(),
               f"aminmax {kw} max")
 
     # aminmax on a 0-d tensor: (scalar, scalar)
