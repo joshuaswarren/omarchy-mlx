@@ -469,6 +469,42 @@ class TestOmarchyTorchBackend(unittest.TestCase):
                 (kw, float((got - ref.float()).abs().max())))
 
 
+    def test_im2col_col2im_parity(self):
+        """PT-IM-a: aten.im2col + aten.col2im lower in the wheel
+        backend — fp32 parity vs torch across kernel/stride/dilation/
+        padding combos, including overlap summation."""
+        import mlx.core as mx
+        import numpy as np
+        import torch
+
+        from mlx.omarchy_torch import ATEN_TABLE
+
+        torch.manual_seed(0)
+        x = torch.randn(2, 3, 8, 9)
+        a = torch.ops.aten
+        for ks, dl, pd, st in [((3, 3), (1, 1), (1, 1), (1, 1)),
+                               ((2, 3), (1, 1), (0, 0), (2, 2)),
+                               ((3, 2), (2, 1), (1, 0), (2, 1)),
+                               ((3, 3), (1, 1), (2, 2), (4, 4)),
+                               ((1, 1), (1, 1), (3, 3), (1, 1))]:
+            mxin = mx.array(x.numpy())
+            ref = a.im2col.default(x, list(ks), list(dl), list(pd), list(st))
+            got = np.array(ATEN_TABLE["im2col"](
+                mxin, list(ks), list(dl), list(pd), list(st)))
+            self.assertTrue(
+                np.allclose(got, ref.numpy(), atol=1e-5),
+                ("im2col", ks, dl, pd, st,
+                 float(abs(got - ref.numpy()).max())))
+            ref2 = a.col2im.default(
+                ref, [8, 9], list(ks), list(dl), list(pd), list(st))
+            got2 = np.array(ATEN_TABLE["col2im"](
+                mx.array(got), [8, 9], list(ks), list(dl), list(pd), list(st)))
+            self.assertTrue(
+                np.allclose(got2, ref2.numpy(), atol=1e-5),
+                ("col2im", ks, dl, pd, st,
+                 float(abs(got2 - ref2.numpy()).max())))
+
+
     def test_pdist_cdist_parity(self):
         """PT-PAIR-a: aten.pdist + aten.cdist lower in the wheel
         backend — parity vs torch across p=0.5/1/2/inf and batched
