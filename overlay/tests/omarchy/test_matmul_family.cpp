@@ -9217,7 +9217,8 @@ TEST_CASE("CMAT16 64/128-row and staged-k tiles match the 32-row route bit for b
     double host_max = 0.0;
     for (size_t i = 0; i < base_values.size(); ++i) {
       host_max = std::max(
-          host_max, std::abs(base_values[i] - expected[i]));
+          host_max,
+          static_cast<double>(std::abs(base_values[i] - expected[i])));
     }
     // The 32-row CMAT16 route's published value class: one fp16
     // staging rounding per operand on the fp32 accumulation chain.
