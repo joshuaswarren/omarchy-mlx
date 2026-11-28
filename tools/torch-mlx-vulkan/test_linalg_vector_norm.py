@@ -70,7 +70,7 @@ def main():
 
     # aten.linalg_norm alias: defaults ord=2, dim=None, keepdim=False
     a = rng.randn(7).astype(np.float32)
-    got = mlx_vulkan._FUNC_SPECS["linalg_norm"](mlx_vulkan._mx(a))
+    got = mlx_vulkan._FUNC_SPECS["linalg_norm"](mx.array(a))
     want = np.linalg.norm(a)
     if not np.allclose(_np(got), want, rtol=1e-4):
         failures.append(("alias", want, _np(got)))

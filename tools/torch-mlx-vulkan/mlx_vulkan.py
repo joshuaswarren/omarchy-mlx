@@ -1123,8 +1123,8 @@ def _quantile(a, q, interpolation: str = "linear"):
     lo = mx.floor(pos).astype(mx.int32)
     hi = mx.minimum(lo + 1, mx.full(lo.shape, n - 1, mx.int32))
     frac = pos - lo.astype(mx.float32)
-    lo_v = mx.take_along_axis(xs, lo[None], axis=0)[0]
-    hi_v = mx.take_along_axis(xs, hi[None], axis=0)[0]
+    lo_v = xs[lo]
+    hi_v = xs[hi]
     return lo_v + (hi_v - lo_v) * frac
 
 
@@ -1132,7 +1132,7 @@ def _nanquantile(a, q, interpolation: str = "linear"):
     """aten.nanquantile parity: aten.quantile over the non-NaN entries."""
     x = _mx(a)
     keep = ~mx.isnan(x)
-    return _quantile(mx.take_along_axis(x, mx.nonzero(keep)[0].astype(mx.int32), axis=0)[0],
+    return _quantile(mx.take_along_axis(x, mx.nonzero(keep)[0].astype(mx.int32), axis=0),
                      q, interpolation=interpolation)
 
 
@@ -2529,8 +2529,8 @@ _FUNC_SPECS = {
     "sub_.Tensor": _sub_inplace,
     "masked_fill": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
     "masked_fill_": lambda a, m, v: mx.where(_mx(m).astype(mx.bool_), v, a),
-    "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, dim, dtype=dtype) if dtype else mx.cumsum(a, dim),
-    "cumprod": lambda a, dim, dtype=None: mx.cumprod(a, dim, dtype=dtype) if dtype else mx.cumprod(a, dim),
+    "cumsum": lambda a, dim, dtype=None: mx.cumsum(a, dim, dtype=_MX_DT.get(dtype)) if dtype else mx.cumsum(a, dim),
+    "cumprod": lambda a, dim, dtype=None: mx.cumprod(a, dim, dtype=_MX_DT.get(dtype)) if dtype else mx.cumprod(a, dim),
     "cummax": _cummax,
     "cummin": _cummin,
     "std": _std, "var": _var, "var_mean": _var_mean, "std_mean": _std_mean,
