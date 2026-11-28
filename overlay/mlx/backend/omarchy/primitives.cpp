@@ -10059,7 +10059,10 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       // wider row tile (64-row: 2 subgroups x 2 blocks; 128-row: SG8
       // 256-lane workgroup), MLX_OMARCHY_CMAT16_STEP=32|64 widens the
       // staged k step. The shipped 32-row STEP_K-16 default is
-      // unchanged; mismatched pairs fall back to the default tile.
+      // unchanged; mismatched pairs fall back to the default tile. The
+      // one exception: TILES=128 exists only as the K64 build (there is
+      // no 128-row 32-step kernel), so 128 + STEP=32 keeps K64 —
+      // documented forcing, not a silent mismatch.
       const auto kernel = []() {
         const auto tiles =
             omarchy::env_str("MLX_OMARCHY_CMAT16_TILES");
@@ -10107,8 +10110,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
                 cp,
                 std::min((cp.matrix_n + 31u) / 32u,
                          omarchy::kMaxComputeGroupCountX),
-                std::min((cp.matrix_m + rows_per_tile - 1u) /
-                             (rows_per_tile / 2u),
+                std::min((cp.matrix_m + rows_per_tile - 1u) / rows_per_tile,
                          omarchy::kMaxComputeGroupCountX),
                 1u);
           });
