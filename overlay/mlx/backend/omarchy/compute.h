@@ -1478,6 +1478,13 @@ struct ComputeBinding {
   // the batch drains would be recycled or destroyed while the queued
   // commands still reference it.
   const void* owner{nullptr};
+  // Dependency-tracked byte window [tracked_offset, tracked_end). A zero
+  // tracked_end keeps the bound [offset, offset+range) window.
+  // binding(array) narrows it to the view's own element span so disjoint
+  // views of one allocation do not collide in the tracker; the
+  // descriptor still covers the allocation.
+  VkDeviceSize tracked_offset{0};
+  VkDeviceSize tracked_end{0};
 };
 
 struct ComputeParams {
