@@ -2207,6 +2207,14 @@ def _rot90(a, k=1, dims=(0, 1)):
     if kk == 2:
         return _flip(m, (d0, d1))
     return mx.swapaxes(_flip(m, (d0,)), d0, d1)
+def _isin(elements, test_elements, assume_unique=False, invert=False):
+    """aten.isin(elements, test_elements, *, assume_unique, invert): membership
+    by broadcast compare — elements[..., None] vs the flattened test set,
+    any() over the last axis. assume_unique is a perf hint only; membership
+    is the same set either way. bool out, same shape as elements."""
+    hit = mx.any(mx.equal(mx.expand_dims(_mx(elements), -1),
+                          mx.flatten(_mx(test_elements))), axis=-1)
+    return mx.logical_not(hit) if invert else hit
 
 
 _FUNC_SPECS = {
@@ -2409,6 +2417,9 @@ _FUNC_SPECS = {
     "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
     "take_along_dim": lambda a, i, dim: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
     "index": lambda a, idx: a[tuple(_mx(i) if isinstance(i, (torch.Tensor, list)) else i for i in (idx if isinstance(idx, (list, tuple)) else (idx,)))],
+    # PT-AL-i: membership (aten.isin; in1d is its legacy alias in old graphs)
+    "isin": _isin,
+    "in1d": _isin,
     "bincount": _bincount,
     "tril": lambda a, k=0: mx.tril(a, k), "triu": lambda a, k=0: mx.triu(a, k),
     "pad": lambda a, p, mode="constant", value=0: mx.pad(a, _pad_width(a, p)),
