@@ -11358,7 +11358,7 @@ bool dispatch_quantized_gemv_group(
   }
   params.operation = 4u;
   params.reduce_size = 64u;
-  // DEC-44 dispatch-order probe (qmm_vec.comp bit 17): remap the fused
+  // DEC-44 dispatch-order probe (qmm_vec.comp bit 19): remap the fused
   // multi WG grid to a 64-wide transpose. Bit-identical output; the
   // kernel ignores the flag when the grid is not a multiple of 64.
   static const bool qmm_order_stride =

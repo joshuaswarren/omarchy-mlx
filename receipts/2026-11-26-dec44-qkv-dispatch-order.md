@@ -1,8 +1,8 @@
-# DEC-44: QMM dispatch-order probe (flag bit 17, `MLX_OMARCHY_QMM_ORDER=stride`)
+# DEC-44: QMM dispatch-order probe (flag bit 19, `MLX_OMARCHY_QMM_ORDER=stride`)
 
 Receipt for the PR branch `dec44/qmm-order-stride` (heads `a52df406` probe,
 `67af96e1` fix). DEC-44 asked whether reordering the workgroup → row-block
-walk inside `qmm_vec.comp` (a 64-wide transpose of the walk, flag bit 17 on
+walk inside `qmm_vec.comp` (a 64-wide transpose of the walk, flag bit 19 on
 the shared params field, gated by the env var `MLX_OMARCHY_QMM_ORDER=stride`)
 wins decode throughput on the DEC-44 QKV shape.
 

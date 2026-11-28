@@ -805,7 +805,7 @@ int main(int argc, char** argv) {
         std::cout << "ok: " << name << "_g13c_resnorm_vec_fast identical\n";
       }
   // DEC-44: the fused-multi dispatch-order probe (MLX_OMARCHY_QMM_ORDER=
-  // stride, qmm_vec.comp flag bit 17) is a pure WG -> row-block permutation,
+  // stride, qmm_vec.comp flag bit 19) is a pure WG -> row-block permutation,
   // so every scenario must stay byte-identical with the probe on.
   for (const char* name : {"single", "group", "swiglu"}) {
     std::string base = "/tmp/w7p-geom-order-base.bin";
