@@ -867,9 +867,10 @@ inline bool gdn_conv_coalesced_default(
 // models (Qwen3.5-9B, GatedDeltaDecodeConvNormBF16Sg32). Replaces 3 dispatches
 // (GdnConvDecode + GatedDeltaDecodeBF16Sg32 + RmsNormGated) with 1 dispatch
 // (-48 dispatches and -48 barriers/tok on 9B).
-// Default on G14C; MLX_OMARCHY_GDN_COALESCED=0 disables.
+// Default on G14C and G13C; MLX_OMARCHY_GDN_COALESCED=0 disables.
 inline bool gdn_conv_coalesced_f32a_default(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos;
 }
 
 // Fast Sg32 coalesced GDN conv + delta + gated-RMSNorm variant
@@ -879,9 +880,11 @@ inline bool gdn_conv_coalesced_f32a_default(const std::string& device_name) {
 // Measured on Apple M2 Max (G14C B1, DEFER_TOKENS=0, identical greedy token IDs):
 // Qwen3.8-2B ctx=512 +0.85% (190.79 -> 192.17 tok/s, -37.5 us/tok, 4/5 pairs),
 // Qwen3.5-9B ctx=512 +0.08% (62.31 -> 62.47 tok/s, -42 us/tok, 2/3 pairs).
-// Default on G14C only; MLX_OMARCHY_GDN_SG32_FAST=0/1 overrides. Pure.
+// Default on G14C, G13G, and G13C; MLX_OMARCHY_GDN_SG32_FAST=0/1 overrides. Pure.
 inline bool gdn_conv_sg32_fast_default(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos;
 }
 
 // Coalesced-state standalone GDN decode kernel (GatedDeltaDecodeBF16Sg32:
@@ -890,11 +893,13 @@ inline bool gdn_conv_sg32_fast_default(const std::string& device_name) {
 // Measured on Apple M2 Max (G14C B1) Qwen3.5-9B-MLX-4bit ctx=512 (3-pair ABBA,
 // DEFER_TOKENS=0, identical greedy token IDs): +5.12% (53.71 -> 56.50 tok/s,
 // -0.919 ms/tok, 3/3 wins).
-// Default on G14C for f32-A_log native GQA decode (hk != hv);
+// Default on G14C and G13C for f32-A_log native GQA decode (hk != hv);
 // MLX_OMARCHY_GDN_DECODE_COALESCED=0 disables.
 inline bool gdn_decode_coalesced_default(
     const std::string& device_name, int hk, int hv) {
-  return device_name.find("G14C") != std::string::npos && hk != hv;
+  return (device_name.find("G14C") != std::string::npos ||
+          device_name.find("G13C") != std::string::npos) &&
+      hk != hv;
 }
 
 // Low-register dedicated SwiGLU (QmmVecQ4SwigluBF16R1S8W2: ROWS_PER_SLOT=1,
@@ -917,10 +922,11 @@ inline bool qmm_swiglu_r1s4_default(const std::string& device_name) {
 
 // 128-thread (4 subgroups, 8 cols/WG) Q4 word subgroup decode GEMV for
 // single-output projections with N >= 2048 (QmmVecQ4WordSubgroupBF16R2S4W2,
-// bit-identical to R2S8W2). Default on G14C; MLX_OMARCHY_WORD_R2S4=0 restores
-// geometry.word. Pure.
+// bit-identical to R2S8W2). Default on G14C and G13G; MLX_OMARCHY_WORD_R2S4=0
+// restores geometry.word. Pure.
 inline bool qmm_word_r2s4_default(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 // Coalesced 128-bit uvec4 ResNorm epilogue with 512-thread workgroups
@@ -956,11 +962,13 @@ inline bool qmm_lm_r2s32_default(const std::string& device_name) {
 }
 
 // Upfront 8-load Q4_ROWS Multi GEMV (QmmVecQ4MultiSubgroupBF16R2S8W2Upfront):
-// preserves 1-wave load coalescing (2 waits) on G14C where register headroom
-// sits well below the 104 half-reg cliff, while leaving G13C on the low-reg
-// split-load variant. Default on G14C; MLX_OMARCHY_Q4_UPFRONT=0 disables. Pure.
+// preserves 1-wave load coalescing (2 waits) on G14C and G13G where register
+// headroom sits well below the 104 half-reg cliff, while leaving G13C on the
+// low-reg split-load variant. Default on G14C and G13G;
+// MLX_OMARCHY_Q4_UPFRONT=0 disables. Pure.
 inline bool qmm_multi_upfront_default(const std::string& device_name) {
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 // Fused GatedDeltaUpdate on G18G (Apple M6): the fused update and raw
@@ -1001,28 +1009,31 @@ inline bool resnorm_vec_default_part(const std::string& device_name) {
 
 // Fast-tile-only R2S8W2 Q4 decode variants (K % 512 == 0, N % 8 == 0, even
 // w_base): trims unreachable slow-path fallback loops to cut SPIR-V CFG size
-// and AGX register pressure (0-ULP bit-identical). Default on for G13C only;
-// MLX_OMARCHY_QMM_FAST_ONLY=1/0 overrides on any qualifying 2x8w2 part. Pure.
+// and AGX register pressure (0-ULP bit-identical). Default on for G13C and
+// G13G; MLX_OMARCHY_QMM_FAST_ONLY=1/0 overrides on any qualifying 2x8w2 part.
+// Pure.
 inline bool qmm_fast_only_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_QMM_FAST_ONLY")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("G13C") != std::string::npos;
+  return device_name.find("G13C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
-// Fast-tile-only upfront Q4 decode variants for Apple M2 Max (G14C): trims
-// unreachable slow-path fallback loops and uses uniform sb_delta across Word
-// R2S4W2, lm_head R2S32W2, Multi R2S8W2Upfront, SwiGLU R1S4W2, and ResNormVec4
-// R2S32W2 (0-ULP bit-identical).
+// Fast-tile-only upfront Q4 decode variants for Apple M2 Max (G14C) and Apple
+// M1 (G13G): trims unreachable slow-path fallback loops and uses uniform
+// sb_delta across Word R2S4W2, lm_head R2S32W2, Multi R2S8W2Upfront, SwiGLU
+// R1S4W2, and ResNormVec4 R2S32W2 (0-ULP bit-identical).
 // Measured on Apple M2 Max (G14C B1, DEFER_TOKENS=0, identical greedy digests):
 // Qwen3.8-2B ctx=512 +1.50% (191.17 -> 194.14 tok/s, -80.1 us/tok, 5/5),
 // Qwen3.5-9B ctx=512 +0.60% (62.34 -> 62.76 tok/s, -106.3 us/tok, 3/3).
-// Default on G14C only; MLX_OMARCHY_G14C_FAST_ONLY=0/1 overrides. Pure.
+// Default on G14C and G13G; MLX_OMARCHY_G14C_FAST_ONLY=0/1 overrides. Pure.
 inline bool qmm_g14c_fast_only_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_G14C_FAST_ONLY")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("G14C") != std::string::npos;
+  return device_name.find("G14C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
 }
 
 // 512-thread upfront fast-tile-only Multi GEMV (R2S16W2, 32 cols/WG) for Apple
@@ -1041,15 +1052,39 @@ inline bool qmm_g14c_multi_r2s16_default_part(const std::string& device_name) {
 // G13C-gated HD=128 SdpaOnlineRope fast path (parallel Phase-A sg 2..3 RoPE
 // trig + 2-barrier subgroupShuffleDown K pack via disjoint s_q[128] + preloaded
 // epilogue with single 1/denom). Bit-identical (0 ULP) to the default HD=128
-// kernel. Default on strictly for G13C (Apple M1 Max, Qwen3-4B 4-bit decode,
+// kernel. Default on for G13C (Apple M1 Max, Qwen3-4B 4-bit decode,
 // DEFER_TOKENS=0: #1055 +1.27% / -0.132 ms/tok + #1059 +0.39% / -0.039 ms/tok
-// 5/5 pairs at ctx=512 and +0.36% / -0.040 ms/tok 3/3 pairs at ctx=2048);
-// MLX_OMARCHY_SDPA_G13C_FAST=1/0 overrides on any part. Pure.
+// 5/5 pairs at ctx=512 and +0.36% / -0.040 ms/tok 3/3 pairs at ctx=2048) and
+// G13G (Apple M1); MLX_OMARCHY_SDPA_G13C_FAST=1/0 overrides on any part. Pure.
 inline bool sdpa_g13c_fast_default_part(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_G13C_FAST")) {
     return env[0] != '\0' && std::strcmp(env, "0") != 0;
   }
-  return device_name.find("G13C") != std::string::npos;
+  return device_name.find("G13C") != std::string::npos ||
+      device_name.find("G13G") != std::string::npos;
+}
+
+// G14C-gated HD=256 non-split SdpaOnlineRope fast path (parallel Phase-A
+// sg 16..19 RoPE trig + 2-barrier subgroupShuffleDown K pack via disjoint
+// s_q[256] + single 1/denom epilogue). Bit-identical (0 ULP) to the default
+// HD=256 kernel. Default on strictly for G14C; MLX_OMARCHY_SDPA_HD256_FAST=0/1
+// overrides on any part. Pure.
+inline bool sdpa_g14c_hd256_fast_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_SDPA_HD256_FAST")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G14C") != std::string::npos;
+}
+
+// G14C-gated fused GatherDequantBF16 + FastRmsNormAppleBF16 prologue (1 WG,
+// 256 threads; eliminates 1 serial CDM barrier + 1-WG gather on token 0).
+// Bit-identical to the composed sequence. Default on strictly for G14C;
+// MLX_OMARCHY_PROLOGUE_NORM=0/1 overrides on any part. Pure.
+inline bool prologue_norm_default_part(const std::string& device_name) {
+  if (const char* env = std::getenv("MLX_OMARCHY_PROLOGUE_NORM")) {
+    return env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }
+  return device_name.find("G14C") != std::string::npos;
 }
 
 inline bool vocab_tail_chunked_default(const std::string& device_name) {
@@ -1305,8 +1340,10 @@ inline uint32_t sdpa_split_wide_min_keys(const std::string& device_name) {
   if (const char* env = std::getenv("MLX_OMARCHY_SDPA_SPLIT_WIDE_MIN_KEYS")) {
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
-  // G14C head width 256: 5-pair ABBA Qwen3.8-2B decode loses at ctx 192 (-1.56%, 0/5) and wins at ctx 256 (+1.07%, 5/5), bit-identical tokens. G17C keeps 320 until M5 calibration.
-  if (device_name.find("G14C") != std::string::npos) return 256;
+  // G14C head width 256: with SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast,
+  // non-split beats Split-K through ctx=512 (+0.19% 4/5 on Qwen3.8-2B, bit-exact)
+  // while Split-K stays active at ctx=2048. G17C keeps 320 until M5 calibration.
+  if (device_name.find("G14C") != std::string::npos) return 768;
   if (device_name.find("G17C") != std::string::npos) return 320;
   if (device_name.find("G16S") != std::string::npos) return 768;
   if (device_name.find("G15S") != std::string::npos) return 1408;
@@ -1483,7 +1520,9 @@ inline uint32_t sdpa_online_rope_max_keys(
     return static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
   }
   if (device_name.find("G13C") != std::string::npos) {
-    return head_dim == 128 ? 2304u : 0u;
+    if (head_dim == 128) return 2304u;
+    if (head_dim == 256 && has_outgate) return 4096u;
+    return 0u;
   }
   if (device_name.find("G13G") != std::string::npos) {
     if (head_dim == 128) return 2304u;
@@ -1521,6 +1560,9 @@ inline uint32_t sdpa_online_rope_split_default(
   if (device_name.find("G13G") != std::string::npos) {
     return (heads <= 10u && k_len >= 128u) ? 2u : 1u;
   }
+  if (device_name.find("G13C") != std::string::npos) {
+    return (heads > 10u && heads <= 20u && k_len >= 64u) ? 2u : 1u;
+  }
   if (device_name.find("G14C") == std::string::npos) {
     return 1u;
   }
@@ -1543,10 +1585,14 @@ inline uint32_t sdpa_online_rope_split_default(
 // +0.14% (3/5); Qwen3-4B non-gated flat (-0.12%).
 // G13G (Apple M1, 8 GPU cores): paired with SDPA_ONLINE_ROPE on Qwen3.8-2B
 // ctx 512 +1.48% solo (42.13 -> 42.75 tok/s, 3/3) and +1.61% with split=2.
+// G13C (Apple M1 Max, 32 GPU cores): paired with GDN_COALESCED + GDN_SG32_FAST
+// + SDPA_ONLINE_ROPE (HD=256, split=2) on Qwen3.5-9B 4-bit decode (exact macOS
+// greedy token IDs).
 // Other parts stay off until measured. Pure.
 inline bool sdpa_outgate_default(const std::string& device_name) {
   return device_name.find("G14C") != std::string::npos ||
-      device_name.find("G13G") != std::string::npos;
+      device_name.find("G13G") != std::string::npos ||
+      device_name.find("G13C") != std::string::npos;
 }
 
 // Width-256 value-phase pass 1 (shaders/sdpa_decode_split_p1v.comp -DSPLIT_R=4 -DHD=256): the Qwen3.5 and Qwen3.8 full-attention layers. Four query heads per

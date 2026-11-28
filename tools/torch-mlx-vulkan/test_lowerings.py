@@ -59,6 +59,102 @@ def test_topk():
     print("test_topk PASS")
 
 
+def test_mode():
+    rng = np.random.RandomState(1)
+    # fp32 with duplicates: value must match torch.mode, index must point at
+    # a position holding the mode value (torch's exact duplicate pick is not
+    # stable-defined; the value and the position's value are the contract)
+    x = rng.randn(4, 9).astype(np.float32)
+    x[0, 0] = x[0, 1] = x[0, 2] = 0.5
+    x[1, :] = [1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0]  # tie 3/3 -> smallest 2.0
+    for dim in (1, 0, -1):
+        vals, idx = mlx_vulkan._mode(mx.array(x), dim)
+        tv, ti = torch.mode(torch.tensor(x), dim)
+        assert np.allclose(_np(vals), tv.numpy()), (dim, _np(vals), tv.numpy())
+        got = _np(idx)
+        # every returned index must point at a position holding the mode value
+        deff = dim % x.ndim
+        gax = got.reshape([1 if i == deff else got.size for i in range(x.ndim)])
+        held = np.take_along_axis(x, gax, axis=deff)
+        assert np.array_equal(held.reshape(-1), np.broadcast_to(
+            tv.reshape(-1).numpy(), held.size)), (dim, held.reshape(-1))
+    # int64
+    xi = rng.randint(0, 4, size=(3, 11)).astype(np.int64)
+    vi, ii = mlx_vulkan._mode(mx.array(xi), 1)
+    tvi, tii = torch.mode(torch.tensor(xi), 1)
+    assert np.array_equal(_np(vi), tvi.numpy())
+    assert np.array_equal(_np(ii), tii.numpy()), (_np(ii), tii.numpy())
+    # 1-D, keepdim both ways
+    x1 = np.array([7, 7, 7, 1, 2], dtype=np.int64)
+    v1, i1 = mlx_vulkan._mode(mx.array(x1), keepdim=True)
+    tv1, ti1 = torch.mode(torch.tensor(x1), keepdim=True)
+    assert v1.shape == tv1.shape and np.array_equal(_np(v1), tv1.numpy())
+    v2, i2 = mlx_vulkan._mode(mx.array(x1), 0, keepdim=False)
+    assert v2.shape == torch.mode(torch.tensor(x1), 0).values.shape
+    assert int(_np(v2)) == 7
+    # 3-D middle dim
+    x3 = rng.randint(0, 3, size=(2, 5, 3)).astype(np.int64)
+    v3, i3 = mlx_vulkan._mode(mx.array(x3), 1)
+    tv3, ti3 = torch.mode(torch.tensor(x3), 1)
+    assert np.array_equal(_np(v3), tv3.numpy())
+    assert np.array_equal(_np(i3), ti3.numpy())
+    print("test_mode PASS")
+
+
+def test_kthvalue():
+    rng = np.random.RandomState(2)
+    # fp32 distinct values: value and index must match exactly
+    x = rng.randn(4, 9).astype(np.float32)
+    for k, dim in ((1, 1), (3, 1), (5, 1), (2, 0), (1, 0), (4, -1)):
+        vals, idx = mlx_vulkan._kthvalue(mx.array(x), k, dim)
+        tv, ti = torch.kthvalue(torch.tensor(x), k, dim)
+        assert np.allclose(_np(vals), tv.numpy()), (k, dim)
+        # torch CPU's kthvalue index is a quickselect artifact (it can point
+        # at a different element than the returned value, even for distinct
+        # inputs), so the index is verified against the value contract: the
+        # element at the returned index must equal the returned k-th value
+        deff = dim % x.ndim
+        shape = [1] * x.ndim
+        free = [i for i in range(x.ndim) if i != deff][0]
+        shape[free] = _np(idx).size
+        gax = _np(idx).reshape(shape)
+        held = np.take_along_axis(x, gax, axis=deff)
+        ref = np.broadcast_to(_np(vals).reshape(shape).astype(np.float32), held.shape)
+        assert np.array_equal(held, ref), (k, dim, held, ref)
+    # int64 with duplicates: the k-th smallest VALUE must match torch
+    # exactly. torch CPU's index is a quickselect artifact and does not even
+    # point at the returned value on duplicates (x row 0, k=1: value -2.13 at
+    # index 2, torch's index 7 holds -1.24), so the lowering's index is
+    # verified against the value contract instead: the element at the
+    # returned index must equal the returned k-th value.
+    xi = np.array([[3, 1, 3, 2, 3, 1, 2], [5, 5, 5, 1, 1, 2, 2]], dtype=np.int64)
+    for k in (1, 2, 3, 4, 5, 6):
+        vals, idx = mlx_vulkan._kthvalue(mx.array(xi), k, 1)
+        tv, ti = torch.kthvalue(torch.tensor(xi), k, 1)
+        assert np.array_equal(_np(vals), tv.numpy()), (k, _np(vals), tv.numpy())
+        gshape = [1] * xi.ndim
+        gshape[1 - 1] = _np(idx).size
+        held = np.take_along_axis(xi, _np(idx).reshape(gshape), axis=1)
+        assert np.array_equal(held.reshape(-1), np.asarray(_np(vals)).reshape(-1)), (k, held.reshape(-1), _np(vals))
+    # 1-D + keepdim
+    x1 = np.array([9, 4, 7, 1, 8, 2], dtype=np.int64)
+    v1, i1 = mlx_vulkan._kthvalue(mx.array(x1), 3, 0, keepdim=True)
+    tv1, ti1 = torch.kthvalue(torch.tensor(x1), 3, 0, keepdim=True)
+    assert v1.shape == tv1.shape
+    assert np.array_equal(_np(v1), tv1.numpy())
+    assert int(_np(x1)[_np(i1)[0]]) == int(_np(v1)[0])
+    # 3-D middle dim
+    x3 = rng.randn(2, 6, 3).astype(np.float32)
+    v3, i3 = mlx_vulkan._kthvalue(mx.array(x3), 2, 1)
+    tv3, ti3 = torch.kthvalue(torch.tensor(x3), 2, 1)
+    assert np.allclose(_np(v3), tv3.numpy())
+    shape3 = list(x3.shape)
+    shape3[1] = 1
+    held = np.take_along_axis(x3, _np(i3).reshape(shape3), axis=1)
+    assert np.array_equal(held.reshape(-1), np.asarray(_np(v3)).reshape(-1))
+    print("test_kthvalue PASS")
+
+
 def test_multinomial():
     rng = np.random.RandomState(0)
     # peaked dist: sample must be the argmax row-wise (deterministic check)
@@ -312,6 +408,53 @@ def test_remainder():
     print("test_remainder PASS")
 
 
+
+def test_xlogy_xlog1py():
+    # PT-AL-h: aten.xlogy/xlog1py (KL-divergence / custom-loss paths):
+    # self * log(other) / self * log1p(other) with aten's NaN-first rule —
+    # NaN in either operand gives NaN even when self == 0; otherwise
+    # self == 0 gives 0 for every other, including other <= 0 where the
+    # product form is 0 * -inf. fp32 + bf16 parity vs torch CPU on zero,
+    # negative and NaN operands.
+    x = torch.tensor([[0.0, 2.0], [-3.0, 0.5], [0.0, -1.0], [0.0, float("nan")]])
+    y = torch.tensor([[4.0, 0.0], [2.0, -1.0], [-2.0, 0.25], [float("nan"), 2.0]])
+    xb, yb = x.bfloat16(), y.bfloat16()
+    cases = [
+        (torch.ops.aten.xlogy.Tensor, (x, y), torch.xlogy(x, y), "xlogy", None),
+        (torch.ops.aten.xlogy.Tensor, (xb, yb), torch.xlogy(xb, yb), "xlogy", (xb, yb)),
+        (torch.xlogy, (x, y), torch.xlogy(x, y), "xlogy", None),
+        (torch.ops.aten.xlogy.Scalar_Self, (y,), torch.ops.aten.xlogy.Scalar_Self(0.0, y), "xlogy", (0.0, y)),
+        (torch.ops.aten.special_xlog1py.default, (x, y), torch.special.xlog1py(x, y), "xlog1py", None),
+        (torch.ops.aten.special_xlog1py.default, (xb, yb), torch.special.xlog1py(xb, yb), "xlog1py", (xb, yb)),
+        (torch.special.xlog1py, (x, y), torch.special.xlog1py(x, y), "xlog1py", None),
+        (torch.ops.aten.special_xlog1py.self_scalar, (y,), torch.ops.aten.special_xlog1py.self_scalar(0.0, y), "xlog1py", (0.0, y)),
+    ]
+    for target, ins, ref, name, low_in in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        # the *_scalar overloads carry the scalar in the op call, not a placeholder
+        args = (0.0, phs[0]) if ("Scalar_Self" in str(target) or "self_scalar" in str(target)) else tuple(phs)
+        n = g.call_function(target, args, {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        ref = torch.as_tensor(ref)
+        assert stats["cpu"] == [], (stats, [str(t.target) for t in gm.graph.nodes])
+        assert any(name in s for s in stats["mlx"]), stats
+        got = out.float().numpy()
+        tol = 2e-2 if ref.dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got, ref.float().numpy(), atol=tol,
+                           equal_nan=True), (str(target), got)
+        assert out.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
+            (str(target), out.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            low = mlx_vulkan._FUNC_SPECS[name](
+                *[mlx_vulkan._mx(v) for v in low_in])
+            assert low.dtype == mx.bfloat16, low.dtype
+    print("test_xlogy_xlog1py PASS")
+
 def test_scalar_tensor_factory_lowering():
     # BERT emits scalar_tensor factory nodes (scalar arg, no tensor inputs):
     # the eager executor only lowers call_function nodes with an mx input or
@@ -419,6 +562,112 @@ def test_gelu_backward():
     print("test_gelu_backward PASS")
 
 
+def test_tanh_backward():
+    # PT-U4: aten.tanh_backward.default (PAR-41 census rank 29, 275 receipts).
+    # The aten signature is tanh_backward(grad_output, OUTPUT) — the forward
+    # result y=tanh(x), not x — so grad * (1 - y^2).
+    rng = np.random.RandomState(4)
+    x = rng.randn(6, 8).astype(np.float32) * 4.0  # saturating inputs: y -> +-1
+    dy = rng.randn(6, 8).astype(np.float32)
+    # fp32: exact formula vs the aten reference.
+    y = np.tanh(x)
+    ref = torch.ops.aten.tanh_backward.default(torch.tensor(dy), torch.tensor(y))
+    out = mlx_vulkan.ATEN_TABLE["tanh_backward"](mx.array(dy), mx.array(y))
+    assert np.abs(_np(out) - ref.numpy()).max() < 1e-5
+    # saturated edge: y=+-1 exactly must give grad*0, not a fp artifact.
+    ys = np.array([[-1.0, 1.0], [1.0, -1.0]], dtype=np.float32)
+    ds = np.array([[2.0, -3.0], [0.5, 4.0]], dtype=np.float32)
+    ref_s = torch.ops.aten.tanh_backward.default(torch.tensor(ds), torch.tensor(ys))
+    got_s = mlx_vulkan.ATEN_TABLE["tanh_backward"](mx.array(ds), mx.array(ys))
+    assert np.array_equal(_np(got_s), ref_s.numpy()), (_np(got_s), ref_s.numpy())
+    # bf16: aten runs the formula in fp32 opmath and rounds to bf16.
+    yb = torch.tensor(y, dtype=torch.bfloat16)
+    gb = torch.tensor(dy, dtype=torch.bfloat16)
+    ref_b = torch.ops.aten.tanh_backward.default(gb, yb)
+    mine = mlx_vulkan.ATEN_TABLE["tanh_backward"](
+        mx.array(gb.float().numpy()).astype(mx.bfloat16),
+        mx.array(yb.float().numpy()).astype(mx.bfloat16))
+    assert mine.dtype == mx.bfloat16, mine.dtype
+    got_b = torch.from_numpy(np.array(mine.astype(mx.float32)))
+    d = float((got_b - ref_b.float()).abs().max())
+    assert d < 0.02, f"bf16: {d:.3e}"
+    # executor path: the aten.tanh_backward.default node must land in
+    # stats["mlx"], not the CPU fallback.
+    gfx = torch.fx.Graph()
+    ph_g, ph_y = gfx.placeholder("g"), gfx.placeholder("y")
+    gfx.output(gfx.call_function(torch.ops.aten.tanh_backward.default, (ph_g, ph_y)))
+    gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out_e = run(torch.tensor(dy), torch.tensor(y))
+    assert np.abs(_np(out_e) - ref.numpy()).max() < 1e-5
+    assert "tanh_backward" in stats["mlx"], stats
+    assert "tanh_backward" not in stats["cpu"], stats
+    print("test_tanh_backward PASS")
+
+
+def test_comparisons():
+    # PT-U7: the comparison family — aten .default overloads are the
+    # (Scalar, Scalar) -> bool forms, which hit the has_mx gate with no mx
+    # operand (same miss class as PT-U8's scalar arith). The .Tensor and
+    # .Scalar overloads lower via the tensor operand already.
+    rng = np.random.RandomState(5)
+    a = rng.randn(4, 6).astype(np.float32)
+    b = rng.randn(4, 6).astype(np.float32)
+    OPS = [
+        ("eq", torch.ops.aten.eq.Tensor, mx.equal),
+        ("ne", torch.ops.aten.ne.Tensor, mx.not_equal),
+        ("lt", torch.ops.aten.lt.Tensor, mx.less),
+        ("le", torch.ops.aten.le.Tensor, mx.less_equal),
+        ("gt", torch.ops.aten.gt.Tensor, mx.greater),
+        ("ge", torch.ops.aten.ge.Tensor, mx.greater_equal),
+    ]
+    # elementwise Tensor forms: bool dtype + value parity vs aten
+    for name, aten_op, _ in OPS:
+        ref = aten_op(torch.tensor(a), torch.tensor(b))
+        got = mlx_vulkan.ATEN_TABLE[name](mx.array(a), mx.array(b))
+        assert got.dtype == mx.bool_, (name, got.dtype)
+        assert np.array_equal(_np(got), ref.numpy()), name
+    # Scalar overloads: (Scalar, Scalar) -> bool through the executor must
+    # lower despite no tensor operand (the _ALWAYS_LOWER fix).
+    for name, aten_default, _ in [
+            ("eq", torch.ops.aten.eq.default, None),
+            ("ne", torch.ops.aten.ne.default, None),
+            ("lt", torch.ops.aten.lt.default, None),
+            ("le", torch.ops.aten.le.default, None),
+            ("gt", torch.ops.aten.gt.default, None),
+            ("ge", torch.ops.aten.ge.default, None)]:
+        gfx = torch.fx.Graph()
+        gfx.output(gfx.call_function(aten_default, (2, 2)))
+        gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run()
+        exp = aten_default(2, 2)
+        assert bool(torch.as_tensor(out)) == exp, (name, out, exp)
+        assert name in stats["mlx"], (name, stats)
+        assert name not in stats["cpu"], (name, stats)
+    # .Scalar (Tensor, Scalar) forms: mixed dtype must still lower via the
+    # tensor operand, bool result parity.
+    for name, aten_scalar in [
+            ("eq", torch.ops.aten.eq.Scalar), ("ne", torch.ops.aten.ne.Scalar),
+            ("lt", torch.ops.aten.lt.Scalar), ("le", torch.ops.aten.le.Scalar),
+            ("gt", torch.ops.aten.gt.Scalar), ("ge", torch.ops.aten.ge.Scalar)]:
+        ref = aten_scalar(torch.tensor(a), 0.5)
+        got = mlx_vulkan.ATEN_TABLE[name](mx.array(a), mx.array(0.5))
+        assert got.dtype == mx.bool_, name
+        assert np.array_equal(_np(got), ref.numpy()), name
+    # executor path on a Tensor pair: lands in stats["mlx"]
+    gfx = torch.fx.Graph()
+    pa, pb = gfx.placeholder("a"), gfx.placeholder("b")
+    gfx.output(gfx.call_function(torch.ops.aten.eq.Tensor, (pa, pb)))
+    gm = torch.fx.GraphModule(torch.nn.Module(), gfx)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(torch.tensor(a), torch.tensor(b))
+    assert np.array_equal(_np(out), torch.eq(torch.tensor(a), torch.tensor(b)).numpy())
+    assert "eq" in stats["mlx"], stats
+    assert "eq" not in stats["cpu"], stats
+    print("test_comparisons PASS")
+
+
 def test_linear():
     rng = np.random.RandomState(3)
     x = rng.randn(2, 4, 8).astype(np.float32)   # batched input
@@ -447,7 +696,93 @@ def test_linear():
         assert "linear" not in stats["cpu"], stats
         exp = torch.nn.functional.linear(tx, tw, tb if len(ins) == 3 else None)
         assert np.allclose(_np(out), exp.numpy(), atol=1e-4)
+    # PAR-41 census rerun @d08a7e37f: aten.linear's 1-D-input OpInfo sample
+    # decomposes to t + unsqueeze + mm + squeeze_.dim - the missing squeeze_
+    # spec sent that node to CPU, counting `linear` as the census's top
+    # fallback. The whole 1-D graph must lower end to end.
+    t1, w1 = torch.randn(8), torch.randn(6, 8)
+    g = torch.fx.Graph()
+    pw, px = g.placeholder("w"), g.placeholder("x")
+    n_t = g.call_function(torch.ops.aten.t.default, (pw,), {})
+    n_u = g.call_function(torch.ops.aten.unsqueeze.default, (px, 0), {})
+    n_mm = g.call_function(torch.ops.aten.mm.default, (n_u, n_t), {})
+    n_sq = g.call_function(torch.ops.aten.squeeze_.dim, (n_mm, 0), {})
+    g.output(n_sq)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(w1, t1)
+    assert stats["cpu"] == [], stats
+    exp = torch.nn.functional.linear(t1, w1)
+    assert np.allclose(_np(out), exp.numpy(), atol=1e-4)
     print("test_linear PASS")
+
+
+def test_squeeze_inplace():
+    # squeeze_ covers aten.squeeze_.default / .dim / .dims via _opname's
+    # first-component mapping; the executor's inplace rebinding gives the
+    # input node the squeezed value, matching torch's in-place semantics.
+    x = torch.randn(1, 4, 1, 3)
+    for target, args in ((torch.ops.aten.squeeze_.default, ()),
+                         (torch.ops.aten.squeeze_.dim, (0,)),
+                         (torch.ops.aten.squeeze_.dim, (2,))):
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(target, (ph,) + args, {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(x)
+        assert stats["cpu"] == [], (target, stats)
+        exp = x.clone()
+        target(exp, *args) if args else exp.squeeze_()
+        assert np.allclose(_np(out), exp.numpy(), atol=0)
+    # squeeze.dims takes an int[] dim list positionally
+    g = torch.fx.Graph()
+    ph = g.placeholder("x")
+    n = g.call_function(torch.ops.aten.squeeze.dims, (ph, [0, 2]), {})
+    g.output(n)
+    gm = torch.fx.GraphModule(torch.nn.Module(), g)
+    run, stats = mlx_vulkan.make_executor(gm)
+    out = run(x)
+    assert stats["cpu"] == [], stats
+    assert np.allclose(_np(out), x.squeeze().numpy(), atol=0)
+    print("test_squeeze_inplace PASS")
+
+
+def test_clamp_bounds():
+    # PAR-41 census rerun (w7R, true main): clamp_min.clamp_max had no specs
+    # (plain FALLBACK). Scalar bounds pass python numbers, .Tensor bounds pass
+    # broadcastable tensors; the in-place variants share the lowerings.
+    x = torch.randn(4, 5)
+    lo = torch.full((5,), -0.5)
+    hi = torch.full((5,), 0.5)
+    cases = (
+        (torch.ops.aten.clamp_min.default, (x,), {"min": 0.2},
+         torch.clamp_min(x, 0.2)),
+        (torch.ops.aten.clamp_min.Tensor, (x, lo), {},
+         torch.clamp_min(x, lo)),
+        (torch.ops.aten.clamp_max.default, (x,), {"max": -0.2},
+         torch.clamp_max(x, -0.2)),
+        (torch.ops.aten.clamp_max.Tensor, (x, hi), {},
+         torch.clamp_max(x, hi)),
+        (torch.ops.aten.clamp_min_.default, (x,), {"min": 0.0},
+         x.clone().clamp_min_(0.0)),
+        (torch.ops.aten.clamp_max_.default, (x,), {"max": 0.0},
+         x.clone().clamp_max_(0.0)),
+        (torch.ops.aten.clamp.Tensor, (x, lo, hi), {},
+         torch.clamp(x, lo, hi)),
+    )
+    for target, ins, kw, ref in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (target, stats)
+        assert np.allclose(_np(out), ref.numpy(), atol=1e-6), target
+    print("test_clamp_bounds PASS")
 
 
 def test_cat_clone():
@@ -626,6 +961,20 @@ def test_slice():
         exp = torch.ops.aten.slice.Tensor(tx, dim, start, end, step).numpy()
         got = mlx_vulkan._slice(a, dim, start, end, step)
         assert np.array_equal(_np(got), exp), (dim, start, end, step)
+    # PT-U6: aten.slice.Tensor defaults every arg after self — the OpInfo
+    # census hand-samples `slice(x, 0)` (dim only) and all-kwarg calls,
+    # which TypeError'd against the old required-arg signature
+    opt_cases = [
+        ((0,), {}),                                   # dim only
+        ((), {"dim": 1, "start": 1, "end": -2}),      # all kwargs
+        ((), {"dim": 1, "start": 1, "end": -2, "step": 3}),
+        ((), {"dim": 0, "start": -10, "end": -2, "step": 2}),
+        ((), {}),                                     # every default
+    ]
+    for pos, kw in opt_cases:
+        exp = torch.ops.aten.slice.Tensor(tx, *pos, **kw).numpy()
+        got = mlx_vulkan._slice(a, *pos, **kw)
+        assert np.array_equal(_np(got), exp), (pos, kw)
     # through the eager executor: the aten.slice node must lower
     t = torch.randn(4, 12)
     for dim, start, end, step in ((0, 1, 3, 1), (1, None, 7, 2)):
@@ -641,7 +990,137 @@ def test_slice():
         assert np.array_equal(_np(out), exp), (dim, start, end, step)
         assert "slice" in stats["mlx"], stats
         assert "slice" not in stats["cpu"], stats
+    # PT-U6: dim-only and kwargs node forms through the executor (the
+    # OpInfo census's exact dispatch-miss shapes)
+    for pos, kw in (((0,), {}), ((), {"dim": 1, "start": 1, "end": -2})):
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(torch.ops.aten.slice.Tensor, (ph, *pos), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(mx.array(t.numpy()))
+        exp = torch.ops.aten.slice.Tensor(t, *pos, **kw).numpy()
+        assert np.array_equal(_np(out), exp), (pos, kw)
+        assert "slice" in stats["mlx"], stats
+        assert "slice" not in stats["cpu"], stats
     print("test_slice PASS")
+
+
+def test_fft():
+    # PT-AU-a: aten.fft_fft / aten.fft_ifft -> mx.fft — audio-model ops
+    # (Parakeet, Whisper). Parity vs torch CPU over fp32 (promotes to
+    # complex64) and complex64 inputs, exercising n (pad/truncate), dim
+    # and norm; then the executor must lower both aten nodes.
+    rng = np.random.RandomState(17)
+    xr = rng.randn(4, 6, 10).astype(np.float32)
+    xc = (rng.randn(4, 6, 10) + 1j * rng.randn(4, 6, 10)).astype(np.complex64)
+    for name, torch_op in (("fft_fft", torch.ops.aten.fft_fft),
+                           ("fft_ifft", torch.ops.aten.fft_ifft)):
+        low = mlx_vulkan._FUNC_SPECS[name]
+        for x_np in (xr, xc):
+            tx = torch.tensor(x_np)
+            a = mx.array(x_np)
+            for pos, kw in [
+                ((), {}),                              # all defaults
+                ((10,), {}),                           # positional n
+                ((), {"n": 16}),                       # pad with zeros
+                ((), {"n": 4}),                        # truncate
+                ((), {"dim": 1}),                      # middle axis
+                ((), {"dim": -1, "norm": "ortho"}),    # normalization
+                ((), {"dim": 0, "norm": "forward"}),   # axis 0 + forward
+            ]:
+                exp = torch_op(tx, *pos, **kw).resolve_conj().numpy()
+                got = low(a, *pos, **kw)
+                assert np.allclose(_np(got), exp, rtol=2e-4, atol=2e-5), \
+                    (name, x_np.dtype, pos, kw)
+        t = torch.randn(4, 12)
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(torch_op, (ph,), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(mx.array(t.numpy()))
+        exp = torch_op(t).resolve_conj().numpy()
+        assert np.allclose(_np(out), exp, rtol=2e-4, atol=2e-5), name
+        assert name in stats["mlx"], stats
+        assert name not in stats["cpu"], stats
+    print("test_fft PASS")
+
+
+def test_rfft():
+    # PT-AU-b: aten.fft_rfft / aten.fft_irfft -> mx.fft — the
+    # real<->complex transforms (Parakeet mel-spectrogram). Parity vs
+    # torch CPU: rfft on fp32 input (promotes to complex64), irfft on
+    # complex64 input (fp32 out), exercising n, dim and norm.
+    rng = np.random.RandomState(29)
+    xr = rng.randn(4, 6, 10).astype(np.float32)
+    xc = (rng.randn(4, 6, 10) + 1j * rng.randn(4, 6, 10)).astype(np.complex64)
+    for name, torch_op, x_np in (
+            ("fft_rfft", torch.ops.aten.fft_rfft, xr),
+            ("fft_irfft", torch.ops.aten.fft_irfft, xc)):
+        low = mlx_vulkan._FUNC_SPECS[name]
+        tx = torch.tensor(x_np)
+        a = mx.array(x_np)
+        for pos, kw in [
+            ((), {}),                              # all defaults
+            ((10,), {}),                           # positional n
+            ((), {"n": 16}),                       # pad with zeros
+            ((), {"n": 4}),                        # truncate
+            ((), {"dim": 1}),                      # middle axis
+            ((), {"dim": -1, "norm": "ortho"}),    # normalization
+            ((), {"dim": 0, "norm": "forward"}),   # axis 0 + forward
+        ]:
+            exp = torch_op(tx, *pos, **kw).resolve_conj().numpy()
+            got = low(a, *pos, **kw)
+            assert np.allclose(_np(got), exp, rtol=2e-4, atol=2e-5), \
+                (name, x_np.dtype, pos, kw)
+        if name == "fft_rfft":
+            t = torch.randn(4, 12)
+        else:
+            t = (torch.randn(4, 7) + 1j * torch.randn(4, 7))
+def test_fft2():
+    # PT-AU-c: aten.fft_fft2 / aten.fft_ifft2 -> mx.fft — the 2-D
+    # transforms (vision, spectrogram models). Parity vs torch CPU over
+    # fp32 and complex64 inputs, exercising s (per-axis pad/truncate),
+    # dim (axis pair) and norm.
+    rng = np.random.RandomState(41)
+    xr = rng.randn(4, 6, 10).astype(np.float32)
+    xc = (rng.randn(4, 6, 10) + 1j * rng.randn(4, 6, 10)).astype(np.complex64)
+    for name, torch_op in (("fft_fft2", torch.ops.aten.fft_fft2),
+                           ("fft_ifft2", torch.ops.aten.fft_ifft2)):
+        low = mlx_vulkan._FUNC_SPECS[name]
+        for x_np in (xr, xc):
+            tx = torch.tensor(x_np)
+            a = mx.array(x_np)
+            for pos, kw in [
+                ((), {}),                                # all defaults
+                (([8, 12],), {}),                        # positional s
+                ((), {"s": [3, 5]}),                     # truncate both
+                ((), {"dim": [0, 1]}),                   # leading axes
+                ((), {"dim": [-1, -2], "norm": "ortho"}),  # swapped axes
+                ((), {"s": [4, 6], "dim": [0, 2],
+                      "norm": "forward"}),               # all three
+            ]:
+                exp = torch_op(tx, *pos, **kw).resolve_conj().numpy()
+                got = low(a, *pos, **kw)
+                assert np.allclose(_np(got), exp, rtol=2e-4, atol=2e-5), \
+                    (name, x_np.dtype, pos, kw)
+        t = torch.randn(4, 12, 8)
+        g = torch.fx.Graph()
+        ph = g.placeholder("x")
+        n = g.call_function(torch_op, (ph,), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(mx.array(t.numpy()))
+        exp = torch_op(t).resolve_conj().numpy()
+        assert np.allclose(_np(out), exp, rtol=2e-4, atol=2e-5), name
+        assert name in stats["mlx"], stats
+        assert name not in stats["cpu"], stats
+    print("test_rfft PASS")
+    print("test_fft2 PASS")
 
 
 def test_transpose_expand():
@@ -943,6 +1422,72 @@ def test_hyperbolic():
         assert math.copysign(1.0, out.item()) == \
             math.copysign(1.0, ref.item()), (target, xv, out.item())
     print("test_hyperbolic PASS")
+
+
+def test_piecewise_activations():
+    # PT-AL-b: the piecewise activation family (MobileNetV3 et al.) —
+    # hardswish, hardsigmoid, hardshrink, softshrink, tanhshrink, softsign.
+    # Prove the eager executor lowers each op (stats["mlx"], no CPU leg)
+    # and matches torch at fp32 and bf16; the bf16 reference is computed
+    # in fp32 and compared with a bf16-scale tolerance.
+    x = torch.tensor([[-4.0, -2.9, -0.49, 0.0, 0.51, 3.1, 7.0],
+                      [-3.2, -0.5, 0.5, 1.0, -1.0, 2.9, -7.0]])
+    cases = [
+        (torch.ops.aten.hardswish.default, (x,), torch.nn.functional.hardswish(x), "hardswish"),
+        (torch.ops.aten.hardsigmoid.default, (x,), torch.nn.functional.hardsigmoid(x), "hardsigmoid"),
+        (torch.ops.aten.hardshrink.default, (x, 0.5), torch.nn.functional.hardshrink(x, 0.5), "hardshrink"),
+        (torch.ops.aten.softshrink.default, (x, 0.5), torch.nn.functional.softshrink(x, 0.5), "softshrink"),
+    ]
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        for target, ins, ref, name in cases:
+            ins = tuple(t.to(dtype) if torch.is_tensor(t) else t for t in ins)
+            ref = ref.to(torch.float32) if dtype == torch.bfloat16 else ref
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), {})
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, name)
+            assert any(name in s for s in stats["mlx"]), (stats, name)
+            assert np.allclose(out.float().numpy(), ref.float().numpy(),
+                               atol=tol), (name, dtype, out.float().numpy())
+    # boundary pins: hardshrink/softshrink kill |x| == lambd exactly;
+    # hardsigmoid saturates at x <= -3 and x >= 3.
+    edge = torch.tensor([-0.5, 0.5, -3.0, 3.0])
+    for target, ins, ref, name in (
+            (torch.ops.aten.hardshrink.default, (edge, 0.5),
+             torch.tensor([0.0, 0.0, -3.0, 3.0]), "hardshrink-edge"),
+            (torch.ops.aten.hardsigmoid.default, (edge,),
+             torch.tensor([2.5 / 6, 3.5 / 6, 0.0, 1.0]), "hardsigmoid-edge")):
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), {})
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, name)
+        assert np.allclose(out.float().numpy(), ref.numpy(), atol=1e-5), \
+            (name, out.float().numpy(), ref.numpy())
+    # torch 2.15 registers no aten.tanhshrink / aten.softsign dispatcher op —
+    # F.* decomposes to primitives at trace time. Keep the table entries for
+    # torch versions that do dispatch them, and prove parity at the table.
+    F = torch.nn.functional
+    for name, ref in (("tanhshrink", F.tanhshrink(x)),
+                      ("softsign", F.softsign(x)),
+                      ("hardswish_", F.hardswish(x)),
+                      ("hardsigmoid_", F.hardsigmoid(x))):
+        lowering = mlx_vulkan.ATEN_TABLE[name]
+        for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+            m = mx.array(x.numpy())
+            if dtype == torch.bfloat16:
+                m = m.astype(mx.bfloat16)
+            got = torch.from_numpy(np.array(lowering(m).astype(mx.float32)))
+            assert torch.allclose(got, ref.float(), atol=tol, rtol=tol), \
+                (name, dtype, (got - ref.float()).abs().max())
+    print("test_piecewise_activations PASS")
 
 
 def test_bitwise_and_():
@@ -1834,6 +2379,467 @@ def test_where_masked_fill():
     print("test_where_masked_fill PASS")
 
 
+def test_mv_addmv():
+    # PT-U9: aten.mv.default and aten.addmv.default are the matvec census
+    # rows. #825's glue block added the _FUNC_SPECS entries; this pins that
+    # both reach stats["mlx"] (not the torch fallback) and match eager,
+    # including addmv's beta/alpha kwargs and the degenerate beta=0 arm.
+    import numpy as np
+    m32 = torch.randn(4, 3)
+    v32 = torch.randn(3)
+    b32 = torch.randn(4)
+    cases = [
+        (torch.ops.aten.mv.default, (m32, v32), {}, "mv"),
+        (torch.ops.aten.mv.default, (m32.bfloat16(), v32.bfloat16()), {}, "mv"),
+        (torch.ops.aten.mv.default, (m32.half(), v32.half()), {}, "mv"),
+        (torch.ops.aten.addmv.default, (b32, m32, v32), {}, "addmv"),
+        (torch.ops.aten.addmv.default, (b32, m32, v32), {"beta": 0.5, "alpha": 2.0}, "addmv"),
+        (torch.ops.aten.addmv.default, (b32, m32, v32), {"beta": 0, "alpha": 1}, "addmv"),
+        (torch.ops.aten.addmv.default, (b32.bfloat16(), m32.bfloat16(), v32.bfloat16()), {}, "addmv"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        # "mv" is a substring of "addmv": match the spec name exactly.
+        assert fam in stats["mlx"], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert got.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and got.dtype == torch.float32), (
+            str(target), got.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            # Same dtype-fidelity contract as test_mul: _torch widens bf16
+            # to fp32 at the executor boundary (numpy has no bf16 buffer);
+            # the lowering itself must still produce bf16.
+            low = mlx_vulkan._FUNC_SPECS[fam](*(
+                mlx_vulkan._mx(a) if torch.is_tensor(a) else a for a in ins),
+                **kwargs)
+            assert low.dtype == mx.bfloat16, low.dtype
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=3e-2), (
+            str(target), kwargs, got, ref)
+    print("test_mv_addmv PASS")
+
+
+def test_softplus_mish():
+    # PT-AL-c: softplus (T5, GDN gate) + mish (EfficientNet).
+    # aten.softplus(x, beta=1, threshold=20) is log1p(exp(beta*x))/beta,
+    # reverting to the linear x only when beta*x > threshold — strictly
+    # greater, so the equality point stays on the log branch. The inputs
+    # straddle that edge at the defaults (x crosses 20) and at
+    # beta=2,threshold=10 (the edge moves to x=5). bf16 pins the aten
+    # opmath contract: fp32 math rounded to bf16, not bf16 intermediates.
+    x32 = torch.tensor([[-4.0, -1.0, 0.0], [0.001, 1.0, 5.0]])
+    e32 = torch.tensor([[19.5, 20.0], [20.5, 21.0]])      # default edge: beta*x == 20
+    e32b = torch.tensor([[4.5, 5.0], [5.5, 6.0]])         # beta=2 edge: beta*x == 10
+    m32 = torch.tensor([[-5.0, -1.0], [0.0, 3.0]])
+    xb, eb, mb = x32.bfloat16(), e32.bfloat16(), m32.bfloat16()
+    cases = [
+        (torch.ops.aten.softplus.default, (x32,), {},
+         torch.ops.aten.softplus.default(x32, 1, 20), "softplus"),
+        (torch.ops.aten.softplus.default, (e32,), {},
+         torch.ops.aten.softplus.default(e32, 1, 20), "softplus"),
+        (torch.ops.aten.softplus.default, (e32b,), {"beta": 2, "threshold": 10},
+         torch.ops.aten.softplus.default(e32b, 2, 10), "softplus"),
+        (torch.ops.aten.softplus.default, (xb,), {},
+         torch.ops.aten.softplus.default(xb, 1, 20), "softplus"),
+        (torch.ops.aten.softplus.default, (eb,), {},
+         torch.ops.aten.softplus.default(eb, 1, 20), "softplus"),
+        (torch.nn.functional.softplus, (x32,), {}, torch.nn.functional.softplus(x32), "softplus"),
+        (torch.nn.functional.softplus, (x32,), {"beta": 0.5, "threshold": 40},
+         torch.nn.functional.softplus(x32, beta=0.5, threshold=40), "softplus"),
+        (torch.ops.aten.mish.default, (m32,), {},
+         torch.ops.aten.mish.default(m32), "mish"),
+        (torch.ops.aten.mish.default, (mb,), {},
+         torch.ops.aten.mish.default(mb), "mish"),
+        (torch.nn.functional.mish, (m32,), {}, torch.nn.functional.mish(m32), "mish"),
+    ]
+    for target, ins, kw, ref, name in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kw)
+        assert any(name in s for s in stats["mlx"]), (stats, str(target))
+        got = out.float().numpy()
+        assert np.allclose(got, ref.float().numpy(), atol=2e-2), \
+            (str(target), kw, got, ref.float().numpy())
+        assert out.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and out.dtype == torch.float32), \
+            (str(target), kw, out.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            # Same dtype-fidelity contract as test_mul: _torch widens bf16
+            # to fp32 at the executor boundary (numpy has no bf16 buffer);
+            # the lowering itself must still produce bf16.
+            low = mlx_vulkan._FUNC_SPECS[name](mlx_vulkan._mx(ins[0]), **kw)
+            assert low.dtype == mx.bfloat16, low.dtype
+    print("test_softplus_mish PASS")
+
+
+
+def test_elu_selu_celu():
+    # PT-AL-a: the elu family (ViT, Conformer, speech models).
+    # aten.elu(input, alpha=1, scale=1, input_scale=1):
+    #   scale*x for x > 0, else alpha*scale*(exp(input_scale*x) - 1).
+    # aten.selu is elu at the published constants (scale
+    # 1.0507009873554805, alpha 1.6732632423543772). aten.celu(input,
+    # alpha=1) is max(0,x) + min(0, alpha*(exp(x/alpha) - 1)). The inputs
+    # straddle zero and run deep negative so the exp branch saturates to
+    # -alpha*scale.
+    x = torch.tensor([[-8.0, -2.5, -0.3, 0.0], [0.25, 1.5, 6.0, -0.001]])
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        xd = x.to(dtype)
+        cases = [
+            (torch.ops.aten.elu.default, (xd,), {},
+             torch.ops.aten.elu.default(xd, 1.0, 1.0, 1.0), "elu"),
+            (torch.ops.aten.elu.default, (xd,), {"alpha": 2.0},
+             torch.ops.aten.elu.default(xd, 2.0, 1.0, 1.0), "elu"),
+            (torch.ops.aten.elu.default, (xd, 1.5, 1.2, 0.8), {},
+             torch.ops.aten.elu.default(xd, 1.5, 1.2, 0.8), "elu"),
+            (torch.ops.aten.selu.default, (xd,), {},
+             torch.ops.aten.selu.default(xd), "selu"),
+            (torch.ops.aten.celu.default, (xd,), {},
+             torch.ops.aten.celu.default(xd, 1.0), "celu"),
+            (torch.ops.aten.celu.default, (xd,), {"alpha": 2.5},
+             torch.ops.aten.celu.default(xd, 2.5), "celu"),
+            (torch.nn.functional.elu, (xd,), {"alpha": 0.5},
+             torch.nn.functional.elu(xd, alpha=0.5), "elu"),
+            (torch.nn.functional.selu, (xd,), {},
+             torch.nn.functional.selu(xd), "selu"),
+            (torch.nn.functional.celu, (xd,), {"alpha": 1.5},
+             torch.nn.functional.celu(xd, alpha=1.5), "celu"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert any(name in s for s in stats["mlx"]), (stats, str(target))
+            got = out.float().numpy()
+            assert np.allclose(got, ref.float().numpy(), atol=tol), \
+                (str(target), kw, dtype, got, ref.float().numpy())
+    # the in-place aten names share the table entries — parity at the table.
+    F = torch.nn.functional
+    for name, ref, params in (("elu_", F.elu(x, alpha=1.7), (1.7,)),
+                              ("selu_", F.selu(x), ()),
+                              ("celu_", F.celu(x, alpha=2.2), (2.2,))):
+        lowering = mlx_vulkan.ATEN_TABLE[name]
+        m = mx.array(x.numpy())
+        got = torch.from_numpy(
+            np.array(lowering(m, *params).astype(mx.float32)))
+        assert torch.allclose(got, ref.float(), atol=1e-5), \
+            (name, (got - ref.float()).abs().max())
+    # exact-zero pin: all three give 0 at x = 0 under any parameters.
+    z = mx.zeros((2,))
+    for name in ("elu", "selu", "celu"):
+        got = np.array(mlx_vulkan.ATEN_TABLE[name](z))
+        assert np.all(np.array(got) == 0.0), (name, got)
+    print("test_elu_selu_celu PASS")
+
+
+def test_cosine_similarity():
+    # PT-NORM-a: aten.cosine_similarity.default (embedding-eval family).
+    # sum(x1*x2, dim) / (clamp(norm1,eps) * clamp(norm2,eps)) - eps clamps
+    # each norm separately, pinned by the small-norm case below.
+    import numpy as np
+    a32 = torch.randn(4, 3)
+    b32 = torch.randn(4, 3)
+    a3d = torch.randn(2, 5, 4)
+    b3d = torch.randn(2, 5, 4)
+    tiny_a = torch.randn(4, 3) * 1e-3
+    tiny_b = torch.randn(4, 3) * 1e-3
+    cases = [
+        (torch.ops.aten.cosine_similarity.default, (a32, b32), {}, "cosine_similarity"),
+        (torch.ops.aten.cosine_similarity.default, (a32, b32), {"dim": 0}, "cosine_similarity"),
+        (torch.ops.aten.cosine_similarity.default, (a3d, b3d), {"dim": 2}, "cosine_similarity"),
+        (torch.ops.aten.cosine_similarity.default, (tiny_a, tiny_b), {"eps": 0.5}, "cosine_similarity"),
+        (torch.ops.aten.cosine_similarity.default, (a32.bfloat16(), b32.bfloat16()), {}, "cosine_similarity"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert fam in stats["mlx"], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert got.dtype == ref.dtype or (
+            ref.dtype == torch.bfloat16 and got.dtype == torch.float32), (
+            str(target), got.dtype, ref.dtype)
+        if ref.dtype == torch.bfloat16:
+            # Same dtype-fidelity contract as test_mul: _torch widens bf16
+            # to fp32 at the executor boundary (numpy has no bf16 buffer);
+            # the lowering itself must still produce bf16.
+            low = mlx_vulkan._FUNC_SPECS[fam](*(
+                mlx_vulkan._mx(a) if torch.is_tensor(a) else a for a in ins),
+                **kwargs)
+            assert low.dtype == mx.bfloat16, low.dtype
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=3e-2), (
+            str(target), kwargs, got, ref)
+    print("test_cosine_similarity PASS")
+
+
+def test_glu():
+    # PT-AL-d: aten.glu.default (GDN gate, Conformer).
+    # aten.glu(input, dim=-1): the input halves along dim; a * sigmoid(b).
+    x2 = torch.randn(3, 8)
+    x3 = torch.randn(2, 6, 4)
+    x1 = torch.randn(10)
+    F = torch.nn.functional
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        cases = [
+            (torch.ops.aten.glu.default, (x2.to(dtype),), {},
+             F.glu(x2.to(dtype)), "glu"),
+            (torch.ops.aten.glu.default, (x3.to(dtype),), {"dim": 0},
+             F.glu(x3.to(dtype), dim=0), "glu"),
+            (torch.ops.aten.glu.default, (x3.to(dtype),), {"dim": 1},
+             F.glu(x3.to(dtype), dim=1), "glu"),
+            (torch.ops.aten.glu.default, (x1.to(dtype),), {},
+             F.glu(x1.to(dtype)), "glu"),
+            (F.glu, (x2.to(dtype),), {},
+             F.glu(x2.to(dtype)), "glu"),
+            (F.glu, (x3.to(dtype),), {"dim": -2},
+             F.glu(x3.to(dtype), dim=-2), "glu"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert any(name in s for s in stats["mlx"]), (stats, str(target))
+            got = out.float().numpy()
+            assert np.allclose(got, ref.float().numpy(), atol=tol), \
+                (str(target), kw, dtype, got, ref.float().numpy())
+    print("test_glu PASS")
+
+
+def test_reciprocal_frac():
+    # PT-AL-e: aten.reciprocal + aten.frac (rsqrt was already lowered).
+    # frac is x - trunc(x), sign-kept: frac(-2.3) == -0.3, NOT x - floor(x)
+    # (+0.7) — the negative inputs below pin that contract.
+    x = torch.tensor([[-2.3, -0.7, -0.5, 0.0], [0.25, 1.9, 8.0, -4.0]])
+    F = torch.nn.functional
+    for dtype, tol in ((torch.float32, 1e-5), (torch.bfloat16, 2e-2)):
+        xd = x.to(dtype)
+        cases = [
+            (torch.ops.aten.reciprocal.default, (xd,), {},
+             torch.ops.aten.reciprocal.default(xd), "reciprocal"),
+            (torch.ops.aten.frac.default, (xd,), {},
+             torch.ops.aten.frac.default(xd), "frac"),
+            (torch.ops.aten.reciprocal_.default, (xd,), {},
+             torch.ops.aten.reciprocal.default(xd), "reciprocal"),
+            (torch.ops.aten.frac_.default, (xd,), {},
+             torch.ops.aten.frac.default(xd), "frac"),
+            (torch.frac, (xd,), {}, torch.frac(xd), "frac"),
+            (torch.reciprocal, (xd,), {},
+             torch.reciprocal(xd), "reciprocal"),
+        ]
+        for target, ins, kw, ref, name in cases:
+            g = torch.fx.Graph()
+            phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+            n = g.call_function(target, tuple(phs), kw)
+            g.output(n)
+            gm = torch.fx.GraphModule(torch.nn.Module(), g)
+            run, stats = mlx_vulkan.make_executor(gm)
+            out = run(*ins)
+            assert stats["cpu"] == [], (stats, str(target), kw)
+            assert any(name in s for s in stats["mlx"]), (stats, str(target))
+            got = out.float().numpy()
+            assert np.allclose(got, ref.float().numpy(), atol=tol), \
+                (str(target), kw, dtype, got, ref.float().numpy())
+    # sign pin: frac of a negative keeps the negative part.
+    m = mx.array([-2.3, -0.7, 1.9])
+    got = np.array(mlx_vulkan.ATEN_TABLE["frac"](m))
+    assert np.allclose(got, [-0.3, -0.7, 0.9], atol=1e-6), got
+    print("test_reciprocal_frac PASS")
+
+
+def test_linalg_norm():
+    # PT-NORM-b: aten.linalg_vector_norm + aten.linalg_norm (normalization,
+    # grad clipping). Also pins aten.norm's inf/-inf contract: the prior
+    # lowering silently computed a 2-norm for both.
+    x = torch.randn(3, 4)
+    x3 = torch.randn(2, 3, 4)
+    cases = [
+        (torch.ops.aten.linalg_vector_norm.default, (x,), {},
+         torch.linalg.vector_norm(x), "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x,), {"ord": 1.0},
+         torch.linalg.vector_norm(x, ord=1.0), "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x,),
+         {"ord": float("inf"), "dim": [1]},
+         torch.linalg.vector_norm(x, ord=float("inf"), dim=[1]),
+         "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x3,),
+         {"ord": 0.5, "dim": [1, 2], "keepdim": True},
+         torch.linalg.vector_norm(x3, ord=0.5, dim=[1, 2], keepdim=True),
+         "linalg_vector_norm"),
+        (torch.ops.aten.linalg_vector_norm.default, (x,),
+         {"dtype": torch.float64},
+         torch.linalg.vector_norm(x, dtype=torch.float64),
+         "linalg_vector_norm"),
+        (torch.ops.aten.linalg_norm.default, (x,), {},
+         torch.linalg.norm(x), "linalg_norm"),
+        (torch.ops.aten.linalg_norm.default, (x,),
+         {"ord": float("-inf"), "dim": [0]},
+         torch.linalg.norm(x, ord=float("-inf"), dim=[0]), "linalg_norm"),
+        (torch.ops.aten.linalg_norm.default, (x3,), {"ord": 2.0, "dim": [2]},
+         torch.linalg.norm(x3, ord=2.0, dim=[2]), "linalg_norm"),
+    ]
+    for target, ins, kw, ref, name in cases:
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), kw)
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kw)
+        assert any(name in s for s in stats["mlx"]), (stats, str(target))
+        got = out.float().numpy()
+        assert np.allclose(got, ref.float().numpy(), atol=1e-5), \
+            (str(target), kw, got, ref.float().numpy())
+    # the aten.norm inf/-inf fix at table level.
+    m = mx.array(x.numpy())
+    for p, ref in (("inf", torch.norm(x, float("inf"))),
+                   ("-inf", torch.norm(x, float("-inf"))),
+                   (1.0, torch.norm(x, 1.0)),
+                   (2.0, torch.norm(x, 2.0))):
+        got = torch.from_numpy(np.array(
+            mlx_vulkan.ATEN_TABLE["norm"](m, p)))
+        assert torch.allclose(got, ref.float(), atol=1e-5), \
+            (p, float(got), float(ref))
+    print("test_linalg_norm PASS")
+
+
+def test_logsumexp():
+    # PT-AL-g: aten.logsumexp(self, int[1] dim, keepdim) — used in
+    # contrastive learning. mx.logsumexp is the same stable reduction;
+    # the dim list becomes the axis tuple.
+    x2 = torch.randn(3, 4)
+    x3 = torch.randn(2, 3, 4)
+    cases = [
+        (torch.ops.aten.logsumexp.default, (x2,), {"dim": [0]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x2,), {"dim": [0, 1]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x3,), {"dim": [2]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x3,),
+         {"dim": [0, 2], "keepdim": True}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x2,), {"dim": [-1]}, "logsumexp"),
+        (torch.ops.aten.logsumexp.default, (x2.bfloat16(),), {"dim": [1]},
+         "logsumexp"),
+        # numerically hostile: large logits would overflow a naive
+        # log(sum(exp)) — the stable path must match torch.
+        (torch.ops.aten.logsumexp.default, (x2 + 1e4,), {"dim": [1]},
+         "logsumexp"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert fam in stats["mlx"], (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), kwargs, got, ref)
+    print("test_logsumexp PASS")
+
+
+def test_pdist_cdist():
+    # PT-PAIR-a: aten.pdist + aten.cdist (pairwise distance, metric
+    # learning). Composed from broadcast-difference norms; the pdist
+    # condense order is built arithmetically (mx has no compress).
+    a = torch.randn(5, 3)
+    b = torch.randn(4, 3)
+    ab = torch.randn(2, 5, 3)
+    bb = torch.randn(2, 4, 3)
+    cases = [
+        (torch.ops.aten.cdist.default, (a, b), {}, "cdist"),
+        (torch.ops.aten.cdist.default, (a, b), {"p": 1.0}, "cdist"),
+        (torch.ops.aten.cdist.default, (a, b), {"p": 0.5}, "cdist"),
+        (torch.ops.aten.cdist.default, (a, b), {"p": float("inf")}, "cdist"),
+        (torch.ops.aten.cdist.default, (ab, bb), {}, "cdist"),
+        (torch.ops.aten.pdist.default, (a,), {}, "pdist"),
+        (torch.ops.aten.pdist.default, (a,), {"p": 1.0}, "pdist"),
+        (torch.ops.aten.pdist.default, (a,), {"p": float("inf")}, "pdist"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=1e-5), (
+            str(target), kwargs, got, ref)
+    print("test_pdist_cdist PASS")
+
+
+def test_log1p_expm1_logaddexp():
+    # PT-AL-f: the dev table must match the wheel table — aten.expm1,
+    # aten.logaddexp lower with fp32/bf16 parity including near-zero
+    # inputs where the naive forms lose precision.
+    torch.manual_seed(0)
+    x = torch.tensor([0.0, 1e-9, -1e-9, 1e-7, -1e-7, 1e-4, -1e-4,
+                      1e-2, -1e-2, -0.5, 0.5, 1.0, -0.9999, 2.0])
+    y = torch.tensor([0.0, 1e-9, -1e-9, -20.0, 20.0, 1e-4, -1.0,
+                      0.5, -0.5, 3.0, -3.0, 10.0, -10.0, 0.001])
+    cases = [
+        (torch.ops.aten.log1p.default, (x,), {}, "log1p"),
+        (torch.ops.aten.expm1.default, (x,), {}, "expm1"),
+        (torch.ops.aten.expm1_.default, (x,), {}, "expm1"),
+        (torch.ops.aten.logaddexp.default, (x, y), {}, "logaddexp"),
+        (torch.ops.aten.expm1.default, (x.bfloat16(),), {}, "expm1"),
+        (torch.ops.aten.logaddexp.default,
+         (x.bfloat16(), y.bfloat16()), {}, "logaddexp"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*[a.clone() for a in ins], **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        tol = 2e-2 if ins[0].dtype == torch.bfloat16 else 1e-5
+        assert np.allclose(got.float().numpy(), ref.float().numpy(), atol=tol), (
+            str(target), got, ref)
+    print("test_log1p_expm1_logaddexp PASS")
+
+
 if __name__ == "__main__":
     test_topk()
     test_multinomial()
@@ -1849,10 +2855,15 @@ if __name__ == "__main__":
     test_pcache_skips_static_weights()
     test_compiled_executor_nonarray_outputs()
     test_gelu_backward()
+    test_tanh_backward()
+    test_comparisons()
     test_linear()
     test_dispatch_registered()
     test_numel()
     test_slice()
+    test_fft()
+    test_rfft()
+    test_fft2()
     test_transpose_expand()
     test_cat_clone()
     test_sum()
@@ -1869,6 +2880,17 @@ if __name__ == "__main__":
     test_meshgrid()
     test_group_norm()
     test_where_masked_fill()
+    test_mv_addmv()
+    test_xlogy_xlog1py()
+    test_softplus_mish()
+    test_elu_selu_celu()
+    test_log1p_expm1_logaddexp()
+    test_logsumexp()
+    test_glu()
+    test_reciprocal_frac()
+    test_linalg_norm()
+    test_cosine_similarity()
+    test_pdist_cdist()
     print("ALL PASS")
 
 

@@ -271,6 +271,32 @@ layout(set = 0, binding = 0, std430) readonly buffer InputX {
 #else
 #define QMM_VEC_OUTPUT_ACCESS writeonly
 #endif
+#ifdef QMM_MULTI_3M_PLAIN
+#if defined(QMM_VEC_TOKENS)
+#error "QMM_MULTI_3M_PLAIN is only supported for single-token QMM_VEC_MULTI"
+#endif
+// 3-member plain+KV trimmed multi-weight layout (16 bindings: x + 3x5).
+// Host guarantees members.size() <= 3, !any_epilogue, !any_out_view, !swiglu.
+#define QMM_VEC_MULTI_WEIGHT_3M(I, B) \
+layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
+  WVEC_T values[]; \
+} input_w##I; \
+layout(set = 0, binding = B + 1, std430) readonly buffer Scales##I { \
+  STORAGE_TYPE values[]; \
+} scales##I; \
+layout(set = 0, binding = B + 2, std430) readonly buffer Biases##I { \
+  STORAGE_TYPE values[]; \
+} biases##I; \
+layout(set = 0, binding = B + 3, std430) QMM_VEC_OUTPUT_ACCESS buffer Output##I { \
+  STORAGE_TYPE values[]; \
+} output##I; \
+layout(set = 0, binding = B + 4, std430) QMM_VEC_SUM_ACCESS buffer Sum##I { \
+  STORAGE_TYPE values[]; \
+} sum##I;
+QMM_VEC_MULTI_WEIGHT_3M(0, 1)
+QMM_VEC_MULTI_WEIGHT_3M(1, 6)
+QMM_VEC_MULTI_WEIGHT_3M(2, 11)
+#else
 #define QMM_VEC_MULTI_WEIGHT(I, B) \
 layout(set = 0, binding = B, std430) readonly buffer InputW##I { \
   WVEC_T values[]; \
@@ -294,6 +320,7 @@ QMM_VEC_MULTI_WEIGHT(0, 1)
 QMM_VEC_MULTI_WEIGHT(1, 7)
 QMM_VEC_MULTI_WEIGHT(2, 13)
 QMM_VEC_MULTI_WEIGHT(3, 19)
+#endif
 #if defined(QMM_VEC_TOKENS) && defined(QMM_VEC_RESNORM)
 // Token residual+norm epilogue: single-member groups only (weights 1..3
 // stay filler-bound), so the norm weight/output and the last-workgroup
@@ -386,8 +413,8 @@ layout(set = 0, binding = 3, std430) readonly buffer Biases0 {
   STORAGE_TYPE values[];
 } biases0;
 #if defined(QMM_RESNORM_PACK32)
-#if !defined(QMM_FAST_ONLY) || !defined(QMM_RESNORM_VEC4)
-#error "QMM_RESNORM_PACK32 requires QMM_FAST_ONLY and QMM_RESNORM_VEC4"
+#if !defined(QMM_FAST_ONLY) || (!defined(QMM_RESNORM_VEC4) && !defined(QMM_RESNORM_VEC))
+#error "QMM_RESNORM_PACK32 requires QMM_FAST_ONLY and (QMM_RESNORM_VEC4 or QMM_RESNORM_VEC)"
 #endif
 layout(set = 0, binding = 4, std430) writeonly buffer Output0U32 {
   uint values[];
@@ -409,9 +436,15 @@ layout(set = 0, binding = 6, std430) coherent buffer Sum0 {
   STORAGE_TYPE values[];
 } sum0;
 #endif
+#if defined(QMM_RESNORM_VEC) && defined(QMM_RESNORM_VEC_REG_V4)
+layout(set = 0, binding = 7, std430) readonly buffer NormWeightV4 {
+  uvec4 values[];
+} norm_weight_v4;
+#else
 layout(set = 0, binding = 7, std430) readonly buffer NormWeight {
   STORAGE_TYPE values[];
 } norm_weight;
+#endif
 layout(set = 0, binding = 8, std430) writeonly buffer NormOutput {
   STORAGE_TYPE values[];
 } norm_output;
@@ -436,10 +469,16 @@ layout(set = 0, binding = 12, std430) writeonly buffer NormOutputV4 {
 layout(set = 0, binding = 10, std430) readonly coherent buffer Sum0Vec4 {
   uvec4 values[];
 } sum0_v4;
+#if defined(QMM_RESNORM_VEC_REG_V4)
+layout(set = 0, binding = 11, std430) writeonly buffer NormOutputV4 {
+  uvec4 values[];
+} norm_output_v4;
+#else
 layout(set = 0, binding = 11, std430) writeonly buffer NormOutputU32 {
   uint values[];
 } norm_output_u32;
 shared uint s_resnorm_sum[2048u];
+#endif
 #endif
 #if defined(QMM_VEC_OUTGATE)
 layout(set = 0, binding = 10, std430) readonly buffer OutgateOut {
@@ -1007,6 +1046,52 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   } \
 }
 #elif defined(QMM_W2) && !defined(QMM_KCONT) && QGROUP == 64 && QMM_LANES == 32
+#if defined(QMM_Q4_MIDSB)
+// G13C-gated ResNormVec fast-tile body: hoist xa/xb together and issue
+// scale/bias loads between xa and xb so xb's 16 FMAs hide scale/bias latency.
+// Bit-identical (0 ULP) to the default low-reg body.
+#define Q4_ROWS_LOWREG_BODY(S, B) \
+      uvec4 xa = OUTGATE_XQUAD(xp); \
+      uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
+      xp += 64u; \
+      Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
+      Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
+      float scale_r[ROWS_PER_SLOT]; \
+      float bias_r[ROWS_PER_SLOT]; \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        uint spr = sp[r]; \
+        sp[r] = spr + 8u; \
+        scale_r[r] = LOAD_VALUE(S.values[spr]); \
+        bias_r[r] = LOAD_VALUE(B.values[spr + sb_delta]); \
+      } \
+      Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
+      Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        precise float bias_term = input_sum * bias_r[r]; \
+        acc[r] += fma(scale_r[r], dot[r], bias_term); \
+      }
+#else
+#define Q4_ROWS_LOWREG_BODY(S, B) \
+      { \
+        uvec4 xa = OUTGATE_XQUAD(xp); \
+        Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
+        Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
+      } \
+      { \
+        uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
+        xp += 64u; \
+        Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
+        Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
+      } \
+      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+        uint spr = sp[r]; \
+        sp[r] = spr + 8u; \
+        float scale_r = LOAD_VALUE(S.values[spr]); \
+        float bias_r = LOAD_VALUE(B.values[spr + sb_delta]); \
+        precise float bias_term = input_sum * bias_r; \
+        acc[r] += fma(scale_r, dot[r], bias_term); \
+      }
+#endif
 #if defined(QMM_FAST_ONLY)
 // Host guarantees K % 512 == 0, N % 8 == 0, and even w_base; trimming the
 // unreachable slow-path loop cuts SPIR-V CFG size and AGX register pressure.
@@ -1136,6 +1221,59 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   } \
 }
 #endif
+#elif defined(QMM_W2_UPFIFO) && defined(QMM_FAST_ONLY)
+// G13C-gated fast-tile-only FIFO-ordered upfront uvec2 loop (wv -> xa,xb ->
+// s,b -> 4 quads -> fma): issues DRAM weights first, L1-hot x second, and
+// late-use scale/bias last so single-slot FIFO waits overlap s/b with quad
+// math on shipped Mesa and AGX_SMART_WAITS places s/b in slot 1. Uses uniform
+// sb_delta (no bp[]) and trims unreachable slow-path CFG. Bit-identical (0 ULP).
+#define Q4_ROWS(W, S, B) { \
+  uint row_base[ROWS_PER_SLOT]; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    row_base[r] = min(column + r, n - 1u); \
+  } \
+  uint pairs_per_row = words_per_row >> 1u; \
+  uint w_base_pair = w_base >> 1u; \
+  uint wp[ROWS_PER_SLOT]; \
+  uint sp[ROWS_PER_SLOT]; \
+  uint sb_delta = b_base - s_base; \
+  uint g0 = lane_in_slot >> 2u; \
+  for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+    wp[r] = w_base_pair + row_base[r] * pairs_per_row + lane_in_slot; \
+    sp[r] = s_base + row_base[r] * groups_per_row + g0; \
+  } \
+  uint xp = (x_row >> 3u) + (lane_in_slot << 1u); \
+  uint iters = pairs_per_row >> 5u; \
+  for (uint wi_ = 0u; wi_ < iters; ++wi_) { \
+    precise float dot[ROWS_PER_SLOT]; \
+    precise float input_sum = 0.0; \
+    uvec2 wv[ROWS_PER_SLOT]; \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      dot[r] = 0.0; \
+      wv[r] = W.values[wp[r]]; \
+      wp[r] += 32u; \
+    } \
+    uvec4 xa = OUTGATE_XQUAD(xp); \
+    uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
+    xp += 64u; \
+    float scale_r[ROWS_PER_SLOT]; \
+    float bias_r[ROWS_PER_SLOT]; \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      uint spr = sp[r]; \
+      sp[r] = spr + 8u; \
+      scale_r[r] = LOAD_VALUE(S.values[spr]); \
+      bias_r[r] = LOAD_VALUE(B.values[spr + sb_delta]); \
+    } \
+    Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
+    Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
+    Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
+    Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
+      precise float bias_term = input_sum * bias_r[r]; \
+      acc[r] += fma(scale_r[r], dot[r], bias_term); \
+    } \
+  } \
+}
 #else
 // Hoisted uvec2 fast-tile loop with low register footprint: replaces bp[] with
 // uniform sb_delta, splits xa/xb live ranges across the two halves of each
@@ -1168,25 +1306,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
         wv[r] = W.values[wp[r]]; \
         wp[r] += 32u; \
       } \
-      { \
-        uvec4 xa = OUTGATE_XQUAD(xp); \
-        Q4_QUAD_ROWS(wv[r].x, xa.x, xa.y) \
-        Q4_QUAD_ROWS(wv[r].x >> 16u, xa.z, xa.w) \
-      } \
-      { \
-        uvec4 xb = OUTGATE_XQUAD(xp + 1u); \
-        xp += 64u; \
-        Q4_QUAD_ROWS(wv[r].y, xb.x, xb.y) \
-        Q4_QUAD_ROWS(wv[r].y >> 16u, xb.z, xb.w) \
-      } \
-      for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) { \
-        uint spr = sp[r]; \
-        sp[r] = spr + 8u; \
-        float scale_r = LOAD_VALUE(S.values[spr]); \
-        float bias_r = LOAD_VALUE(B.values[spr + sb_delta]); \
-        precise float bias_term = input_sum * bias_r; \
-        acc[r] += fma(scale_r, dot[r], bias_term); \
-      } \
+      Q4_ROWS_LOWREG_BODY(S, B) \
     } \
   } else { \
     Q4_ROWS_W2_FALLBACK(W, S, B) \
@@ -1391,6 +1511,17 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
   (total) = reduce_scratch[lane]; \
 }
 #endif
+#ifdef QMM_MULTI_3M_PLAIN
+#define Q4_MULTI_STORE(I, rounded) { \
+  output##I.values[column] = STORE_VALUE(rounded); \
+  if (((params.flags & 262144u) != 0u) && ((params.flags & (4096u << I)) != 0u)) { \
+    uint sum_column = params.out_strides[I] + \
+        (column / params.matrix_m) * params.in_strides[I] + \
+        (column % params.matrix_m); \
+    sum##I.values[sum_column] = STORE_VALUE(rounded); \
+  } \
+}
+#else
 #define Q4_MULTI_STORE(I, rounded) { \
   bool dual_i = ((params.flags & (1048576u << I)) != 0u) && \
       ((params.flags & (4096u << I)) == 0u); \
@@ -1411,6 +1542,7 @@ uint q6_at(uint e, uint c0, uint c1, uint c2) {
                  : ((rounded) + LOAD_VALUE(addend##I.values[column]))); \
   } \
 }
+#endif
 #if defined(QMM_VEC_TOKENS)
 // Multi-token main: same workgroup -> weight partition, fold contract
 // and reduction structure as the single-token main, with the token
@@ -1454,6 +1586,13 @@ void main() {
     which = 1u;
     workgroup -= groups0;
     n = n1;
+#ifdef QMM_MULTI_3W
+  } else {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  }
+#else
   } else if (workgroup < groups0 + groups1 + groups2) {
     which = 2u;
     workgroup -= groups0 + groups1;
@@ -1463,6 +1602,7 @@ void main() {
     workgroup -= groups0 + groups1 + groups2;
     n = n3;
   }
+#endif
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
   bool column_active = column < n;
   uint words_per_row = params.matrix_k / 8u;
@@ -2027,13 +2167,31 @@ void main() {
   uint n0 = params.shape[0];
   uint n1 = params.shape[1];
   uint n2 = params.shape[2];
+#ifndef QMM_MULTI_3M_PLAIN
   uint n3 = params.shape[3];
+#endif
   uint groups0 = (n0 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
   uint groups1 = (n1 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+#ifndef QMM_MULTI_3M_PLAIN
   uint groups2 = (n2 + COLUMNS_PER_GROUP - 1u) / COLUMNS_PER_GROUP;
+#endif
   uint workgroup = gl_WorkGroupID.x;
   uint which;
   uint n;
+#ifdef QMM_MULTI_3M_PLAIN
+  if (workgroup < groups0) {
+    which = 0u;
+    n = n0;
+  } else if (workgroup < groups0 + groups1) {
+    which = 1u;
+    workgroup -= groups0;
+    n = n1;
+  } else {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  }
+#else
   if ((params.flags & 65536u) != 0u) {
     which = 0u;
     n = n0;
@@ -2044,6 +2202,13 @@ void main() {
     which = 1u;
     workgroup -= groups0;
     n = n1;
+#ifdef QMM_MULTI_3W
+  } else {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  }
+#else
   } else if (workgroup < groups0 + groups1 + groups2) {
     which = 2u;
     workgroup -= groups0 + groups1;
@@ -2053,6 +2218,8 @@ void main() {
     workgroup -= groups0 + groups1 + groups2;
     n = n3;
   }
+#endif
+#endif
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot * uint(ROWS_PER_SLOT);
   bool column_active = column < n;
   uint words_per_row = params.matrix_k / 8u;
@@ -2099,11 +2266,17 @@ void main() {
       Q4_ROWS(input_w0, scales0, biases0)
     } else if (which == 1u) {
       Q4_ROWS(input_w1, scales1, biases1)
+#if defined(QMM_MULTI_3M_PLAIN) || defined(QMM_MULTI_3W)
+    } else {
+      Q4_ROWS(input_w2, scales2, biases2)
+    }
+#else
     } else if (which == 2u) {
       Q4_ROWS(input_w2, scales2, biases2)
     } else {
       Q4_ROWS(input_w3, scales3, biases3)
     }
+#endif
   }
   Q4_ROWS_REDUCE(total)
   if (lane_in_slot == 0u) {
@@ -2116,11 +2289,17 @@ void main() {
           Q4_MULTI_STORE(0, rounded)
         } else if (which == 1u) {
           Q4_MULTI_STORE(1, rounded)
+#if defined(QMM_MULTI_3M_PLAIN) || defined(QMM_MULTI_3W)
+        } else {
+          Q4_MULTI_STORE(2, rounded)
+        }
+#else
         } else if (which == 2u) {
           Q4_MULTI_STORE(2, rounded)
         } else {
           Q4_MULTI_STORE(3, rounded)
         }
+#endif
       }
     }
   }
@@ -2163,6 +2342,13 @@ void main() {
     which = 1u;
     workgroup -= groups0;
     n = n1;
+#ifdef QMM_MULTI_3W
+  } else {
+    which = 2u;
+    workgroup -= groups0 + groups1;
+    n = n2;
+  }
+#else
   } else if (workgroup < groups0 + groups1 + groups2) {
     which = 2u;
     workgroup -= groups0 + groups1;
@@ -2172,6 +2358,7 @@ void main() {
     workgroup -= groups0 + groups1 + groups2;
     n = n3;
   }
+#endif
   uint column = workgroup * COLUMNS_PER_GROUP + column_slot;
   bool column_active = column < n;
   precise float accumulator = 0.0;
@@ -2315,7 +2502,7 @@ void main() {
     ticket.done = 0u;
   }
   memoryBarrierBuffer();
-#ifndef QMM_RESNORM_VEC4
+#if !defined(QMM_RESNORM_VEC4) && !defined(QMM_RESNORM_VEC_REG_V4)
   barrier();
 #endif
 
@@ -2331,6 +2518,12 @@ void main() {
   uint n_reads = row_length / 256u;
   bool reg_path =
       (row_length == 2048u || row_length == 2560u || row_length == 4096u);
+#if defined(QMM_RESNORM_D2048) && defined(QMM_RESNORM_D4096)
+#error "QMM_RESNORM_D2048 and QMM_RESNORM_D4096 are mutually exclusive"
+#endif
+#if (defined(QMM_RESNORM_D2048) || defined(QMM_RESNORM_D4096)) && !defined(QMM_RESNORM_VEC4)
+#error "QMM_RESNORM_D2048/D4096 require QMM_RESNORM_VEC4"
+#endif
 #if defined(QMM_RESNORM_VEC4) && !defined(QMM_VEC_OUTGATE)
   // Coalesced 128-bit uvec4 RMSNorm epilogue for row_length == 2048 or 4096:
   // each of threads 0..255 loads 1 or 2 uvec4 words (8 or 16 bf16 elements)
@@ -2338,10 +2531,24 @@ void main() {
   // the reduction barriers (eliminating the second coherent read), loads
   // norm_weight_v4 once, and writes norm_output_v4 as 128-bit uvec4 stores.
   // Bit-identical to fast_norm_apple.comp; barriers are workgroup-uniform.
+#if defined(QMM_RESNORM_D2048)
+  if (row_length == 2048u &&
+      params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
+#elif defined(QMM_RESNORM_D4096)
+  if (row_length == 4096u &&
+      params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
+#else
   if ((row_length == 2048u || row_length == 4096u) &&
       params.lhs_size != 1u && (params.rhs_offset & 7u) == 0u) {
+#endif
     uint nw_base = params.rhs_offset >> 3u;
+#if defined(QMM_RESNORM_D2048)
+    if (true) {
+#elif defined(QMM_RESNORM_D4096)
+    if (false) {
+#else
     if (row_length == 2048u) {
+#endif
       uvec4 sv0 = uvec4(0u);
 #ifdef QMM_RESNORM_EPI_HOIST
       uvec4 wv0 = uvec4(0u);
@@ -2473,6 +2680,86 @@ void main() {
 #endif
 #if defined(QMM_RESNORM_VEC)
   if (reg_path) {
+#if defined(QMM_RESNORM_VEC_REG_V4)
+    // G13C-gated zero-shmem, single-barrier coalesced 128-bit uvec4 RMSNorm
+    // epilogue for D in {2048, 2560, 4096} (n_v4 in {256, 320, 512}): each
+    // thread 0..255 loads 1 or 2 uvec4 words from sum0_v4 and norm_weight_v4
+    // before the single reduction barrier, eliminating s_resnorm_sum[2048]
+    // (8 KB shmem) and three workgroup barriers per dispatch.
+    uint n_v4 = row_length >> 3u;
+    uint nw_base = params.rhs_offset >> 3u;
+    uvec4 sv0 = uvec4(0u);
+    uvec4 sv1 = uvec4(0u);
+    uvec4 wv0 = uvec4(0u);
+    uvec4 wv1 = uvec4(0u);
+    bool has1 = (lane + 256u < n_v4);
+    if (lane < 256u) {
+      sv0 = sum0_v4.values[lane];
+      wv0 = norm_weight_v4.values[nw_base + lane];
+      if (has1) {
+        sv1 = sum0_v4.values[lane + 256u];
+        wv1 = norm_weight_v4.values[nw_base + lane + 256u];
+      }
+      {
+        float a0 = uintBitsToFloat((sv0.x & 0xFFFFu) << 16u);
+        float a1 = uintBitsToFloat(sv0.x & 0xFFFF0000u);
+        float a2 = uintBitsToFloat((sv0.y & 0xFFFFu) << 16u);
+        float a3 = uintBitsToFloat(sv0.y & 0xFFFF0000u);
+        float a4 = uintBitsToFloat((sv0.z & 0xFFFFu) << 16u);
+        float a5 = uintBitsToFloat(sv0.z & 0xFFFF0000u);
+        float a6 = uintBitsToFloat((sv0.w & 0xFFFFu) << 16u);
+        float a7 = uintBitsToFloat(sv0.w & 0xFFFF0000u);
+        reg_sq += a0 * a0; reg_sq += a1 * a1; reg_sq += a2 * a2; reg_sq += a3 * a3;
+        reg_sq += a4 * a4; reg_sq += a5 * a5; reg_sq += a6 * a6; reg_sq += a7 * a7;
+      }
+      if (has1) {
+        float a0 = uintBitsToFloat((sv1.x & 0xFFFFu) << 16u);
+        float a1 = uintBitsToFloat(sv1.x & 0xFFFF0000u);
+        float a2 = uintBitsToFloat((sv1.y & 0xFFFFu) << 16u);
+        float a3 = uintBitsToFloat(sv1.y & 0xFFFF0000u);
+        float a4 = uintBitsToFloat((sv1.z & 0xFFFFu) << 16u);
+        float a5 = uintBitsToFloat(sv1.z & 0xFFFF0000u);
+        float a6 = uintBitsToFloat((sv1.w & 0xFFFFu) << 16u);
+        float a7 = uintBitsToFloat(sv1.w & 0xFFFF0000u);
+        reg_sq += a0 * a0; reg_sq += a1 * a1; reg_sq += a2 * a2; reg_sq += a3 * a3;
+        reg_sq += a4 * a4; reg_sq += a5 * a5; reg_sq += a6 * a6; reg_sq += a7 * a7;
+      }
+      float sub_partial = subgroupAdd(reg_sq);
+      if (sub_lane == 0u) {
+        s_resnorm_partial[sub_id] = sub_partial;
+      }
+    }
+    barrier();
+    if (lane < 256u) {
+      float v = (sub_lane < 8u) ? s_resnorm_partial[sub_lane] : 0.0;
+      float total_sq = subgroupAdd(v);
+      float mean_square = total_sq / float(row_length);
+      float norm = inversesqrt(mean_square + eps);
+      #define RNV_PACK_PAIR(sv_w, wv_w, out_u) { \
+        precise float _nw0 = norm * uintBitsToFloat(((wv_w) & 0xFFFFu) << 16u); \
+        precise float _nw1 = norm * uintBitsToFloat((wv_w) & 0xFFFF0000u); \
+        precise float _r0 = uintBitsToFloat(((sv_w) & 0xFFFFu) << 16u) * _nw0; \
+        precise float _r1 = uintBitsToFloat((sv_w) & 0xFFFF0000u) * _nw1; \
+        (out_u) = uint(STORE_VALUE(_r0)) | (uint(STORE_VALUE(_r1)) << 16u); \
+      }
+      uvec4 o0;
+      RNV_PACK_PAIR(sv0.x, wv0.x, o0.x)
+      RNV_PACK_PAIR(sv0.y, wv0.y, o0.y)
+      RNV_PACK_PAIR(sv0.z, wv0.z, o0.z)
+      RNV_PACK_PAIR(sv0.w, wv0.w, o0.w)
+      norm_output_v4.values[lane] = o0;
+      if (has1) {
+        uvec4 o1;
+        RNV_PACK_PAIR(sv1.x, wv1.x, o1.x)
+        RNV_PACK_PAIR(sv1.y, wv1.y, o1.y)
+        RNV_PACK_PAIR(sv1.z, wv1.z, o1.z)
+        RNV_PACK_PAIR(sv1.w, wv1.w, o1.w)
+        norm_output_v4.values[lane + 256u] = o1;
+      }
+      #undef RNV_PACK_PAIR
+    }
+    return;
+#else
     // Cooperative 128-bit uvec4 coherent-L2 load into shared memory:
     // 16x fewer coherent L2 reads than 20 scalar uint16_t loads per thread
     // (320 uvec4 loads for D=2560 -> 1.25 loads/thread), zero extra QMV regs.
@@ -2540,6 +2827,7 @@ void main() {
       }
     }
     return;
+#endif
   }
 #endif
 #if !defined(QMM_FAST_ONLY)
@@ -4004,13 +4292,18 @@ void main() {
 // Multi-row form of the Q4 word main: same batch walk and bases as the
 // single-row main below, each slot owning ROWS_PER_SLOT consecutive
 // columns (see Q4_ROWS).
+#if defined(QMM_WORD_BATCH1) && (defined(QMM_VEC_MULTI) || defined(QMM_VEC_SWIGLU) || defined(QMM_VEC_RESNORM) || defined(QMM_VEC_TOKENS) || defined(QMM_VEC_BATCH) || defined(QMM_VEC_ROWS))
+#error "QMM_WORD_BATCH1 is only supported on single-weight word decode"
+#endif
 void main() {
   uint lane = gl_LocalInvocationID.x;
   uint column_slot = lane / LANES;
   uint lane_in_slot = lane % LANES;
+#ifndef QMM_WORD_BATCH1
   uint batch = params.shape[0];
   uint w_batch_words = params.shape[1];
   uint param_batch = params.shape[2];
+#endif
   uint column = gl_WorkGroupID.x * COLUMNS_PER_GROUP +
       column_slot * uint(ROWS_PER_SLOT);
   uint n = params.matrix_n;
@@ -4020,6 +4313,28 @@ void main() {
 #if QBITS == 8
   uint row_words = params.matrix_k / 4u;
 #endif
+#ifdef QMM_WORD_BATCH1
+  {
+    precise float acc[ROWS_PER_SLOT];
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      acc[r] = 0.0;
+    }
+    if (column_active) {
+      uint w_base = params.rhs_offset;
+      uint s_base = params.aux_offset;
+      uint b_base = params.aux_size;
+      uint x_row = params.lhs_offset;
+      Q4_ROWS(input_w, scales, biases)
+    }
+    for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
+      float total = subgroupAdd(acc[r]);
+      if (lane_in_slot == 0u && column + r < n) {
+        output_data.values[params.output_offset + column + r] =
+            STORE_VALUE(total);
+      }
+    }
+  }
+#else
   for (uint b = 0u; b < batch; ++b) {
     precise float acc[ROWS_PER_SLOT];
     for (uint r = 0u; r < uint(ROWS_PER_SLOT); ++r) {
@@ -4040,6 +4355,7 @@ void main() {
       }
     }
   }
+#endif
 }
 #endif
 #elif defined(QMM_VEC_GREEDY_WORD)

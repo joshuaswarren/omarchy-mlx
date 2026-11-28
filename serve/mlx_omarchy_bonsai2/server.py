@@ -20,10 +20,11 @@ max_position_embeddings): a prompt plus max_tokens beyond it is a 400.
 --managed is the admission-control mode: pin the budget registry home
 once, admit + reserve against mlx_omarchy_serve.budget BEFORE any
 weights are touched (weights + KV at the served context + workspace via
-budget.estimate_required), transition the reservation to resident only
-after the load, release on exit only what was reserved, and fail closed
-(exit 3) if any of that cannot be done. Without --managed the same
-reservation runs best-effort and never blocks standalone serving.
+budget.estimate_required), refuse to load a pack whose config.json or
+model.safetensors changed after admission, transition the reservation to
+resident only after the load, release on exit only what was reserved,
+and fail closed (exit 3) if any of that cannot be done. Without --managed
+the same reservation runs best-effort and never blocks standalone serving.
 """
 
 from __future__ import annotations
@@ -207,6 +208,7 @@ def _preflight_managed(args, reservation_name):
             raise
         if not admission.fits:  # defensive: refusals raise BudgetError
             _fail_managed("admission refused: %s" % "; ".join(admission.lines))
+        args.admitted = facts
         return total
     except SystemExit:
         raise
@@ -297,11 +299,18 @@ class Bonsai2State:
     def __init__(self, args):
         import mlx.core as mx
 
-        from .loader import load_text_model, load_tokenizer
+        from .loader import PackChangedError, load_text_model, load_tokenizer
 
         self.mx = mx
         self.pack_dir = Path(args.model).resolve()
-        self.model, self.info = load_text_model(self.pack_dir)
+        try:
+            self.model, self.info = load_text_model(
+                self.pack_dir, admitted=getattr(args, "admitted", None)
+            )
+        except PackChangedError as exc:
+            if getattr(args, "managed", False):
+                _fail_managed(str(exc))
+            raise
         self.tokenizer = load_tokenizer(self.pack_dir)
         self.device = "gpu" if mx.default_device() == mx.gpu else "cpu"
         self.catalog_id = args.model_id
@@ -698,6 +707,7 @@ def serve_main(argv):
     args.reservation_name = _reservation_name(args.model_id)
     args.owner = _owner_token(_budget_module())
     args.registry_home = None
+    args.admitted = None
     args.reserved = False
     # Env-gated ids-probe hook (bench-only, default OFF). Imported only when
     # the env var is set: install.sh does not ship ids_probe.py. Mirrors the

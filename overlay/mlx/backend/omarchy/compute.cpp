@@ -328,6 +328,7 @@
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s4w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast_3w.h"
 #include "qmm_vec_q4_swiglu_bf16_r2s8w2.h"
 #include "qmm_vec_q4_swiglu_bf16_r2s8w2_fast.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s8w2.h"
@@ -399,6 +400,7 @@
 #include "sdpa_decode_online_sg32_bf16_hd128.h"
 #include "sdpa_decode_online_rope_sg32_bf16_hd128.h"
 #include "sdpa_decode_online_rope_sg32_bf16_hd128_g13c.h"
+#include "sdpa_decode_online_rope_sg32_bf16_hd128_g13c_b4.h"
 #include "sdpa_decode_online_rope_outgate_sg32_bf16_hd128.h"
 #include "sdpa_decode_online_rope_outgate_sg32_bf16_hd128_g13c.h"
 #include "sdpa_decode_online_rope_sg32_bf16_hd256.h"
@@ -792,10 +794,23 @@
 #include "qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s4w2.h"
 #include "qmm_vec_q4_swiglu_bf16_r1s4w2_fast.h"
+#include "qmm_vec_q4_swiglu_bf16_r1s8w2_fast.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_fast.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_fast_3m.h"
 #include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast.h"
+#include "qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast_3m.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast_d2048.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast_d4096.h"
 #include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast.h"
+#include "sdpa_decode_online_rope_sg32_bf16_hd256_fast.h"
+#include "sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast.h"
+#include "gather_dequant_norm_bf16.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d2048.h"
+#include "qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast_b1.h"
+#include "qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast_b1.h"
 #ifdef MLX_OMARCHY_BF16_DIRECT
 #include "matmul_direct_bf16_nn.h"
 #include "matmul_direct_bf16_nt.h"
@@ -1495,6 +1510,9 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
     case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128G13C:
       return {sdpa_decode_online_rope_sg32_bf16_hd128_g13c,
               sdpa_decode_online_rope_sg32_bf16_hd128_g13c_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd128G13CB4:
+      return {sdpa_decode_online_rope_sg32_bf16_hd128_g13c_b4,
+              sdpa_decode_online_rope_sg32_bf16_hd128_g13c_b4_size};
     case ComputeKernel::SdpaDecodeOnlineSg32BF16Hd256:
       return {sdpa_decode_online_sg32_bf16_hd256,
               sdpa_decode_online_sg32_bf16_hd256_size};
@@ -2519,6 +2537,10 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast,
           qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2Fast3w:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast_3w,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_fast_3w_size};
     case ComputeKernel::QmmVecQ4SwigluBF16R2S8W2Fast:
       return {
           qmm_vec_q4_swiglu_bf16_r2s8w2_fast,
@@ -2666,6 +2688,58 @@ ShaderBytes shader_bytes(ComputeKernel kernel) {
       return {
           qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast,
           qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S16W2UpfrontFast3M:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast_3m,
+          qmm_vec_q4_multi_subgroup_bf16_r2s16w2_up_fast_3m_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeSg32BF16Hd256Fast:
+      return {
+          sdpa_decode_online_rope_sg32_bf16_hd256_fast,
+          sdpa_decode_online_rope_sg32_bf16_hd256_fast_size};
+    case ComputeKernel::SdpaDecodeOnlineRopeOutgateSg32BF16Hd256Fast:
+      return {
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast,
+          sdpa_decode_online_rope_outgate_sg32_bf16_hd256_fast_size};
+    case ComputeKernel::GatherDequantNormBF16:
+      return {
+          gather_dequant_norm_bf16,
+          gather_dequant_norm_bf16_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD2048:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d2048,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d2048_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S32W2FastD4096:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s32w2_fast_d4096_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S4W2FastB1:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast_b1,
+          qmm_vec_q4_word_subgroup_bf16_r2s4w2_fast_b1_size};
+    case ComputeKernel::QmmVecQ4WordSubgroupBF16R2S32W2FastB1:
+      return {
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast_b1,
+          qmm_vec_q4_word_subgroup_bf16_r2s32w2_fast_b1_size};
+    case ComputeKernel::QmmVecQ4SwigluBF16R1S8W2Fast:
+      return {
+          qmm_vec_q4_swiglu_bf16_r1s8w2_fast,
+          qmm_vec_q4_swiglu_bf16_r1s8w2_fast_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2Fast:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2FastD2048:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast_d2048,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast_d2048_size};
+    case ComputeKernel::QmmVecQ4ResNormVec4BF16R2S16W2FastD4096:
+      return {
+          qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast_d4096,
+          qmm_vec_q4_resnorm_vec4_bf16_r2s16w2_fast_d4096_size};
+    case ComputeKernel::QmmVecQ4MultiSubgroupBF16R2S8W2UpfrontFast3M:
+      return {
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_fast_3m,
+          qmm_vec_q4_multi_subgroup_bf16_r2s8w2_up_fast_3m_size};
     case ComputeKernel::Custom:
     case ComputeKernel::Count:
       break;

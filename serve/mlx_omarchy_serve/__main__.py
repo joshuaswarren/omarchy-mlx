@@ -21,13 +21,15 @@ Design invariants (do not weaken):
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import importlib.metadata
 import importlib.util
 import json
 import math
 import os
+# PAR-32: prevent OpenBLAS worker threads from spinning CPU (~9.5% on Apple
+# Silicon) during token decode; callers may still override explicitly.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import re
 import stat
 import subprocess
@@ -979,6 +981,191 @@ def cmd_plan(args, cat, home) -> int:
     return 0
 
 
+MLXLM_METADATA_MAX_BYTES = cap_shim.METADATA_MAX_BYTES
+MLXLM_RECORD_MAX_BYTES = cap_shim.RECORD_MAX_BYTES
+MLXLM_PY_MAX_BYTES = cap_shim.SERVE_COPY_MAX_BYTES
+MLXLM_PATCH_RECORD_MAX_BYTES = 64 << 10
+_MLXLM_PATCH_FIX = "fix: install.sh --patch-venv <this venv>"
+
+
+def _is_filesystem_path_dist(dist) -> bool:
+    return (
+        isinstance(dist, importlib.metadata.PathDistribution)
+        and isinstance(getattr(dist, "_path", None), os.PathLike)
+    )
+
+
+def _read_mlxlm_dist_version(dist) -> str | None:
+    """Return the installed mlx-lm version without blocking or unbounded reads."""
+    if _is_filesystem_path_dist(dist):
+        import email.parser
+
+        try:
+            root = Path(dist._path)
+            root_st = os.stat(root)
+        except (OSError, TypeError, ValueError):
+            return None
+        if stat.S_ISDIR(root_st.st_mode):
+            target = None
+            for name in ("METADATA", "PKG-INFO"):
+                candidate = root / name
+                try:
+                    os.lstat(candidate)
+                except FileNotFoundError:
+                    continue
+                except (OSError, ValueError):
+                    return None
+                target = candidate
+                break
+            if target is None:
+                return None
+        else:
+            target = root
+        raw = bytearray()
+        if not cap_shim._read_regular_bounded(
+                target, MLXLM_METADATA_MAX_BYTES, raw.extend):
+            return None
+        try:
+            text = raw.decode("utf-8")
+            msg = email.parser.HeaderParser().parsestr(text)
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            return None
+        versions = msg.get_all("Version")
+        if not versions or len(versions) != 1:
+            return None
+        version = versions[0]
+    else:
+        try:
+            version = dist.version
+        except Exception:
+            return None
+    if not isinstance(version, str):
+        return None
+    version = version.strip()
+    if not version or "\n" in version or "\r" in version:
+        return None
+    return version
+
+
+def _read_mlxlm_record_entries(
+    dist,
+) -> tuple[list[tuple[object, str, str | None, str | None]] | None, bool]:
+    """Return (entries, error) for mlx_lm/*.py rows in dist's wheel RECORD.
+
+    For filesystem PathDistributions, reads RECORD through
+    cap_shim._read_regular_bounded() so a FIFO or oversized RECORD cannot hang
+    or exhaust memory. Preserves dist.files for monkeypatched or non-filesystem
+    distributions. Returns ([], False) when a valid PEP 376 RECORD contains no
+    mlx_lm/*.py rows (for example an editable .pth install), and (None, True)
+    when RECORD is missing, empty, unreadable, malformed, unsafe, or contains
+    conflicting duplicate mlx_lm/*.py rows.
+    """
+    raw_entries: list[tuple[object, str, str | None, str | None]] = []
+    if _is_filesystem_path_dist(dist):
+        import csv
+        import io
+
+        try:
+            root = Path(dist._path)
+            root_st = os.stat(root)
+        except (OSError, TypeError, ValueError):
+            return None, True
+        if not stat.S_ISDIR(root_st.st_mode):
+            return None, True
+        record_path = root / "RECORD"
+        try:
+            os.lstat(record_path)
+        except (OSError, ValueError):
+            return None, True
+        raw = bytearray()
+        if not cap_shim._read_regular_bounded(
+                record_path, MLXLM_RECORD_MAX_BYTES, raw.extend):
+            return None, True
+        try:
+            text = raw.decode("utf-8")
+            rows = list(csv.reader(io.StringIO(text, newline=""), strict=True))
+        except (UnicodeDecodeError, csv.Error):
+            return None, True
+        non_empty_rows = 0
+        for row in rows:
+            if not row:
+                continue
+            if len(row) != 3 or not row[0]:
+                return None, True
+            if row[2] and not (row[2].isascii() and row[2].isdigit()):
+                return None, True
+            non_empty_rows += 1
+            raw_name = row[0]
+            spec = row[1] or None
+            if spec is None:
+                mode, value = None, None
+            else:
+                m, sep, v = spec.partition("=")
+                mode, value = (m, v) if sep else (spec, "")
+            raw_entries.append((raw_name, raw_name, mode, value))
+        if non_empty_rows == 0:
+            return None, True
+    else:
+        try:
+            files = dist.files
+            if files is None:
+                return None, True
+            for f in files:
+                raw_name = str(f)
+                fhash = getattr(f, "hash", None)
+                if fhash is None:
+                    mode, value = None, None
+                else:
+                    mode = getattr(fhash, "mode", None)
+                    value = getattr(fhash, "value", None)
+                raw_entries.append((f, raw_name, mode, value))
+        except Exception:
+            return None, True
+        if not raw_entries:
+            return None, True
+
+    entries: list[tuple[object, str, str | None, str | None]] = []
+    seen: dict[str, tuple[str | None, str | None]] = {}
+    for locator_arg, raw_name, mode, value in raw_entries:
+        if "\0" in raw_name:
+            return None, True
+        norm = PurePosixPath(raw_name)
+        parts = norm.parts
+        if norm.is_absolute() or not parts or parts[0] != "mlx_lm":
+            continue
+        if ".." in parts:
+            return None, True
+        if len(parts) < 2 or not parts[-1].endswith(".py"):
+            continue
+        if raw_name.endswith("/") or raw_name.split("/")[-1] == ".":
+            return None, True
+        key = str(norm)
+        spec_pair = (mode, value)
+        if key in seen:
+            if seen[key] != spec_pair:
+                return None, True
+            continue
+        seen[key] = spec_pair
+        entries.append((locator_arg, key, mode, value))
+    return entries, False
+
+
+def _read_mlxlm_patch_record(dist) -> str | None:
+    """Read mlx_lm/.omarchy-serve-patches boundedly without blocking."""
+    try:
+        record_path = Path(dist.locate_file("mlx_lm/.omarchy-serve-patches"))
+    except Exception:
+        return None
+    raw = bytearray()
+    if not cap_shim._read_regular_bounded(
+            record_path, MLXLM_PATCH_RECORD_MAX_BYTES, raw.extend):
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 def mlxlm_patch_status() -> str | None:
     """One line saying whether the vendored mlx-lm serve patches are applied.
 
@@ -989,39 +1176,83 @@ def mlxlm_patch_status() -> str | None:
     one patch at a time, so a failure part way leaves some of them changed. The
     script writes mlx_lm/.omarchy-serve-patches only after the last step, so
     "applied" needs that record for this mlx-lm version as well.
+    All reads (METADATA/PKG-INFO, RECORD, mlx_lm/*.py, and the patch record)
+    are non-blocking and size-bounded; unreadable, oversized, non-regular, or
+    non-canonical entries fail closed to "PARTIAL or unverified".
     Returns None when mlx-lm is absent (not the serving engine's concern).
     """
     try:
         dist = importlib.metadata.distribution("mlx-lm")
     except importlib.metadata.PackageNotFoundError:
         return None
-    total = modified = 0
-    for f in dist.files or []:
-        name = str(f)
-        if not name.startswith("mlx_lm/") or not name.endswith(".py") or f.hash is None:
-            continue
-        total += 1
-        try:
-            data = Path(dist.locate_file(f)).read_bytes()
-        except OSError:
-            continue
-        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
-        modified += digest != f.hash.value
-    if not total:
+    except Exception:
+        return (
+            "mlx-lm serve patches: PARTIAL or unverified "
+            "(installed mlx-lm distribution could not be inspected); "
+            f"{_MLXLM_PATCH_FIX}"
+        )
+    entries, record_error = _read_mlxlm_record_entries(dist)
+    if record_error:
+        return (
+            "mlx-lm serve patches: PARTIAL or unverified "
+            "(wheel RECORD could not be read or verified); "
+            f"{_MLXLM_PATCH_FIX}"
+        )
+    if not entries:
         return None
-    if modified:
+    total = modified = unverified = 0
+    for locator_arg, _name, mode, value in entries:
+        total += 1
+        want = cap_shim._decode_record_sha256(value) if mode == "sha256" else None
+        if want is None:
+            unverified += 1
+            continue
         try:
-            record = Path(dist.locate_file("mlx_lm/.omarchy-serve-patches")).read_text()
-        except OSError:
-            record = ""
-        if f"mlx_lm={dist.version}\n" in record:
-            return (f"mlx-lm serve patches: applied ({modified} of {total} files "
-                    "differ from the wheel RECORD, apply completed)")
-        return (f"mlx-lm serve patches: PARTIAL or unverified ({modified} of {total} files "
-                "differ from the wheel RECORD, but no completed apply is recorded for "
-                f"mlx-lm {dist.version}); fix: install.sh --patch-venv <this venv>")
-    return ("mlx-lm serve patches: NOT applied (stock mlx-lm); "
-            "fix: install.sh --patch-venv <this venv>")
+            file_path = Path(dist.locate_file(locator_arg))
+        except Exception:
+            unverified += 1
+            continue
+        hasher = hashlib.sha256()
+        if not cap_shim._read_regular_bounded(
+                file_path, MLXLM_PY_MAX_BYTES, hasher.update):
+            unverified += 1
+            continue
+        if hasher.digest() != want:
+            modified += 1
+    if unverified:
+        if modified:
+            return (
+                f"mlx-lm serve patches: PARTIAL or unverified ({modified} of {total} "
+                f"files differ from the wheel RECORD, {unverified} of {total} could "
+                f"not be verified); {_MLXLM_PATCH_FIX}"
+            )
+        return (
+            f"mlx-lm serve patches: PARTIAL or unverified ({unverified} of {total} "
+            f"files could not be verified against the wheel RECORD); {_MLXLM_PATCH_FIX}"
+        )
+    if modified:
+        version = _read_mlxlm_dist_version(dist)
+        if version is None:
+            return (
+                f"mlx-lm serve patches: PARTIAL or unverified ({modified} of {total} "
+                "files differ from the wheel RECORD, and the installed mlx-lm version "
+                f"could not be read); {_MLXLM_PATCH_FIX}"
+            )
+        record = _read_mlxlm_patch_record(dist)
+        if record is not None and f"mlx_lm={version}" in record.split("\n")[:-1]:
+            return (
+                f"mlx-lm serve patches: applied ({modified} of {total} files "
+                "differ from the wheel RECORD, apply completed)"
+            )
+        return (
+            f"mlx-lm serve patches: PARTIAL or unverified ({modified} of {total} files "
+            "differ from the wheel RECORD, but no completed apply is recorded for "
+            f"mlx-lm {version}); {_MLXLM_PATCH_FIX}"
+        )
+    return (
+        "mlx-lm serve patches: NOT applied (stock mlx-lm); "
+        f"{_MLXLM_PATCH_FIX}"
+    )
 
 
 def approve_download(lines: list[str], *, interactive: bool, assume_yes: bool,

@@ -137,6 +137,8 @@ shared float s_o[SUBGROUPS * S_O_STRIDE];
 shared uint s_k_words[HALF_D];
 #if HD == 128 && defined(SDPA_G13C_FAST)
 shared float s_q[TILE_D];
+#elif HD == 256 && defined(SDPA_HD256_FAST)
+shared float s_q[D];
 #endif
 
 float load_q_raw(uint abs_index) {
@@ -409,6 +411,156 @@ void main() {
 
       k_idx += k_step;
       v_idx += v_step;
+#if defined(SDPA_G13C_BLK) && (SDPA_G13C_BLK == 4)
+      uint key = sg + uint(SUBGROUPS);
+      uint blk4_end =
+          (last_key > 3u * uint(SUBGROUPS)) ? (last_key - 3u * uint(SUBGROUPS)) : 0u;
+      for (; key < blk4_end; key += 4u * uint(SUBGROUPS)) {
+        uvec2 kw0 = key_data.values[k_idx];
+        uvec2 kw1 = key_data.values[k_idx + k_step];
+        uvec2 kw2 = key_data.values[k_idx + 2u * k_step];
+        uvec2 kw3 = key_data.values[k_idx + 3u * k_step];
+        k_idx += 4u * k_step;
+
+        float d0 = fma(q0, uintBitsToFloat(kw0.x << 16u),
+                   fma(q1, uintBitsToFloat(kw0.x & 0xffff0000u),
+                   fma(q2, uintBitsToFloat(kw0.y << 16u),
+                       q3 * uintBitsToFloat(kw0.y & 0xffff0000u))));
+        float d1 = fma(q0, uintBitsToFloat(kw1.x << 16u),
+                   fma(q1, uintBitsToFloat(kw1.x & 0xffff0000u),
+                   fma(q2, uintBitsToFloat(kw1.y << 16u),
+                       q3 * uintBitsToFloat(kw1.y & 0xffff0000u))));
+        float d2 = fma(q0, uintBitsToFloat(kw2.x << 16u),
+                   fma(q1, uintBitsToFloat(kw2.x & 0xffff0000u),
+                   fma(q2, uintBitsToFloat(kw2.y << 16u),
+                       q3 * uintBitsToFloat(kw2.y & 0xffff0000u))));
+        float d3 = fma(q0, uintBitsToFloat(kw3.x << 16u),
+                   fma(q1, uintBitsToFloat(kw3.x & 0xffff0000u),
+                   fma(q2, uintBitsToFloat(kw3.y << 16u),
+                       q3 * uintBitsToFloat(kw3.y & 0xffff0000u))));
+        float s0 = subgroupAdd(d0);
+        float s1 = subgroupAdd(d1);
+        float s2 = subgroupAdd(d2);
+        float s3 = subgroupAdd(d3);
+
+        uvec2 vw0 = value_data.values[v_idx];
+        uvec2 vw1 = value_data.values[v_idx + v_step];
+        uvec2 vw2 = value_data.values[v_idx + 2u * v_step];
+        uvec2 vw3 = value_data.values[v_idx + 3u * v_step];
+        v_idx += 4u * v_step;
+
+        float new_max = max(m_i, max(max(s0, s1), max(s2, s3)));
+        float factor = exp2(m_i - new_max);
+        float p0 = exp2(s0 - new_max);
+        float p1 = exp2(s1 - new_max);
+        float p2 = exp2(s2 - new_max);
+        float p3 = exp2(s3 - new_max);
+        m_i = new_max;
+        l_i = fma(l_i, factor, (p0 + p1) + (p2 + p3));
+        o0 = fma(o0, factor,
+                 fma(p0, uintBitsToFloat(vw0.x << 16u),
+                 fma(p1, uintBitsToFloat(vw1.x << 16u),
+                 fma(p2, uintBitsToFloat(vw2.x << 16u),
+                     p3 * uintBitsToFloat(vw3.x << 16u)))));
+        o1 = fma(o1, factor,
+                 fma(p0, uintBitsToFloat(vw0.x & 0xffff0000u),
+                 fma(p1, uintBitsToFloat(vw1.x & 0xffff0000u),
+                 fma(p2, uintBitsToFloat(vw2.x & 0xffff0000u),
+                     p3 * uintBitsToFloat(vw3.x & 0xffff0000u)))));
+        o2 = fma(o2, factor,
+                 fma(p0, uintBitsToFloat(vw0.y << 16u),
+                 fma(p1, uintBitsToFloat(vw1.y << 16u),
+                 fma(p2, uintBitsToFloat(vw2.y << 16u),
+                     p3 * uintBitsToFloat(vw3.y << 16u)))));
+        o3 = fma(o3, factor,
+                 fma(p0, uintBitsToFloat(vw0.y & 0xffff0000u),
+                 fma(p1, uintBitsToFloat(vw1.y & 0xffff0000u),
+                 fma(p2, uintBitsToFloat(vw2.y & 0xffff0000u),
+                     p3 * uintBitsToFloat(vw3.y & 0xffff0000u)))));
+      }
+      for (; key < last_key; key += uint(SUBGROUPS)) {
+        kw = key_data.values[k_idx];
+        k_idx += k_step;
+        dot = fma(q0, uintBitsToFloat(kw.x << 16u),
+              fma(q1, uintBitsToFloat(kw.x & 0xffff0000u),
+              fma(q2, uintBitsToFloat(kw.y << 16u),
+                  q3 * uintBitsToFloat(kw.y & 0xffff0000u))));
+        float score = subgroupAdd(dot);
+        vw = value_data.values[v_idx];
+        v_idx += v_step;
+        float new_max = max(m_i, score);
+        float factor = exp2(m_i - new_max);
+        float p = exp2(score - new_max);
+        m_i = new_max;
+        l_i = fma(l_i, factor, p);
+        o0 = fma(o0, factor, p * uintBitsToFloat(vw.x << 16u));
+        o1 = fma(o1, factor, p * uintBitsToFloat(vw.x & 0xffff0000u));
+        o2 = fma(o2, factor, p * uintBitsToFloat(vw.y << 16u));
+        o3 = fma(o3, factor, p * uintBitsToFloat(vw.y & 0xffff0000u));
+      }
+#elif defined(SDPA_G13C_BLK) && (SDPA_G13C_BLK == 2)
+      uint key = sg + uint(SUBGROUPS);
+      uint blk2_end =
+          (last_key > uint(SUBGROUPS)) ? (last_key - uint(SUBGROUPS)) : 0u;
+      for (; key < blk2_end; key += 2u * uint(SUBGROUPS)) {
+        uvec2 kw0 = key_data.values[k_idx];
+        uvec2 kw1 = key_data.values[k_idx + k_step];
+        k_idx += 2u * k_step;
+        uvec2 vw0 = value_data.values[v_idx];
+        uvec2 vw1 = value_data.values[v_idx + v_step];
+        v_idx += 2u * v_step;
+
+        float d0 = fma(q0, uintBitsToFloat(kw0.x << 16u),
+                   fma(q1, uintBitsToFloat(kw0.x & 0xffff0000u),
+                   fma(q2, uintBitsToFloat(kw0.y << 16u),
+                       q3 * uintBitsToFloat(kw0.y & 0xffff0000u))));
+        float d1 = fma(q0, uintBitsToFloat(kw1.x << 16u),
+                   fma(q1, uintBitsToFloat(kw1.x & 0xffff0000u),
+                   fma(q2, uintBitsToFloat(kw1.y << 16u),
+                       q3 * uintBitsToFloat(kw1.y & 0xffff0000u))));
+        float s0 = subgroupAdd(d0);
+        float s1 = subgroupAdd(d1);
+
+        float new_max = max(m_i, max(s0, s1));
+        float factor = exp2(m_i - new_max);
+        float p0 = exp2(s0 - new_max);
+        float p1 = exp2(s1 - new_max);
+        m_i = new_max;
+        l_i = fma(l_i, factor, p0 + p1);
+        o0 = fma(o0, factor,
+                 fma(p0, uintBitsToFloat(vw0.x << 16u),
+                     p1 * uintBitsToFloat(vw1.x << 16u)));
+        o1 = fma(o1, factor,
+                 fma(p0, uintBitsToFloat(vw0.x & 0xffff0000u),
+                     p1 * uintBitsToFloat(vw1.x & 0xffff0000u)));
+        o2 = fma(o2, factor,
+                 fma(p0, uintBitsToFloat(vw0.y << 16u),
+                     p1 * uintBitsToFloat(vw1.y << 16u)));
+        o3 = fma(o3, factor,
+                 fma(p0, uintBitsToFloat(vw0.y & 0xffff0000u),
+                     p1 * uintBitsToFloat(vw1.y & 0xffff0000u)));
+      }
+      if (key < last_key) {
+        kw = key_data.values[k_idx];
+        vw = value_data.values[v_idx];
+        k_idx += k_step;
+        v_idx += v_step;
+        dot = fma(q0, uintBitsToFloat(kw.x << 16u),
+              fma(q1, uintBitsToFloat(kw.x & 0xffff0000u),
+              fma(q2, uintBitsToFloat(kw.y << 16u),
+                  q3 * uintBitsToFloat(kw.y & 0xffff0000u))));
+        float score = subgroupAdd(dot);
+        float new_max = max(m_i, score);
+        float factor = exp2(m_i - new_max);
+        float p = exp2(score - new_max);
+        m_i = new_max;
+        l_i = fma(l_i, factor, p);
+        o0 = fma(o0, factor, p * uintBitsToFloat(vw.x << 16u));
+        o1 = fma(o1, factor, p * uintBitsToFloat(vw.x & 0xffff0000u));
+        o2 = fma(o2, factor, p * uintBitsToFloat(vw.y << 16u));
+        o3 = fma(o3, factor, p * uintBitsToFloat(vw.y & 0xffff0000u));
+      }
+#else
       for (uint key = sg + uint(SUBGROUPS); key < last_key; key += uint(SUBGROUPS)) {
         kw = key_data.values[k_idx];
         vw = value_data.values[v_idx];
@@ -430,6 +582,7 @@ void main() {
         o2 = fma(o2, factor, p * uintBitsToFloat(vw.y << 16u));
         o3 = fma(o3, factor, p * uintBitsToFloat(vw.y & 0xffff0000u));
       }
+#endif
 
       if (sg == (last_key & 31u)) {
         kw = uvec2(s_k_words[lane * 2u], s_k_words[lane * 2u + 1u]);
@@ -537,6 +690,21 @@ void main() {
   // FastRopeNormAppleBF16); cleared uses stride-128..1 tree reduction
   // (bit-identical to FastRopeNormBF16). Both branches are workgroup-uniform.
   bool use_apple_norm = (params.flags & 4u) != 0u;
+#ifdef SDPA_HD256_FAST
+  uint rot_half = params.in_strides[0] != 0u ? params.in_strides[0] : HALF_D;
+  uint rot_dims = rot_half << 1u;
+  // Single copy of RoPE (cos, sin) on idle sg 16..19 (t = 512..512+rot_half-1),
+  // completely disjoint from sg 0..15 (Q/K RMSNorm) — avoids I-cache duplication.
+  if (t >= 512u && t < 512u + rot_half) {
+    uint d = t - 512u;
+    float position =
+        uintBitsToFloat(params.shape[0]) * float(offset_data.values[params.dims]);
+    float inv = exp(-float(d) * params.beta);
+    float theta = position * inv;
+    s_o[512u + d] = rope_round(omarchy_trig_cos(theta));
+    s_o[640u + d] = rope_round(omarchy_trig_sin(theta));
+  }
+#endif
   if (!has_norm) {
     if (sg < 8u) {
       uint q_row_base = params.lhs_offset + head * params.reduce_size;
@@ -627,6 +795,60 @@ void main() {
   }
   barrier();
 
+#ifdef SDPA_HD256_FAST
+  // Prologue Phase B (HD256 fast path): read precomputed (cos, sin) from
+  // s_o[512..767], write rotated pre-scaled Q into disjoint s_q[256], and pack
+  // rotated/passthrough K directly into s_k_words[128] via subgroupShuffleDown
+  // (requires even rot_half) — deleting the third prologue barrier.
+  if (t < rot_half) {
+    float c = s_o[512u + t];
+    float s = s_o[640u + t];
+
+    float qa = s_o[t];
+    float qb = s_o[t + rot_half];
+    s_q[t] = rope_round(rope_round(qa * c) - rope_round(qb * s)) * s_scale;
+    s_q[t + rot_half] =
+        rope_round(rope_round(qa * s) + rope_round(qb * c)) * s_scale;
+
+    float ka = s_o[256u + t];
+    float kb = s_o[256u + t + rot_half];
+    uint b0 = bf16_bits(rope_round(rope_round(ka * c) - rope_round(kb * s)));
+    uint b1 = bf16_bits(rope_round(rope_round(ka * s) + rope_round(kb * c)));
+    uint n0 = subgroupShuffleDown(b0, 1u);
+    uint n1 = subgroupShuffleDown(b1, 1u);
+    if ((t & 1u) == 0u) {
+      s_k_words[t >> 1u] = b0 | (n0 << 16u);
+      s_k_words[(rot_half + t) >> 1u] = b1 | (n1 << 16u);
+    }
+  } else if (t >= rot_dims && t < D) {
+    s_q[t] = s_o[t] * s_scale;
+    uint bk = bf16_bits(s_o[256u + t]);
+    uint bkn = subgroupShuffleDown(bk, 1u);
+    if ((t & 1u) == 0u) {
+      s_k_words[t >> 1u] = bk | (bkn << 16u);
+    }
+  }
+  barrier();
+
+  float q0 = s_q[lane * 8u + 0u];
+  float q1 = s_q[lane * 8u + 1u];
+  float q2 = s_q[lane * 8u + 2u];
+  float q3 = s_q[lane * 8u + 3u];
+  float q4 = s_q[lane * 8u + 4u];
+  float q5 = s_q[lane * 8u + 5u];
+  float q6 = s_q[lane * 8u + 6u];
+  float q7 = s_q[lane * 8u + 7u];
+
+  if (sg == 0u && write_k && split_id == 0u && head == kv_head * repeats) {
+    uint k_write_idx =
+        params.count + kv_head * (params.shape[3] >> 3u) + lane;
+    key_data.values[k_write_idx] = uvec4(
+        s_k_words[lane * 4u + 0u],
+        s_k_words[lane * 4u + 1u],
+        s_k_words[lane * 4u + 2u],
+        s_k_words[lane * 4u + 3u]);
+  }
+#else
   // Prologue Phase B: Partial or full RoPE (rot_half in in_strides[0], default
   // 128) on Q -> s_o[512..767] (pre-scaled by s_scale) and K -> s_o[768..1023].
   uint rot_half = params.in_strides[0] != 0u ? params.in_strides[0] : HALF_D;
@@ -687,6 +909,7 @@ void main() {
     }
   }
   barrier();
+#endif
 
   float o0 = 0.0;
   float o1 = 0.0;
@@ -868,6 +1091,43 @@ void main() {
   uint gate_base = params.out_strides[1] + head * params.out_strides[2];
 #endif
 
+#ifdef SDPA_HD256_FAST
+  {
+    float x0 = lane_active ? (s_o[rbase + 0u] * w) : 0.0;
+    float x1 = lane_active ? (s_o[rbase + 1u] * w) : 0.0;
+    float x2 = lane_active ? (s_o[rbase + 2u] * w) : 0.0;
+    float x3 = lane_active ? (s_o[rbase + 3u] * w) : 0.0;
+    float a0 = subgroupAdd(x0);
+    float a1 = subgroupAdd(x1);
+    float a2 = subgroupAdd(x2);
+    float a3 = subgroupAdd(x3);
+    if (lane == 0u) {
+#ifdef SDPA_SPLIT_K
+      split_scratch.values[sb + 2u + d0 + 0u] = a0;
+      split_scratch.values[sb + 2u + d0 + 1u] = a1;
+      split_scratch.values[sb + 2u + d0 + 2u] = a2;
+      split_scratch.values[sb + 2u + d0 + 3u] = a3;
+#else
+      float inv_d = 1.0 / denom;
+#ifdef SDPA_OUTGATE
+      output_data.values[out_base + d0 + 0u] =
+          apply_outgate(a0 * inv_d, gate_base + d0 + 0u);
+      output_data.values[out_base + d0 + 1u] =
+          apply_outgate(a1 * inv_d, gate_base + d0 + 1u);
+      output_data.values[out_base + d0 + 2u] =
+          apply_outgate(a2 * inv_d, gate_base + d0 + 2u);
+      output_data.values[out_base + d0 + 3u] =
+          apply_outgate(a3 * inv_d, gate_base + d0 + 3u);
+#else
+      output_data.values[out_base + d0 + 0u] = bf16_store(a0 * inv_d);
+      output_data.values[out_base + d0 + 1u] = bf16_store(a1 * inv_d);
+      output_data.values[out_base + d0 + 2u] = bf16_store(a2 * inv_d);
+      output_data.values[out_base + d0 + 3u] = bf16_store(a3 * inv_d);
+#endif
+#endif
+    }
+  }
+#else
   for (uint k = 0u; k < D_PER_SG; ++k) {
     float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
     if (lane == 0u) {
@@ -881,6 +1141,7 @@ void main() {
 #endif
     }
   }
+#endif
 
   barrier();
 
@@ -898,6 +1159,43 @@ void main() {
 
   barrier();
 
+#ifdef SDPA_HD256_FAST
+  {
+    float x0 = lane_active ? (s_o[rbase + 0u] * w) : 0.0;
+    float x1 = lane_active ? (s_o[rbase + 1u] * w) : 0.0;
+    float x2 = lane_active ? (s_o[rbase + 2u] * w) : 0.0;
+    float x3 = lane_active ? (s_o[rbase + 3u] * w) : 0.0;
+    float a0 = subgroupAdd(x0);
+    float a1 = subgroupAdd(x1);
+    float a2 = subgroupAdd(x2);
+    float a3 = subgroupAdd(x3);
+    if (lane == 0u) {
+#ifdef SDPA_SPLIT_K
+      split_scratch.values[sb + 2u + TILE_D + d0 + 0u] = a0;
+      split_scratch.values[sb + 2u + TILE_D + d0 + 1u] = a1;
+      split_scratch.values[sb + 2u + TILE_D + d0 + 2u] = a2;
+      split_scratch.values[sb + 2u + TILE_D + d0 + 3u] = a3;
+#else
+      float inv_d = 1.0 / denom;
+#ifdef SDPA_OUTGATE
+      output_data.values[out_base + TILE_D + d0 + 0u] =
+          apply_outgate(a0 * inv_d, gate_base + TILE_D + d0 + 0u);
+      output_data.values[out_base + TILE_D + d0 + 1u] =
+          apply_outgate(a1 * inv_d, gate_base + TILE_D + d0 + 1u);
+      output_data.values[out_base + TILE_D + d0 + 2u] =
+          apply_outgate(a2 * inv_d, gate_base + TILE_D + d0 + 2u);
+      output_data.values[out_base + TILE_D + d0 + 3u] =
+          apply_outgate(a3 * inv_d, gate_base + TILE_D + d0 + 3u);
+#else
+      output_data.values[out_base + TILE_D + d0 + 0u] = bf16_store(a0 * inv_d);
+      output_data.values[out_base + TILE_D + d0 + 1u] = bf16_store(a1 * inv_d);
+      output_data.values[out_base + TILE_D + d0 + 2u] = bf16_store(a2 * inv_d);
+      output_data.values[out_base + TILE_D + d0 + 3u] = bf16_store(a3 * inv_d);
+#endif
+#endif
+    }
+  }
+#else
   for (uint k = 0u; k < D_PER_SG; ++k) {
     float acc = subgroupAdd(lane_active ? (s_o[rbase + k] * w) : 0.0);
     if (lane == 0u) {
@@ -911,6 +1209,7 @@ void main() {
 #endif
     }
   }
+#endif
 #ifdef SDPA_SPLIT_K
   barrier();
   memoryBarrierBuffer();

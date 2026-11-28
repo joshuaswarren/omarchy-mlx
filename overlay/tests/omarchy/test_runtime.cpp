@@ -904,7 +904,13 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // (Qwen3-4B p99 27.8 ms, Qwen3-8B max 54.7 ms); 20000 raised the 4B
   // tail to 49.7 ms and 30000 the 8B tail to 94.6 ms.
   CHECK(omarchy::calibrated_batch_work("Apple M4 Pro (G16S B1)") == 15000);
-  CHECK(omarchy::calibrated_batch_work("Apple M4 (G16G B1)") == 0);
+
+  // The G16G row (M4) takes 60000 (receipts/2026-11-24-m4-g16g-batch-work):
+  // time per token is linear in the submission count, so the row keeps a
+  // decode submission near 4.9 ms of GPU time (34 -> 4 submissions per
+  // Qwen3.5 2B token, +35% decode, identical ids, all submissions under 18.5 ms).
+  CHECK(omarchy::calibrated_batch_work("Apple M4 (G16G B1)") == 60000);
+  CHECK(omarchy::calibrated_batch_work("Apple M4 (G16G 10)") == 60000);
 
   // The G17C row (M5 Max) takes 100000 (initial value matching G14C pending calibration on M5).
   CHECK(omarchy::calibrated_batch_work("Apple M5 Max (G17C B1)") == 100000);
@@ -927,15 +933,17 @@ TEST_CASE("submission-cap default resolves per calibrated board") {
   // Every calibrated row must sit between the off switch and a receipt-
   // bound ceiling: a calibrated value above 40000 would loosen the
   // shipped cap on that board without a receipt saying why. G13C sits at
-  // 80000 (receipts/2026-11-26-g13c-batch-work-80000.md);
-  // G14C sits at 200000 (receipts/2026-11-24-g14c-batch-work-200000);
-  // G17C keeps the 100000 placeholder pending M5 calibration; G18G is
-  // uncapped (headless, receipts/2026-11-23-g621-batch-budget-submits) —
-  // naming its ceiling here also repairs the stale bound the row introduced.
+  // 80000 (receipts/2026-11-26-g13c-batch-work-80000.md); G14C sits at
+  // 200000 (receipts/2026-11-24-g14c-batch-work-200000); G16G sits at
+  // 60000 (receipts/2026-11-24-m4-g16g-batch-work); G17C keeps the
+  // 100000 placeholder pending M5 calibration; G18G is uncapped
+  // (headless, receipts/2026-11-23-g621-batch-budget-submits) — naming
+  // its ceiling here also repairs the stale bound the row introduced.
   for (const auto& row : omarchy::kBatchWorkCalibration) {
     if (row.budget > 0) {
       CHECK(row.budget <= (row.board == "G13C"   ? 80000
                            : row.board == "G14C" ? 200000
+                           : row.board == "G16G" ? 60000
                            : row.board == "G17C" ? 100000
                            : row.board == "G18G" ? UINT64_MAX
                                                  : 40000));

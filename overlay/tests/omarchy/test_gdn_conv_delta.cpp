@@ -487,7 +487,7 @@ TEST_CASE("coalesced GDN Sg32 default policy, accuracy, dispatch count, and off-
 TEST_CASE("coalesced GDN Sg32 f32 A_log GQA 3-in-1 fusion policy, accuracy, and lazy off-switch") {
   CHECK(omarchy::gdn_conv_coalesced_f32a_default("Apple M2 Max (G14C B1)"));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::gdn_conv_coalesced_f32a_default("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default("Apple M6 (G18G B1)"));
   CHECK_FALSE(omarchy::gdn_conv_coalesced_f32a_default(""));
 
@@ -526,8 +526,8 @@ TEST_CASE("coalesced GDN Sg32 f32 A_log GQA 3-in-1 fusion policy, accuracy, and 
 
 TEST_CASE("coalesced GDN Sg32Fast default policy, accuracy, and off-switch") {
   CHECK(omarchy::gdn_conv_sg32_fast_default("Apple M2 Max (G14C B1)"));
-  CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M1 (G13G B1)"));
-  CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M1 Max (G13C C0)"));
+  CHECK(omarchy::gdn_conv_sg32_fast_default("Apple M1 (G13G B1)"));
+  CHECK(omarchy::gdn_conv_sg32_fast_default("Apple M1 Max (G13C C0)"));
   CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M4 Pro (G16S B1)"));
   CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default("Apple M6 (G18G B1)"));
   CHECK_FALSE(omarchy::gdn_conv_sg32_fast_default(""));

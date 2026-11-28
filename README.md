@@ -92,18 +92,19 @@ plus Laya, and it needs a 96 GB machine.
 
 | Chip | GPU | ANE |
 |---|---|---|
-| M1 | Tested | Parakeet islands |
-| M1 Max | Tested | Whole encoder |
-| M2 Max | [Tested on Linux](receipts/2026-10-09-linux-vs-macos/m2-max-linux/README.md) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](docs/ANE-LINUX.md#m2-max-ane-measured)) ([results](receipts/2026-10-10-m2-max-ane.md)) |
-| M1 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 16-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 31.5 tok/s | Untested |
-| M2 | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Air 13-inch, 8-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 19.4 tok/s | Untested |
+| M1 | Tested on Linux: MacBook Pro 13-inch, 8-core GPU, Mesa Honeykrisp `53ad9af196f5`; Qwen3-4B 4-bit decode 24.37 tok/s ([matched table](#how-close-to-macos)) | Parakeet islands |
+| M1 Max | Tested on Linux: MacBook Pro 16-inch, 32-core GPU, Mesa Honeykrisp `53ad9af196f5`; Qwen3-4B 4-bit decode 107.16 tok/s ([matched table](#how-close-to-macos)) | Whole encoder |
+| M2 Max | [Tested on Linux](receipts/2026-11-21-m2-mesa-1650fc1-qualification/README.md): MacBook Pro 14-inch, 38-core GPU, Mesa Honeykrisp `1650fc1a33` — suite clean against the M1 Max reference, kit decode 80.75 tok/s; Qwen3.8-2B 4-bit decode 215.41 tok/s on Mesa `53ad9af196f5` ([matched table](#how-close-to-macos)) | Whole encoder (bit-exact on the M2, see [M2 Max ANE](docs/ANE-LINUX.md#m2-max-ane-measured)) ([results](receipts/2026-10-10-m2-max-ane.md)) |
+| M1 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 16-core GPU, release wheel on Mesa Borealis `be147e3625`, Qwen3-4B 4-bit decode 31.5 tok/s | Untested |
+| M2 | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Air 13-inch, 8-core GPU, release wheel on Mesa Borealis `be147e3625`, Qwen3-4B 4-bit decode 19.4 tok/s | Untested |
 | M1 Ultra, M2 Pro, M2 Ultra | Untested | Untested |
 | M3 | Experimental: aurora mesa-m3 graphics; compute not certified | Data-only; h15 bring-up module |
-| M3 Pro | [Tested on Linux](receipts/2026-11-21-m3-pro-g15s-linux/README.md): MacBook Pro 14-inch, 14-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 43.9 tok/s; standing battery 747/747 cases on source build `a893cae5c` | Untested |
-| M4 | [Experimental](receipts/2026-11-01-m4-g16g-part1/README.md): Mac mini (J773g) with the out-of-tree G16G driver and Honeykrisp's Apple9 compute port; no qualification row posted yet | Data-only; h16 bring-up module |
-| M4 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 20-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 49.3 tok/s; runtime 59/60 on source build `ec849019` (independent-streams ratio 0.876 against that build's 0.95 floor; main has the 0.80 Borealis floor, not re-run); [qualification-r4 row](https://github.com/joshuaswarren/omarchy-mlx/issues/537) clean bar the `test_export_unique` defect the r7 wheel fixes | Untested |
-| M4 Air | Experimental: MacBook Air (J713, T8132, G16G B0) on a bring-up Borealis driver; [qualification-r4 row](https://github.com/joshuaswarren/omarchy-mlx/issues/537) complete with only `test_export_unique` new over the reference (the r7 wheel fixes it); Qwen3-4B 4-bit decode 25.68 tok/s on the bring-up driver, not a final rate | Data-only; h16 bring-up module |
-| A18 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Neo, 5-core GPU, release wheel on the Borealis Vulkan driver, Qwen3-4B 4-bit decode 13.5 tok/s; runtime 59/60: the independent-streams timing check fails against the 0.80 Borealis floor (0.437 to 0.442 in four runs), copies are byte-exact | Untested |
+| M3 Pro | [Tested on Linux](receipts/2026-11-21-m3-pro-g15s-linux/README.md): MacBook Pro 14-inch, 14-core GPU, release wheel on Mesa Borealis `a196911147`, Qwen3-4B 4-bit decode 43.9 tok/s; standing battery 747/747 cases on source build `a893cae5c` | Untested |
+| M4 | [Experimental](receipts/2026-11-01-m4-g16g-part1/README.md): Mac mini (J773g) on the out-of-tree G16G techmore/mesa `ea32833` driver (Honeykrisp `git-ea328336ef` + Apple9 compute port); no qualification row posted yet | Data-only; h16 bring-up module |
+| M4 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Pro 16-inch, 20-core GPU, release wheel on Mesa Borealis `c208afc352`, Qwen3-4B 4-bit decode 49.3 tok/s; runtime 59/60 on source build `ec849019` (independent-streams ratio 0.876 against that build's 0.95 floor; main has the 0.80 Borealis floor, not re-run); [qualification-r4 row](https://github.com/joshuaswarren/omarchy-mlx/issues/537) clean bar the `test_export_unique` defect the r7 wheel fixes | Untested |
+| M4 Air | Experimental: MacBook Air (J713, T8132, G16G B0) on a bring-up Borealis driver (mesa git sha not recorded); [qualification-r4 row](https://github.com/joshuaswarren/omarchy-mlx/issues/537) complete with only `test_export_unique` new over the reference (the r7 wheel fixes it); Qwen3-4B 4-bit decode 25.68 tok/s on the bring-up driver, not a final rate | Data-only; h16 bring-up module |
+| A18 Pro | [Tested on Linux](receipts/2026-11-13-m1pro-m2-m4pro-a18pro-linux/README.md): MacBook Neo, 5-core GPU, release wheel on Mesa Borealis `c208afc352`, Qwen3-4B 4-bit decode 13.5 tok/s; runtime 59/60: the independent-streams timing check fails against the 0.80 Borealis floor (0.437 to 0.442 in four runs), copies are byte-exact | Untested |
+| M6 | [Experimental](receipts/2026-11-22-m6-mini-g18g-linux/README.md): Mac mini (G18G, j873g) on a local Borealis ICD (mesa git sha not recorded); first Linux receipt, Qwen3-4B 4-bit decode 5.23 tok/s — early driver, not a final rate | Untested |
 
 The supported installer targets are M1-class Macs and the M2 Max. They
 share one GPU class and driver path. The Tested rows are the machines
@@ -183,24 +184,35 @@ run record in [receipts/2026-10-11-non-apple-gpu-run/README.md](receipts/2026-10
 | GPU | Driver | Result |
 |---|---|---|
 | Intel UHD 770 | Mesa ANV 26.2.4 | 55/55 `omarchy_runtime_tests`; op check clean |
-| RTX 5060 Ti | NVIDIA 615.71.09 | 54/55; the independent-streams timing check (0.78-0.88 vs a 0.95 floor), see [Non-Apple GPUs](docs/compatibility.md#non-apple-gpus-development-drivers) |
+| RTX 5060 Ti | NVIDIA 615.71.09 (suite run); 615.78.08 (latest) | 54/55; the independent-streams timing check (0.78-0.88 vs a 0.95 floor), see [Non-Apple GPUs](docs/compatibility.md#non-apple-gpus-development-drivers); Qwen3-4B 4-bit decode 98.78 tok/s on the newer driver ([receipt](receipts/2026-11-21-rtx-5060ti-batch-work/README.md)) |
 
 AMD (RADV) has no qualifying run.
 
 ## How close to macOS
 
-### Matched decode parity (November 2026, `MLX_OMARCHY_DEFER_TOKENS=0`)
+### Parity card (November 2026, Mesa `53ad9af196f5`)
 
-Same MacBook Pro on both sides, same quantized model snapshot, same prompt, and identical greedy token output verified by SHA-256 hash on every run. Every Linux cell below ran on shipped Mesa Honeykrisp commit `1650fc1a33` with `MLX_OMARCHY_DEFER_TOKENS=0` (each token synchronizes on the GPU before advancing the timer, matching macOS Metal). Every macOS cell ran macOS 27.0 with stock `mlx 0.32.2` and `mlx-lm 0.31.3` on Metal. The ratio column is Linux as a share of macOS: 100% means parity, higher is faster on Linux.
+One row per machine, model snapshot and context. Decode and prefill are
+tokens per second on the same MacBook Pro on both sides, same snapshot,
+same prompt, greedy output verified by SHA-256 on every run. Linux
+cells run the unified Mesa pin `53ad9af196f5` with
+`MLX_OMARCHY_DEFER_TOKENS=0`; macOS cells run stock `mlx` /
+`mlx-lm 0.31.3` on Metal (macOS 27.0 with `mlx 0.32.2` on the 13-inch
+and M2 Max; macOS 26.6.2 with `mlx 0.32.3`–`0.32.5` on the 16-inch). The share column is Linux decode as a share of
+macOS decode: 100% means parity, higher is faster on Linux.
 
-| Machine | Model (snapshot) | Context / decode | Linux (Vulkan, Mesa `1650fc1a33`) | macOS (Metal, `mlx 0.32.2`) | Linux / macOS | Greedy SHA-256 (12 hex) |
-|---|---|---:|---:|---:|---:|---|
-| 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 / 64 | **24.23 tok/s** (`#1067` defaults, 3 rounds / 15 runs) | 23.17 tok/s (5 pairs / 25 runs) | **104.6% (+4.6%)** | `a6fad159dfa9` |
-| 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 / 64 | **21.06 tok/s** (5 pairs / 25 runs) | 20.18 tok/s (5 pairs / 25 runs) | **104.3% (+4.3%)** | `9115b5280c1d` |
-| 13-inch M1 MacBook Pro (8-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 / 64 | 45.38 tok/s (`#1067` defaults, 5 pairs / 25 runs) | 49.06 tok/s (5 pairs / 25 runs) | 92.5% | `4784df039da0` |
-| 13-inch M1 MacBook Pro (8-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 / 64 | 44.81 tok/s (`#1067` defaults, 5 pairs / 25 runs) | 48.02 tok/s (5 pairs / 25 runs) | 93.3% | `c5fb4074d0b5` |
-| 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 / 64 | 202.71 tok/s (`819625f8`, 5 pairs) | 212.82 tok/s (5 runs) | 95.2% | `4784df039da0` |
-| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 / 128 | 100.69 tok/s (`#1059` / `#1063`, 5 pairs) | 104.53 tok/s (5 runs) | 96.3% | `efb521ae04af` |
+| Machine | Model (snapshot) | Context | Linux decode | Linux prefill | macOS decode | macOS prefill | Linux / macOS | Runs | Greedy SHA-256 (12 hex) | PR | Mesa pin |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|
+| 13-inch M1 MacBook Pro (8-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 | **52.31 tok/s** | 517.58 tok/s | 49.06 tok/s | 347.33 tok/s | **106.6% (+6.6%)** | 5 pairs / 25 runs | `4784df039da0` | `#1138` | `53ad9af196f5` |
+| 13-inch M1 MacBook Pro (8-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 | **51.54 tok/s** | 498.75 tok/s | 48.02 tok/s | 341.46 tok/s | **107.3% (+7.3%)** | 5 pairs / 25 runs | `c5fb4074d0b5` | `#1138` | `53ad9af196f5` |
+| 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | **24.37 tok/s** | 231.65 tok/s | 23.17 tok/s | 170.02 tok/s | **105.2% (+5.2%)** | 5 pairs / 25 runs | `a6fad159dfa9` | `#1138` | `53ad9af196f5` |
+| 13-inch M1 MacBook Pro (8-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | **22.21 tok/s** | 194.39 tok/s | 20.18 tok/s | 161.87 tok/s | **110.0% (+10.0%)** | 5 pairs / 25 runs | `9115b5280c1d` | `#1138` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 512 | **107.16 tok/s** | 894.77 tok/s | 104.53 tok/s | 660.26 tok/s | **102.5% (+2.5%)** | 5 pairs / 25 runs | `efb521ae04af` | `#1117` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`50d42775`) | 2048 | **96.69 tok/s** | 786.10 tok/s | 87.20 tok/s | 638.54 tok/s | **110.9% (+10.9%)** | 5 pairs / 25 runs | `542524d1f692` | `#1117` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 512 | **63.47 tok/s** | 470.32 tok/s | 57.77 tok/s | 388.31 tok/s | **109.9% (+9.9%)** | 5 pairs / 25 runs | `697272134f42` | `#1117` | `53ad9af196f5` |
+| 16-inch M1 Max MacBook Pro (32-core GPU) | `mlx-community/Qwen3.5-9B-MLX-4bit` (`938d8919`) | 2048 | **62.96 tok/s** | 449.39 tok/s | 57.05 tok/s | 388.44 tok/s | **110.4% (+10.4%)** | 5 pairs / 25 runs | `7dd7261b2fb8` | `#1117` | `53ad9af196f5` |
+| 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 512 | **215.41 tok/s** | 2282.75 tok/s | 212.82 tok/s | 1766.07 tok/s | **101.2% (+1.2%)** | 5 pairs / 25 runs | `4784df039da0` | `#1101` | `53ad9af196f5` |
+| 14-inch M2 Max MacBook Pro (38-core GPU) | `SiddhJagani/Qwen3.8-2B-mlx-4Bit` (`0867d98b`) | 2048 | **211.38 tok/s** | 2347.61 tok/s | 209.28 tok/s | 1786.03 tok/s | **101.0% (+1.0%)** | 5 pairs / 25 runs | `c5fb4074d0b5` | `#1101` | `53ad9af196f5` |
 
 ### Earlier M1 Max model sweep (October 2026)
 
@@ -210,19 +222,19 @@ Decode is the median of 10 greedy generations and prefill is the median of 5 run
 
 MLX 4-bit through the installer's mlx-lm patches, tokens per second. A cell shows Linux, or Linux / macOS and the percentage where macOS is shown:
 
-| Model | Decode | Prefill 512 |
-|---|---|---|
-| Qwen3.8-27B (dense 27B) | 13.5 | 87.4 |
-| gemma-4-26B-A4B (MoE, 4B active) | 12.61 | 116.50 |
-| gemma-4-31B (dense 31B) | 7.3 | 62.4 |
-| Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = 62% | 299.4 / 339.0 = 88% |
-| Qwen3.6-35B-A3B (MoE, 3B active) | 13.62 | 116.37 |
-| gemma-4-E4B (dense 4B) | 30.5 | 366.5 |
-| gpt-oss-20b (MoE, attention sinks) | 2.2 | 1.9 |
+| Model | Decode | Prefill 512 | Driver (Mesa git) |
+|---|---|---|---|
+| Qwen3.8-27B (dense 27B) | 13.5 | 87.4 | not recorded |
+| gemma-4-26B-A4B (MoE, 4B active) | 12.61 | 116.50 | `6543eeb7df7` |
+| gemma-4-31B (dense 31B) | 7.3 | 62.4 | not recorded |
+| Qwen3.5-9B (dense 9B, gated-delta) | 37.1 / 59.4 = 62% | 299.4 / 339.0 = 88% | not recorded |
+| Qwen3.6-35B-A3B (MoE, 3B active) | 13.62 | 116.37 | `6543eeb7df7` |
+| gemma-4-E4B (dense 4B) | 30.5 | 366.5 | `6543eeb7df7` |
+| gpt-oss-20b (MoE, attention sinks) | 2.2 | 1.9 | not recorded |
 
 macOS shares are printed only where both sides produce identical tokens.
 
-Driver build: the two mixture-of-experts rows (gemma-4-26B-A4B and Qwen3.6-35B-A3B) and the gemma-4-E4B row ran on main at `e57cb301` with the private Honeykrisp ICD at Mesa git `6543eeb7df7`. For the other rows the driver build was not recorded. The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Driver build: the three rows naming `6543eeb7df7` ran on main at `e57cb301` with the private Honeykrisp ICD at that Mesa commit; the other rows did not record their driver. The full tables, per chip, with the wheel, the driver and the start load of each run, are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 Decode on the 13-inch M1 changed with the CPU governor with no ANE work running. See [Set the CPU governor for local AI](docs/BENCHMARKS.md#set-the-cpu-governor-for-local-ai).
 

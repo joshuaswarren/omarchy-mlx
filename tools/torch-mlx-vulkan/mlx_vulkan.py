@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import inspect
 import logging
 import math
 import operator
@@ -175,6 +176,11 @@ def _wt(w):
 def _linear(x, w, bias=None):
     y = mx.matmul(x, _wt(w))
     return y + _mx(bias) if bias is not None else y
+
+def _squeeze(a, dim=None):
+    if isinstance(dim, (list, tuple)):
+        dim = tuple(dim)
+    return mx.squeeze(a, axis=dim) if dim is not None else mx.squeeze(a)
 
 def _reshape(a, *s):
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
@@ -337,7 +343,7 @@ def _refused_nodes(nodes, strided):
                 stack.append(a)
     return refused
 
-def _slice(a, dim, start, end, step=1):
+def _slice(a, dim=0, start=None, end=None, step=1):
     dim = dim % a.ndim
     n = a.shape[dim]
     # aten clamps out-of-range bounds; mlx requires int32. None = open bound.
@@ -449,6 +455,12 @@ def _ln_backward(gout, x, normalized_shape, mean, rstd, weight, bias, output_mas
     w = _mx(weight) if weight is not None else None
     ndim = len(tuple(normalized_shape))
     axes = tuple(range(x.ndim - ndim, x.ndim))
+    # aten returns mean/rstd with keepdims, but callers through aot_autograd
+    # and the OpInfo graph can hand them squeezed (shape x.shape[:-ndim]);
+    # restore the trailing singletons so they broadcast over normalized dims.
+    if mean.ndim < x.ndim:
+        shp = mean.shape + (1,) * (x.ndim - mean.ndim)
+        mean, rstd = mx.reshape(mean, shp), mx.reshape(rstd, shp)
     xhat = (x - mean) * rstd
     g = gout * w if w is not None else gout
     dx = rstd * (g - mx.mean(g, axis=axes, keepdims=True)
@@ -1020,18 +1032,21 @@ def _convolution_backward(gout, x, w, bias_sizes, stride, padding, dilation,
 
 
 def _conv1d(a, w, b=None, stride=1, padding=0, dilation=1, groups=1):
-    # torch: a NCL, w OIK ; mlx.conv1d: x NLC, w (K, I/groups, O)
-    if groups != 1:
-        return _raise("grouped conv1d")
-    x = _mx(a).transpose(0, 2, 1)
-    wt = _mx(w).transpose(0, 2, 1)  # torch O,I,K -> mlx O,K,I
+    # torch: a NCL or CL (unbatched), w (O, I/groups, K) ; mlx.conv1d: x NLC, w (O, K, I/groups)
+    x = _mx(a)
+    unbatched = x.ndim == 2
+    if unbatched:
+        x = x[None]
+    x = x.transpose(0, 2, 1)
+    wt = _mx(w).transpose(0, 2, 1)  # torch O,I/groups,K -> mlx O,K,I/groups
     st = stride[0] if isinstance(stride, (list, tuple)) else stride
     p = padding[0] if isinstance(padding, (list, tuple)) else padding
     dl = dilation[0] if isinstance(dilation, (list, tuple)) else dilation
-    y = mx.conv1d(x, wt, stride=st, padding=p, dilation=dl)
+    y = mx.conv1d(x, wt, stride=st, padding=p, dilation=dl, groups=groups)
     if b is not None:
         y = y + _mx(b).reshape(1, 1, -1)
-    return y.transpose(0, 2, 1)
+    y = y.transpose(0, 2, 1)
+    return y[0] if unbatched else y
 
 def _diff(a, n=1, dim=-1, prepend=None, append=None):
     x = _mx(a)
@@ -1091,6 +1106,85 @@ def _topk(a, k, dim=-1, largest=True, sorted=True):
     vals = mx.take_along_axis(at, idx, axis=-1)
     inv = [perm.index(i) for i in range(a.ndim)]
     return (mx.transpose(vals, axes=inv), mx.transpose(idx, axes=inv).astype(mx.int64))
+
+def _mode(a, dim=-1, keepdim=False):
+    """torch.mode parity: (values, indices) of the row-wise most frequent
+    value, ties resolving to the smallest such value (torch CPU behavior),
+    indices first-occurrence. Sort + per-row equality count: the count of
+    each sorted position's value, argmax picks the first maximum, which in
+    an ascending sort is the smallest modal value."""
+    a = _mx(a)
+    dim = (dim if dim is not None else -1) % a.ndim
+    perm = [i for i in range(a.ndim) if i != dim] + [dim]
+    at = mx.transpose(a, axes=perm)
+    # the omarchy backend has no int64/integral argsort kernel: integral
+    # sorts run on an explicit CPU stream (small ranking widths, correctness
+    # first); float sorts dispatch on the device stream as usual
+    if mx.issubdtype(at.dtype, mx.integer):
+        with mx.stream(mx.cpu):
+            idx = mx.argsort(at, axis=-1)
+            v = mx.take_along_axis(at, idx, axis=-1)
+    else:
+        idx = mx.argsort(at, axis=-1)
+        v = mx.take_along_axis(at, idx, axis=-1)
+    eq = mx.expand_dims(v, -1) == mx.expand_dims(v, -2)
+    counts = mx.sum(eq, axis=-1)
+    # torch.mode picks the smallest modal value and its index is that
+    # value's last (rightmost) occurrence. Deterministic tie handling without
+    # relying on argmax tie order: maximize count, break ties toward the
+    # larger sorted slot (key = count * (n+1) - slot).
+    fm = mx.argmax(counts, axis=-1)
+    maxc = mx.max(counts, axis=-1)
+    pos = fm + maxc - 1
+    pos_ax = mx.expand_dims(pos, -1) if pos.ndim < v.ndim else pos
+    vals = mx.take_along_axis(v, pos_ax, axis=-1)
+    index = mx.take_along_axis(idx, pos_ax, axis=-1)
+    inv = [perm.index(i) for i in range(a.ndim)]
+    vals = mx.transpose(vals, axes=inv)
+    index = mx.transpose(index, axes=inv)
+    if not keepdim:
+        vals = mx.squeeze(vals, dim)
+        index = mx.squeeze(index, dim)
+    if keepdim and a.ndim > 1:
+        vals = mx.expand_dims(vals, dim)
+        index = mx.expand_dims(index, dim)
+    return (vals.astype(a.dtype), index.astype(mx.int64))
+
+
+def _kthvalue(a, k, dim=-1, keepdim=False):
+    """torch.kthvalue parity: the k-th smallest value along dim plus its
+    index. Sort + index: the ascending sort's k-1 slot. torch CPU's own
+    kthvalue index is a quickselect artifact that need not point at the
+    returned value (verified: value -2.136 at index 2, torch's index 7 holds
+    -1.24); this lowering guarantees the index points at a position holding
+    the returned value."""
+    a = _mx(a)
+    dim = (dim if dim is not None else -1) % a.ndim
+    perm = [i for i in range(a.ndim) if i != dim] + [dim]
+    at = mx.transpose(a, axes=perm)
+    # integral sorts run on an explicit CPU stream (no int64 argsort kernel
+    # in the omarchy backend); see _mode
+    if mx.issubdtype(at.dtype, mx.integer):
+        with mx.stream(mx.cpu):
+            idx = mx.argsort(at, axis=-1)
+    else:
+        idx = mx.argsort(at, axis=-1)
+    # sel is itself the original position of the k-th smallest (a slot value
+    # of the argsort output); taking idx at sel would double-indirect
+    sel = idx[..., k - 1: k]
+    vals = mx.take_along_axis(at, sel, axis=-1)
+    sel_idx = sel
+    inv = [perm.index(i) for i in range(a.ndim)]
+    vals = mx.transpose(vals, axes=inv)
+    sel_idx = mx.transpose(sel_idx, axes=inv)
+    if not keepdim:
+        vals = mx.squeeze(vals, dim)
+        sel_idx = mx.squeeze(sel_idx, dim)
+    if keepdim and a.ndim > 1:
+        vals = mx.expand_dims(vals, dim)
+        sel_idx = mx.expand_dims(sel_idx, dim)
+    return (vals.astype(a.dtype), sel_idx.astype(mx.int64))
+
 
 def _is_integral_dtype(dt):
     return mx.issubdtype(dt, mx.integer) or mx.issubdtype(dt, mx.bool_)
@@ -1319,6 +1413,74 @@ def _arange(*a, **k):
     if dtype is None and all(type(v) is int for v in args):
         dtype = mx.int64   # torch.arange defaults to int64 for integral args
     return mx.arange(*args, dtype=dtype)
+
+
+
+def _histc(a, bins=100, min=None, max=None, **kw):
+    """torch.histc parity: equal-width bins over [min, max], out-of-range dropped,
+    the right edge inclusive. min==0 and max==0 (or both None) = the input min/max."""
+    x = mx.flatten(_mx(a).astype(mx.float32))
+    nb = int(bins)
+    if nb <= 0:
+        raise ValueError("histc needs bins >= 1")
+    auto = (min is None or min == 0) and (max is None or max == 0)
+    lo = float(mx.min(x).item()) if auto else float(min)
+    hi = float(mx.max(x).item()) if auto else float(max)
+    if hi < lo:
+        raise ValueError("histc needs max >= min")
+    if hi == lo:
+        # torch widens a collapsed range to [v-0.5, v+0.5]; without this the
+        # width is 0 and (x - lo) / width puts the whole mass in bin 0
+        lo, hi = lo - 0.5, hi + 0.5
+    width = (hi - lo) / nb
+    idx = mx.clip(mx.floor((x - lo) / width).astype(mx.int32), 0, nb - 1)
+    keep = ((x >= lo) & (x <= hi)).astype(mx.float32)
+    return (mx.eye(nb, nb)[idx].astype(mx.float32) * keep[:, None]).sum(axis=0)
+
+
+def _histogram(a, bins=10, range=None, weight=None, density=False, **kw):
+    """torch.histogram parity: returns (hist, bin_edges). An int bin count builds
+    equal-width edges over the (lo, hi) range (default = the input min/max); a list
+    of edges is used as-is. Per-sample weights replace counts; density=True
+    normalizes so mass * width integrates to 1. Out-of-range samples drop."""
+    x = mx.flatten(_mx(a).astype(mx.float32))
+    if isinstance(bins, (list, tuple)):
+        edges = mx.array([float(e) for e in bins])
+        nb = len(bins) - 1
+    else:
+        nb = int(bins)
+        if range is not None:
+            lo, hi = float(range[0]), float(range[1])
+        else:
+            lo = float(mx.min(x).item())
+            hi = float(mx.max(x).item())
+        edges = lo + (hi - lo) * (mx.arange(nb + 1, dtype=mx.float32) / nb)
+    if nb <= 0:
+        raise ValueError("histogram needs bins >= 1")
+    lo = float(edges[0].item())
+    hi = float(edges[-1].item())
+    if hi < lo:
+        raise ValueError("histogram needs a rising edge sequence")
+    width = (hi - lo) / nb
+    keep = ((x >= lo) & (x <= hi)).astype(mx.float32)
+    interior = edges[1:-1]
+    if interior.shape[0] > 0:
+        idx = (x[:, None] >= interior[None, :]).astype(mx.int32).sum(axis=1)
+    else:
+        idx = mx.zeros_like(x).astype(mx.int32)
+    onehot = mx.eye(nb, nb)[idx].astype(mx.float32) * keep[:, None]
+    if weight is not None:
+        w = _mx(weight).astype(mx.float32) * keep
+        hist = (onehot * w[:, None]).sum(axis=0)
+    else:
+        hist = onehot.sum(axis=0)
+    if density:
+        # torch normalizes by the PER-BIN widths, not one uniform width —
+        # a non-uniform (list) edge sequence has unequal bin widths
+        widths = edges[1:] - edges[:-1]
+        hist = hist / (hist.sum() * widths)
+    return hist.astype(_mx(a).dtype), edges
+
 
 
 def _multinomial(probs, num_samples, replacement=False, **kw):
@@ -1768,6 +1930,177 @@ def _gn_native(a, w, b, N, C, HxW, group, eps):
     return out, mu.reshape(N, group), rstd.reshape(N, group)
 
 
+def _xlogy(a, b):
+    # aten.xlogy(self, other): NaN in either operand -> NaN first (the aten
+    # kernel checks isnan before the zero rule), then self == 0 -> 0, which
+    # also masks the NaN that self * log(other) produces for other <= 0.
+    # The wheel has no fused xlogy; build the mask with where.
+    a, b = _mx(a), _mx(b)
+    r = a * mx.log(b)
+    nan = mx.array(float("nan"), dtype=r.dtype)
+    return _ar(mx.where(mx.equal(a, 0), mx.where(mx.isnan(b), nan, mx.zeros_like(r)), r))
+
+
+def _xlog1py(a, b):
+    # aten.xlog1py(self, other): self * log1p(other) with the same NaN-first,
+    # then self==0 mask (KL-divergence / custom-loss graphs use both forms).
+    a, b = _mx(a), _mx(b)
+    r = a * mx.log1p(b)
+    nan = mx.array(float("nan"), dtype=r.dtype)
+    return _ar(mx.where(mx.equal(a, 0), mx.where(mx.isnan(b), nan, mx.zeros_like(r)), r))
+
+
+def _opmath_f32(a):
+    """aten elementwise ops on fp16/bf16 inputs compute in fp32 opmath and
+    round once at the end; the lowering does the same or the narrow-dtype
+    tail values drift. Returns (original, fp32-view)."""
+    a = _mx(a)
+    return a, (a.astype(mx.float32) if a.dtype in (mx.bfloat16, mx.float16) else a)
+
+
+def _softplus(a, beta=1, threshold=20):
+    # aten.softplus(input, beta=1, threshold=20):
+    #   log1p(exp(beta*x)) / beta, and the linear x when beta*x > threshold
+    #   (strictly greater — the equality point keeps the log branch). The
+    #   linear tail also keeps exp(beta*x) finite for large inputs.
+    a, f = _opmath_f32(a)
+    bx = f * beta
+    return mx.where(bx > threshold, f,
+                    mx.log1p(mx.exp(bx)) / beta).astype(a.dtype)
+
+
+def _elu(a, alpha=1.0, scale=1.0, input_scale=1.0):
+    # aten.elu(input, alpha=1, scale=1, input_scale=1):
+    #   scale*x when x > 0, else alpha*scale*(exp(input_scale*x) - 1)
+    a, f = _opmath_f32(a)
+    out = mx.where(mx.greater(f, 0.0), scale * f,
+                   scale * alpha * (mx.exp(input_scale * f) - 1.0))
+    return out.astype(a.dtype)
+
+
+def _selu(a):
+    # aten.selu is elu with the published constants folded in:
+    #   scale=1.0507009873554805, alpha=1.6732632423543772, input_scale=1
+    return _elu(a, alpha=1.6732632423543772, scale=1.0507009873554805)
+
+
+def _celu(a, alpha=1.0):
+    # aten.celu(input, alpha=1): max(0, x) + min(0, alpha*(exp(x/alpha) - 1))
+    a, f = _opmath_f32(a)
+    out = mx.maximum(f, 0.0) + mx.minimum(alpha * (mx.exp(f / alpha) - 1.0), 0.0)
+    return out.astype(a.dtype)
+
+
+def _mish(a, inplace=False):
+    # aten.mish(input): x * tanh(softplus(x)) under softplus' defaults
+    # (beta=1, threshold=20).
+    a, f = _opmath_f32(a)
+    sp = mx.where(f > 20, f, mx.log1p(mx.exp(f)))
+    return (f * mx.tanh(sp)).astype(a.dtype)
+
+
+def _glu(a, dim=-1):
+    # aten.glu(input, dim=-1): halves along dim, a * sigmoid(b). A scalar
+    # or an odd-sized dim is an error in aten too.
+    a, f = _opmath_f32(a)
+    if a.ndim == 0 or a.shape[dim % a.ndim] % 2:
+        return _raise("glu")
+    lo, hi = mx.split(f, 2, axis=dim % a.ndim)
+    return (lo * mx.sigmoid(hi)).astype(a.dtype)
+def _frac(a):
+    # aten.frac(input): x - trunc(x); the sign keeps with x (-2.3 -> -0.3,
+    # NOT x - floor(x) which would give +0.7).
+    a = _mx(a)
+    return a - mx.trunc(a)
+
+
+def _l2_clamped(a, dim, eps):
+    return mx.maximum(mx.sqrt(mx.sum(mx.square(_mx(a)), axis=dim)), eps)
+
+
+def _linalg_norm(a, ord=None, dim=None, keepdim=False, dtype=None):
+    # aten.linalg_norm: mx.linalg.norm shares the vector/matrix
+    # ord/axis/keepdims contract (ord=None + axis=None flattens, a
+    # 2-axis dim is a matrix norm); dtype is an output cast.
+    a = _mx(a)
+    out = mx.linalg.norm(a, ord=ord, axis=dim, keepdims=keepdim)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("linalg_norm dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
+
+
+def _linalg_vector_norm(a, ord=2, dim=None, keepdim=False, dtype=None):
+    # aten.linalg_vector_norm always means a VECTOR norm — flattening
+    # when dim is None and reducing every listed dim. mx.linalg.norm
+    # reads ord+axis=None or a 2-axis dim as a MATRIX norm, so compose
+    # from power/sum instead.
+    a = _mx(a)
+    ax = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    if ax is None:
+        ax = tuple(range(a.ndim))
+    o = float(ord)
+    if o == float("inf"):
+        out = mx.max(mx.abs(a), axis=ax, keepdims=keepdim)
+    elif o == float("-inf"):
+        out = mx.min(mx.abs(a), axis=ax, keepdims=keepdim)
+    elif o == 0:
+        out = mx.sum((a != 0).astype(mx.int32), axis=ax,
+                     keepdims=keepdim).astype(a.dtype)
+    else:
+        out = mx.power(
+            mx.sum(mx.power(mx.abs(a), o), axis=ax, keepdims=keepdim),
+            1.0 / o)
+    if dtype is not None:
+        if dtype not in _MX_DT:
+            return _raise("linalg_vector_norm dtype")
+        out = out.astype(_MX_DT[dtype])
+    return out
+
+
+def _pnorm(a, p=2, dim=None, keepdim=False):
+    # aten.norm: sum(|x|^p)^(1/p); inf/-inf take the max/min magnitude,
+    # not the 2-norm.
+    a = _mx(a)
+    ax = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    if str(p) in ("inf", "-inf"):
+        m = mx.max if str(p) == "inf" else mx.min
+        return m(mx.abs(a), axis=ax, keepdims=keepdim)
+    return mx.power(mx.sum(mx.power(mx.abs(a), float(p)), axis=ax,
+                                  keepdims=keepdim), 1.0 / float(p))
+
+
+def _cdist(a, b, p=2.0, compute_mode=None):
+    # aten.cdist(x1, x2, p, compute_mode): pairwise p-norm distances
+    # between the rows of [.., N, D] and [.., M, D]. Broadcast-
+    # difference covers every p; compute_mode only picks a numerics
+    # strategy in aten, the values are unchanged.
+    a, b = _mx(a), _mx(b)
+    d = a[..., :, None, :] - b[..., None, :, :]
+    fp = float(p)
+    if fp == float("inf"):
+        return mx.max(mx.abs(d), axis=-1)
+    if fp == 0:
+        return mx.sum((d != 0).astype(mx.int32), axis=-1).astype(a.dtype)
+    return mx.power(mx.sum(mx.power(mx.abs(d), fp), axis=-1), 1.0 / fp)
+
+
+def _pdist(a, p=2.0):
+    # aten.pdist(self, p): condensed i<j pairwise distances of the N
+    # row vectors. mx has no compress/nonzero, so the condense order is
+    # built arithmetically: flat positions with jj>ii key below n*n and
+    # sort first; the keys are unique so the order is exact.
+    a = _mx(a)
+    n = a.shape[-2]
+    d = _cdist(a, a, p)
+    flat = mx.arange(n * n)
+    sel = flat % n > flat // n
+    key = mx.logical_not(sel).astype(mx.int32) * (n * n) + flat
+    m = n * (n - 1) // 2
+    return mx.flatten(d)[mx.argsort(key)[:m]]
+
+
 _FUNC_SPECS = {
     "linear": _linear,
     "matmul": lambda a, b: mx.matmul(_mx(a), _mx(b)).astype(_mx(a).dtype),
@@ -1803,12 +2136,15 @@ _FUNC_SPECS = {
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
     "sqrt": mx.sqrt, "rsqrt": mx.rsqrt, "exp": mx.exp, "log": mx.log,
+    # PT-AL-e: basic math ops used in normalization chains
+    "reciprocal": mx.reciprocal, "frac": _frac,
+    "reciprocal_": mx.reciprocal, "frac_": _frac,
     "sigmoid": mx.sigmoid, "tanh": mx.tanh, "erf": mx.erf,
     "transpose": lambda a, d0, d1: mx.transpose(a, axes=_perm_swap(a, d0, d1)),
     "permute": lambda a, *d: mx.transpose(a, axes=tuple(d[0]) if len(d) == 1 else tuple(d)),
     "flatten": lambda a, start=0, end=-1: mx.reshape(a, (*a.shape[:start], int(np.prod(a.shape[start:end + 1])), *a.shape[end + 1:]) if end != -1 else (*a.shape[:start], int(np.prod(a.shape[start:])))),
     "unsqueeze": lambda a, d: mx.expand_dims(a, axis=d),
-    "squeeze": lambda a, d=None: mx.squeeze(a, axis=d) if d is not None else mx.squeeze(a),
+    "squeeze": _squeeze, "squeeze_": _squeeze,
     "expand": _expand, "expand_as": lambda a, o: mx.broadcast_to(a, o.shape),
     "cat": _cat_impl,
     "concat": _cat_impl,
@@ -1817,9 +2153,21 @@ _FUNC_SPECS = {
     "split_with_sizes": lambda a, ss, dim=0: _split_sizes(a, ss, dim),
     "chunk": _chunk, "unbind": lambda a, dim=0: _unbind(a, dim),
     "meshgrid": _meshgrid,
+    # torch's norm=None means "backward", same as mx's default
+    "fft_fft": lambda a, n=None, dim=-1, norm=None: mx.fft.fft(_mx(a), n, axis=dim, norm=norm or "backward"),
+    "fft_ifft": lambda a, n=None, dim=-1, norm=None: mx.fft.ifft(_mx(a), n, axis=dim, norm=norm or "backward"),
+    # PT-AU-b: real<->complex transforms (Parakeet mel-spectrogram)
+    "fft_rfft": lambda a, n=None, dim=-1, norm=None: mx.fft.rfft(_mx(a), n, axis=dim, norm=norm or "backward"),
+    "fft_irfft": lambda a, n=None, dim=-1, norm=None: mx.fft.irfft(_mx(a), n, axis=dim, norm=norm or "backward"),
+    # PT-AU-c: 2-D transforms (vision, spectrogram models)
+    "fft_fft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.fft2(_mx(a), s, axes=dim, norm=norm or "backward"),
+    "fft_ifft2": lambda a, s=None, dim=(-2, -1), norm=None: mx.fft.ifft2(_mx(a), s, axes=dim, norm=norm or "backward"),
     "select": lambda a, dim, i: _slice(a, dim, i % a.shape[dim % a.ndim], i % a.shape[dim % a.ndim] + 1, 1)[tuple(0 if d == dim % a.ndim else slice(None) for d in range(a.ndim))],
     "slice": _slice, "narrow": lambda a, dim, s, n: _slice(a, dim, s, s + n, 1),
     "mean": _mean, "sum": _sum,
+    # PT-AL-g: aten.logsumexp(self, int[1] dim, keepdim) — the dim list
+    # becomes the axis tuple; mx.logsumexp is the same stable reduction.
+    "logsumexp": lambda a, dim, keepdim=False: mx.logsumexp(_mx(a), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "max": lambda a, d=None, keepdim=False, *k: (mx.max(a, axis=d, keepdims=keepdim), mx.argmax(a, axis=d, keepdims=keepdim)) if d is not None else mx.max(a),
     "min": lambda a, d=None, keepdim=False, *k: (mx.min(a, axis=d, keepdims=keepdim), mx.argmin(a, axis=d, keepdims=keepdim)) if d is not None else mx.min(a),
     "where": lambda c, a, b: mx.where(_mx(c), _mx(a), _mx(b)),
@@ -1896,6 +2244,27 @@ _FUNC_SPECS = {
     "silu_backward": _silu_backward,
     "silu": lambda a, inplace=False: a * mx.sigmoid(a),
     "relu": lambda a, inplace=False: mx.maximum(a, 0.0),
+    "softplus": _softplus,
+    "mish": _mish,
+    "relu_": lambda a: mx.maximum(a, 0.0),
+    # PT-AL-a: the elu family (ViT, Conformer, speech models).
+    "elu": _elu,
+    "elu_": _elu,
+    "selu": _selu,
+    "selu_": _selu,
+    "celu": _celu,
+    "celu_": _celu,
+    # PT-AL-d: aten.glu (GDN gate, Conformer)
+    "glu": _glu,
+    # PT-AL-b: the piecewise activation family (MobileNetV3 et al.)
+    "hardsigmoid": lambda a, inplace=False: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
+    "hardswish": lambda a, inplace=False: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),
+    "hardsigmoid_": lambda a: mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0,
+    "hardswish_": lambda a: a * (mx.minimum(mx.maximum(a + 3.0, 0.0), 6.0) / 6.0),
+    "hardshrink": lambda a, lambd=0.5, *k: mx.where(mx.greater(mx.abs(a), lambd), a, mx.zeros_like(a)),
+    "softshrink": lambda a, lambd=0.5, *k: mx.where(mx.greater(a, lambd), a - lambd, mx.where(mx.less(a, -lambd), a + lambd, mx.zeros_like(a))),
+    "tanhshrink": lambda a: a - mx.tanh(a),
+    "softsign": lambda a: a / (1.0 + mx.abs(a)),
     "scaled_dot_product_attention": _sdpa,
     "_scaled_dot_product_efficient_attention": _sdpa_eff,
     "_efficient_attention_forward": _sdpa_eff_fwd,
@@ -1905,6 +2274,13 @@ _FUNC_SPECS = {
     "gt": lambda a, b: mx.greater(_mx(a), _mx(b)),
     "lt": lambda a, b: mx.less(_mx(a), _mx(b)),
     "cos": mx.cos, "sin": mx.sin, "log": mx.log, "log1p": mx.log1p,
+    # PT-AL-f: the wheel table already carries these; the dev table
+    # must match so traced graphs lower them too.
+    "expm1": mx.expm1, "expm1_": mx.expm1,
+    "logaddexp": lambda a, b: mx.logaddexp(_mx(a), _mx(b)),
+    "xlogy": _xlogy, "xlog1py": _xlog1py,
+    # aten registers torch.special.xlog1py as special_xlog1py
+    "special_xlog1py": _xlog1py,
     "sinh": _sinh, "cosh": _cosh,
     "asinh": _asinh, "acosh": _acosh, "atanh": mx.atanh,
     "acos": mx.acos, "asin": mx.asin, "atan": mx.atan, "atan2": _atan2,
@@ -1913,6 +2289,10 @@ _FUNC_SPECS = {
     "argmin": lambda a, dim=None, keepdim=False: mx.argmin(a, axis=dim, keepdims=keepdim),
     "topk": _topk,
     "multinomial": _multinomial,
+    "histc": _histc,
+    "histogram": _histogram,
+    "mode": _mode,
+    "kthvalue": _kthvalue,
     "take": lambda a, i, dim=None: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "index_select": lambda a, dim, i: mx.take(a, _mx(i).astype(mx.int32), axis=dim),
     "gather": lambda a, dim, i: mx.take_along_axis(a, _mx(i).astype(mx.int32), axis=dim),
@@ -1948,8 +2328,13 @@ _FUNC_SPECS = {
     "logical_or": lambda a, b: mx.logical_or(_mx(a), _mx(b)),
     "logical_not": lambda a: mx.logical_not(a),
     "invert": lambda a: mx.logical_not(a),
-    "clamp": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
-    "clip": lambda a, min=None, max=None: mx.clip(a, min if min is not None else -float("inf"), max if max is not None else float("inf")),
+    "clamp": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
+    "clamp_": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
+    "clip": lambda a, min=None, max=None: mx.clip(a, _mx(min) if min is not None else -float("inf"), _mx(max) if max is not None else float("inf")),
+    "clamp_min": lambda a, min: mx.maximum(a, _mx(min)),
+    "clamp_min_": lambda a, min: mx.maximum(a, _mx(min)),
+    "clamp_max": lambda a, max: mx.minimum(a, _mx(max)),
+    "clamp_max_": lambda a, max: mx.minimum(a, _mx(max)),
     "rsub": _rsub,
     "sub_": _sub_inplace,
     "sub_.Tensor": _sub_inplace,
@@ -1962,8 +2347,17 @@ _FUNC_SPECS = {
     "_log_softmax": _log_softmax_fwd,
     "_log_softmax_backward_data": _log_softmax_bwd,
     "normalize": lambda x, p=2, dim=1, eps=1e-12: x / mx.maximum(mx.sum(mx.power(mx.abs(x), p), axis=dim, keepdims=True), eps),
-    "norm": lambda a, p=2, dim=None, keepdim=False: mx.power(mx.sum(mx.power(mx.abs(a), float(p) if p not in ("inf", "-inf") else 2.0), axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim), 1.0 / (float(p) if p not in ("inf", "-inf") else 2.0)),
+    "norm": _pnorm,
+    # PT-NORM-b: the linalg norm family (normalization, grad clipping)
+    "linalg_vector_norm": lambda a, ord=2, dim=None, keepdim=False, *, dtype=None: _linalg_vector_norm(a, ord, dim, keepdim, dtype),
+    "linalg_norm": lambda a, ord=None, dim=None, keepdim=False, *, dtype=None: _linalg_norm(a, ord, dim, keepdim, dtype),
+    # PT-PAIR-a: pairwise distances used in metric learning.
+    "cdist": lambda a, b, p=2.0, compute_mode=None: _cdist(a, b, p, compute_mode),
+    "pdist": lambda a, p=2.0: _pdist(a, p),
     "rms_norm": lambda a, ns, w=None, eps=None: mx.fast.rms_norm(a, _mx(w) if w is not None else None, eps if eps is not None else 1e-6),
+    # aten.cosine_similarity clamps each l2 norm at eps separately, not
+    # their product (device-checked against torch 2.15 CPU).
+    "cosine_similarity": lambda x1, x2, dim=1, eps=1e-8: mx.sum(_mx(x1) * _mx(x2), axis=dim) / (_l2_clamped(x1, dim, eps) * _l2_clamped(x2, dim, eps)),
     "embedding": _embedding_any,
     "all": lambda a, dim=None, keepdim=False: mx.all(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
     "any": lambda a, dim=None, keepdim=False: mx.any(a, axis=tuple(dim) if isinstance(dim, (list, tuple)) else dim, keepdims=keepdim),
@@ -1994,6 +2388,27 @@ def _resolve(dotted):
     for part in parts[1:]:
         obj = getattr(obj, part)
     return obj
+
+
+def _bd_inner(tgt, args, kwargs):
+    """Resolve torch.nn.functional.boolean_dispatch.<locals>.fn wrappers
+    (F.max_pool2d's return_indices arm and friends) to the inner torch
+    function the call actually selects, so table lookups can hit; returns
+    the wrapper unchanged when the closure cannot be read."""
+    if not getattr(tgt, "__qualname__", "").startswith("boolean_dispatch"):
+        return tgt
+    try:
+        nv = inspect.getclosurevars(tgt).nonlocals
+        aname, aidx = nv.get("arg_name"), nv.get("arg_index")
+        use_true = False
+        if aname and aname in kwargs:
+            use_true = bool(kwargs[aname])
+        elif isinstance(aidx, int) and 0 <= aidx < len(args):
+            use_true = bool(args[aidx])
+        inner = nv.get("if_true" if use_true else "if_false")
+        return inner if inner is not None else tgt
+    except Exception:
+        return tgt
 
 def _build_func_table():
     candidates = []
@@ -2077,7 +2492,11 @@ _ALWAYS_LOWER = {"max_pool2d", "max_pool2d_with_indices",
                  "threshold_backward", "native_batch_norm_backward",
                  "Float",
                  "add", "sub", "mul", "div", "truediv", "true_divide",
-                 "remainder"}
+                 "remainder", "xlogy", "special_xlog1py", "relu", "relu_",
+                 # comparison ops: the aten .default overloads are
+                 # (Scalar, Scalar) -> bool — no mx operand, same gate as
+                 # the scalar arith forms above.
+                 "eq", "ne", "lt", "le", "gt", "ge"}
 
 # aten.* OpOverload name table (same lowerings, keyed by opname)
 ATEN_TABLE = {name: f for name, f in _FUNC_SPECS.items()}
@@ -2239,8 +2658,11 @@ def make_executor(gm):
             val = None
             on_mlx = False
             if node.op == "call_function":
-                lowering = (FUNC_TABLE.get(node.target)
-                            or FUNC_TABLE_BY_NAME.get(getattr(node.target, "__name__", ""))
+                tgt = _bd_inner(node.target, args, kwargs)
+                tn = getattr(tgt, "__name__", "")
+                lowering = (FUNC_TABLE.get(tgt)
+                            or FUNC_TABLE_BY_NAME.get(tn)
+                            or FUNC_TABLE_BY_NAME.get(tn.lstrip("_"))
                             or ATEN_TABLE.get(name))
                 is_producer = (getattr(node.target, "__name__", "") in _PRODUCERS
                                or getattr(node.target, "__name__", "") in _ALWAYS_LOWER
@@ -3031,8 +3453,11 @@ def make_compiled_executor(gm, dt=None, return_all_outputs=False):
                         f"unlowerable node {name}: mx.compile freezes "
                         "mx.random draws; sampling stays on the "
                         "per-node path")
-                low = (FUNC_TABLE.get(n.target)
-                       or FUNC_TABLE_BY_NAME.get(getattr(n.target, "__name__", ""))
+                tgt = _bd_inner(n.target, args, kwargs)
+                tn = getattr(tgt, "__name__", "")
+                low = (FUNC_TABLE.get(tgt)
+                       or FUNC_TABLE_BY_NAME.get(tn)
+                       or FUNC_TABLE_BY_NAME.get(tn.lstrip("_"))
                        or ATEN_TABLE.get(name))
                 if low is not None:
                     kw2 = {k: v for k, v in kwargs.items() if k != "device"}
