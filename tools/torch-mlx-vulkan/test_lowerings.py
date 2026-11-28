@@ -2935,6 +2935,66 @@ def test_pdist_cdist():
     print("test_pdist_cdist PASS")
 
 
+def test_searchsorted_bucketize():
+    # Q-08: aten.searchsorted + aten.bucketize (rank/bucket ops used by
+    # quantizers, loss curves and lookups). mx has no searchsorted, so
+    # the lowering counts elements below (left) or below-or-equal
+    # (right) each value; aten ranks NaN to len(seq).
+    seq = torch.tensor([1, 2, 2, 5, 8])
+    v = torch.tensor([0, 1, 2, 3, 8, 9])
+    seq2 = torch.tensor([[1, 3], [2, 8]])
+    v2 = torch.tensor([[0, 2, 9], [4, 5, 6]])
+    useq = torch.tensor([8, 1, 5, 2])
+    perm = torch.argsort(useq)
+    seqf = torch.tensor([1.0, 2.0, 3.0, 4.0])
+    vf = torch.tensor([1.0, float("nan"), 5.0])
+    seqi = torch.tensor([1, 3, 5], dtype=torch.int32)
+    vi = torch.tensor([0, 3, 9])
+    b = torch.tensor([2, 5, 8])
+    x = torch.tensor([-1, 2, 5, 8, 9])
+    xf = torch.tensor([1.0, float("nan"), 9.0])
+    x2 = torch.tensor([[-1, 5], [8, 9]])
+    be = torch.empty(0, dtype=torch.int64)
+    cases = [
+        (torch.ops.aten.searchsorted.Tensor, (seq, v), {}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Tensor, (seq, v), {"right": True}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Tensor, (seq, v), {"out_int32": True}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Tensor, (seq, v), {"right": True, "out_int32": True}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Tensor, (seq, v), {"side": "right"}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Tensor, (useq, v), {"sorter": perm}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Tensor, (seqf, vf), {}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Tensor, (seqi, vi), {}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Tensor, (seq2, v2), {}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Tensor, (seq, torch.tensor(3)), {}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Scalar, (seq, 2), {}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Scalar, (seq, 2), {"right": True}, "searchsorted"),
+        (torch.ops.aten.searchsorted.Scalar, (seqf, float("nan")), {}, "searchsorted"),
+        (torch.ops.aten.bucketize.Tensor, (x, b), {}, "bucketize"),
+        (torch.ops.aten.bucketize.Tensor, (x, b), {"right": True}, "bucketize"),
+        (torch.ops.aten.bucketize.Tensor, (x, b), {"out_int32": True}, "bucketize"),
+        (torch.ops.aten.bucketize.Tensor, (xf, b), {}, "bucketize"),
+        (torch.ops.aten.bucketize.Tensor, (x2, b), {}, "bucketize"),
+        (torch.ops.aten.bucketize.Tensor, (x, be), {}, "bucketize"),
+        (torch.ops.aten.bucketize.Scalar, (5, b), {}, "bucketize"),
+    ]
+    for target, ins, kwargs, fam in cases:
+        ref = target(*ins, **kwargs)
+        g = torch.fx.Graph()
+        phs = [g.placeholder(f"p{i}") for i in range(len(ins))]
+        n = g.call_function(target, tuple(phs), dict(kwargs))
+        g.output(n)
+        gm = torch.fx.GraphModule(torch.nn.Module(), g)
+        run, stats = mlx_vulkan.make_executor(gm)
+        out = run(*ins)
+        assert stats["cpu"] == [], (stats, str(target), kwargs)
+        assert any(fam in s for s in stats["mlx"]), (stats, str(target), kwargs)
+        got = torch.as_tensor(out)
+        assert got.dtype == ref.dtype, (str(target), kwargs, got.dtype, ref.dtype)
+        assert np.array_equal(got.numpy(), ref.numpy()), (
+            str(target), kwargs, got, ref)
+    print("test_searchsorted_bucketize PASS")
+
+
 def test_log1p_expm1_logaddexp():
     # PT-AL-f: the dev table must match the wheel table — aten.expm1,
     # aten.logaddexp lower with fp32/bf16 parity including near-zero
@@ -3074,6 +3134,8 @@ if __name__ == "__main__":
     test_squeeze_inplace()
     test_clamp_bounds()
     test_piecewise_activations()
+
+    test_searchsorted_bucketize()
     print("ALL PASS")
 
 
