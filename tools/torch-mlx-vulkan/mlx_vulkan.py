@@ -1360,6 +1360,14 @@ def _has_0d_mixed(*vs):
     return len({_dtype_of(v) for v in ts}) > 1
 
 
+def _lerp(start, end, weight):
+    # Q-55 (PT): aten.lerp.Tensor(input, end, weight) / lerp.Scalar —
+    # start + weight*(end-start); the weight broadcasts (scalar or tensor)
+    # and values outside [0, 1] extrapolate (no clamp in aten).
+    a, e, w = _mx(start), _mx(end), _mx(weight)
+    return a + w * (e - a)
+
+
 def _addcmul(a, t1, t2, value=1, **k):
     # aten.addcmul(input, t1, t2, *, value=1): input + value*t1*t2. Bool
     # has no kernel; on integral operands the wrapped value scalar takes
@@ -2242,8 +2250,17 @@ _FUNC_SPECS = {
     # evaluate in Python first so _ar boxes int64 like the binop specs, and
     # a bare scalar stays weak beside a narrow-int tensor operand.
     "remainder": lambda a, b, *k: _ar(_mx(a) % _mx(b)),
+    # Q-55 (PT): aten.fmod truncates toward zero — the result keeps the
+    # DIVIDEND's sign (-7 % 3 is 2, fmod(-7, 3) is -1). remainder above is
+    # the floor/-inf convention; fmod is a - b*trunc(a/b) so it composes
+    # with scalar and tensor divisors (and NaN-propagates on b == 0 like
+    # the omarchy Remainder eval does).
+    "fmod": lambda a, b, *k: _ar(_mx(a) - _mx(b) * mx.trunc(_mx(a) / _mx(b))),
+    # Q-55: aten.trunc — round toward zero; mx.trunc is the same contract.
+    "trunc": lambda a: mx.trunc(_mx(a)),
     # aten.addcmul/addcdiv(input, t1, t2, *, value=1): input + value*t1*t2
     "addcmul": _addcmul,
+    "lerp": _lerp,
     "addcdiv": _addcdiv,
     "neg": lambda a: -a,
     "pow": lambda a, b: mx.power(_mx(a), _mx(b)),
